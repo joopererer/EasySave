@@ -6,7 +6,7 @@ EasySave is a monorepo skeleton for a Flutter app and a vanilla WXT browser exte
 
 - `app/`: Flutter application (`com.james.easysave`) for Android and iOS.
 - `extension/`: WXT + TypeScript vanilla extension, with Vitest tests.
-- `spec/`: parser contract and fixture directories (`fixtures/xhs/`, `fixtures/instagram/`).
+- `spec/`: parser contract and fixtures under `spec/fixtures/` (`spec/fixtures/xhs/`, `spec/fixtures/instagram/`).
 - `refs/`: read-only AGPL/GPL reference checkouts for research only.
 
 Never copy code from `refs/` into this project. The references are read-only and remain outside the product implementation.
@@ -15,9 +15,14 @@ Never copy code from `refs/` into this project. The references are read-only and
 
 App and extension parsers must pass every fixture pair under `spec/fixtures/`: each `*.html` input has a corresponding `*.expected.json` output. Add fixtures before implementing parser behavior.
 
+## Environment and network
+
+- Node.js 22.12 or newer is required.
+- The agent environment may not have network access. Commands that require network access, including dependency installation and fixture collection, must be run by the user locally; provide the exact command or script instead of attempting to bypass network restrictions.
+
 ## Workflow and language
 
-After each completed step, run the relevant tests and commit. Code, comments, and commit messages must be in English.
+Run the relevant tests after each completed step. Tests or builds that do not pass must stop the workflow and be reported; never commit a change when validation has failed. Never use `GIT_SSL_NO_VERIFY` or any other method that disables TLS certificate verification. Code, comments, and commit messages must be in English.
 
 ## Common commands
 

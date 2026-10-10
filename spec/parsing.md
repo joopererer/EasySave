@@ -2,6 +2,8 @@
 
 ## Unified output
 
+Fixture pairs used to validate this contract live under spec/fixtures/.
+
 Parsers produce `{ platform, id, author, caption, items: [{ type: image|video|live, url, videoUrl? }] }`. `items` preserves source order; `live` represents a still image paired with its motion asset.
 
 ## Xiaohongshu
