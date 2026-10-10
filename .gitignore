@@ -1,0 +1,6 @@
+
+refs/
+extension/node_modules/
+extension/.wxt/
+app/.dart_tool/
+app/build/
