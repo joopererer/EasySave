@@ -1,6 +1,5 @@
 export default defineContentScript({
   matches: ["*://*.xiaohongshu.com/*", "*://*.instagram.com/*"],
-  world: "MAIN",
   main() {
     const host = location.hostname.toLowerCase();
     const isXhs = host === "xiaohongshu.com" || host.endsWith(".xiaohongshu.com");
@@ -79,10 +78,9 @@ export default defineContentScript({
       const { parse } = await import("../src/index");
       let result: import("../src/index").ParseResult;
       if (isXhs) {
-        const { readXhsStateJson } = await import("../src/main-world");
         const { findNoteInStates, buildNoteFromRecord } = await import("../src/xhs");
         const wantedId = noteIdFromUrl(url);
-        const state = readXhsStateJson();
+        const state = await readXhsStateViaBridge();
         const note = state === undefined ? undefined : findNoteInStates([state], wantedId);
         if (note) {
           const noteId =
@@ -101,9 +99,44 @@ export default defineContentScript({
       return result;
     }
 
+    let bridgeInstalled = false;
+    let bridgeNonce = 0;
+
+    function ensureBridge(): void {
+      if (bridgeInstalled || !isXhs) return;
+      bridgeInstalled = true;
+      const script = document.createElement("script");
+      script.src = chrome.runtime.getURL("/xhs-state.js");
+      script.addEventListener("load", () => script.remove());
+      (document.head ?? document.documentElement).appendChild(script);
+    }
+
+    /** Ask the MAIN-world bridge for the embedded page state. */
+    function readXhsStateViaBridge(): Promise<unknown> {
+      ensureBridge();
+      return new Promise((resolve) => {
+        const nonce = `es${Date.now()}_${bridgeNonce++}`;
+        const timer = setTimeout(() => {
+          window.removeEventListener("message", onMessage);
+          resolve(undefined);
+        }, 3000);
+        function onMessage(event: MessageEvent): void {
+          const data = event.data as
+            | { source?: string; type?: string; nonce?: string; state?: unknown }
+            | null;
+          if (!data || event.source !== window || data.nonce !== nonce) return;
+          if (data.source !== "easysave" || data.type !== "EASYSAVE_STATE") return;
+          clearTimeout(timer);
+          window.removeEventListener("message", onMessage);
+          resolve(data.state);
+        }
+        window.addEventListener("message", onMessage);
+        window.postMessage({ source: "easysave", type: "EASYSAVE_GET_STATE", nonce }, "*");
+      });
+    }
+
     // SPA in-page navigation: drop the cached result so the next open re-parses.
-    let observedUrl = location.href;
-    setInterval(() => {
+    let observedUrl = location.href;    setInterval(() => {
       if (location.href !== observedUrl) {
         observedUrl = location.href;
         lastParsedUrl = null;

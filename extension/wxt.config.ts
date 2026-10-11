@@ -20,5 +20,11 @@ export default defineConfig({
         },
       ],
     },
+    web_accessible_resources: [
+      {
+        resources: ["xhs-state.js"],
+        matches: ["*://*.xiaohongshu.com/*"],
+      },
+    ],
   },
 });
