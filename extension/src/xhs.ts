@@ -410,53 +410,7 @@ export function parseXhs(html: string, pageUrl: string): XhsResult {
     if (parsed !== undefined) states.push(parsed);
   }
 
-  let note: Record<string, unknown> | undefined;
-  for (const state of states) {
-    if (!isRecord(state)) continue;
-    const byMap =
-      isRecord(state["note"]) &&
-      isRecord((state["note"] as Record<string, unknown>)["noteDetailMap"])
-        ? ((state["note"] as Record<string, unknown>)["noteDetailMap"] as Record<string, unknown>)[
-            wantedId ?? ""
-          ]
-        : undefined;
-    const fromMap = isRecord(byMap) && isRecord(byMap["note"])
-      ? (byMap["note"] as Record<string, unknown>)
-      : isRecord(byMap)
-        ? byMap
-        : undefined;
-    if (fromMap && (!wantedId || !nonBlank(fromMap["noteId"]) || fromMap["noteId"] === wantedId)) {
-      note = fromMap;
-      break;
-    }
-    const mobile =
-      isRecord(state["noteData"]) &&
-      isRecord((state["noteData"] as Record<string, unknown>)["data"])
-        ? ((state["noteData"] as Record<string, unknown>)["data"] as Record<string, unknown>)["noteData"]
-        : undefined;
-    const mobileNote = isRecord(mobile) && isRecord(mobile["note"])
-      ? (mobile["note"] as Record<string, unknown>)
-      : isRecord(mobile)
-        ? mobile
-        : undefined;
-    if (
-      mobileNote &&
-      (!wantedId || !nonBlank(mobileNote["noteId"]) || mobileNote["noteId"] === wantedId)
-    ) {
-      note = mobileNote;
-      break;
-    }
-  }
-  if (!note) {
-    for (const state of states) {
-      note = deepFindNote(state, wantedId);
-      if (note && (!wantedId || !nonBlank(note["noteId"]) || note["noteId"] === wantedId)) break;
-      note = undefined;
-    }
-  }
-  if (!note) {
-    note = extractNoteDetailEntry(html, wantedId);
-  }
+  const note = findNoteInStates(states, wantedId) ?? extractNoteDetailEntry(html, wantedId);
 
   const looksLikeXhs =
     /xiaohongshu\.com|xhslink/.test(pageUrl) ||
@@ -484,6 +438,67 @@ export function parseXhs(html: string, pageUrl: string): XhsResult {
       error: { code: "INVALID_PAGE", message: "Could not determine the note id." },
     };
   }
+  return buildNoteFromRecord(note, noteId);
+}
+
+/**
+ * Locate the wanted note inside already-parsed embedded states.
+ * Exported so the MAIN-world content script can pass `window.__INITIAL_STATE__`
+ * directly instead of re-serializing and re-parsing the page.
+ */
+export function findNoteInStates(
+  states: unknown[],
+  wantedId: string | undefined,
+): Record<string, unknown> | undefined {
+  for (const state of states) {
+    if (!isRecord(state)) continue;
+    const byMap =
+      isRecord(state["note"]) &&
+      isRecord((state["note"] as Record<string, unknown>)["noteDetailMap"])
+        ? ((state["note"] as Record<string, unknown>)["noteDetailMap"] as Record<string, unknown>)[
+            wantedId ?? ""
+          ]
+        : undefined;
+    const fromMap = isRecord(byMap) && isRecord(byMap["note"])
+      ? (byMap["note"] as Record<string, unknown>)
+      : isRecord(byMap)
+        ? byMap
+        : undefined;
+    if (fromMap && (!wantedId || !nonBlank(fromMap["noteId"]) || fromMap["noteId"] === wantedId)) {
+      return fromMap;
+    }
+    const mobile =
+      isRecord(state["noteData"]) &&
+      isRecord((state["noteData"] as Record<string, unknown>)["data"])
+        ? ((state["noteData"] as Record<string, unknown>)["data"] as Record<string, unknown>)["noteData"]
+        : undefined;
+    const mobileNote = isRecord(mobile) && isRecord(mobile["note"])
+      ? (mobile["note"] as Record<string, unknown>)
+      : isRecord(mobile)
+        ? mobile
+        : undefined;
+    if (
+      mobileNote &&
+      (!wantedId || !nonBlank(mobileNote["noteId"]) || mobileNote["noteId"] === wantedId)
+    ) {
+      return mobileNote;
+    }
+  }
+  for (const state of states) {
+    const note = deepFindNote(state, wantedId);
+    if (note && (!wantedId || !nonBlank(note["noteId"]) || note["noteId"] === wantedId)) return note;
+  }
+  return undefined;
+}
+
+/**
+ * Build the unified note output from an already-located note object.
+ * Shared by parseXhs (HTML input) and the MAIN-world fast path.
+ */
+export function buildNoteFromRecord(
+  note: Record<string, unknown>,
+  noteId: string,
+): XhsResult {
 
   const user = isRecord(note["user"])
     ? (note["user"] as Record<string, unknown>)

@@ -1,0 +1,44 @@
+[
+  {
+    "id": 1,
+    "priority": 1,
+    "action": {
+      "type": "modifyHeaders",
+      "requestHeaders": [
+        { "header": "Referer", "operation": "set", "value": "https://www.xiaohongshu.com/" }
+      ]
+    },
+    "condition": {
+      "urlFilter": "*://*.xhscdn.com/*",
+      "resourceTypes": ["xmlhttprequest", "media", "image", "other"]
+    }
+  },
+  {
+    "id": 2,
+    "priority": 1,
+    "action": {
+      "type": "modifyHeaders",
+      "requestHeaders": [
+        { "header": "Referer", "operation": "set", "value": "https://www.xiaohongshu.com/" }
+      ]
+    },
+    "condition": {
+      "urlFilter": "*://ci.xiaohongshu.com/*",
+      "resourceTypes": ["xmlhttprequest", "media", "image", "other"]
+    }
+  },
+  {
+    "id": 3,
+    "priority": 1,
+    "action": {
+      "type": "modifyHeaders",
+      "requestHeaders": [
+        { "header": "Referer", "operation": "set", "value": "https://www.instagram.com/" }
+      ]
+    },
+    "condition": {
+      "urlFilter": "*://*.cdninstagram.com/*",
+      "resourceTypes": ["xmlhttprequest", "media", "image", "other"]
+    }
+  }
+]
