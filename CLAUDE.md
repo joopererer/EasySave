@@ -15,10 +15,9 @@ Never copy code from `refs/` into this project. The references are read-only and
 
 App and extension parsers must pass every fixture pair under `spec/fixtures/`: each `*.html` input has a corresponding `*.expected.json` output. Add fixtures before implementing parser behavior.
 
-## Environment and network
+## Environment
 
-- Node.js 22.12 or newer is required.
-- The agent environment may not have network access. Commands that require network access, including dependency installation and fixture collection, must be run by the user locally; provide the exact command or script instead of attempting to bypass network restrictions.
+Node.js 22.12 or newer is required.
 
 ## Workflow and language
 
