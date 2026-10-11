@@ -53,12 +53,19 @@ export default defineContentScript({
     const btn = document.createElement("button");
     btn.className = `${PREFIX}-btn`;
     btn.textContent = "下载";
+    let opening = false;
     btn.addEventListener("click", () => {
       if (panelEl) {
         closePanel();
-      } else {
-        void openPanel();
+        return;
       }
+      if (opening) return;
+      opening = true;
+      btn.style.opacity = "0.7";
+      void openPanel().finally(() => {
+        opening = false;
+        btn.style.opacity = "";
+      });
     });
     document.documentElement.appendChild(btn);
 
@@ -135,10 +142,23 @@ export default defineContentScript({
       });
     }
 
-    // SPA in-page navigation: drop the cached result so the next open re-parses.
-    let observedUrl = location.href;    setInterval(() => {
-      if (location.href !== observedUrl) {
-        observedUrl = location.href;
+    // SPA in-page navigation: track the post identity (not the raw URL, which
+    // may churn with tokens/query params) and drop the cached result only
+    // when the user actually moves to a different post.
+    function pageIdentity(): string {
+      if (isXhs) {
+        const id = noteIdFromUrl(location.href);
+        if (id) return `xhs:${id}`;
+      } else if (isInstagram) {
+        const m = /\/(?:p|reel|tv)\/([A-Za-z0-9-_]+)/.exec(location.href);
+        if (m) return `ig:${m[1]}`;
+      }
+      return `url:${location.href}`;
+    }
+    let observedIdentity = pageIdentity();
+    setInterval(() => {
+      if (pageIdentity() !== observedIdentity) {
+        observedIdentity = pageIdentity();
         lastParsedUrl = null;
         lastResult = null;
         closePanel();
