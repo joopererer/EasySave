@@ -1,8 +1,13 @@
-// Runs in the page's MAIN world. Answers state requests from the content
-// script (which lives in the ISOLATED world and cannot touch window state).
+// Runs in the page's MAIN world:
+//  1. sniffs XHR/fetch JSON responses for note records (SPA navigation loads
+//     notes without a full page load, so embedded state goes stale);
+//  2. answers state requests from the content script (ISOLATED world).
+
+import { cachedNotesFromText, NoteCache } from "../src/note-cache";
 
 export default defineUnlistedScript(() => {
   const SOURCE = "easysave";
+  const cache = new NoteCache(20);
 
   function readState(): unknown {
     const w = window as unknown as Record<string, unknown>;
@@ -38,24 +43,98 @@ export default defineUnlistedScript(() => {
     return walk(value);
   }
 
+  function sniffText(text: string): void {
+    if (!text || text.length < 2) return;
+    try {
+      const notes = cachedNotesFromText(text);
+      if (notes.length > 0) cache.add(notes);
+    } catch {
+      // Ignore sniffing failures; the page must never break.
+    }
+  }
+
+  function isJsonResponse(contentType: string | null): boolean {
+    return !!contentType && contentType.toLowerCase().includes("json");
+  }
+
+  let sniffInstalled = false;
+  function installSniff(): void {
+    if (sniffInstalled) return;
+    sniffInstalled = true;
+    try {
+      const originalFetch = window.fetch.bind(window);
+      window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+        const response = await originalFetch(input, init);
+        try {
+          const contentType = response.headers.get("content-type");
+          if (isJsonResponse(contentType)) {
+            const text = await response.clone().text();
+            sniffText(text);
+          }
+        } catch {
+          // Ignore; the original response is untouched.
+        }
+        return response;
+      }) as typeof window.fetch;
+
+      const originalOpen = XMLHttpRequest.prototype.open;
+      const originalSend = XMLHttpRequest.prototype.send;
+      XMLHttpRequest.prototype.open = function (
+        this: XMLHttpRequest,
+        method: string,
+        url: string | URL,
+        ...rest: unknown[]
+      ): void {
+        (this as unknown as Record<string, unknown>).__esSeen = { method, url: String(url) };
+        (originalOpen as (...args: unknown[]) => void).apply(this, [method, url, ...rest]);
+      } as typeof XMLHttpRequest.prototype.open;
+      XMLHttpRequest.prototype.send = function (
+        this: XMLHttpRequest,
+        ...args: unknown[]
+      ): ReturnType<typeof XMLHttpRequest.prototype.send> {
+        this.addEventListener("load", () => {
+          try {
+            if (typeof this.responseText === "string") sniffText(this.responseText);
+          } catch {
+            // Ignore sniffing failures.
+          }
+        });
+        return (originalSend as (...a: unknown[]) => ReturnType<typeof XMLHttpRequest.prototype.send>).apply(
+          this,
+          args,
+        );
+      };
+    } catch {
+      // If patching fails (locked-down page), state reads still work.
+    }
+  }
+
+  installSniff();
+
   window.addEventListener("message", (event: MessageEvent) => {
     if (event.source !== window) return;
-    const data = event.data as { source?: string; type?: string; nonce?: string } | null;
+    const data = event.data as { source?: string; type?: string; nonce?: string; wantedId?: string } | null;
     if (!data || data.source !== SOURCE || data.type !== "EASYSAVE_GET_STATE") return;
     let state: unknown;
+    let note: unknown;
     try {
       state = safeClone(readState());
+      if (typeof data.wantedId === "string" && data.wantedId.length > 0) {
+        note = safeClone(cache.get(data.wantedId));
+      }
     } catch {
       state = undefined;
+      note = undefined;
     }
+    const answer = { source: SOURCE, type: "EASYSAVE_STATE", nonce: data.nonce, state, note };
     try {
-      window.postMessage({ source: SOURCE, type: "EASYSAVE_STATE", nonce: data.nonce, state }, "*");
+      window.postMessage(answer, "*");
     } catch {
-      // Last resort: answer without state so the content script falls back
+      // Last resort: answer without payloads so the content script falls back
       // to parsing the page HTML instead of timing out.
       try {
         window.postMessage(
-          { source: SOURCE, type: "EASYSAVE_STATE", nonce: data.nonce, state: undefined },
+          { source: SOURCE, type: "EASYSAVE_STATE", nonce: data.nonce },
           "*",
         );
       } catch {

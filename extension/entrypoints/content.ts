@@ -87,16 +87,28 @@ export default defineContentScript({
       if (isXhs) {
         const { findNoteInStates, buildNoteFromRecord } = await import("../src/xhs");
         const wantedId = noteIdFromUrl(url);
-        const state = await readXhsStateViaBridge();
-        const note = state === undefined ? undefined : findNoteInStates([state], wantedId);
-        if (note) {
-          const noteId =
-            typeof note["noteId"] === "string" && (note["noteId"] as string).length > 0
-              ? (note["noteId"] as string)
-              : (wantedId ?? "");
-          result = noteId ? buildNoteFromRecord(note, noteId) : parse(document.documentElement.outerHTML, url);
+        const { state, note: cached } = await readXhsStateViaBridge();
+        const isRecord = (v: unknown): v is Record<string, unknown> =>
+          typeof v === "object" && v !== null;
+        if (isRecord(cached) && wantedId) {
+          const cachedId = typeof cached["noteId"] === "string" ? cached["noteId"] : "";
+          if (cachedId === wantedId || cachedId === "") {
+            result = buildNoteFromRecord(cached, wantedId);
+          } else {
+            result = parse(document.documentElement.outerHTML, url);
+          }
         } else {
-          result = parse(document.documentElement.outerHTML, url);
+          const note =
+            state === undefined ? undefined : findNoteInStates([state], wantedId);
+          if (note) {
+            const noteId =
+              typeof note["noteId"] === "string" && (note["noteId"] as string).length > 0
+                ? (note["noteId"] as string)
+                : (wantedId ?? "");
+            result = noteId ? buildNoteFromRecord(note, noteId) : parse(document.documentElement.outerHTML, url);
+          } else {
+            result = parse(document.documentElement.outerHTML, url);
+          }
         }
       } else {
         result = parse(document.documentElement.outerHTML, url);
@@ -119,26 +131,29 @@ export default defineContentScript({
     }
 
     /** Ask the MAIN-world bridge for the embedded page state. */
-    function readXhsStateViaBridge(): Promise<unknown> {
+    function readXhsStateViaBridge(): Promise<{ state?: unknown; note?: unknown }> {
       ensureBridge();
       return new Promise((resolve) => {
         const nonce = `es${Date.now()}_${bridgeNonce++}`;
         const timer = setTimeout(() => {
           window.removeEventListener("message", onMessage);
-          resolve(undefined);
+          resolve({});
         }, 3000);
         function onMessage(event: MessageEvent): void {
           const data = event.data as
-            | { source?: string; type?: string; nonce?: string; state?: unknown }
+            | { source?: string; type?: string; nonce?: string; state?: unknown; note?: unknown }
             | null;
           if (!data || event.source !== window || data.nonce !== nonce) return;
           if (data.source !== "easysave" || data.type !== "EASYSAVE_STATE") return;
           clearTimeout(timer);
           window.removeEventListener("message", onMessage);
-          resolve(data.state);
+          resolve({ state: data.state, note: data.note });
         }
         window.addEventListener("message", onMessage);
-        window.postMessage({ source: "easysave", type: "EASYSAVE_GET_STATE", nonce }, "*");
+        window.postMessage(
+          { source: "easysave", type: "EASYSAVE_GET_STATE", nonce, wantedId: noteIdFromUrl(location.href) },
+          "*",
+        );
       });
     }
 
