@@ -5,3 +5,5 @@ app/.dart_tool/
 app/build/
 extension/.output/
 .idea/
+
+spec/fixtures/_raw/
