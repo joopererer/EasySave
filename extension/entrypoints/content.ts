@@ -6,6 +6,13 @@ export default defineContentScript({
     const isInstagram = host === "instagram.com" || host.endsWith(".instagram.com");
 
     const PREFIX = "easysave";
+    const isExtAlive = (): boolean => {
+      try {
+        return !!chrome.runtime?.id;
+      } catch {
+        return false;
+      }
+    };
     let panelEl: HTMLElement | null = null;
     let lastParsedUrl: string | null = null;
     let lastResult: import("../src/index").ParseResult | null = null;
@@ -87,16 +94,22 @@ export default defineContentScript({
       if (isXhs) {
         const { findNoteInStates, buildNoteFromRecord } = await import("../src/xhs");
         const wantedId = noteIdFromUrl(url);
-        const { state, note: cached } = await readXhsStateViaBridge();
+        const { state, note: cached, recent } = await readXhsStateViaBridge();
         const isRecord = (v: unknown): v is Record<string, unknown> =>
           typeof v === "object" && v !== null;
+        const noteIdOf = (v: Record<string, unknown>): string =>
+          typeof v["noteId"] === "string" ? (v["noteId"] as string) : "";
         if (isRecord(cached) && wantedId) {
-          const cachedId = typeof cached["noteId"] === "string" ? cached["noteId"] : "";
+          const cachedId = noteIdOf(cached);
           if (cachedId === wantedId || cachedId === "") {
             result = buildNoteFromRecord(cached, wantedId);
           } else {
             result = parse(document.documentElement.outerHTML, url);
           }
+        } else if (!wantedId && isRecord(recent) && noteIdOf(recent) !== "") {
+          // Feed/modal views carry no note id in the URL: use the most
+          // recently network-loaded note (the open modal).
+          result = buildNoteFromRecord(recent, noteIdOf(recent));
         } else {
           const note =
             state === undefined ? undefined : findNoteInStates([state], wantedId);
@@ -113,6 +126,10 @@ export default defineContentScript({
       } else {
         result = parse(document.documentElement.outerHTML, url);
       }
+      if (!result.ok && hasPostIdentity(url)) {
+        const fetched = await fetchAndParse(url);
+        if (fetched) result = fetched;
+      }
       lastParsedUrl = url;
       lastResult = result;
       return result;
@@ -122,7 +139,7 @@ export default defineContentScript({
     let bridgeNonce = 0;
 
     function ensureBridge(): void {
-      if (bridgeInstalled || !isXhs) return;
+      if (bridgeInstalled || !isXhs || !isExtAlive()) return;
       bridgeInstalled = true;
       const script = document.createElement("script");
       script.src = chrome.runtime.getURL("/xhs-state.js");
@@ -131,7 +148,7 @@ export default defineContentScript({
     }
 
     /** Ask the MAIN-world bridge for the embedded page state. */
-    function readXhsStateViaBridge(): Promise<{ state?: unknown; note?: unknown }> {
+    function readXhsStateViaBridge(): Promise<{ state?: unknown; note?: unknown; recent?: unknown }> {
       ensureBridge();
       return new Promise((resolve) => {
         const nonce = `es${Date.now()}_${bridgeNonce++}`;
@@ -141,13 +158,13 @@ export default defineContentScript({
         }, 3000);
         function onMessage(event: MessageEvent): void {
           const data = event.data as
-            | { source?: string; type?: string; nonce?: string; state?: unknown; note?: unknown }
+            | { source?: string; type?: string; nonce?: string; state?: unknown; note?: unknown; recent?: unknown }
             | null;
           if (!data || event.source !== window || data.nonce !== nonce) return;
           if (data.source !== "easysave" || data.type !== "EASYSAVE_STATE") return;
           clearTimeout(timer);
           window.removeEventListener("message", onMessage);
-          resolve({ state: data.state, note: data.note });
+          resolve({ state: data.state, note: data.note, recent: data.recent });
         }
         window.addEventListener("message", onMessage);
         window.postMessage(
@@ -155,6 +172,27 @@ export default defineContentScript({
           "*",
         );
       });
+    }
+
+    /** Last-resort: fetch the page HTML (SSR embeds the current post) and parse it. */
+    async function fetchAndParse(pageUrl: string): Promise<import("../src/index").ParseResult | null> {
+      try {
+        const { parse } = await import("../src/index");
+        const resp = await fetch(pageUrl, { credentials: "same-origin", redirect: "follow" });
+        if (!resp.ok) return null;
+        const html = await resp.text();
+        if (!html) return null;
+        const parsed = parse(html, resp.url || pageUrl);
+        return parsed.ok ? parsed : null;
+      } catch {
+        return null;
+      }
+    }
+
+    function hasPostIdentity(pageUrl: string): boolean {
+      if (isXhs) return noteIdFromUrl(pageUrl) !== undefined;
+      if (isInstagram) return /\/(?:p|reel|tv)\/([A-Za-z0-9-_]+)/.test(pageUrl);
+      return false;
     }
 
     // SPA in-page navigation: track the post identity (not the raw URL, which
@@ -182,30 +220,39 @@ export default defineContentScript({
 
     const TYPE_LABEL: Record<string, string> = { image: "图", video: "视频", live: "实况" };
 
-    async function openPanel(): Promise<void> {
-      const result = await parseCurrent();
+    function showMessage(text: string): void {
       const panel = document.createElement("div");
       panel.className = `${PREFIX}-panel`;
+      const head = document.createElement("div");
+      head.className = `${PREFIX}-head`;
+      head.textContent = "EasySave";
+      const close = document.createElement("button");
+      close.textContent = "✕";
+      close.addEventListener("click", closePanel);
+      head.appendChild(close);
+      const err = document.createElement("div");
+      err.className = `${PREFIX}-err`;
+      err.textContent = text;
+      panel.append(head, err);
+      document.documentElement.appendChild(panel);
+      panelEl = panel;
+    }
 
+    async function openPanel(): Promise<void> {
+      if (!isExtAlive()) {
+        showMessage("插件已更新，请刷新本页面后重试。");
+        return;
+      }
+      const result = await parseCurrent();
       if (!result.ok) {
         const { errorMessage } = await import("../src/errors");
-        const head = document.createElement("div");
-        head.className = `${PREFIX}-head`;
-        head.textContent = "EasySave";
-        const close = document.createElement("button");
-        close.textContent = "✕";
-        close.addEventListener("click", closePanel);
-        head.appendChild(close);
-        const err = document.createElement("div");
-        err.className = `${PREFIX}-err`;
         const failure = result as unknown as { error: { code: import("../src/index").ParseErrorCode } };
-        err.textContent = errorMessage(failure.error.code);
-        panel.append(head, err);
-        document.documentElement.appendChild(panel);
-        panelEl = panel;
+        showMessage(errorMessage(failure.error.code));
         return;
       }
 
+      const panel = document.createElement("div");
+      panel.className = `${PREFIX}-panel`;
       const data = result.data;
       const items = data.items;
       const selected = new Set<number>(items.map((_, i) => i));
@@ -309,7 +356,9 @@ export default defineContentScript({
               ? `已开始下载 ${targets.length} 个文件`
               : `下载失败 ${res?.failed ?? targets.length} 个，请重试`;
           } catch {
-            status.textContent = "无法连接后台，请重载插件后重试";
+            status.textContent = isExtAlive()
+              ? "下载请求失败，请重试"
+              : "插件已更新，请刷新本页面后重试";
           } finally {
             if (statusTimer) clearTimeout(statusTimer);
             statusTimer = setTimeout(() => {

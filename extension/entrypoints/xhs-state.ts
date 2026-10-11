@@ -117,16 +117,19 @@ export default defineUnlistedScript(() => {
     if (!data || data.source !== SOURCE || data.type !== "EASYSAVE_GET_STATE") return;
     let state: unknown;
     let note: unknown;
+    let recent: unknown;
     try {
       state = safeClone(readState());
       if (typeof data.wantedId === "string" && data.wantedId.length > 0) {
         note = safeClone(cache.get(data.wantedId));
       }
+      recent = safeClone(cache.recent());
     } catch {
       state = undefined;
       note = undefined;
+      recent = undefined;
     }
-    const answer = { source: SOURCE, type: "EASYSAVE_STATE", nonce: data.nonce, state, note };
+    const answer = { source: SOURCE, type: "EASYSAVE_STATE", nonce: data.nonce, state, note, recent };
     try {
       window.postMessage(answer, "*");
     } catch {

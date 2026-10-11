@@ -101,4 +101,11 @@ export class NoteCache {
   get(id: string): Record<string, unknown> | undefined {
     return this.map.get(id);
   }
+
+  /** Most recently added note (used when the URL carries no post id, e.g. feed modals). */
+  recent(): Record<string, unknown> | undefined {
+    let last: Record<string, unknown> | undefined;
+    for (const note of this.map.values()) last = note;
+    return last;
+  }
 }
