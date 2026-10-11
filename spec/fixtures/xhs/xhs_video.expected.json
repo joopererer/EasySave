@@ -11,9 +11,8 @@
   "publishedAt": "2026-10-10T12:44:50Z",
   "items": [
     {
-      "type": "live",
-      "url": "http://sns-webpic-qc.xhscdn.com/202610112130/4ca888533d81f744c9e81710f7e3e763/1040g2sg32654u2hk58005nvn7eo08625p5ifpm0!nd_dft_wlteh_webp_3",
-      "videoUrl": "http://sns-video-v27.xhscdn.com/stream/1/110/520/01eaca334205185901037001a125d89ed5_520.mp4?sign=8eaedf3e33258346968f8aaeb87446c0&t=6ad02c9f",
+      "type": "video",
+      "url": "https://sns-video-v27.xhscdn.com/stream/1/110/520/01eaca334205185901037001a125d89ed5_520.mp4?sign=8eaedf3e33258346968f8aaeb87446c0&t=6ad02c9f",
       "width": 720,
       "height": 1164
     }

@@ -45,15 +45,20 @@ export type XhsResult =
   | { ok: true; data: XhsNote }
   | { ok: false; error: XhsError };
 
-interface VideoCandidate {
+export interface ResolvedVideo {
   url: string;
+  width?: number;
+  height?: number;
+}
+
+interface VideoCandidate extends ResolvedVideo {
   watermarked: boolean;
-  width: number;
-  height: number;
 }
 
 const NOTE_ID_PATTERN = /\/(?:explore|discovery\/item|user\/profile\/[^/]+)\/([a-f0-9]{24})/i;
 const STATE_MARKERS = ["__INITIAL_STATE__", "__NEXT_DATA__", "__NUXT__"];
+const XHS_CDN_SUFFIX = ".xhscdn.com";
+const XIAOHONGSHU_SUFFIX = ".xiaohongshu.com";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
@@ -73,6 +78,37 @@ function pickString(obj: Record<string, unknown>, keys: string[]): string | unde
 
 function toIsoUtc(ms: number): string {
   return new Date(ms).toISOString().replace(/\.\d{3}Z$/, "Z");
+}
+
+export function toHttps(url: string): string {
+  return url.startsWith("http://") ? `https://${url.slice("http://".length)}` : url;
+}
+
+/**
+ * Rewrite an XHS CDN image URL to its canonical original form:
+ * strip the `!style` suffix and serve through ci.xiaohongshu.com.
+ * Non-XHS hosts are returned with only the scheme upgraded to https.
+ */
+export function transformImageUrl(url: string): string {
+  const https = toHttps(url);
+  let host = "";
+  let path = "";
+  try {
+    const parsed = new URL(https);
+    host = parsed.hostname.toLowerCase();
+    path = parsed.pathname;
+  } catch {
+    return https;
+  }
+  if (!host.endsWith(XHS_CDN_SUFFIX) && !host.endsWith(XIAOHONGSHU_SUFFIX)) return https;
+  const withoutStyle = path.split("!")[0];
+  const parts = withoutStyle.split("/").filter((part) => part.length > 0);
+  const token =
+    parts.length > 2 && /^[a-fA-F0-9]{32}$/.test(parts[1])
+      ? parts.slice(2).join("/")
+      : parts.join("/");
+  if (!token) return https;
+  return `https://ci.xiaohongshu.com/${token}`;
 }
 
 /** Scan a balanced `{...}` object starting at the first `{` at/after `from`. */
@@ -100,6 +136,56 @@ function scanBalancedObject(html: string, from: number): { start: number; end: n
   return undefined;
 }
 
+/**
+ * Replace JS `undefined` literals that appear outside string literals with
+ * `null`, so embedded state containing non-JSON JS can still be parsed.
+ * Text inside string literals (including the word "undefined") is untouched.
+ */
+export function sanitizeJsUndefined(source: string): string {
+  let out = "";
+  let i = 0;
+  let inString = false;
+  let escaped = false;
+  const isIdChar = (c: string): boolean => /[A-Za-z0-9_$]/.test(c);
+  while (i < source.length) {
+    const c = source[i];
+    if (inString) {
+      out += c;
+      if (escaped) escaped = false;
+      else if (c === "\\") escaped = true;
+      else if (c === '"') inString = false;
+      i++;
+      continue;
+    }
+    if (c === '"') {
+      inString = true;
+      out += c;
+      i++;
+      continue;
+    }
+    if (
+      source.startsWith("undefined", i) &&
+      (i === 0 || !isIdChar(source[i - 1])) &&
+      (i + "undefined".length >= source.length || !isIdChar(source[i + "undefined".length]))
+    ) {
+      out += "null";
+      i += "undefined".length;
+      continue;
+    }
+    out += c;
+    i++;
+  }
+  return out;
+}
+
+function tryParseJson(text: string): unknown | undefined {
+  try {
+    return JSON.parse(text) as unknown;
+  } catch {
+    return undefined;
+  }
+}
+
 /** Extract the first balanced `{...}` JSON object after a marker string. */
 function extractJsonAfter(html: string, marker: string): unknown | undefined {
   let from = 0;
@@ -108,18 +194,16 @@ function extractJsonAfter(html: string, marker: string): unknown | undefined {
     if (at < 0) return undefined;
     const scanned = scanBalancedObject(html, at + marker.length);
     if (!scanned) return undefined;
-    try {
-      return JSON.parse(html.slice(scanned.start, scanned.end + 1)) as unknown;
-    } catch {
-      from = scanned.end + 1;
-    }
+    const raw = html.slice(scanned.start, scanned.end + 1);
+    const parsed = tryParseJson(raw) ?? tryParseJson(sanitizeJsUndefined(raw));
+    if (parsed !== undefined) return parsed;
+    from = scanned.end + 1;
   }
 }
 
 /**
- * Targeted fallback for pages whose full embedded state is not strict JSON
- * (e.g. it contains JS `undefined`). Extracts just the `noteDetailMap`
- * subtree and reads the wanted entry from it.
+ * Targeted fallback for pages whose embedded state cannot be parsed even
+ * after sanitizing. Extracts just the `noteDetailMap` subtree.
  */
 function extractNoteDetailEntry(html: string, wantedId: string | undefined): Record<string, unknown> | undefined {
   let from = 0;
@@ -130,25 +214,22 @@ function extractNoteDetailEntry(html: string, wantedId: string | undefined): Rec
     if (colon < 0) return undefined;
     const scanned = scanBalancedObject(html, colon + 1);
     if (!scanned) return undefined;
-    try {
-      const map = JSON.parse(html.slice(scanned.start, scanned.end + 1)) as Record<string, unknown>;
-      if (isRecord(map)) {
-        if (wantedId && isRecord(map[wantedId])) {
-          const entry = map[wantedId] as Record<string, unknown>;
-          return isRecord(entry["note"]) ? (entry["note"] as Record<string, unknown>) : entry;
-        }
-        if (!wantedId) {
-          for (const entry of Object.values(map)) {
-            if (!isRecord(entry)) continue;
-            const note = isRecord(entry["note"])
-              ? (entry["note"] as Record<string, unknown>)
-              : entry;
-            if (isNoteShaped(note)) return note;
-          }
+    const raw = html.slice(scanned.start, scanned.end + 1);
+    const map = tryParseJson(raw) ?? tryParseJson(sanitizeJsUndefined(raw));
+    if (isRecord(map)) {
+      if (wantedId && isRecord(map[wantedId])) {
+        const entry = map[wantedId] as Record<string, unknown>;
+        return isRecord(entry["note"]) ? (entry["note"] as Record<string, unknown>) : entry;
+      }
+      if (!wantedId) {
+        for (const entry of Object.values(map)) {
+          if (!isRecord(entry)) continue;
+          const note = isRecord(entry["note"])
+            ? (entry["note"] as Record<string, unknown>)
+            : entry;
+          if (isNoteShaped(note)) return note;
         }
       }
-    } catch {
-      // Unparseable map; keep scanning for another occurrence.
     }
     from = scanned.end + 1;
   }
@@ -224,47 +305,77 @@ function streamEntries(stream: unknown): Array<Record<string, unknown>> {
   return out;
 }
 
-function collectVideoCandidates(video: unknown): VideoCandidate[] {
-  if (!isRecord(video)) return [];
-  const out: VideoCandidate[] = [];
-  const buckets: unknown[] = [video["media"], video["stream"]].filter((v) => v !== undefined);
+function candidateFromEntry(entry: Record<string, unknown>): VideoCandidate | undefined {
+  const type = entry["streamType"] ?? entry["stream_type"];
+  const desc = entry["streamDesc"] ?? entry["stream_desc"];
+  const watermarked =
+    type === 259 ||
+    type === 309 ||
+    (typeof desc === "string" && desc.toUpperCase() === "WEB_LIVEPHOTO_19");
+  const urls = [
+    entry["masterUrl"],
+    entry["master_url"],
+    ...(Array.isArray(entry["backupUrls"])
+      ? (entry["backupUrls"] as unknown[])
+      : Array.isArray(entry["backup_urls"])
+        ? (entry["backup_urls"] as unknown[])
+        : []),
+    entry["url"],
+  ].filter(nonBlank);
+  if (urls.length === 0) return undefined;
+  const width = typeof entry["width"] === "number" ? (entry["width"] as number) : 0;
+  const height = typeof entry["height"] === "number" ? (entry["height"] as number) : 0;
+  return { url: toHttps(urls[0]), watermarked, width, height };
+}
+
+function collectStreamCandidates(container: unknown): VideoCandidate[] {
+  if (!isRecord(container)) return [];
+  const streamObj =
+    container["stream"] !== undefined && isRecord(container) ? container["stream"] : container;
+  return streamEntries(streamObj)
+    .map(candidateFromEntry)
+    .filter((c): c is VideoCandidate => c !== undefined);
+}
+
+/**
+ * Resolve the original video file. An explicitly supplied originVideoKey
+ * (consumer.originVideoKey or top-level originVideoKey) wins; otherwise the
+ * best non-watermarked stream rendition is used.
+ */
+export function resolveVideoUrl(video: unknown): ResolvedVideo | undefined {
+  if (!isRecord(video)) return undefined;
+  const key =
+    (isRecord(video["consumer"]) ? pickString(video["consumer"] as Record<string, unknown>, ["originVideoKey"]) : undefined) ??
+    pickString(video, ["originVideoKey"]);
+  if (key) {
+    if (/^https?:\/\//i.test(key)) return { url: toHttps(key) };
+    return { url: `https://sns-video-bd.xhscdn.com/${key.replace(/^\/+/, "")}` };
+  }
+  const candidates: VideoCandidate[] = [];
+  if (isRecord(video["media"])) {
+    const media = video["media"] as Record<string, unknown>;
+    if (media["stream"] !== undefined) candidates.push(...collectStreamCandidates(media["stream"]));
+  }
+  if (video["stream"] !== undefined) candidates.push(...collectStreamCandidates(video["stream"]));
   if (typeof video["mediaV2"] === "string") {
     try {
       const parsed = JSON.parse(video["mediaV2"] as string) as Record<string, unknown>;
-      if (isRecord(parsed) && parsed["stream"] !== undefined) buckets.push(parsed["stream"]);
+      if (isRecord(parsed) && parsed["stream"] !== undefined) {
+        candidates.push(...collectStreamCandidates(parsed["stream"]));
+      }
     } catch {
       // Ignore unparseable app-media payloads; other buckets may still apply.
     }
   }
-  for (const bucket of buckets) {
-    const streamObj = isRecord(bucket) && bucket["stream"] !== undefined ? bucket["stream"] : bucket;
-    for (const entry of streamEntries(streamObj)) {
-      const type = entry["streamType"] ?? entry["stream_type"];
-      const desc = entry["streamDesc"] ?? entry["stream_desc"];
-      const watermarked =
-        type === 259 ||
-        type === 309 ||
-        (typeof desc === "string" && desc.toUpperCase() === "WEB_LIVEPHOTO_19");
-      const urls = [
-        entry["masterUrl"],
-        entry["master_url"],
-        ...(Array.isArray(entry["backupUrls"])
-          ? (entry["backupUrls"] as unknown[])
-          : Array.isArray(entry["backup_urls"])
-            ? (entry["backup_urls"] as unknown[])
-            : []),
-        entry["url"],
-      ].filter(nonBlank);
-      if (urls.length === 0) continue;
-      const width = typeof entry["width"] === "number" ? (entry["width"] as number) : 0;
-      const height = typeof entry["height"] === "number" ? (entry["height"] as number) : 0;
-      out.push({ url: urls[0], watermarked, width, height });
-    }
-  }
-  return out;
+  const best = bestVideo(candidates);
+  if (!best) return undefined;
+  const resolved: ResolvedVideo = { url: best.url };
+  if (best.width > 0) resolved.width = best.width;
+  if (best.height > 0) resolved.height = best.height;
+  return resolved;
 }
 
-/** Highest resolution wins; watermarked renditions lose ties and lose to clean ones. */
+/** Highest resolution wins; watermarked renditions lose to clean ones. */
 function bestVideo(candidates: VideoCandidate[]): VideoCandidate | undefined {
   return [...candidates].sort((a, b) => {
     if (a.watermarked !== b.watermarked) return a.watermarked ? 1 : -1;
@@ -274,7 +385,7 @@ function bestVideo(candidates: VideoCandidate[]): VideoCandidate | undefined {
 
 function imageUrlOf(entry: Record<string, unknown>): string | undefined {
   const direct = pickString(entry, ["urlDefault", "url"]);
-  if (direct) return direct;
+  if (direct) return transformImageUrl(direct);
   const traceId = pickString(entry, ["traceId"]);
   if (traceId) return `https://sns-img-qc.xhscdn.com/${traceId}`;
   return undefined;
@@ -348,7 +459,7 @@ export function parseXhs(html: string, pageUrl: string): XhsResult {
   }
 
   const looksLikeXhs =
-    /xiaohongshu\.com|xhslink|__INITIAL_STATE__/.test(pageUrl) ||
+    /xiaohongshu\.com|xhslink/.test(pageUrl) ||
     /xiaohongshu\.com|xhslink|__INITIAL_STATE__/.test(html.slice(0, 20000));
   if (!note) {
     if (looksLikeXhs) {
@@ -385,75 +496,101 @@ export function parseXhs(html: string, pageUrl: string): XhsResult {
   if (authorName) author.name = authorName;
   if (authorId) author.id = authorId;
 
-  const images = (Array.isArray(note["imageList"]) ? note["imageList"] : note["images"] ?? []) as unknown[];
-  const noteVideoCandidates = collectVideoCandidates(note["video"]);
+  const rawImages = (Array.isArray(note["imageList"]) ? note["imageList"] : (note["images"] ?? [])) as unknown[];
+  const images = rawImages.filter(isRecord);
+
+  const noteType = typeof note["type"] === "string" ? (note["type"] as string) : "";
+  const firstHasStream =
+    images.length > 0 && (images[0]["stream"] !== undefined || images[0]["livePhoto"] !== undefined);
+  const hasMainVideo =
+    isRecord(note["video"]) &&
+    (nonBlank((note["video"] as Record<string, unknown>)["originVideoKey"]) ||
+      (isRecord((note["video"] as Record<string, unknown>)["consumer"]) &&
+        nonBlank(
+          ((note["video"] as Record<string, unknown>)["consumer"] as Record<string, unknown>)[
+            "originVideoKey"
+          ],
+        )) ||
+      collectStreamCandidates((note["video"] as Record<string, unknown>)["media"]).length > 0 ||
+      collectStreamCandidates((note["video"] as Record<string, unknown>)["stream"]).length > 0 ||
+      (typeof (note["video"] as Record<string, unknown>)["mediaV2"] === "string" &&
+        (((note["video"] as Record<string, unknown>)["mediaV2"] as string).includes("master_url") ||
+          ((note["video"] as Record<string, unknown>)["mediaV2"] as string).includes("masterUrl"))));
+  const isVideoNote =
+    noteType === "video" || (noteType === "" && hasMainVideo && images.length <= 1 && !firstHasStream);
 
   const items: XhsItem[] = [];
-  let noteVideoEmitted = false;
-  const emitNoteVideo = (): void => {
-    if (noteVideoEmitted) return;
-    const best = bestVideo(noteVideoCandidates);
-    if (!best) return;
-    noteVideoEmitted = true;
-    const item: XhsItem = { type: "video", url: best.url };
-    if (best.width > 0) item.width = best.width;
-    if (best.height > 0) item.height = best.height;
-    items.push(item);
-  };
 
-  images.forEach((raw) => {
-    if (!isRecord(raw)) return;
-    const entry = raw as Record<string, unknown>;
-    const img = imageUrlOf(entry);
-    const livePhoto = entry["livePhoto"];
-    const ownCandidates = [
-      ...streamEntries(entry["stream"]),
-      ...(isRecord(livePhoto) && livePhoto["stream"] !== undefined
-        ? streamEntries(livePhoto["stream"])
-        : []),
-    ]
-      .map((e) => collectVideoCandidates({ stream: { x: [e] } }))
-      .flat();
-    const own = bestVideo(ownCandidates);
-    if (own && img) {
-      const item: XhsItem = { type: "live", url: img, videoUrl: own.url };
-      const w = num(entry["width"]);
-      const h = num(entry["height"]);
-      if (w !== undefined) item.width = w;
-      if (h !== undefined) item.height = h;
+  if (isVideoNote) {
+    const resolved = resolveVideoUrl(note["video"]);
+    if (resolved) {
+      const item: XhsItem = { type: "video", url: resolved.url };
+      if (resolved.width !== undefined) item.width = resolved.width;
+      if (resolved.height !== undefined) item.height = resolved.height;
       items.push(item);
-      return;
+    } else if (images.length === 1) {
+      const img = imageUrlOf(images[0]);
+      if (img) {
+        const item: XhsItem = { type: "image", url: img };
+        const w = num(images[0]["width"]);
+        const h = num(images[0]["height"]);
+        if (w !== undefined) item.width = w;
+        if (h !== undefined) item.height = h;
+        items.push(item);
+      }
     }
-    if (own && !img) {
-      items.push({ type: "video", url: own.url });
-      return;
-    }
-    if (img && noteVideoCandidates.length > 0 && images.length === 1) {
-      const best = bestVideo(noteVideoCandidates);
-      if (best) {
-        noteVideoEmitted = true;
-        const item: XhsItem = { type: "live", url: img, videoUrl: best.url };
-        if (best.width > 0) item.width = best.width;
-        if (best.height > 0) item.height = best.height;
+  } else {
+    const noteVideo = resolveVideoUrl(note["video"]);
+    let noteVideoEmitted = false;
+    images.forEach((entry) => {
+      const img = imageUrlOf(entry);
+      const livePhoto = entry["livePhoto"];
+      const entryKey =
+        pickString(entry, ["originVideoKey"]) ??
+        (isRecord(livePhoto) ? pickString(livePhoto, ["originVideoKey"]) : undefined);
+      const entryKeyUrl = entryKey
+        ? /^https?:\/\//i.test(entryKey)
+          ? toHttps(entryKey)
+          : `https://sns-video-bd.xhscdn.com/${entryKey.replace(/^\/+/, "")}`
+        : undefined;
+      const ownCandidates = [
+        ...collectStreamCandidates(entry["stream"]),
+        ...(isRecord(livePhoto) && livePhoto["stream"] !== undefined
+          ? collectStreamCandidates(livePhoto["stream"])
+          : []),
+      ];
+      const own = entryKeyUrl
+        ? { url: entryKeyUrl, watermarked: false, width: 0, height: 0 }
+        : bestVideo(ownCandidates);
+      if (own && img) {
+        const item: XhsItem = { type: "live", url: img, videoUrl: own.url };
+        const w = num(entry["width"]);
+        const h = num(entry["height"]);
+        if (w !== undefined) item.width = w;
+        if (h !== undefined) item.height = h;
         items.push(item);
         return;
       }
-    }
-    if (img) {
-      const item: XhsItem = { type: "image", url: img };
-      const w = num(entry["width"]);
-      const h = num(entry["height"]);
-      if (w !== undefined) item.width = w;
-      if (h !== undefined) item.height = h;
+      if (own && !img) {
+        items.push({ type: "video", url: own.url });
+        return;
+      }
+      if (img) {
+        const item: XhsItem = { type: "image", url: img };
+        const w = num(entry["width"]);
+        const h = num(entry["height"]);
+        if (w !== undefined) item.width = w;
+        if (h !== undefined) item.height = h;
+        items.push(item);
+      }
+    });
+    if (noteVideo && !noteVideoEmitted && images.length !== 1) {
+      noteVideoEmitted = true;
+      const item: XhsItem = { type: "video", url: noteVideo.url };
+      if (noteVideo.width !== undefined) item.width = noteVideo.width;
+      if (noteVideo.height !== undefined) item.height = noteVideo.height;
       items.push(item);
-      return;
     }
-  });
-
-  if (items.length === 0 && noteVideoCandidates.length > 0) {
-    emitNoteVideo();
-  } else if (noteVideoCandidates.length > 0 && !noteVideoEmitted && images.length !== 1) {
-    emitNoteVideo();
   }
 
   if (items.length === 0) {

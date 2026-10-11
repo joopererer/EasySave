@@ -2,7 +2,7 @@ import { readdirSync, readFileSync } from "node:fs";
 import { join, dirname, basename } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { parseXhs } from "../src/xhs";
+import { parseXhs, sanitizeJsUndefined } from "../src/xhs";
 
 const fixtureDir = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "spec", "fixtures", "xhs");
 
@@ -46,4 +46,38 @@ describe("xhs fixtures", () => {
       }
     });
   }
+});
+
+describe("sanitizeJsUndefined", () => {
+  it("replaces undefined outside strings but keeps it inside strings", () => {
+    expect(sanitizeJsUndefined('{"a":undefined,"b":"say undefined loudly"}')).toBe(
+      '{"a":null,"b":"say undefined loudly"}',
+    );
+    expect(sanitizeJsUndefined('{"a":null}')).toBe('{"a":null}');
+    expect(sanitizeJsUndefined('[undefined,null,"undefined"]')).toBe('[null,null,"undefined"]');
+  });
+
+  it("parses state containing JS undefined without touching string content", () => {
+    const id = "6aca089a000000000a01efb4";
+    const html =
+      `<html><head><script>window.__INITIAL_STATE__={"global":{"x":undefined},` +
+      `"note":{"noteDetailMap":{"${id}":{"note":{"noteId":"${id}",` +
+      `"title":"say undefined loudly","desc":"d","time":1791625370000,` +
+      `"user":{"nickname":"momo","userId":"604e0d4800000000010065ec"},` +
+      `"imageList":[{"urlDefault":"http://sns-webpic-qc.xhscdn.com/202610112129/eb1fb79a62c72f9dbe14dd2909e2d83c/notes_pre_post/1040g3k83264voo1al0dg5o2e1l408pfcf1dl208!nd_dft_wlteh_webp_3","width":1290,"height":1608}]}}}}` +
+      `</script></head></html>`;
+    const result = parseXhs(html, `https://www.xiaohongshu.com/explore/${id}`);
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.data.title).toBe("say undefined loudly");
+      expect(result.data.items).toEqual([
+        {
+          type: "image",
+          url: "https://ci.xiaohongshu.com/notes_pre_post/1040g3k83264voo1al0dg5o2e1l408pfcf1dl208",
+          width: 1290,
+          height: 1608,
+        },
+      ]);
+    }
+  });
 });
