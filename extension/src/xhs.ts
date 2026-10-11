@@ -277,7 +277,6 @@ function deepFindNote(root: unknown, wantedId: string | undefined): Record<strin
         throw { found: node };
       }
       if (!fallback && !wantedId && isNoteShaped(node)) fallback = node;
-      else if (!fallback && wantedId && isNoteShaped(node) && !nonBlank(node["noteId"])) fallback = node;
       for (const value of Object.values(node)) visit(value, depth + 1);
     } else {
       for (const value of node as unknown[]) visit(value, depth + 1);
@@ -410,7 +409,17 @@ export function parseXhs(html: string, pageUrl: string): XhsResult {
     if (parsed !== undefined) states.push(parsed);
   }
 
-  const note = findNoteInStates(states, wantedId) ?? extractNoteDetailEntry(html, wantedId);
+  let note = findNoteInStates(states, wantedId) ?? extractNoteDetailEntry(html, wantedId);
+  if (
+    note &&
+    wantedId &&
+    nonBlank(note["noteId"]) &&
+    (note["noteId"] as string).toLowerCase() !== wantedId
+  ) {
+    // A mismatched id means stale data from another post: never present it
+    // as the requested note.
+    note = undefined;
+  }
 
   const looksLikeXhs =
     /xiaohongshu\.com|xhslink/.test(pageUrl) ||

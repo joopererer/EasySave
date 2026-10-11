@@ -22,8 +22,8 @@ export default defineConfig({
     },
     web_accessible_resources: [
       {
-        resources: ["xhs-state.js"],
-        matches: ["*://*.xiaohongshu.com/*"],
+        resources: ["page-bridge.js"],
+        matches: ["*://*.xiaohongshu.com/*", "*://*.instagram.com/*"],
       },
     ],
   },

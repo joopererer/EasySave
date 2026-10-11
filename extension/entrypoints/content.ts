@@ -86,45 +86,32 @@ export default defineContentScript({
       return m ? m[1].toLowerCase() : undefined;
     }
 
+    function shortcodeFromUrl(url: string): string | undefined {
+      const m = /\/(?:p|reel|tv)\/([A-Za-z0-9-_]+)/.exec(url);
+      return m ? m[1] : undefined;
+    }
+
     async function parseCurrent(): Promise<import("../src/index").ParseResult> {
       const url = location.href;
       if (lastResult && lastParsedUrl === url) return lastResult;
       const { parse } = await import("../src/index");
       let result: import("../src/index").ParseResult;
       if (isXhs) {
-        const { findNoteInStates, buildNoteFromRecord } = await import("../src/xhs");
-        const wantedId = noteIdFromUrl(url);
-        const { state, note: cached, recent } = await readXhsStateViaBridge();
-        const isRecord = (v: unknown): v is Record<string, unknown> =>
-          typeof v === "object" && v !== null;
-        const noteIdOf = (v: Record<string, unknown>): string =>
-          typeof v["noteId"] === "string" ? (v["noteId"] as string) : "";
-        if (isRecord(cached) && wantedId) {
-          const cachedId = noteIdOf(cached);
-          if (cachedId === wantedId || cachedId === "") {
-            result = buildNoteFromRecord(cached, wantedId);
-          } else {
-            result = parse(document.documentElement.outerHTML, url);
-          }
-        } else if (!wantedId && isRecord(recent) && noteIdOf(recent) !== "") {
-          // Feed/modal views carry no note id in the URL: use the most
-          // recently network-loaded note (the open modal).
-          result = buildNoteFromRecord(recent, noteIdOf(recent));
-        } else {
-          const note =
-            state === undefined ? undefined : findNoteInStates([state], wantedId);
-          if (note) {
-            const noteId =
-              typeof note["noteId"] === "string" && (note["noteId"] as string).length > 0
-                ? (note["noteId"] as string)
-                : (wantedId ?? "");
-            result = noteId ? buildNoteFromRecord(note, noteId) : parse(document.documentElement.outerHTML, url);
-          } else {
-            result = parse(document.documentElement.outerHTML, url);
-          }
-        }
+        result = await parseXhsCurrent(url, parse);
       } else {
-        result = parse(document.documentElement.outerHTML, url);
+        const shortcode = shortcodeFromUrl(url);
+        const { product } = await readBridgeState();
+        if (shortcode) {
+          const { buildPostFromProduct } = await import("../src/instagram");
+          const isRecord = (v: unknown): v is Record<string, unknown> =>
+            typeof v === "object" && v !== null;
+          result =
+            isRecord(product) && product["shortcode"] === shortcode
+              ? buildPostFromProduct(product, shortcode)
+              : parse(document.documentElement.outerHTML, url);
+        } else {
+          result = parse(document.documentElement.outerHTML, url);
+        }
       }
       if (!result.ok && hasPostIdentity(url)) {
         const fetched = await fetchAndParse(url);
@@ -135,20 +122,62 @@ export default defineContentScript({
       return result;
     }
 
+    async function parseXhsCurrent(
+      url: string,
+      parse: (html: string, pageUrl: string) => import("../src/index").ParseResult,
+    ): Promise<import("../src/index").ParseResult> {
+      const { findNoteInStates, buildNoteFromRecord } = await import("../src/xhs");
+      const wantedId = noteIdFromUrl(url);
+      const { state, note: cached, recent } = await readBridgeState();
+      const isRecord = (v: unknown): v is Record<string, unknown> =>
+        typeof v === "object" && v !== null;
+      const noteIdOf = (v: Record<string, unknown>): string =>
+        typeof v["noteId"] === "string" ? (v["noteId"] as string) : "";
+      if (isRecord(cached) && wantedId) {
+        const cachedId = noteIdOf(cached);
+        if (cachedId === wantedId) {
+          return buildNoteFromRecord(cached, wantedId);
+        }
+        return parse(document.documentElement.outerHTML, url);
+      }
+      if (!wantedId && isRecord(recent) && noteIdOf(recent) !== "") {
+        // Feed/modal views carry no note id in the URL: use the most
+        // recently network-loaded note (the open modal).
+        return buildNoteFromRecord(recent, noteIdOf(recent));
+      }
+      const note =
+        state === undefined ? undefined : findNoteInStates([state], wantedId);
+      if (note) {
+        const noteId =
+          typeof note["noteId"] === "string" && (note["noteId"] as string).length > 0
+            ? (note["noteId"] as string)
+            : (wantedId ?? "");
+        if (noteId) return buildNoteFromRecord(note, noteId);
+      }
+      return parse(document.documentElement.outerHTML, url);
+    }
+
     let bridgeInstalled = false;
     let bridgeNonce = 0;
 
     function ensureBridge(): void {
-      if (bridgeInstalled || !isXhs || !isExtAlive()) return;
+      if (bridgeInstalled || (!isXhs && !isInstagram) || !isExtAlive()) return;
       bridgeInstalled = true;
       const script = document.createElement("script");
-      script.src = chrome.runtime.getURL("/xhs-state.js");
+      script.src = chrome.runtime.getURL("/page-bridge.js");
       script.addEventListener("load", () => script.remove());
       (document.head ?? document.documentElement).appendChild(script);
     }
 
-    /** Ask the MAIN-world bridge for the embedded page state. */
-    function readXhsStateViaBridge(): Promise<{ state?: unknown; note?: unknown; recent?: unknown }> {
+    interface BridgeAnswer {
+      state?: unknown;
+      note?: unknown;
+      recent?: unknown;
+      product?: unknown;
+    }
+
+    /** Ask the MAIN-world bridge for page state and sniffed post records. */
+    function readBridgeState(): Promise<BridgeAnswer> {
       ensureBridge();
       return new Promise((resolve) => {
         const nonce = `es${Date.now()}_${bridgeNonce++}`;
@@ -158,17 +187,31 @@ export default defineContentScript({
         }, 3000);
         function onMessage(event: MessageEvent): void {
           const data = event.data as
-            | { source?: string; type?: string; nonce?: string; state?: unknown; note?: unknown; recent?: unknown }
+            | {
+                source?: string;
+                type?: string;
+                nonce?: string;
+                state?: unknown;
+                note?: unknown;
+                recent?: unknown;
+                product?: unknown;
+              }
             | null;
           if (!data || event.source !== window || data.nonce !== nonce) return;
           if (data.source !== "easysave" || data.type !== "EASYSAVE_STATE") return;
           clearTimeout(timer);
           window.removeEventListener("message", onMessage);
-          resolve({ state: data.state, note: data.note, recent: data.recent });
+          resolve({ state: data.state, note: data.note, recent: data.recent, product: data.product });
         }
         window.addEventListener("message", onMessage);
         window.postMessage(
-          { source: "easysave", type: "EASYSAVE_GET_STATE", nonce, wantedId: noteIdFromUrl(location.href) },
+          {
+            source: "easysave",
+            type: "EASYSAVE_GET_STATE",
+            nonce,
+            wantedId: isXhs ? noteIdFromUrl(location.href) : undefined,
+            wantedShortcode: isInstagram ? shortcodeFromUrl(location.href) : undefined,
+          },
           "*",
         );
       });

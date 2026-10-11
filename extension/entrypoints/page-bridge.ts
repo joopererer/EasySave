@@ -1,13 +1,15 @@
 // Runs in the page's MAIN world:
-//  1. sniffs XHR/fetch JSON responses for note records (SPA navigation loads
-//     notes without a full page load, so embedded state goes stale);
+//  1. sniffs XHR/fetch JSON responses for post records (SPA navigation loads
+//     posts without a full page load, so embedded state goes stale);
 //  2. answers state requests from the content script (ISOLATED world).
 
 import { cachedNotesFromText, NoteCache } from "../src/note-cache";
+import { cachedProductsFromText, ProductCache } from "../src/ig-cache";
 
 export default defineUnlistedScript(() => {
   const SOURCE = "easysave";
-  const cache = new NoteCache(20);
+  const noteCache = new NoteCache(20);
+  const productCache = new ProductCache(20);
 
   function readState(): unknown {
     const w = window as unknown as Record<string, unknown>;
@@ -47,7 +49,13 @@ export default defineUnlistedScript(() => {
     if (!text || text.length < 2) return;
     try {
       const notes = cachedNotesFromText(text);
-      if (notes.length > 0) cache.add(notes);
+      if (notes.length > 0) noteCache.add(notes);
+    } catch {
+      // Ignore sniffing failures; the page must never break.
+    }
+    try {
+      const products = cachedProductsFromText(text);
+      if (products.length > 0) productCache.add(products);
     } catch {
       // Ignore sniffing failures; the page must never break.
     }
@@ -85,7 +93,6 @@ export default defineUnlistedScript(() => {
         url: string | URL,
         ...rest: unknown[]
       ): void {
-        (this as unknown as Record<string, unknown>).__esSeen = { method, url: String(url) };
         (originalOpen as (...args: unknown[]) => void).apply(this, [method, url, ...rest]);
       } as typeof XMLHttpRequest.prototype.open;
       XMLHttpRequest.prototype.send = function (
@@ -113,23 +120,42 @@ export default defineUnlistedScript(() => {
 
   window.addEventListener("message", (event: MessageEvent) => {
     if (event.source !== window) return;
-    const data = event.data as { source?: string; type?: string; nonce?: string; wantedId?: string } | null;
+    const data = event.data as {
+      source?: string;
+      type?: string;
+      nonce?: string;
+      wantedId?: string;
+      wantedShortcode?: string;
+    } | null;
     if (!data || data.source !== SOURCE || data.type !== "EASYSAVE_GET_STATE") return;
     let state: unknown;
     let note: unknown;
     let recent: unknown;
+    let product: unknown;
     try {
       state = safeClone(readState());
       if (typeof data.wantedId === "string" && data.wantedId.length > 0) {
-        note = safeClone(cache.get(data.wantedId));
+        note = safeClone(noteCache.get(data.wantedId));
       }
-      recent = safeClone(cache.recent());
+      recent = safeClone(noteCache.recent());
+      if (typeof data.wantedShortcode === "string" && data.wantedShortcode.length > 0) {
+        product = safeClone(productCache.get(data.wantedShortcode));
+      }
     } catch {
       state = undefined;
       note = undefined;
       recent = undefined;
+      product = undefined;
     }
-    const answer = { source: SOURCE, type: "EASYSAVE_STATE", nonce: data.nonce, state, note, recent };
+    const answer = {
+      source: SOURCE,
+      type: "EASYSAVE_STATE",
+      nonce: data.nonce,
+      state,
+      note,
+      recent,
+      product,
+    };
     try {
       window.postMessage(answer, "*");
     } catch {

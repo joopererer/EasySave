@@ -204,6 +204,17 @@ export function parseInstagram(html: string, pageUrl: string): InstagramResult {
     };
   }
 
+  return buildPostFromProduct(product, shortcode);
+}
+
+/**
+ * Build the unified post output from an already-located product object.
+ * Shared by parseInstagram (HTML input) and the network-sniffing fast path.
+ */
+export function buildPostFromProduct(
+  product: Record<string, unknown>,
+  shortcode: string,
+): InstagramResult {
   const user = isRecord(product["user"])
     ? (product["user"] as Record<string, unknown>)
     : isRecord(product["owner"])
