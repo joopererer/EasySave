@@ -100,7 +100,7 @@ export default defineContentScript({
         result = await parseXhsCurrent(url, parse);
       } else {
         const shortcode = shortcodeFromUrl(url);
-        const { product } = await readBridgeState();
+        const { product } = await readBridgeSettled();
         if (shortcode) {
           const { buildPostFromProduct } = await import("../src/instagram");
           const isRecord = (v: unknown): v is Record<string, unknown> =>
@@ -128,7 +128,7 @@ export default defineContentScript({
     ): Promise<import("../src/index").ParseResult> {
       const { findNoteInStates, buildNoteFromRecord } = await import("../src/xhs");
       const wantedId = noteIdFromUrl(url);
-      const { state, note: cached, recent } = await readBridgeState();
+      const { state, note: cached, recent } = await readBridgeSettled();
       const isRecord = (v: unknown): v is Record<string, unknown> =>
         typeof v === "object" && v !== null;
       const noteIdOf = (v: Record<string, unknown>): string =>
@@ -163,10 +163,13 @@ export default defineContentScript({
     function ensureBridge(): void {
       if (bridgeInstalled || (!isXhs && !isInstagram) || !isExtAlive()) return;
       bridgeInstalled = true;
-      const script = document.createElement("script");
-      script.src = chrome.runtime.getURL("/page-bridge.js");
-      script.addEventListener("load", () => script.remove());
-      (document.head ?? document.documentElement).appendChild(script);
+      try {
+        void chrome.runtime
+          .sendMessage({ type: "EASYSAVE_BRIDGE_INSTALL" })
+          .catch(() => undefined);
+      } catch {
+        // Extension context dead; the bridge simply stays unavailable.
+      }
     }
 
     interface BridgeAnswer {
@@ -179,8 +182,7 @@ export default defineContentScript({
     /** Ask the MAIN-world bridge for page state and sniffed post records. */
     function readBridgeState(): Promise<BridgeAnswer> {
       ensureBridge();
-      return new Promise((resolve) => {
-        const nonce = `es${Date.now()}_${bridgeNonce++}`;
+      return new Promise((resolve) => {        const nonce = `es${Date.now()}_${bridgeNonce++}`;
         const timer = setTimeout(() => {
           window.removeEventListener("message", onMessage);
           resolve({});
@@ -215,6 +217,28 @@ export default defineContentScript({
           "*",
         );
       });
+    }
+
+    function bridgeAnswerEmpty(ans: BridgeAnswer): boolean {
+      return (
+        ans.state === undefined &&
+        ans.note === undefined &&
+        ans.recent === undefined &&
+        ans.product === undefined
+      );
+    }
+
+    /**
+     * Read the bridge, retrying briefly: modal/XHR data may still be in
+     * flight when the user opens the panel immediately after navigation.
+     */
+    async function readBridgeSettled(): Promise<BridgeAnswer> {
+      let ans = await readBridgeState();
+      for (let i = 0; i < 2 && bridgeAnswerEmpty(ans); i++) {
+        await new Promise((r) => setTimeout(r, 500));
+        ans = await readBridgeState();
+      }
+      return ans;
     }
 
     /** Last-resort: fetch the page HTML (SSR embeds the current post) and parse it. */

@@ -5,8 +5,10 @@ export default defineConfig({
     name: "EasySave",
     description: "Media download assistant",
     version: "0.1.0",
-    permissions: ["activeTab", "downloads", "declarativeNetRequest"],
+    permissions: ["activeTab", "downloads", "declarativeNetRequest", "scripting"],
     host_permissions: [
+      "*://*.xiaohongshu.com/*",
+      "*://*.instagram.com/*",
       "*://*.xhscdn.com/*",
       "*://ci.xiaohongshu.com/*",
       "*://*.cdninstagram.com/*",

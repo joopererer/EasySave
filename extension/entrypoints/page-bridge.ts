@@ -7,6 +7,10 @@ import { cachedNotesFromText, NoteCache } from "../src/note-cache";
 import { cachedProductsFromText, ProductCache } from "../src/ig-cache";
 
 export default defineUnlistedScript(() => {
+  const w = window as unknown as Record<string, unknown>;
+  if (w["__easysaveBridgeInstalled"]) return;
+  w["__easysaveBridgeInstalled"] = true;
+
   const SOURCE = "easysave";
   const noteCache = new NoteCache(20);
   const productCache = new ProductCache(20);
