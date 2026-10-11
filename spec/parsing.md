@@ -4,13 +4,25 @@
 
 Fixture pairs used to validate this contract live under spec/fixtures/.
 
-Parsers produce `{ platform, id, author, caption, items: [{ type: image|video|live, url, videoUrl? }] }`. `items` preserves source order; `live` represents a still image paired with its motion asset.
+Parsers produce `{ platform, id, url, author: { name?, id? }, title?, caption?, publishedAt?, items: [{ type: image|video|live, url, videoUrl?, width?, height? }] }`.
+`platform` is `xhs` or `instagram`. `url` is the canonical post URL.
+`items` preserves source order. `live` represents a still image paired with its
+motion asset via `videoUrl`. In v1, `live` is only an image+video pair; no
+motion-photo synthesis is performed.
+
+v1 scope exclusions: comment-section images, Stories, and OG fallback on post
+pages. When structured parsing fails, return an explicit parse error instead of
+a partial or empty success.
+
+Resolution policy: always select the highest resolution available.
 
 ## Xiaohongshu
 
-**Source and paths.** Prefer the structured state exposed by the page: locate the note identified by the 24-character id in `window.__INITIAL_STATE__`, `window.__NEXT_DATA__`, or `window.__NUXT__`. Candidate shapes include `noteDetailMap[id].note`, mobile `noteData.data.noteData`, and a note object containing `noteId`, `imageList`, or `video`. Author and caption come from the note's user/author object and `desc`.
+**Source and paths.** Prefer the structured state exposed by the page: locate the note identified by the 24-character lowercase hex id in `window.__INITIAL_STATE__`, `window.__NEXT_DATA__`, or `window.__NUXT__`. The id appears in note page paths matching `/(explore|discovery/item|user/profile/[^/]+)/([a-f0-9]{24})` (case-insensitive). Candidate shapes include `noteDetailMap[id].note`, mobile `noteData.data.noteData`, and a note object containing `noteId`, `imageList`, or `video`. Author name is resolved from the note's user object in priority order `nickname`, `nickName`, `name`, `userName`; author id from `userId`, `user_id`, `id`, `redId`. Caption/body is `desc` (fallback `description`); `title` and `publishTime` (as `publishedAt`) are taken when present.
 
-**URL rules.** For each image, prefer the largest origin-quality URL in its image metadata and remove resizing/query transformations only when the host/path format is known to preserve the asset. For video, use the note's video URL. A paired image and video is emitted as `live`, with the video in `videoUrl`.
+**URL rules.** For each entry in `imageList` (fallback `images`), the original image URL is resolved in priority order: `urlDefault`, then `url`, then `https://sns-img-qc.xhscdn.com/{traceId}` derived from a non-blank `traceId`. Skip entries with no usable URL. Resizing/query transformations are removed only when the host/path format is known to preserve the asset. For video, resolve the original key from `video.consumer.originVideoKey` (fallback top-level `originVideoKey` on the video object); only a supplied original key is used, stream/video IDs are not interchangeable with CDN keys. Additional renditions are enumerated from `video.media.stream` and `video.stream` codec arrays, each contributing `masterUrl` plus `backupUrls` plus `url`. A stream entry is treated as watermarked when `streamType` is 259 or 309, or `streamDesc` equals `WEB_LIVEPHOTO_19` (case-insensitive); watermarked renditions are deprioritized. A paired image and video is emitted as `live`, with the video in `videoUrl`.
+
+**Note type.** The note `type` field distinguishes video notes from image/text notes: when `type` is blank, treat the note as `video` if a main video exists and `imageList` has at most one entry whose item has no `stream` object; otherwise treat it as `normal`.
 
 **Fallback.** Walk nested objects with cycle protection and accept a matching note-shaped object. If structured state is absent, use embedded JSON scripts or the page's canonical/OG metadata for a single preview image, but do not claim a full media list.
 
@@ -18,11 +30,11 @@ Parsers produce `{ platform, id, author, caption, items: [{ type: image|video|li
 
 ## Instagram
 
-**Source and paths.** Fetch the public post page and inspect JSON-bearing `data-sjs` scripts. Recursively find the product whose numeric `id`/`pk` matches the shortcode converted from Instagram's base-64 alphabet. Caption is `caption.text`; author is `user.username` or `owner.username`; carousel media is `carousel_media`.
+**Source and paths.** Fetch the public post page (`/p/{shortcode}/`, `/reel/{shortcode}/`, `/tv/{shortcode}/` all normalize to `/p/{shortcode}/` for fetching; both `instagram.com` and `instagr.am` hosts are accepted) and inspect JSON-bearing `data-sjs` scripts matching `<script\b[^>]*\bdata-sjs[^>]*>(\{.+?\})</script>`. The shortcode uses Instagram's base64url alphabet `A-Za-z0-9-_`. Recursively find the product whose numeric `id`/`pk` matches the shortcode converted to a media id. The shortcode-to-media-id conversion MUST use arbitrary-precision integers (BigInt in TypeScript) because the value exceeds 64-bit float precision; fixed-width 64-bit integers can overflow on unexpected input and must be rejected rather than wrapped. A candidate object matches when it has any of `video_versions`, `carousel_media`, or `image_versions2`. Caption is `caption.text`; author is `user.username` or `owner.username`; carousel media is `carousel_media`; publish time is `taken_at` (seconds, as `publishedAt`).
 
-**URL rules.** Images are selected from `image_versions2.candidates` (or `display_url` fallback); videos from `video_versions`. Select the highest usable rendition and retain signed query parameters. Do not rewrite CDN URLs because signatures and expiry are meaningful. Reels/posts/tv URLs normalize to `/p/{shortcode}/` for fetching.
+**URL rules.** Images are selected from `image_versions2.candidates` (or `display_url` fallback); videos from `video_versions`. Always select the highest-resolution rendition and retain signed query parameters. Do not rewrite CDN URLs because signatures and expiry are meaningful.
 
-**Fallback.** Use OG image/video metadata for a single item when public JSON is unavailable. A profile URL may fall back to its `og:image`, but this is not a post result. Report private, deleted, login-gated, or empty pages as parse failures rather than returning an empty success.
+**Fallback.** In v1 there is no OG fallback on post pages: when public JSON is unavailable, report private, deleted, login-gated, or empty pages as parse failures rather than returning an empty success. A profile URL may fall back to its `og:image`, but this is not a post result.
 
 **Risks.** Instagram changes script schemas and gates public data, CDN URLs expire, shortcode decoding can overflow for unexpected input, carousels mix media types, and regional/login/age restrictions can hide the product.
 
