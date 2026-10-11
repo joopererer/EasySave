@@ -87,7 +87,7 @@ export default defineContentScript({
     }
 
     function shortcodeFromUrl(url: string): string | undefined {
-      const m = /\/(?:p|reel|tv)\/([A-Za-z0-9-_]+)/.exec(url);
+      const m = /\/(?:p|reels?|tv)\/([A-Za-z0-9-_]+)/.exec(url);
       return m ? m[1] : undefined;
     }
 

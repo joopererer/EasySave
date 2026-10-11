@@ -22,6 +22,18 @@ function noteIdOf(note: Record<string, unknown>): string | undefined {
   return typeof id === "string" && id.length > 0 ? id : undefined;
 }
 
+function isNoteLike(obj: Record<string, unknown>): boolean {
+  if (!noteIdOf(obj)) return false;
+  return (
+    typeof obj["title"] === "string" ||
+    typeof obj["desc"] === "string" ||
+    typeof obj["description"] === "string" ||
+    Array.isArray(obj["imageList"]) ||
+    Array.isArray(obj["images"]) ||
+    isRecord(obj["video"])
+  );
+}
+
 /**
  * Walk a decoded JSON payload and collect every note record it contains.
  * Recognizes `noteDetailMap` entries (keyed by note id) and mobile-style
@@ -56,6 +68,9 @@ export function extractCachedNotes(payload: unknown): CachedNote[] {
         const wrapper = (isRecord(nested) ? nested : node["noteData"]) as Record<string, unknown>;
         push(undefined, unwrapEntry(isRecord(wrapper["note"]) ? wrapper["note"] : wrapper));
       }
+      // Unknown API shapes (e.g. feed modal payloads): accept any object
+      // that looks like a note and carries its own noteId.
+      if (isNoteLike(node)) push(undefined, node);
       for (const value of Object.values(node)) visit(value);
     } else {
       for (const value of node as unknown[]) visit(value);
@@ -73,7 +88,11 @@ export function extractCachedNotes(payload: unknown): CachedNote[] {
 /** Parse response text into cached notes; returns [] for non-JSON bodies. */
 export function cachedNotesFromText(text: string): CachedNote[] {
   if (text.length === 0 || text.length > 8 * 1024 * 1024) return [];
-  if (!text.includes("noteDetailMap") && !text.includes("noteData")) return [];
+  const hasMap = text.includes("noteDetailMap") || text.includes("noteData");
+  const hasNoteLike =
+    text.includes('"noteId"') &&
+    (text.includes('"imageList"') || text.includes('"images"') || text.includes('"video"'));
+  if (!hasMap && !hasNoteLike) return [];
   try {
     return extractCachedNotes(JSON.parse(text) as unknown);
   } catch {

@@ -57,6 +57,14 @@ describe("instagram fixtures", () => {
 });
 
 describe("shortcodeToMediaId", () => {
+  it("accepts /reels/ page URLs and normalizes them to /p/", () => {
+    const html = readFileSync(join(fixtureDir, "ig_reel.html"), "utf-8");
+    const expected = JSON.parse(
+      readFileSync(join(fixtureDir, "ig_reel.expected.json"), "utf-8"),
+    ) as Record<string, unknown>;
+    const result = parseInstagram(html, "https://www.instagram.com/reels/DeTOj5WRMIh/");
+    expect(result).toEqual({ ok: true, data: expected });
+  });
   it("converts known shortcodes with BigInt precision", () => {
     expect(shortcodeToMediaId("Ddl1WWnGyCN")).toBe("3991831277305798797");
     expect(shortcodeToMediaId("DeTOj5WRMIh")).toBe("4004608533072232993");

@@ -44,7 +44,7 @@ export type InstagramResult =
   | { ok: true; data: InstagramPost }
   | { ok: false; error: InstagramError };
 
-const SHORTCODE_PATTERN = /\/(?:p|reel|tv)\/([A-Za-z0-9-_]+)/;
+const SHORTCODE_PATTERN = /\/(?:p|reels?|tv)\/([A-Za-z0-9-_]+)/;
 const SHORTCODE_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
 const DATA_SJS_PATTERN = /<script\b[^>]*\bdata-sjs[^>]*>(\{.+?\})<\/script>/gs;
 

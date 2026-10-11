@@ -23,6 +23,13 @@ describe("extractCachedNotes", () => {
     expect(notes[0].id).toBe("m1");
   });
 
+  it("collects unknown API shapes carrying their own noteId", () => {
+    const notes = extractCachedNotes({
+      data: { feed: [{ noteId: "w1", desc: "hello", imageList: [] }] },
+    });
+    expect(notes.map((n) => n.id)).toEqual(["w1"]);
+  });
+
   it("ignores unexpected shapes without throwing", () => {
     expect(extractCachedNotes(null)).toEqual([]);
     expect(extractCachedNotes({ a: [1, "x", null] })).toEqual([]);
