@@ -91,6 +91,63 @@ export default defineContentScript({
       return m ? m[1] : undefined;
     }
 
+    /**
+     * Feed overlays carry no shortcode in the URL: look for the permalink
+     * inside the open dialog (modal). Never guesses from the feed itself.
+     */
+    function shortcodeFromPage(): string | undefined {
+      const dialog = document.querySelector('[role="dialog"]');
+      if (!dialog) return undefined;
+      const anchors = dialog.querySelectorAll<HTMLAnchorElement>('a[href*="/p/"], a[href*="/reel"]');
+      for (const anchor of anchors) {
+        const sc = shortcodeFromUrl(anchor.getAttribute("href") ?? anchor.href);
+        if (sc) return sc;
+      }
+      return undefined;
+    }
+
+    /**
+     * Fetch the canonical post URL with the user's login state. The document
+     * in a SPA is stale after in-page navigation; a same-origin fetch returns
+     * server-rendered HTML for the current post. No private APIs involved.
+     */
+    async function fetchInstagramPost(shortcode: string): Promise<string | null> {
+      try {
+        const resp = await fetch(`https://www.instagram.com/p/${shortcode}/`, {
+          credentials: "include",
+          redirect: "follow",
+          signal: AbortSignal.timeout(20000),
+        });
+        if (!resp.ok) return null;
+        const html = await resp.text();
+        return html || null;
+      } catch {
+        return null;
+      }
+    }
+
+    async function parseInstagramCurrent(
+      url: string,
+      shortcode: string,
+      parse: (html: string, pageUrl: string) => import("../src/index").ParseResult,
+    ): Promise<import("../src/index").ParseResult> {
+      const canonical = `https://www.instagram.com/p/${shortcode}/`;
+      const fetched = await fetchInstagramPost(shortcode);
+      if (fetched) {
+        const parsed = parse(fetched, canonical);
+        if (parsed.ok) return parsed;
+      }
+      const { product } = await readBridgeSettled();
+      const isRecord = (v: unknown): v is Record<string, unknown> =>
+        typeof v === "object" && v !== null;
+      if (isRecord(product) && product["shortcode"] === shortcode) {
+        const { buildPostFromProduct } = await import("../src/instagram");
+        const built = buildPostFromProduct(product, shortcode);
+        if (built.ok) return built;
+      }
+      return parse(document.documentElement.outerHTML, url);
+    }
+
     async function parseCurrent(): Promise<import("../src/index").ParseResult> {
       const url = location.href;
       if (lastResult && lastParsedUrl === url) return lastResult;
@@ -99,19 +156,10 @@ export default defineContentScript({
       if (isXhs) {
         result = await parseXhsCurrent(url, parse);
       } else {
-        const shortcode = shortcodeFromUrl(url);
-        const { product } = await readBridgeSettled();
-        if (shortcode) {
-          const { buildPostFromProduct } = await import("../src/instagram");
-          const isRecord = (v: unknown): v is Record<string, unknown> =>
-            typeof v === "object" && v !== null;
-          result =
-            isRecord(product) && product["shortcode"] === shortcode
-              ? buildPostFromProduct(product, shortcode)
-              : parse(document.documentElement.outerHTML, url);
-        } else {
-          result = parse(document.documentElement.outerHTML, url);
-        }
+        const shortcode = shortcodeFromUrl(url) ?? shortcodeFromPage();
+        result = shortcode
+          ? await parseInstagramCurrent(url, shortcode, parse)
+          : parse(document.documentElement.outerHTML, url);
       }
       if (!result.ok && hasPostIdentity(url)) {
         const fetched = await fetchAndParse(url);

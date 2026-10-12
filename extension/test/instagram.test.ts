@@ -47,7 +47,7 @@ describe("instagram fixtures", () => {
       if ("error" in expected) {
         expect(result.ok).toBe(false);
         if (!result.ok) {
-          expect(result.error.code).toBe(expected.error.code);
+          expect(result.error.code).toBe((expected as { error: { code: string } }).error.code);
         }
       } else {
         expect(result).toEqual({ ok: true, data: expected });

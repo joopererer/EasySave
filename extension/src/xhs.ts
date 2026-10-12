@@ -51,8 +51,11 @@ export interface ResolvedVideo {
   height?: number;
 }
 
-interface VideoCandidate extends ResolvedVideo {
+interface VideoCandidate {
+  url: string;
   watermarked: boolean;
+  width: number;
+  height: number;
 }
 
 const NOTE_ID_PATTERN = /\/(?:explore|discovery\/item|user\/profile\/[^/]+)\/([a-f0-9]{24})/i;
@@ -632,6 +635,7 @@ export function buildNoteFromRecord(
     id: noteId,
     url: `https://www.xiaohongshu.com/explore/${noteId}`,
     author,
+    items,
   };
   if (nonBlank(note["title"])) data.title = note["title"] as string;
   const caption = pickString(note, ["desc", "description"]);
@@ -639,6 +643,5 @@ export function buildNoteFromRecord(
   if (typeof note["time"] === "number" && Number.isFinite(note["time"])) {
     data.publishedAt = toIsoUtc(note["time"] as number);
   }
-  data.items = items;
   return { ok: true, data };
 }
