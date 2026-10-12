@@ -58,7 +58,9 @@ Future<ParsedPost> _parseInner(String url) async {
     final isXhs = host == 'xiaohongshu.com' ||
         host.endsWith('.xiaohongshu.com') ||
         host == 'xhslink.com' ||
-        host.endsWith('.xhslink.com');
+        host.endsWith('.xhslink.com') ||
+        host == 'xhslink.cn' ||
+        host.endsWith('.xhslink.cn');
 
     ParseResult result;
     if (isXhs) {

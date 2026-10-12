@@ -34,6 +34,7 @@ void main() {
     test('accepts platform and short-link hosts', () {
       expect(isSupportedLink('https://www.xiaohongshu.com/explore/x'), isTrue);
       expect(isSupportedLink('http://xhslink.com/a/b'), isTrue);
+      expect(isSupportedLink('https://xhslink.cn/o/UJ01yHnFbS'), isTrue);
       expect(isSupportedLink('https://www.instagram.com/reels/abc/'), isTrue);
       expect(isSupportedLink('https://instagr.am/p/abc/'), isTrue);
       expect(isSupportedLink('https://evil-xiaohongshu.com/x'), isFalse);

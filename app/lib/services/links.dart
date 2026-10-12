@@ -12,6 +12,8 @@ bool isSupportedLink(String url) {
       host.endsWith('.xiaohongshu.com') ||
       host == 'xhslink.com' ||
       host.endsWith('.xhslink.com') ||
+      host == 'xhslink.cn' ||
+      host.endsWith('.xhslink.cn') ||
       host == 'instagram.com' ||
       host.endsWith('.instagram.com') ||
       host == 'instagr.am' ||

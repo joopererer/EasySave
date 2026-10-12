@@ -9,7 +9,9 @@ bool _isXhsHost(String host) =>
     host == 'xiaohongshu.com' ||
     host.endsWith('.xiaohongshu.com') ||
     host == 'xhslink.com' ||
-    host.endsWith('.xhslink.com');
+    host.endsWith('.xhslink.com') ||
+    host == 'xhslink.cn' ||
+    host.endsWith('.xhslink.cn');
 
 bool _isInstagramHost(String host) =>
     host == 'instagram.com' ||
