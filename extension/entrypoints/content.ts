@@ -110,17 +110,34 @@ export default defineContentScript({
      * Fetch the canonical post URL with the user's login state. The document
      * in a SPA is stale after in-page navigation; a same-origin fetch returns
      * server-rendered HTML for the current post. No private APIs involved.
+     * Headers mimic a navigation (IG soft-blocks non-navigation HTML hits
+     * after a few requests); results are cached per shortcode for the session.
      */
+    const igHtmlCache = new Map<string, string>();
     async function fetchInstagramPost(shortcode: string): Promise<string | null> {
+      const cached = igHtmlCache.get(shortcode);
+      if (cached) return cached;
       try {
         const resp = await fetch(`https://www.instagram.com/p/${shortcode}/`, {
           credentials: "include",
           redirect: "follow",
           signal: AbortSignal.timeout(20000),
+          headers: {
+            Accept:
+              "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+            "Accept-Language": navigator.language || "en-US",
+          },
         });
         if (!resp.ok) return null;
         const html = await resp.text();
-        return html || null;
+        if (!html) return null;
+        igHtmlCache.set(shortcode, html);
+        while (igHtmlCache.size > 10) {
+          const oldest = igHtmlCache.keys().next();
+          if (oldest.done) break;
+          igHtmlCache.delete(oldest.value);
+        }
+        return html;
       } catch {
         return null;
       }
@@ -132,11 +149,7 @@ export default defineContentScript({
       parse: (html: string, pageUrl: string) => import("../src/index").ParseResult,
     ): Promise<import("../src/index").ParseResult> {
       const canonical = `https://www.instagram.com/p/${shortcode}/`;
-      const fetched = await fetchInstagramPost(shortcode);
-      if (fetched) {
-        const parsed = parse(fetched, canonical);
-        if (parsed.ok) return parsed;
-      }
+      // Bridge cache first: zero extra requests when SPA data was sniffed.
       const { product } = await readBridgeSettled();
       const isRecord = (v: unknown): v is Record<string, unknown> =>
         typeof v === "object" && v !== null;
@@ -144,6 +157,11 @@ export default defineContentScript({
         const { buildPostFromProduct } = await import("../src/instagram");
         const built = buildPostFromProduct(product, shortcode);
         if (built.ok) return built;
+      }
+      const fetched = await fetchInstagramPost(shortcode);
+      if (fetched) {
+        const parsed = parse(fetched, canonical);
+        if (parsed.ok) return parsed;
       }
       return parse(document.documentElement.outerHTML, url);
     }
@@ -161,7 +179,7 @@ export default defineContentScript({
           ? await parseInstagramCurrent(url, shortcode, parse)
           : parse(document.documentElement.outerHTML, url);
       }
-      if (!result.ok && hasPostIdentity(url)) {
+      if (!result.ok && isXhs && hasPostIdentity(url)) {
         const fetched = await fetchAndParse(url);
         if (fetched) result = fetched;
       }
