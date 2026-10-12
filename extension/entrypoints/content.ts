@@ -331,15 +331,28 @@ export default defineContentScript({
     // SPA in-page navigation: track the post identity (not the raw URL, which
     // may churn with tokens/query params) and drop the cached result only
     // when the user actually moves to a different post.
-    function pageIdentity(): string {
+    function currentPostKey(): string | undefined {
       if (isXhs) {
         const id = noteIdFromUrl(location.href);
-        if (id) return `xhs:${id}`;
-      } else if (isInstagram) {
-        const m = /\/(?:p|reel|tv)\/([A-Za-z0-9-_]+)/.exec(location.href);
-        if (m) return `ig:${m[1]}`;
+        return id ? `xhs:${id}` : undefined;
       }
-      return `url:${location.href}`;
+      if (isInstagram) {
+        const sc = shortcodeFromUrl(location.href);
+        return sc ? `ig:${sc}` : undefined;
+      }
+      return undefined;
+    }
+
+    function resultMismatch(
+      result: import("../src/index").ParseResult,
+    ): boolean {
+      if (!result.ok) return false;
+      const current = currentPostKey();
+      if (!current) return false;
+      return `${result.data.platform}:${result.data.id}` !== current;
+    }
+    function pageIdentity(): string {
+      return currentPostKey() ?? `url:${location.href}`;
     }
     let observedIdentity = pageIdentity();
     setInterval(() => {
@@ -376,7 +389,14 @@ export default defineContentScript({
         showMessage("插件已更新，请刷新本页面后重试。");
         return;
       }
-      const result = await parseCurrent();
+      let result = await parseCurrent();
+      // The page may navigate mid-parse (reels swipe before data lands):
+      // if the result no longer matches the current post, parse once more.
+      for (let i = 0; i < 2 && resultMismatch(result); i++) {
+        lastParsedUrl = null;
+        lastResult = null;
+        result = await parseCurrent();
+      }
       if (!result.ok) {
         const { errorMessage } = await import("../src/errors");
         const failure = result as unknown as { error: { code: import("../src/index").ParseErrorCode } };
