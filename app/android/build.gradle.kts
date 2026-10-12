@@ -1,3 +1,20 @@
+import com.android.build.gradle.LibraryExtension
+import org.jetbrains.kotlin.gradle.tasks.KotlinCompile
+
+buildscript {
+    repositories {
+        google()
+        mavenCentral()
+        gradlePluginPortal()
+    }
+    // Makes AGP/KGP types visible so legacy plugin builds below can be
+    // pinned to one JVM target. Versions match settings.gradle.kts.
+    dependencies {
+        classpath("com.android.tools.build:gradle:8.11.1")
+        classpath("org.jetbrains.kotlin:kotlin-gradle-plugin:2.2.20")
+    }
+}
+
 allprojects {
     repositories {
         google()
@@ -17,6 +34,23 @@ subprojects {
 }
 subprojects {
     project.evaluationDependsOn(":app")
+}
+
+// Force legacy Groovy-style plugin builds onto one JVM target. withPlugin
+// hooks run during evaluation, before compile options are finalized.
+subprojects {
+    pluginManager.withPlugin("com.android.library") {
+        val ext = extensions.getByType(LibraryExtension::class.java)
+        ext.compileOptions.sourceCompatibility = JavaVersion.VERSION_17
+        ext.compileOptions.targetCompatibility = JavaVersion.VERSION_17
+    }
+    pluginManager.withPlugin("kotlin-android") {
+        tasks.withType<KotlinCompile>().configureEach {
+            compilerOptions.jvmTarget.set(
+                org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17,
+            )
+        }
+    }
 }
 
 tasks.register<Delete>("clean") {
