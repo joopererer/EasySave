@@ -64,35 +64,54 @@ Future<void> saveItems(
   }
   final referer = _refererFor(post.platform);
   var done = 0;
-  var total = 0;
   final jobs = <Future<void> Function()>[];
+  var total = 0;
   for (var i = 0; i < selected.length; i++) {
     final item = post.items[selected[i]];
     final seq = i + 1;
     if (item.type == 'live' && item.videoUrl != null) {
       total += 2;
-      jobs.add(() => _saveOne([item.url, ...item.fallbacks], referer, 'image', '${post.id}_$seq.jpg', true));
-      jobs.add(() => _saveOne([item.videoUrl!], referer, 'video', '${post.id}_${seq}_live.mp4', false));
+      jobs.add(() => _saveOne([item.url, ...item.fallbacks], referer, '${post.id}_$seq.jpg', true));
+      jobs.add(() => _saveOne([item.videoUrl!], referer, '${post.id}_${seq}_live.mp4', false));
     } else if (item.type == 'video') {
       total += 1;
       final url = item.videoUrl ?? item.url;
-      jobs.add(() => _saveOne([url, ...item.fallbacks], referer, 'video', '${post.id}_$seq.mp4', false));
+      jobs.add(() => _saveOne([url, ...item.fallbacks], referer, '${post.id}_$seq.mp4', false));
     } else {
       total += 1;
-      jobs.add(() => _saveOne([item.url, ...item.fallbacks], referer, 'image', '${post.id}_$seq.jpg', true));
+      jobs.add(() => _saveOne([item.url, ...item.fallbacks], referer, '${post.id}_$seq.jpg', true));
     }
   }
-  for (final job in jobs) {
-    await job();
-    done++;
-    await onProgress(SaveProgress(done: done, total: total));
+  // Bounded concurrency: 3 downloads at a time beats strict serial
+  // without tripping CDN rate limits.
+  const concurrency = 3;
+  var failed = <String>[];
+  for (var i = 0; i < jobs.length; i += concurrency) {
+    final batch = jobs.sublist(i, (i + concurrency).clamp(0, jobs.length));
+    final results = await Future.wait(
+      batch.map((job) async {
+        try {
+          await job();
+          return null;
+        } catch (e) {
+          return '$e';
+        }
+      }),
+    );
+    for (final error in results) {
+      done++;
+      if (error != null) failed.add(error);
+      await onProgress(SaveProgress(done: done, total: total));
+    }
+  }
+  if (failed.isNotEmpty) {
+    throw FileSystemException('其中 ${failed.length} 个文件保存失败：${failed.first}');
   }
 }
 
 Future<void> _saveOne(
   List<String> urls,
   String referer,
-  String kind,
   String fallbackName,
   bool isImage,
 ) async {

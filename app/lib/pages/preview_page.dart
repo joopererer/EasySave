@@ -118,7 +118,10 @@ class _PreviewPageState extends State<PreviewPage> {
                           borderRadius: BorderRadius.circular(8),
                         ),
                         clipBehavior: Clip.antiAlias,
-                        child: _Thumb(item: item),
+                        child: _Thumb(
+                          key: ValueKey(item.url),
+                          item: item,
+                        ),
                       ),
                       Positioned(
                         top: 4,
@@ -174,7 +177,7 @@ class _PreviewPageState extends State<PreviewPage> {
 /// Thumbnail that walks through the primary URL and its fallbacks before
 /// showing the broken-image placeholder.
 class _Thumb extends StatefulWidget {
-  const _Thumb({required this.item});
+  const _Thumb({super.key, required this.item});
 
   final MediaItem item;
 
@@ -191,6 +194,9 @@ class _ThumbState extends State<_Thumb> {
     return Image.network(
       urls[_attempt.clamp(0, urls.length - 1)],
       fit: BoxFit.cover,
+      // Thumbnails only need grid resolution; asking for the multi-MB
+      // original for a ~120px cell is what made the grid feel slow.
+      cacheWidth: 400,
       errorBuilder: (context, error, stackTrace) {
         if (_attempt + 1 < urls.length) {
           WidgetsBinding.instance.addPostFrameCallback((_) {
