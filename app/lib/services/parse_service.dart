@@ -41,6 +41,17 @@ Future<ParsedPost> _parseInner(String url) async {
   try {
     headless = HeadlessInAppWebView(
       initialUrlRequest: URLRequest(url: WebUri.uri(Uri.parse(url))),
+      // XHS pages auto-navigate to xhsdiscover:// (app-open scheme) after
+      // load. Cancel every non-http(s) navigation so the WebView stays on
+      // the note page, whose DOM/state holds the data we parse.
+      shouldOverrideUrlLoading: (controller, navigationAction) async {
+        final scheme =
+            navigationAction.request.url?.scheme.toLowerCase() ?? '';
+        if (scheme == 'http' || scheme == 'https') {
+          return NavigationActionPolicy.ALLOW;
+        }
+        return NavigationActionPolicy.CANCEL;
+      },
       onLoadStop: (controller, uri) {
         readyController ??= controller;
         if (!loaded.isCompleted) loaded.complete();
