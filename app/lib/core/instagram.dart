@@ -6,7 +6,8 @@ import 'dart:convert';
 import 'models.dart';
 
 final _shortcodePattern = RegExp(r'/(?:p|reels?|tv)/([A-Za-z0-9-_]+)');
-const _shortcodeAlphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
+const _shortcodeAlphabet =
+    'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
 final _dataSjsPattern = RegExp(
   r'<script\b[^>]*\bdata-sjs[^>]*>(\{.+?\})</script>',
   dotAll: true,
@@ -17,8 +18,10 @@ bool _isRecord(Object? v) => v is Map<String, Object?>;
 bool _nonBlank(Object? v) => v is String && v.trim().isNotEmpty;
 
 String _toIsoUtcSeconds(num seconds) {
-  final s = DateTime.fromMillisecondsSinceEpoch((seconds * 1000).toInt(), isUtc: true)
-      .toIso8601String();
+  final s = DateTime.fromMillisecondsSinceEpoch(
+    (seconds * 1000).toInt(),
+    isUtc: true,
+  ).toIso8601String();
   return s.replaceFirst(RegExp(r'\.\d+Z$'), 'Z');
 }
 
@@ -37,7 +40,8 @@ String? shortcodeToMediaId(String shortcode) {
 }
 
 bool _isProductShaped(Map<String, Object?> obj, String mediaId) {
-  final matchesId = '${obj['id'] ?? ''}' == mediaId || '${obj['pk'] ?? ''}' == mediaId;
+  final matchesId =
+      '${obj['id'] ?? ''}' == mediaId || '${obj['pk'] ?? ''}' == mediaId;
   if (!matchesId) return false;
   return obj.containsKey('video_versions') ||
       obj.containsKey('carousel_media') ||
@@ -85,7 +89,11 @@ _Rendition? _bestRendition(Object? list) {
     final width = entry['width'] is num ? entry['width'] as num : 0;
     final height = entry['height'] is num ? entry['height'] as num : 0;
     if (best == null || width * height > best.width * best.height) {
-      best = _Rendition(url: entry['url'] as String, width: width, height: height);
+      best = _Rendition(
+        url: entry['url'] as String,
+        width: width,
+        height: height,
+      );
     }
   }
   return best;
@@ -94,7 +102,9 @@ _Rendition? _bestRendition(Object? list) {
 _Rendition? _bestImage(Map<String, Object?> media) {
   final versions = media['image_versions2'];
   final best = _isRecord(versions)
-      ? _bestRendition(((versions as Map).cast<String, Object?>())['candidates'])
+      ? _bestRendition(
+          ((versions as Map).cast<String, Object?>())['candidates'],
+        )
       : null;
   if (best != null) return best;
   if (_nonBlank(media['display_url'])) {
@@ -103,7 +113,8 @@ _Rendition? _bestImage(Map<String, Object?> media) {
   return null;
 }
 
-_Rendition? _bestVideoUrl(Map<String, Object?> media) => _bestRendition(media['video_versions']);
+_Rendition? _bestVideoUrl(Map<String, Object?> media) =>
+    _bestRendition(media['video_versions']);
 
 MediaItem? _mediaItem(Map<String, Object?> media) {
   final image = _bestImage(media);
@@ -118,7 +129,12 @@ MediaItem? _mediaItem(Map<String, Object?> media) {
     );
   }
   if (image != null) {
-    return MediaItem(type: 'image', url: image.url, width: image.width, height: image.height);
+    return MediaItem(
+      type: 'image',
+      url: image.url,
+      width: image.width,
+      height: image.height,
+    );
   }
   return null;
 }
@@ -144,32 +160,42 @@ ParseResult parseInstagram(String html, String pageUrl) {
   }
 
   final head = html.length > 20000 ? html.substring(0, 20000) : html;
-  final looksLikeInstagram = pageUrl.contains('instagram.com') ||
+  final looksLikeInstagram =
+      pageUrl.contains('instagram.com') ||
       pageUrl.contains('instagr.am') ||
       head.contains('instagram.com') ||
       head.contains('instagr.am') ||
       head.contains('data-sjs');
   if (product == null || shortcode == null) {
     if (looksLikeInstagram) {
-      return ParseResult.err(ParseError(
-        code: ParseErrorCode.loginRequired,
-        message: 'Instagram returned a login-gated shell without post data.',
-      ));
+      return ParseResult.err(
+        ParseError(
+          code: ParseErrorCode.loginRequired,
+          message: 'Instagram returned a login-gated shell without post data.',
+        ),
+      );
     }
-    return ParseResult.err(ParseError(
-      code: ParseErrorCode.invalidPage,
-      message: 'Not an Instagram post page.',
-    ));
+    return ParseResult.err(
+      ParseError(
+        code: ParseErrorCode.invalidPage,
+        message: 'Not an Instagram post page.',
+      ),
+    );
   }
 
   return buildPostFromProduct(product, shortcode);
 }
 
 /// Build the unified post output from an already-located product object.
-ParseResult buildPostFromProduct(Map<String, Object?> product, String shortcode) {
+ParseResult buildPostFromProduct(
+  Map<String, Object?> product,
+  String shortcode,
+) {
   Object? userObj = product['user'];
   if (!_isRecord(userObj)) userObj = product['owner'];
-  final user = _isRecord(userObj) ? (userObj as Map).cast<String, Object?>() : <String, Object?>{};
+  final user = _isRecord(userObj)
+      ? (userObj as Map).cast<String, Object?>()
+      : <String, Object?>{};
   final authorId = user['pk'] ?? user['id'];
   final author = PostAuthor(
     name: _nonBlank(user['username']) ? user['username'] as String : null,
@@ -180,12 +206,15 @@ ParseResult buildPostFromProduct(Map<String, Object?> product, String shortcode)
   String caption = '';
   if (captionRaw is String) {
     caption = captionRaw;
-  } else if (captionRaw is Map<String, Object?> && captionRaw['text'] is String) {
+  } else if (captionRaw is Map<String, Object?> &&
+      captionRaw['text'] is String) {
     caption = captionRaw['text'] as String;
   }
 
   final takenAt = product['taken_at'];
-  final publishedAt = takenAt is num && takenAt.isFinite ? _toIsoUtcSeconds(takenAt) : '';
+  final publishedAt = takenAt is num && takenAt.isFinite
+      ? _toIsoUtcSeconds(takenAt)
+      : '';
 
   final items = <MediaItem>[];
   final carousel = product['carousel_media'];
@@ -201,19 +230,23 @@ ParseResult buildPostFromProduct(Map<String, Object?> product, String shortcode)
   }
 
   if (items.isEmpty) {
-    return ParseResult.err(ParseError(
-      code: ParseErrorCode.loginRequired,
-      message: 'Instagram post has no extractable media.',
-    ));
+    return ParseResult.err(
+      ParseError(
+        code: ParseErrorCode.loginRequired,
+        message: 'Instagram post has no extractable media.',
+      ),
+    );
   }
 
-  return ParseResult.ok(ParsedPost(
-    platform: 'instagram',
-    id: shortcode,
-    url: 'https://www.instagram.com/p/$shortcode/',
-    author: author,
-    caption: caption,
-    items: items,
-    publishedAt: publishedAt.isNotEmpty ? publishedAt : null,
-  ));
+  return ParseResult.ok(
+    ParsedPost(
+      platform: 'instagram',
+      id: shortcode,
+      url: 'https://www.instagram.com/p/$shortcode/',
+      author: author,
+      caption: caption,
+      items: items,
+      publishedAt: publishedAt.isNotEmpty ? publishedAt : null,
+    ),
+  );
 }

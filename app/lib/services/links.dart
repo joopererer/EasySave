@@ -4,7 +4,10 @@
 
 import 'dart:io';
 
-final _urlPattern = RegExp(r"https?://[^\s<>""'，。！？；：）】”　]+");
+final _urlPattern = RegExp(
+  r"https?://[^\s<>"
+  "'，。！？；：）】”　]+",
+);
 const _trailingPunctuation = ".,!?;:)]}\"'，。！？；：）】”…";
 
 /// Supported post hosts (full pages and short links).
@@ -28,7 +31,8 @@ bool isSupportedLink(String url) {
 String? extractLink(String text) {
   for (final match in _urlPattern.allMatches(text)) {
     var url = match.group(0)!;
-    while (url.isNotEmpty && _trailingPunctuation.contains(url[url.length - 1])) {
+    while (url.isNotEmpty &&
+        _trailingPunctuation.contains(url[url.length - 1])) {
       url = url.substring(0, url.length - 1);
     }
     if (isSupportedLink(url)) return url;
@@ -42,7 +46,8 @@ String? extractLink(String text) {
 Future<String> resolveShortLink(String url) async {
   final uri = Uri.tryParse(url);
   final host = uri?.host.toLowerCase() ?? '';
-  final isShort = host == 'xhslink.com' ||
+  final isShort =
+      host == 'xhslink.com' ||
       host.endsWith('.xhslink.com') ||
       host == 'xhslink.cn' ||
       host.endsWith('.xhslink.cn');
@@ -53,7 +58,10 @@ Future<String> resolveShortLink(String url) async {
     for (var i = 0; i < 5; i++) {
       final request = await client.getUrl(current);
       request.followRedirects = false;
-      request.headers.set(HttpHeaders.userAgentHeader, 'Mozilla/5.0 (Linux; Android 10)');
+      request.headers.set(
+        HttpHeaders.userAgentHeader,
+        'Mozilla/5.0 (Linux; Android 10)',
+      );
       final response = await request.close();
       await response.drain<void>();
       final location = response.headers.value(HttpHeaders.locationHeader);

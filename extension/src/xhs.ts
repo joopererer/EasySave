@@ -395,11 +395,12 @@ function imageUrlOf(entry: Record<string, unknown>): { url: string; fallbacks: s
   const directRaw = direct ? toHttps(direct) : undefined;
   if (cleans.length > 0) {
     const token = fileToken(entry);
+    const primary = toHttps(cleans[0]);
     // Keep every raw rendition reachable (clean scenes other than the
     // primary included), then the direct original, then the ci token.
     const rest = [
-      ...cleans.slice(1),
-      ...markeds,
+      ...cleans.slice(1).map((u) => toHttps(u)),
+      ...markeds.map((u) => toHttps(u)),
       ...(Array.isArray(info) ? info.flatMap((e) => {
         if (!isRecord(e)) return [];
         const u = pickString(e, ["url"]);
@@ -407,8 +408,8 @@ function imageUrlOf(entry: Record<string, unknown>): { url: string; fallbacks: s
       }) : []),
       ...(directRaw ? [directRaw] : []),
       ...(token ? [`https://ci.xiaohongshu.com/${token}`] : []),
-    ].filter((u) => u && u !== cleans[0]);
-    return { url: transformImageUrl(cleans[0]), fallbacks: [...new Set(rest)] };
+    ].filter((u) => u && u !== primary);
+    return { url: primary, fallbacks: [...new Set(rest)] };
   }
   if (direct) {
     const primary = transformImageUrl(direct);
@@ -431,22 +432,24 @@ function fileToken(entry: Record<string, unknown>): string {
 }
 
 /**
- * Clean scene renditions: WB_DFT preferred (first), WB_PRV previews after.
- * Raw URLs; the call site normalizes. Watermarked renditions are excluded.
+ * Clean scene renditions, H5_DTL first, then WB_DFT, then anything else
+ * without a watermark token. Raw URLs; the call site normalizes.
+ * Watermarked renditions are excluded.
  */
 function cleanScenes(info: unknown[]): string[] {
-  const out: string[] = [];
+  const order = ["H5_DTL", "WB_DFT", ""];
+  const ranked: string[] = [];
+  const rest: string[] = [];
   for (const e of info) {
     if (!isRecord(e)) continue;
     const u = pickString(e, ["url"]);
-    if (!u) continue;
+    if (!u || looksWatermarked(u)) continue;
     const scene = typeof e["imageScene"] === "string" ? (e["imageScene"] as string) : "";
-    if (scene !== "WB_DFT" && scene !== "WB_PRV" && scene !== "") continue;
-    if (looksWatermarked(u)) continue;
-    if (scene === "WB_DFT") out.unshift(u);
-    else out.push(u);
+    if (order.includes(scene)) ranked.push(`${order.indexOf(scene)}|${u}`);
+    else rest.push(u);
   }
-  return out;
+  ranked.sort();
+  return [...ranked.map((r) => r.slice(2)), ...rest];
 }
 
 /** Raw URLs of the server-watermarked renditions in `info`. */
@@ -456,23 +459,22 @@ function markedScenes(info: unknown[]): string[] {
     if (!isRecord(e)) continue;
     const u = pickString(e, ["url"]);
     if (!u) continue;
-    const scene = typeof e["imageScene"] === "string" ? (e["imageScene"] as string) : "";
-    if (scene !== "WB_DFT" && scene !== "WB_PRV" && scene !== "") continue;
     if (looksWatermarked(u)) out.push(u);
   }
   return out;
 }
 
 /**
- * Filenames carrying a watermark scene token are server-watermarked
- * renditions; the same scene without the token is the clean original.
+ * Filenames carrying a `watermark` scene token are server-watermarked;
+ * scenes without the token (H5_DTL/H5_PRV/...) are clean. Unknown scenes
+ * are treated as clean so new scene names fail open instead of hiding
+ * behind the watermarked fallback.
  */
 export function looksWatermarked(url: string): boolean {
   const file = (url.split("/").pop() ?? "").toLowerCase();
   const excl = file.indexOf("!");
   const token = excl >= 0 ? file.slice(excl + 1) : file;
-  if (token.includes("watermark")) return true;
-  return /(^|_)wm(_|$)/.test(token);
+  return token.includes("watermark");
 }
 
 function num(value: unknown): number | undefined {

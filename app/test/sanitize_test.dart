@@ -27,52 +27,68 @@ void main() {
       final result = parseXhs(html, 'https://www.xiaohongshu.com/explore/$id');
       expect(result.ok, isTrue);
       expect(result.data?.title, equals('say undefined loudly'));
-      expect(result.data?.items.map((i) => i.toJson()).toList(), equals([
-        {
-          'type': 'image',
-          'url': 'https://ci.xiaohongshu.com/notes_pre_post/1040g3k83264voo1al0dg5o2e1l408pfcf1dl208',
-          'width': 1290,
-          'height': 1608,
-        },
-      ]));
+      expect(
+        result.data?.items.map((i) => i.toJson()).toList(),
+        equals([
+          {
+            'type': 'image',
+            'url':
+                'https://ci.xiaohongshu.com/notes_pre_post/1040g3k83264voo1al0dg5o2e1l408pfcf1dl208',
+            'width': 1290,
+            'height': 1608,
+          },
+        ]),
+      );
     });
 
     test('parseXhsState accepts decoded INITIAL_STATE JSON directly', () {
       const id = '6aca089a000000000a01efb4';
-      final result = parseXhsState(
-        {
-          'note': {
-            'noteDetailMap': {
-              id: {
-                'note': {
-                  'noteId': id,
-                  'title': 't',
-                  'desc': 'd',
-                  'time': 1791625370000,
-                  'user': {'nickname': 'momo', 'userId': '604e0d4800000000010065ec'},
-                  'imageList': [
-                    {'urlDefault': 'https://sns-img-qc.xhscdn.com/trace', 'width': 10, 'height': 20},
-                  ],
+      final result = parseXhsState({
+        'note': {
+          'noteDetailMap': {
+            id: {
+              'note': {
+                'noteId': id,
+                'title': 't',
+                'desc': 'd',
+                'time': 1791625370000,
+                'user': {
+                  'nickname': 'momo',
+                  'userId': '604e0d4800000000010065ec',
                 },
+                'imageList': [
+                  {
+                    'urlDefault': 'https://sns-img-qc.xhscdn.com/trace',
+                    'width': 10,
+                    'height': 20,
+                  },
+                ],
               },
             },
           },
         },
-        'https://www.xiaohongshu.com/explore/$id',
-      );
+      }, 'https://www.xiaohongshu.com/explore/$id');
       expect(result.ok, isTrue);
-      expect(result.data?.toJson(), equals({
-        'platform': 'xhs',
-        'id': id,
-        'url': 'https://www.xiaohongshu.com/explore/$id',
-        'author': {'name': 'momo', 'id': '604e0d4800000000010065ec'},
-        'title': 't',
-        'caption': 'd',
-        'publishedAt': '2026-10-10T09:42:50Z',
-        'items': [
-          {'type': 'image', 'url': 'https://ci.xiaohongshu.com/trace', 'width': 10, 'height': 20},
-        ],
-      }));
+      expect(
+        result.data?.toJson(),
+        equals({
+          'platform': 'xhs',
+          'id': id,
+          'url': 'https://www.xiaohongshu.com/explore/$id',
+          'author': {'name': 'momo', 'id': '604e0d4800000000010065ec'},
+          'title': 't',
+          'caption': 'd',
+          'publishedAt': '2026-10-10T09:42:50Z',
+          'items': [
+            {
+              'type': 'image',
+              'url': 'https://ci.xiaohongshu.com/trace',
+              'width': 10,
+              'height': 20,
+            },
+          ],
+        }),
+      );
     });
   });
 }

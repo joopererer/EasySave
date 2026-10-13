@@ -16,7 +16,7 @@ String loginEntryUrl(PlatformKind platform) => platform == PlatformKind.xhs
 /// 进入桌面站：右上角"登录"为二维码，手机 App 扫码即登。
 String? loginUserAgent(PlatformKind platform) => platform == PlatformKind.xhs
     ? 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
-        '(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36'
+          '(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36'
     : null;
 
 String _cookieUrl(PlatformKind platform) => platform == PlatformKind.xhs

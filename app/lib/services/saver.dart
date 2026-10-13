@@ -23,12 +23,19 @@ String _extensionFor(String url, String fallback) {
   return RegExp(r'^[a-z0-9]{2,5}$').hasMatch(ext) ? ext : fallback;
 }
 
-Future<File> _downloadToTemp(String url, String referer, String filename) async {
+Future<File> _downloadToTemp(
+  String url,
+  String referer,
+  String filename,
+) async {
   final client = HttpClient();
   try {
     final request = await client.getUrl(Uri.parse(url));
     request.headers.set(HttpHeaders.refererHeader, referer);
-    request.headers.set(HttpHeaders.userAgentHeader, 'Mozilla/5.0 (Linux; Android 10)');
+    request.headers.set(
+      HttpHeaders.userAgentHeader,
+      'Mozilla/5.0 (Linux; Android 10)',
+    );
     final response = await request.close();
     if (response.statusCode != HttpStatus.ok) {
       throw HttpException('下载失败（HTTP ${response.statusCode}）：$url');
@@ -76,12 +83,21 @@ Future<void> saveItems(
     if (item.type == 'live' && item.videoUrl != null) {
       total += 2;
       jobs.add(() => _saveOne(imageUrls, referer, '${post.id}_$seq.jpg', true));
-      jobs.add(() => _saveOne([item.videoUrl!], referer, '${post.id}_${seq}_live.mp4', false));
+      jobs.add(
+        () => _saveOne(
+          [item.videoUrl!],
+          referer,
+          '${post.id}_${seq}_live.mp4',
+          false,
+        ),
+      );
     } else if (item.type == 'video') {
       total += 1;
       final url = item.videoUrl ?? item.url;
       final videoUrls = item.videoUrl != null ? [url, ...imageUrls] : imageUrls;
-      jobs.add(() => _saveOne(videoUrls, referer, '${post.id}_$seq.mp4', false));
+      jobs.add(
+        () => _saveOne(videoUrls, referer, '${post.id}_$seq.mp4', false),
+      );
     } else {
       total += 1;
       jobs.add(() => _saveOne(imageUrls, referer, '${post.id}_$seq.jpg', true));

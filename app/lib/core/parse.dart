@@ -23,15 +23,19 @@ bool _isInstagramHost(String host) =>
 ParseResult parse(String html, String pageUrl) {
   final host = Uri.tryParse(pageUrl)?.host.toLowerCase();
   if (host == null || host.isEmpty) {
-    return ParseResult.err(ParseError(
-      code: ParseErrorCode.unsupportedUrl,
-      message: 'Cannot parse URL: $pageUrl',
-    ));
+    return ParseResult.err(
+      ParseError(
+        code: ParseErrorCode.unsupportedUrl,
+        message: 'Cannot parse URL: $pageUrl',
+      ),
+    );
   }
   if (_isXhsHost(host)) return parseXhs(html, pageUrl);
   if (_isInstagramHost(host)) return parseInstagram(html, pageUrl);
-  return ParseResult.err(ParseError(
-    code: ParseErrorCode.unsupportedUrl,
-    message: 'Unsupported host: $host',
-  ));
+  return ParseResult.err(
+    ParseError(
+      code: ParseErrorCode.unsupportedUrl,
+      message: 'Unsupported host: $host',
+    ),
+  );
 }

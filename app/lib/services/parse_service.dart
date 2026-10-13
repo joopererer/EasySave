@@ -28,8 +28,9 @@ Future<T> _withTimeout<T>(Future<T> Function() run, String what) {
 /// Load [url] headlessly and parse the post it resolves to.
 Future<ParsedPost> parsePostUrl(String url) {
   return _withTimeout(() async {
-    final resolved = await resolveShortLink(url)
-        .timeout(const Duration(seconds: 10), onTimeout: () => url);
+    final resolved = await resolveShortLink(
+      url,
+    ).timeout(const Duration(seconds: 10), onTimeout: () => url);
     return (await _parseInner(resolved)).data;
   }, '加载页面');
 }
@@ -37,8 +38,9 @@ Future<ParsedPost> parsePostUrl(String url) {
 /// Same as [parsePostUrl] but keeps the raw image entries for diagnostics.
 Future<ParseOutcome> parsePostOutcome(String url) {
   return _withTimeout(() async {
-    final resolved = await resolveShortLink(url)
-        .timeout(const Duration(seconds: 10), onTimeout: () => url);
+    final resolved = await resolveShortLink(
+      url,
+    ).timeout(const Duration(seconds: 10), onTimeout: () => url);
     return _parseInner(resolved);
   }, '加载页面');
 }
@@ -61,8 +63,7 @@ Future<ParseOutcome> _parseInner(String url) async {
       // load. Cancel every non-http(s) navigation so the WebView stays on
       // the note page, whose DOM/state holds the data we parse.
       shouldOverrideUrlLoading: (controller, navigationAction) async {
-        final scheme =
-            navigationAction.request.url?.scheme.toLowerCase() ?? '';
+        final scheme = navigationAction.request.url?.scheme.toLowerCase() ?? '';
         if (scheme == 'http' || scheme == 'https') {
           return NavigationActionPolicy.ALLOW;
         }
@@ -87,13 +88,15 @@ Future<ParseOutcome> _parseInner(String url) async {
     }
     final finalUrl = (await controller.getUrl())?.toString() ?? url;
     final host = Uri.tryParse(finalUrl)?.host.toLowerCase() ?? '';
-    final isXhs = host == 'xiaohongshu.com' ||
+    final isXhs =
+        host == 'xiaohongshu.com' ||
         host.endsWith('.xiaohongshu.com') ||
         host == 'xhslink.com' ||
         host.endsWith('.xhslink.com') ||
         host == 'xhslink.cn' ||
         host.endsWith('.xhslink.cn');
-    final isInstagram = host == 'instagram.com' ||
+    final isInstagram =
+        host == 'instagram.com' ||
         host.endsWith('.instagram.com') ||
         host == 'instagr.am' ||
         host.endsWith('.instagr.am');
@@ -137,10 +140,9 @@ Future<ParseResult> _parseXhsPage(
   }
   final html = await _outerHtml(controller);
   if (html == null) {
-    return ParseResult.err(ParseError(
-      code: ParseErrorCode.loginRequired,
-      message: '无法读取页面内容',
-    ));
+    return ParseResult.err(
+      ParseError(code: ParseErrorCode.loginRequired, message: '无法读取页面内容'),
+    );
   }
   return parseXhs(html, finalUrl);
 }
@@ -151,10 +153,9 @@ Future<ParseResult> _parseInstagramPage(
 ) async {
   final html = await _outerHtml(controller);
   if (html == null) {
-    return ParseResult.err(ParseError(
-      code: ParseErrorCode.loginRequired,
-      message: '无法读取页面内容',
-    ));
+    return ParseResult.err(
+      ParseError(code: ParseErrorCode.loginRequired, message: '无法读取页面内容'),
+    );
   }
   return parseInstagram(html, finalUrl);
 }
@@ -170,7 +171,8 @@ Future<String?> _outerHtml(InAppWebViewController controller) async {
   }
   // Safety net for very large documents: only the scripts the parser reads.
   try {
-    final parts = await controller.evaluateJavascript(source: '''
+    final parts = await controller.evaluateJavascript(
+      source: '''
 (() => {
   const out = [];
   document.querySelectorAll('script[data-sjs]').forEach((s) => {
@@ -178,7 +180,8 @@ Future<String?> _outerHtml(InAppWebViewController controller) async {
   });
   return out.join('\\n');
 })()
-''');
+''',
+    );
     if (parts is String && parts.isNotEmpty) return parts;
   } catch (_) {
     // Ignore; caller reports the failure.

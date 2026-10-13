@@ -29,6 +29,7 @@ class _PreviewPageState extends State<PreviewPage> {
     if (item.type == 'live') return '实况';
     return '';
   }
+
   Future<void> _save() async {
     if (_selected.isEmpty || _saving) return;
     setState(() {
@@ -73,17 +74,15 @@ class _PreviewPageState extends State<PreviewPage> {
                 for (var i = 0; i < post.items.length; i++)
                   '[$i] ${post.items[i].type} ${post.items[i].url}'
                       '${post.items[i].fallbacks.map((u) => '\n    alt: $u').join()}',
-                for (var i = 0;
-                    i < widget.rawImages.length;
-                    i++)
+                for (var i = 0; i < widget.rawImages.length; i++)
                   'raw[$i] keys=${widget.rawImages[i].keys.join(',')}'
                       '${widget.rawImages[i].scenes.map((s) => '\n    ${s.scene}: ${s.url}').join()}',
               ];
               await Clipboard.setData(ClipboardData(text: lines.join('\n')));
               if (context.mounted) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('诊断信息已复制')),
-                );
+                ScaffoldMessenger.of(
+                  context,
+                ).showSnackBar(const SnackBar(content: Text('诊断信息已复制')));
               }
             },
           ),
@@ -124,10 +123,7 @@ class _PreviewPageState extends State<PreviewPage> {
                           borderRadius: BorderRadius.circular(8),
                         ),
                         clipBehavior: Clip.antiAlias,
-                        child: _Thumb(
-                          key: ValueKey(item.url),
-                          item: item,
-                        ),
+                        child: _Thumb(key: ValueKey(item.url), item: item),
                       ),
                       Positioned(
                         top: 4,
@@ -142,14 +138,20 @@ class _PreviewPageState extends State<PreviewPage> {
                           left: 4,
                           bottom: 4,
                           child: Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 6,
+                              vertical: 2,
+                            ),
                             decoration: BoxDecoration(
                               color: Colors.black54,
                               borderRadius: BorderRadius.circular(6),
                             ),
                             child: Text(
                               badge,
-                              style: const TextStyle(color: Colors.white, fontSize: 11),
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 11,
+                              ),
                             ),
                           ),
                         ),

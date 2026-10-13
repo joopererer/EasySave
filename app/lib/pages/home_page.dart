@@ -116,10 +116,8 @@ class _HomePageState extends State<HomePage> {
       setState(() => _busy = false);
       await Navigator.of(context).push(
         MaterialPageRoute<void>(
-          builder: (_) => PreviewPage(
-            post: outcome.data,
-            rawImages: outcome.rawImages,
-          ),
+          builder: (_) =>
+              PreviewPage(post: outcome.data, rawImages: outcome.rawImages),
         ),
       );
     } on ParseFailure catch (e) {
@@ -165,7 +163,9 @@ class _HomePageState extends State<HomePage> {
   }
 
   void _snack(String message) {
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text(message)));
   }
 
   Future<void> _openLogin(PlatformKind platform) async {

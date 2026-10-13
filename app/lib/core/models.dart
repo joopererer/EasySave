@@ -113,9 +113,9 @@ class ResolvedVideo {
 /// carries the untouched image entries for diagnostics only.
 class ParseResult {
   ParseResult.ok(this.data, [List<RawImageEntry>? rawImages])
-      : ok = true,
-        error = null,
-        rawImages = rawImages ?? const [];
+    : ok = true,
+      error = null,
+      rawImages = rawImages ?? const [];
   ParseResult.err(this.error) : ok = false, data = null, rawImages = const [];
 
   final bool ok;

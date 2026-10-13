@@ -26,12 +26,17 @@ String? _pickString(Map<String, Object?> obj, List<String> keys) {
 }
 
 String _toIsoUtc(int ms) {
-  final s = DateTime.fromMillisecondsSinceEpoch(ms, isUtc: true).toIso8601String();
+  final s = DateTime.fromMillisecondsSinceEpoch(
+    ms,
+    isUtc: true,
+  ).toIso8601String();
   return s.replaceFirst(RegExp(r'\.\d+Z$'), 'Z');
 }
 
 String toHttps(String url) {
-  return url.startsWith('http://') ? 'https://${url.substring('http://'.length)}' : url;
+  return url.startsWith('http://')
+      ? 'https://${url.substring('http://'.length)}'
+      : url;
 }
 
 /// Rewrite an XHS CDN image URL to its canonical original form.
@@ -40,7 +45,9 @@ String transformImageUrl(String url) {
   final parsed = Uri.tryParse(https);
   if (parsed == null || !parsed.hasAuthority) return https;
   final host = parsed.host.toLowerCase();
-  if (!host.endsWith('.xhscdn.com') && !host.endsWith('.xiaohongshu.com')) return https;
+  if (!host.endsWith('.xhscdn.com') && !host.endsWith('.xiaohongshu.com')) {
+    return https;
+  }
   final withoutStyle = parsed.path.split('!').first;
   final parts = withoutStyle.split('/').where((p) => p.isNotEmpty).toList();
   final token = parts.length > 2 && _hex32.hasMatch(parts[1])
@@ -151,7 +158,8 @@ Object? _extractJsonAfter(String html, String marker) {
     final scanned = _scanBalancedObject(html, at + marker.length);
     if (scanned == null) return null;
     final raw = html.substring(scanned.start, scanned.end + 1);
-    final parsed = _tryParseJson(raw) ?? _tryParseJson(sanitizeJsUndefined(raw));
+    final parsed =
+        _tryParseJson(raw) ?? _tryParseJson(sanitizeJsUndefined(raw));
     if (parsed != null) return parsed;
     from = scanned.end + 1;
   }
@@ -173,14 +181,18 @@ Map<String, Object?>? _extractNoteDetailEntry(String html, String? wantedId) {
       if (wantedId != null && _isRecord(m[wantedId])) {
         final entry = (m[wantedId] as Map).cast<String, Object?>();
         final inner = entry['note'];
-        return _isRecord(inner) ? (inner as Map).cast<String, Object?>() : entry;
+        return _isRecord(inner)
+            ? (inner as Map).cast<String, Object?>()
+            : entry;
       }
       if (wantedId == null) {
         for (final entry in m.values) {
           if (!_isRecord(entry)) continue;
           final e = (entry as Map).cast<String, Object?>();
           final inner = e['note'];
-          final note = _isRecord(inner) ? (inner as Map).cast<String, Object?>() : e;
+          final note = _isRecord(inner)
+              ? (inner as Map).cast<String, Object?>()
+              : e;
           if (_isNoteShaped(note)) return note;
         }
       }
@@ -244,7 +256,9 @@ Map<String, Object?>? _deepFindNote(Object? root, String? wantedId) {
       if (_nonBlank(rec['noteId']) && rec['noteId'] == wantedId) {
         throw _FoundNote(rec);
       }
-      if (fallback == null && wantedId == null && _isNoteShaped(rec)) fallback = rec;
+      if (fallback == null && wantedId == null && _isNoteShaped(rec)) {
+        fallback = rec;
+      }
       for (final value in rec.values) {
         visit(value, depth + 1);
       }
@@ -264,7 +278,12 @@ Map<String, Object?>? _deepFindNote(Object? root, String? wantedId) {
 }
 
 class _VideoCandidate {
-  _VideoCandidate({required this.url, required this.watermarked, required this.width, required this.height});
+  _VideoCandidate({
+    required this.url,
+    required this.watermarked,
+    required this.width,
+    required this.height,
+  });
   final String url;
   final bool watermarked;
   final num width;
@@ -287,14 +306,15 @@ List<Map<String, Object?>> _streamEntries(Object? stream) {
 _VideoCandidate? _candidateFromEntry(Map<String, Object?> entry) {
   final type = entry['streamType'] ?? entry['stream_type'];
   final desc = entry['streamDesc'] ?? entry['stream_desc'];
-  final watermarked = type == 259 ||
+  final watermarked =
+      type == 259 ||
       type == 309 ||
       (desc is String && desc.toUpperCase() == 'WEB_LIVEPHOTO_19');
   final backups = entry['backupUrls'] is List
       ? entry['backupUrls'] as List
       : entry['backup_urls'] is List
-          ? entry['backup_urls'] as List
-          : const [];
+      ? entry['backup_urls'] as List
+      : const [];
   final urls = [
     entry['masterUrl'],
     entry['master_url'],
@@ -304,16 +324,22 @@ _VideoCandidate? _candidateFromEntry(Map<String, Object?> entry) {
   if (urls.isEmpty) return null;
   final width = entry['width'] is num ? entry['width'] as num : 0;
   final height = entry['height'] is num ? entry['height'] as num : 0;
-  return _VideoCandidate(url: toHttps(urls[0]), watermarked: watermarked, width: width, height: height);
+  return _VideoCandidate(
+    url: toHttps(urls[0]),
+    watermarked: watermarked,
+    width: width,
+    height: height,
+  );
 }
 
 List<_VideoCandidate> _collectStreamCandidates(Object? container) {
   if (!_isRecord(container)) return [];
   final rec = (container as Map).cast<String, Object?>();
-  final streamObj = rec.containsKey('stream') && _isRecord(rec) ? rec['stream'] : container;
+  final streamObj = rec.containsKey('stream') && _isRecord(rec)
+      ? rec['stream']
+      : container;
   return [
-    for (final e in _streamEntries(streamObj))
-      _candidateFromEntry(e),
+    for (final e in _streamEntries(streamObj)) _candidateFromEntry(e),
   ].whereType<_VideoCandidate>().toList();
 }
 
@@ -323,29 +349,41 @@ ResolvedVideo? resolveVideoUrl(Object? video) {
   if (!_isRecord(video)) return null;
   final rec = (video as Map).cast<String, Object?>();
   final consumer = rec['consumer'];
-  final key = (_isRecord(consumer)
-          ? _pickString((consumer as Map).cast<String, Object?>(), const ['originVideoKey'])
+  final key =
+      (_isRecord(consumer)
+          ? _pickString((consumer as Map).cast<String, Object?>(), const [
+              'originVideoKey',
+            ])
           : null) ??
       _pickString(rec, const ['originVideoKey']);
   if (key != null) {
     if (RegExp(r'^https?://', caseSensitive: false).hasMatch(key)) {
       return ResolvedVideo(url: toHttps(key));
     }
-    return ResolvedVideo(url: 'https://sns-video-bd.xhscdn.com/${key.replaceFirst(RegExp(r'^/+'), '')}');
+    return ResolvedVideo(
+      url:
+          'https://sns-video-bd.xhscdn.com/${key.replaceFirst(RegExp(r'^/+'), '')}',
+    );
   }
   final candidates = <_VideoCandidate>[];
   final media = rec['media'];
   if (_isRecord(media)) {
     final m = (media as Map).cast<String, Object?>();
-    if (m.containsKey('stream')) candidates.addAll(_collectStreamCandidates(m['stream']));
+    if (m.containsKey('stream')) {
+      candidates.addAll(_collectStreamCandidates(m['stream']));
+    }
   }
-  if (rec.containsKey('stream')) candidates.addAll(_collectStreamCandidates(rec['stream']));
+  if (rec.containsKey('stream')) {
+    candidates.addAll(_collectStreamCandidates(rec['stream']));
+  }
   if (rec['mediaV2'] is String) {
     try {
       final parsed = jsonDecode(rec['mediaV2'] as String);
       if (_isRecord(parsed)) {
         final p = (parsed as Map).cast<String, Object?>();
-        if (p.containsKey('stream')) candidates.addAll(_collectStreamCandidates(p['stream']));
+        if (p.containsKey('stream')) {
+          candidates.addAll(_collectStreamCandidates(p['stream']));
+        }
       }
     } catch (_) {
       // Ignore unparseable app-media payloads; other buckets may still apply.
@@ -373,7 +411,7 @@ _VideoCandidate? _bestVideo(List<_VideoCandidate> candidates) {
 /// Primary URL plus alternates serving the same bytes.
 class _ImageRef {
   _ImageRef(this.url, [List<String>? fallbacks])
-      : fallbacks = fallbacks ?? const [];
+    : fallbacks = fallbacks ?? const [];
   final String url;
   final List<String> fallbacks;
 }
@@ -384,21 +422,22 @@ class _ImageRef {
 /// small previews. Returns the raw URLs (normalization happens at the
 /// call site so diagnostics can show the original form).
 List<String> _cleanScenes(List<Object?> info) {
-  final out = <String>[];
+  const order = ['H5_DTL', 'WB_DFT', ''];
+  final ranked = <String>[];
+  final rest = <String>[];
   for (final e in info) {
     if (e is! Map<String, Object?>) continue;
     final u = _pickString(e, const ['url']);
-    if (u == null) continue;
+    if (u == null || _looksWatermarked(u)) continue;
     final scene = (e['imageScene'] as String?) ?? '';
-    if (scene != 'WB_DFT' && scene != 'WB_PRV' && scene.isNotEmpty) continue;
-    if (_looksWatermarked(u)) continue;
-    if (scene == 'WB_DFT') {
-      out.insert(0, u);
+    if (order.contains(scene)) {
+      ranked.add('${order.indexOf(scene)}|$u');
     } else {
-      out.add(u);
+      rest.add(u);
     }
   }
-  return out;
+  ranked.sort();
+  return [for (final r in ranked) r.substring(2), ...rest];
 }
 
 /// Raw URLs of the server-watermarked renditions in [info].
@@ -408,63 +447,68 @@ List<String> _markedScenes(List<Object?> info) {
     if (e is! Map<String, Object?>) continue;
     final u = _pickString(e, const ['url']);
     if (u == null) continue;
-    final scene = (e['imageScene'] as String?) ?? '';
-    if (scene != 'WB_DFT' && scene != 'WB_PRV' && scene.isNotEmpty) continue;
     if (_looksWatermarked(u)) out.add(u);
   }
   return out;
 }
 
 /// Filenames carrying a watermark scene token are server-watermarked
-/// renditions; the same scene without the token is the clean original.
+/// renditions; scenes without the token are clean (H5_DTL/H5_PRV carry no
+/// watermark token). Unknown scenes are treated as clean so new scene
+/// names fail open instead of hiding behind the watermarked fallback.
 bool _looksWatermarked(String url) {
   final file = url.split('/').last.toLowerCase();
   final excl = file.indexOf('!');
   final token = excl >= 0 ? file.substring(excl + 1) : file;
-  if (token.contains('watermark')) return true;
-  return RegExp(r'(^|_)wm(_|$)').hasMatch(token);
+  return token.contains('watermark');
 }
 
 _ImageRef? _imageUrlOf(Map<String, Object?> entry) {
-  // infoList scene renditions first: the direct urlDefault/ci URL is the
-  // watermarked original, while a clean WB_DFT scene often exists alongside.
+  // Scene renditions first: H5_DTL (the watermark-free 1080p the app
+  // itself shows), then clean WB_DFT. The ci rewrite and the urlDefault
+  // original both carry the burned-in watermark, so they are fallbacks.
+  // Fallbacks stay raw (https-normalized); only the primary is rewritten
+  // by callers that need the canonical form.
   // All fallbacks are https-normalized so HttpClient never downgrades.
   final info = entry['infoList'];
-  final cleans =
-      info is List ? _cleanScenes(info.cast<Object?>()) : const <String>[];
-  final markeds =
-      info is List ? _markedScenes(info.cast<Object?>()) : const <String>[];
+  final cleans = info is List
+      ? _cleanScenes(info.cast<Object?>())
+      : const <String>[];
+  final markeds = info is List
+      ? _markedScenes(info.cast<Object?>())
+      : const <String>[];
   final direct = _pickString(entry, const ['urlDefault', 'url']);
   final directRaw = direct == null ? null : toHttps(direct);
   if (cleans.isNotEmpty) {
     final token = _fileToken(entry);
     // Keep every raw rendition reachable (clean scenes other than the
     // primary included), then the direct original, then the ci token.
+    final primary = toHttps(cleans.first);
     final rest = [
       for (final u in [...cleans.skip(1), ...markeds]) toHttps(u),
       if (info is List)
         for (final e in info)
-          if (e is Map<String, Object?> && _pickString(e, const ['url']) != null)
+          if (e is Map<String, Object?> &&
+              _pickString(e, const ['url']) != null)
             toHttps(_pickString(e, const ['url'])!),
       if (directRaw != null) directRaw,
       if (token.isNotEmpty) 'https://ci.xiaohongshu.com/$token',
-    ].where((u) => u.isNotEmpty && u != cleans.first).toSet().toList();
-    return _ImageRef(transformImageUrl(cleans.first), rest);
+    ].where((u) => u.isNotEmpty && u != primary).toSet().toList();
+    return _ImageRef(primary, rest);
   }
   if (direct != null) {
     final primary = transformImageUrl(direct);
     final raw = toHttps(direct);
-    final rest = [
-      for (final u in markeds) toHttps(u),
-      if (raw != primary) raw,
-    ];
+    final rest = [for (final u in markeds) toHttps(u), if (raw != primary) raw];
     return _ImageRef(primary, rest);
   }
   if (markeds.isNotEmpty) return _ImageRef(transformImageUrl(markeds.first));
   final token = _fileToken(entry);
   if (token.isNotEmpty) return _ImageRef('https://ci.xiaohongshu.com/$token');
   final traceId = _pickString(entry, const ['traceId']);
-  if (traceId != null) return _ImageRef('https://sns-img-qc.xhscdn.com/$traceId');
+  if (traceId != null) {
+    return _ImageRef('https://sns-img-qc.xhscdn.com/$traceId');
+  }
   return null;
 }
 
@@ -491,7 +535,9 @@ Map<String, Object?>? findNoteInStates(List<Object?> states, String? wantedId) {
     if (_isRecord(noteObj)) {
       final inner = (noteObj as Map).cast<String, Object?>();
       final map = inner['noteDetailMap'];
-      if (_isRecord(map)) byMap = ((map as Map).cast<String, Object?>())[wantedId ?? ''];
+      if (_isRecord(map)) {
+        byMap = ((map as Map).cast<String, Object?>())[wantedId ?? ''];
+      }
     }
     Map<String, Object?>? fromMap;
     if (_isRecord(byMap)) {
@@ -500,7 +546,9 @@ Map<String, Object?>? findNoteInStates(List<Object?> states, String? wantedId) {
       fromMap = _isRecord(inner) ? (inner as Map).cast<String, Object?>() : e;
     }
     if (fromMap != null &&
-        (wantedId == null || !_nonBlank(fromMap['noteId']) || fromMap['noteId'] == wantedId)) {
+        (wantedId == null ||
+            !_nonBlank(fromMap['noteId']) ||
+            fromMap['noteId'] == wantedId)) {
       return fromMap;
     }
     Object? mobile;
@@ -508,13 +556,17 @@ Map<String, Object?>? findNoteInStates(List<Object?> states, String? wantedId) {
     if (_isRecord(noteData)) {
       final nd = (noteData as Map).cast<String, Object?>();
       final data = nd['data'];
-      if (_isRecord(data)) mobile = ((data as Map).cast<String, Object?>())['noteData'];
+      if (_isRecord(data)) {
+        mobile = ((data as Map).cast<String, Object?>())['noteData'];
+      }
     }
     Map<String, Object?>? mobileNote;
     if (_isRecord(mobile)) {
       final m = (mobile as Map).cast<String, Object?>();
       final inner = m['note'];
-      mobileNote = _isRecord(inner) ? (inner as Map).cast<String, Object?>() : m;
+      mobileNote = _isRecord(inner)
+          ? (inner as Map).cast<String, Object?>()
+          : m;
     }
     if (mobileNote != null &&
         (wantedId == null ||
@@ -526,33 +578,46 @@ Map<String, Object?>? findNoteInStates(List<Object?> states, String? wantedId) {
   for (final state in states) {
     final note = _deepFindNote(state, wantedId);
     if (note != null &&
-        (wantedId == null || !_nonBlank(note['noteId']) || note['noteId'] == wantedId)) {
+        (wantedId == null ||
+            !_nonBlank(note['noteId']) ||
+            note['noteId'] == wantedId)) {
       return note;
     }
   }
   return null;
 }
 
-ParseResult _completeXhs(Map<String, Object?>? note, String? wantedId, bool looksLikeXhs) {
+ParseResult _completeXhs(
+  Map<String, Object?>? note,
+  String? wantedId,
+  bool looksLikeXhs,
+) {
   if (note == null) {
     if (looksLikeXhs) {
-      return ParseResult.err(ParseError(
-        code: ParseErrorCode.loginRequired,
-        message: 'Xiaohongshu returned an authenticated-only shell without note data.',
-      ));
+      return ParseResult.err(
+        ParseError(
+          code: ParseErrorCode.loginRequired,
+          message:
+              'Xiaohongshu returned an authenticated-only shell without note data.',
+        ),
+      );
     }
-    return ParseResult.err(ParseError(
-      code: ParseErrorCode.invalidPage,
-      message: 'Not a Xiaohongshu note page.',
-    ));
+    return ParseResult.err(
+      ParseError(
+        code: ParseErrorCode.invalidPage,
+        message: 'Not a Xiaohongshu note page.',
+      ),
+    );
   }
   final rawId = note['noteId'];
   final noteId = _nonBlank(rawId) ? rawId as String : (wantedId ?? '');
   if (noteId.isEmpty) {
-    return ParseResult.err(ParseError(
-      code: ParseErrorCode.invalidPage,
-      message: 'Could not determine the note id.',
-    ));
+    return ParseResult.err(
+      ParseError(
+        code: ParseErrorCode.invalidPage,
+        message: 'Could not determine the note id.',
+      ),
+    );
   }
   return buildNoteFromRecord(note, noteId);
 }
@@ -569,9 +634,13 @@ ParseResult parseXhs(String html, String pageUrl) {
   }
 
   Map<String, Object?>? note =
-      findNoteInStates(states, wantedId) ?? _extractNoteDetailEntry(html, wantedId);
+      findNoteInStates(states, wantedId) ??
+      _extractNoteDetailEntry(html, wantedId);
   final foundId = note?['noteId'];
-  if (note != null && wantedId != null && _nonBlank(foundId) && (foundId as String).toLowerCase() != wantedId) {
+  if (note != null &&
+      wantedId != null &&
+      _nonBlank(foundId) &&
+      (foundId as String).toLowerCase() != wantedId) {
     // A mismatched id means stale data from another post: never present it
     // as the requested note.
     note = null;
@@ -579,7 +648,11 @@ ParseResult parseXhs(String html, String pageUrl) {
 
   final head = html.length > 20000 ? html.substring(0, 20000) : html;
   final looksLikeXhs =
-      pageUrl.contains('xiaohongshu.com') || pageUrl.contains('xhslink') || head.contains('xiaohongshu.com') || head.contains('xhslink') || head.contains('__INITIAL_STATE__');
+      pageUrl.contains('xiaohongshu.com') ||
+      pageUrl.contains('xhslink') ||
+      head.contains('xiaohongshu.com') ||
+      head.contains('xhslink') ||
+      head.contains('__INITIAL_STATE__');
   return _completeXhs(note, wantedId, looksLikeXhs);
 }
 
@@ -590,10 +663,14 @@ ParseResult parseXhsState(Object? state, String pageUrl) {
   final wantedId = idMatch?.group(1)?.toLowerCase();
   Map<String, Object?>? note = findNoteInStates([state], wantedId);
   final foundId = note?['noteId'];
-  if (note != null && wantedId != null && _nonBlank(foundId) && (foundId as String).toLowerCase() != wantedId) {
+  if (note != null &&
+      wantedId != null &&
+      _nonBlank(foundId) &&
+      (foundId as String).toLowerCase() != wantedId) {
     note = null;
   }
-  final looksLikeXhs = pageUrl.contains('xiaohongshu.com') || pageUrl.contains('xhslink');
+  final looksLikeXhs =
+      pageUrl.contains('xiaohongshu.com') || pageUrl.contains('xhslink');
   return _completeXhs(note, wantedId, looksLikeXhs);
 }
 
@@ -601,26 +678,37 @@ ParseResult parseXhsState(Object? state, String pageUrl) {
 ParseResult buildNoteFromRecord(Map<String, Object?> note, String noteId) {
   Object? userObj = note['user'];
   if (!_isRecord(userObj)) userObj = note['author'];
-  final user = _isRecord(userObj) ? (userObj as Map).cast<String, Object?>() : <String, Object?>{};
+  final user = _isRecord(userObj)
+      ? (userObj as Map).cast<String, Object?>()
+      : <String, Object?>{};
   final author = PostAuthor(
     name: _pickString(user, const ['nickname', 'nickName', 'name', 'userName']),
     id: _pickString(user, const ['userId', 'user_id', 'id', 'redId']),
   );
 
-  final rawImages = note['imageList'] is List ? note['imageList'] as List : (note['images'] as List? ?? []);
-  final images = [for (final e in rawImages) if (_isRecord(e)) (e as Map).cast<String, Object?>()];
+  final rawImages = note['imageList'] is List
+      ? note['imageList'] as List
+      : (note['images'] as List? ?? []);
+  final images = [
+    for (final e in rawImages)
+      if (_isRecord(e)) (e as Map).cast<String, Object?>(),
+  ];
 
   final noteType = note['type'] is String ? note['type'] as String : '';
-  final firstHasStream = images.isNotEmpty &&
+  final firstHasStream =
+      images.isNotEmpty &&
       ((images[0].containsKey('stream')) || images[0].containsKey('livePhoto'));
   final videoObj = note['video'];
   var hasMainVideo = false;
   if (_isRecord(videoObj)) {
     final v = (videoObj as Map).cast<String, Object?>();
     final consumer = v['consumer'];
-    hasMainVideo = _nonBlank(v['originVideoKey']) ||
+    hasMainVideo =
+        _nonBlank(v['originVideoKey']) ||
         (_isRecord(consumer) &&
-            _nonBlank(((consumer as Map).cast<String, Object?>())['originVideoKey'])) ||
+            _nonBlank(
+              ((consumer as Map).cast<String, Object?>())['originVideoKey'],
+            )) ||
         _collectStreamCandidates(v['media']).isNotEmpty ||
         _collectStreamCandidates(v['stream']).isNotEmpty ||
         (v['mediaV2'] is String &&
@@ -628,23 +716,34 @@ ParseResult buildNoteFromRecord(Map<String, Object?> note, String noteId) {
                 (v['mediaV2'] as String).contains('masterUrl')));
   }
   final isVideoNote =
-      noteType == 'video' || (noteType == '' && hasMainVideo && images.length <= 1 && !firstHasStream);
+      noteType == 'video' ||
+      (noteType == '' && hasMainVideo && images.length <= 1 && !firstHasStream);
 
   final items = <MediaItem>[];
 
   if (isVideoNote) {
     final resolved = resolveVideoUrl(note['video']);
     if (resolved != null) {
-      items.add(MediaItem(type: 'video', url: resolved.url, width: resolved.width, height: resolved.height));
+      items.add(
+        MediaItem(
+          type: 'video',
+          url: resolved.url,
+          width: resolved.width,
+          height: resolved.height,
+        ),
+      );
     } else if (images.length == 1) {
       final img = _imageUrlOf(images[0]);
       if (img != null) {
-        items.add(MediaItem(
+        items.add(
+          MediaItem(
             type: 'image',
             url: img.url,
             width: _asInt(images[0]['width']),
             height: _asInt(images[0]['height']),
-            fallbacks: img.fallbacks));
+            fallbacks: img.fallbacks,
+          ),
+        );
       }
     }
   } else {
@@ -653,15 +752,16 @@ ParseResult buildNoteFromRecord(Map<String, Object?> note, String noteId) {
     for (final entry in images) {
       final img = _imageUrlOf(entry);
       final livePhoto = entry['livePhoto'];
-      final livePhotoMap =
-          livePhoto is Map<String, Object?> ? livePhoto : null;
-      final entryKey = _pickString(entry, const ['originVideoKey']) ??
+      final livePhotoMap = livePhoto is Map<String, Object?> ? livePhoto : null;
+      final entryKey =
+          _pickString(entry, const ['originVideoKey']) ??
           (livePhotoMap != null
               ? _pickString(livePhotoMap, const ['originVideoKey'])
               : null);
       String? entryKeyUrl;
       if (entryKey != null) {
-        entryKeyUrl = RegExp(r'^https?://', caseSensitive: false).hasMatch(entryKey)
+        entryKeyUrl =
+            RegExp(r'^https?://', caseSensitive: false).hasMatch(entryKey)
             ? toHttps(entryKey)
             : 'https://sns-video-bd.xhscdn.com/${entryKey.replaceFirst(RegExp(r'^/+'), '')}';
       }
@@ -671,16 +771,24 @@ ParseResult buildNoteFromRecord(Map<String, Object?> note, String noteId) {
           ..._collectStreamCandidates(livePhotoMap['stream']),
       ];
       final _VideoCandidate? own = entryKeyUrl != null
-          ? _VideoCandidate(url: entryKeyUrl, watermarked: false, width: 0, height: 0)
+          ? _VideoCandidate(
+              url: entryKeyUrl,
+              watermarked: false,
+              width: 0,
+              height: 0,
+            )
           : _bestVideo(ownCandidates);
       if (own != null && img != null) {
-        items.add(MediaItem(
+        items.add(
+          MediaItem(
             type: 'live',
             url: img.url,
             videoUrl: own.url,
             width: _asInt(entry['width']),
             height: _asInt(entry['height']),
-            fallbacks: img.fallbacks));
+            fallbacks: img.fallbacks,
+          ),
+        );
         continue;
       }
       if (own != null && img == null) {
@@ -688,26 +796,37 @@ ParseResult buildNoteFromRecord(Map<String, Object?> note, String noteId) {
         continue;
       }
       if (img != null) {
-        items.add(MediaItem(
+        items.add(
+          MediaItem(
             type: 'image',
             url: img.url,
             width: _asInt(entry['width']),
             height: _asInt(entry['height']),
-            fallbacks: img.fallbacks));
+            fallbacks: img.fallbacks,
+          ),
+        );
       }
     }
     if (noteVideo != null && !noteVideoEmitted && images.length != 1) {
       noteVideoEmitted = true;
-      items.add(MediaItem(
-          type: 'video', url: noteVideo.url, width: noteVideo.width, height: noteVideo.height));
+      items.add(
+        MediaItem(
+          type: 'video',
+          url: noteVideo.url,
+          width: noteVideo.width,
+          height: noteVideo.height,
+        ),
+      );
     }
   }
 
   if (items.isEmpty) {
-    return ParseResult.err(ParseError(
-      code: ParseErrorCode.loginRequired,
-      message: 'Xiaohongshu note has no extractable media.',
-    ));
+    return ParseResult.err(
+      ParseError(
+        code: ParseErrorCode.loginRequired,
+        message: 'Xiaohongshu note has no extractable media.',
+      ),
+    );
   }
 
   final time = note['time'];
@@ -735,10 +854,7 @@ RawImageEntry _rawEntryOf(Map<String, Object?> entry) {
       if (e is! Map<String, Object?>) continue;
       final u = _pickString(e, const ['url']);
       if (u == null) continue;
-      scenes.add(RawScene(
-        scene: (e['imageScene'] as String?) ?? '',
-        url: u,
-      ));
+      scenes.add(RawScene(scene: (e['imageScene'] as String?) ?? '', url: u));
     }
   }
   return RawImageEntry(keys: entry.keys.toList()..sort(), scenes: scenes);

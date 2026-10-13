@@ -24,7 +24,9 @@ void main() {
 
     test('takes the first supported link', () {
       expect(
-        extractLink('https://example.com/a https://www.xiaohongshu.com/explore/abc'),
+        extractLink(
+          'https://example.com/a https://www.xiaohongshu.com/explore/abc',
+        ),
         equals('https://www.xiaohongshu.com/explore/abc'),
       );
     });

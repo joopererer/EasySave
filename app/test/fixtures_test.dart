@@ -12,14 +12,17 @@ void main() {
   final root = Directory('../spec/fixtures');
   for (final platformDir in ['xhs', 'instagram']) {
     final dir = Directory('${root.path}/$platformDir');
-    final cases = dir
-        .listSync()
-        .whereType<File>()
-        .where((f) => f.path.endsWith('.html'))
-        .map((f) => f.uri.pathSegments.last.replaceAll('.html', ''))
-        .where((name) => File('${dir.path}/$name.expected.json').existsSync())
-        .toList()
-      ..sort();
+    final cases =
+        dir
+            .listSync()
+            .whereType<File>()
+            .where((f) => f.path.endsWith('.html'))
+            .map((f) => f.uri.pathSegments.last.replaceAll('.html', ''))
+            .where(
+              (name) => File('${dir.path}/$name.expected.json').existsSync(),
+            )
+            .toList()
+          ..sort();
     group('$platformDir fixtures', () {
       if (cases.isEmpty) {
         test('has fixtures to test', () => expect(cases, isNotEmpty));

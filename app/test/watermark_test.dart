@@ -1,9 +1,8 @@
 import 'package:easysave/core/xhs.dart';
 import 'package:flutter_test/flutter_test.dart';
 
-// WB_DFT renditions exist with and without watermark: the appended token
-// decides (`wb_dft` clean vs `watermark`). Clean wins; marked is kept as
-// the only fallback.
+// H5 and WB scenes without a watermark token are clean originals:
+// H5_DTL first, then WB_DFT. Watermarked renditions stay as fallbacks.
 void main() {
   Map<String, Object?> noteWith(List<Map<String, Object?>> images) => {
     'noteId': '6aca089a000000000a01efb4',
@@ -21,7 +20,7 @@ void main() {
       'http://sns-webpic-qc.xhscdn.com/202610132252/fccfbed52a062a916648e7d56c157af7/$ciToken!h5_1080jpg';
 
   group('watermark-free scene selection', () {
-    test('clean WB_DFT wins over the watermarked rendition', () {
+    test('H5_DTL wins over WB_DFT and the watermarked rendition', () {
       final result = buildNoteFromRecord(
         noteWith([
           {
@@ -32,6 +31,7 @@ void main() {
             'infoList': [
               {'imageScene': 'WB_DFT', 'url': marked},
               {'imageScene': 'WB_DFT', 'url': clean},
+              {'imageScene': 'H5_DTL', 'url': direct},
             ],
           },
         ]),
@@ -40,14 +40,15 @@ void main() {
       expect(result.ok, isTrue);
       expect(
         result.data?.items.single.url,
-        equals('https://ci.xiaohongshu.com/$ciToken'),
+        equals(
+          'https://sns-webpic-qc.xhscdn.com/202610132252/fccfbed52a062a916648e7d56c157af7/$ciToken!h5_1080jpg',
+        ),
       );
       expect(
         result.data?.items.single.fallbacks,
         equals([
-          'https://sns-webpic-qc.xhscdn.com/202610132252/7089f290924f748b44a1411f3ac4f189/$ciToken!nd_dft_wlteh_webp_watermark_3',
           'https://sns-webpic-qc.xhscdn.com/202610132252/7089f290924f748b44a1411f3ac4f189/$ciToken!nd_dft_wlteh_webp_3',
-          'https://sns-webpic-qc.xhscdn.com/202610132252/fccfbed52a062a916648e7d56c157af7/$ciToken!h5_1080jpg',
+          'https://sns-webpic-qc.xhscdn.com/202610132252/7089f290924f748b44a1411f3ac4f189/$ciToken!nd_dft_wlteh_webp_watermark_3',
           'https://ci.xiaohongshu.com/$ciToken',
         ]),
       );
