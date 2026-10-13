@@ -23,6 +23,12 @@ Node.js 22.12 or newer is required.
 
 Run the relevant tests after each completed step. Tests or builds that do not pass must stop the workflow and be reported; never commit a change when validation has failed. Never use `GIT_SSL_NO_VERIFY` or any other method that disables TLS certificate verification. Code, comments, and commit messages must be in English.
 
+## UI and versions
+
+- UI changes must follow `docs/design/ui-spec.md` (tokens, layouts, states, error copy).
+- Implement only the version specified in the instruction; never implement later versions early.
+- After completing a version, check off its items in `docs/roadmap.md` (`- [ ]` to `- [x]`).
+
 ## Common commands
 
 - `flutter test` (from `app/)
