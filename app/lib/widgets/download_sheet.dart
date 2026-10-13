@@ -39,6 +39,7 @@ class _DownloadSheetState extends State<DownloadSheet> {
   bool _cancelled = false;
   SaveSummary? _summary;
   String? _captionPath;
+  String _albumName = 'EasySave';
 
   @override
   void initState() {
@@ -49,6 +50,7 @@ class _DownloadSheetState extends State<DownloadSheet> {
   Future<void> _start() async {
     final settings = await AppSettings.load();
     final author = widget.post.author.name ?? '';
+    _albumName = settings.albumName;
     final summary = await saveItems(
       widget.post,
       widget.selected,
@@ -190,10 +192,19 @@ class _DownloadSheetState extends State<DownloadSheet> {
                   Expanded(
                     child: OutlinedButton(
                       onPressed: () async {
+                        // Gal.open() fires ACTION_VIEW on the MediaStore
+                        // collection, which many OEM galleries cannot handle.
+                        // Fall back to telling the user the album name.
                         try {
                           await Gal.open();
                         } catch (_) {
-                          // Older gal builds may not implement open.
+                          if (context.mounted) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(
+                                content: Text('已保存到相册“$_albumName”，请手动打开相册查看'),
+                              ),
+                            );
+                          }
                         }
                       },
                       child: const Text('打开相册'),

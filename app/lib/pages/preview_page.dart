@@ -290,10 +290,14 @@ class _ThumbState extends State<_Thumb> {
 
   @override
   Widget build(BuildContext context) {
-    // Display order: CDN originals first. The rewritten ci.xiaohongshu.com
-    // primary is occasionally slow/unreachable from mobile networks (the
-    // 0/2/6 pattern); it stays in the rotation as a fallback.
-    final urls = [...widget.item.fallbacks, widget.item.url];
+    // Video items show their still-image cover; the item url itself may
+    // be an mp4 that Image.network cannot render.
+    final cover = widget.item.type == 'video' ? widget.item.posterUrl : null;
+    final urls = [
+      ...widget.item.fallbacks,
+      if (cover != null) cover,
+      widget.item.url,
+    ];
     return Image.network(
       urls[_attempt.clamp(0, urls.length - 1)],
       fit: BoxFit.cover,

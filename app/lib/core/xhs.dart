@@ -713,10 +713,12 @@ ParseResult buildNoteFromRecord(Map<String, Object?> note, String noteId) {
   if (isVideoNote) {
     final resolved = resolveVideoUrl(note['video']);
     if (resolved != null) {
+      final cover = images.isNotEmpty ? _imageUrlOf(images[0]) : null;
       items.add(
         MediaItem(
           type: 'video',
           url: resolved.url,
+          posterUrl: cover?.url,
           width: resolved.width,
           height: resolved.height,
           duration: videoDuration(note['video']),

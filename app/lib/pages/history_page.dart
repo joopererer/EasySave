@@ -16,10 +16,10 @@ class HistoryPage extends StatefulWidget {
   final VoidCallback? onGoParse;
 
   @override
-  State<HistoryPage> createState() => _HistoryPageState();
+  State<HistoryPage> createState() => HistoryPageState();
 }
 
-class _HistoryPageState extends State<HistoryPage> {
+class HistoryPageState extends State<HistoryPage> {
   String _filter = 'all';
   List<HistoryRecord> _records = [];
   bool _loading = true;
@@ -29,6 +29,13 @@ class _HistoryPageState extends State<HistoryPage> {
   void initState() {
     super.initState();
     _reload();
+  }
+
+  /// Reload from DB; called by the shell every time the tab becomes visible
+  /// because IndexedStack keeps this page alive across tab switches.
+  Future<void> reload() async {
+    if (!mounted) return;
+    await _reload();
   }
 
   Future<void> _reload() async {
@@ -97,6 +104,7 @@ class _HistoryPageState extends State<HistoryPage> {
               type: map['type'] as String? ?? 'image',
               url: map['url'] as String? ?? '',
               videoUrl: map['videoUrl'] as String?,
+              posterUrl: map['posterUrl'] as String?,
               width: map['width'] as num?,
               height: map['height'] as num?,
               duration: map['duration'] as num?,

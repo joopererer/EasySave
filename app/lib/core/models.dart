@@ -31,6 +31,7 @@ class MediaItem {
     required this.type,
     required this.url,
     this.videoUrl,
+    this.posterUrl,
     this.width,
     this.height,
     this.duration,
@@ -40,6 +41,10 @@ class MediaItem {
   final String type;
   final String url;
   final String? videoUrl;
+
+  /// Still-image cover for a video item (XHS `imageList[0]`). IG video
+  /// items already carry the preview in `url`, so this stays null there.
+  final String? posterUrl;
   final num? width;
   final num? height;
 
@@ -55,6 +60,7 @@ class MediaItem {
   Map<String, Object?> toJson() {
     final map = <String, Object?>{'type': type, 'url': url};
     if (videoUrl != null) map['videoUrl'] = videoUrl;
+    if (posterUrl != null) map['posterUrl'] = posterUrl;
     if (width != null) map['width'] = width;
     if (height != null) map['height'] = height;
     if (duration != null) map['duration'] = duration;

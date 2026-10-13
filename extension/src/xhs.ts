@@ -26,6 +26,8 @@ export interface XhsItem {
   type: XhsItemType;
   url: string;
   videoUrl?: string;
+  /** Still-image cover for a video item (XHS `imageList[0]`). */
+  posterUrl?: string;
   width?: number;
   height?: number;
   /** Video length in seconds, from `video.capa.duration`. Absent when unknown. */
@@ -649,6 +651,8 @@ export function buildNoteFromRecord(
     const resolved = resolveVideoUrl(note["video"]);
     if (resolved) {
       const item: XhsItem = { type: "video", url: resolved.url };
+      const cover = images.length > 0 ? imageUrlOf(images[0]) : undefined;
+      if (cover) item.posterUrl = cover.url;
       if (resolved.width !== undefined) item.width = resolved.width;
       if (resolved.height !== undefined) item.height = resolved.height;
       const duration = videoDuration(note["video"]);

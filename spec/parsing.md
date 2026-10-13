@@ -4,7 +4,7 @@
 
 Fixture pairs used to validate this contract live under spec/fixtures/.
 
-Parsers produce `{ platform, id, url, author: { name?, id? }, title?, caption?, publishedAt?, items: [{ type: image|video|live, url, videoUrl?, width?, height?, duration? }] }`.
+Parsers produce `{ platform, id, url, author: { name?, id? }, title?, caption?, publishedAt?, items: [{ type: image|video|live, url, videoUrl?, posterUrl?, width?, height?, duration? }] }`.
 `platform` is `xhs` or `instagram`. `url` is the canonical post URL.
 `items` preserves source order. `live` represents a still image paired with its
 motion asset via `videoUrl`. In v1, `live` is only an image+video pair; no
@@ -12,6 +12,10 @@ motion-photo synthesis is performed.
 `duration` is the video length in seconds, present only on `video` items and
 only when the source provides it: XHS reads `video.capa.duration`, Instagram
 reads `video_duration`. When absent, the UI shows a bare play badge.
+`posterUrl` is the still-image cover for a `video` item, taken from XHS
+`imageList[0]` (IG video items already carry the preview image in `url`, so
+it stays null there). The UI renders `posterUrl` for video thumbnails because
+the item `url` itself may be an mp4 that image widgets cannot display.
 
 v1 scope exclusions: comment-section images, Stories, and OG fallback on post
 pages. When structured parsing fails, return an explicit parse error instead of
