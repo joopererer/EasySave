@@ -190,7 +190,10 @@ class _ThumbState extends State<_Thumb> {
 
   @override
   Widget build(BuildContext context) {
-    final urls = [widget.item.url, ...widget.item.fallbacks];
+    // Display order: CDN originals first. The rewritten ci.xiaohongshu.com
+    // primary is occasionally slow/unreachable from mobile networks (the
+    // 0/2/6 pattern); it stays in the rotation as a fallback.
+    final urls = [...widget.item.fallbacks, widget.item.url];
     return Image.network(
       urls[_attempt.clamp(0, urls.length - 1)],
       fit: BoxFit.cover,

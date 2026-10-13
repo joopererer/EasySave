@@ -69,17 +69,22 @@ Future<void> saveItems(
   for (var i = 0; i < selected.length; i++) {
     final item = post.items[selected[i]];
     final seq = i + 1;
+    // Display order: CDN originals first (the rewritten ci primary is
+    // occasionally slow/unreachable from mobile networks); ci stays last
+    // as a fallback so nothing is lost when only it serves the bytes.
+    final imageUrls = [...item.fallbacks, item.url];
     if (item.type == 'live' && item.videoUrl != null) {
       total += 2;
-      jobs.add(() => _saveOne([item.url, ...item.fallbacks], referer, '${post.id}_$seq.jpg', true));
+      jobs.add(() => _saveOne(imageUrls, referer, '${post.id}_$seq.jpg', true));
       jobs.add(() => _saveOne([item.videoUrl!], referer, '${post.id}_${seq}_live.mp4', false));
     } else if (item.type == 'video') {
       total += 1;
       final url = item.videoUrl ?? item.url;
-      jobs.add(() => _saveOne([url, ...item.fallbacks], referer, '${post.id}_$seq.mp4', false));
+      final videoUrls = item.videoUrl != null ? [url, ...imageUrls] : imageUrls;
+      jobs.add(() => _saveOne(videoUrls, referer, '${post.id}_$seq.mp4', false));
     } else {
       total += 1;
-      jobs.add(() => _saveOne([item.url, ...item.fallbacks], referer, '${post.id}_$seq.jpg', true));
+      jobs.add(() => _saveOne(imageUrls, referer, '${post.id}_$seq.jpg', true));
     }
   }
   // Bounded concurrency: 3 downloads at a time beats strict serial
