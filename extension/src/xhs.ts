@@ -385,26 +385,40 @@ function bestVideo(candidates: VideoCandidate[]): VideoCandidate | undefined {
   })[0];
 }
 
-function imageUrlOf(entry: Record<string, unknown>): string | undefined {
-  const direct = pickString(entry, ["urlDefault", "url"]);
-  if (direct) return transformImageUrl(direct);
-  // Entries without a direct URL still carry renditions in infoList
-  // (prefer the clean default scene) or at least a fileId.
+function imageUrlOf(entry: Record<string, unknown>): { url: string; fallbacks: string[] } | undefined {
+  // infoList scene renditions first: the direct urlDefault/ci URL is the
+  // watermarked original, while a clean WB_DFT scene often exists alongside.
   const info = entry["infoList"];
-  if (Array.isArray(info)) {
-    const clean = sceneUrl(info, { watermarked: false });
-    const marked = sceneUrl(info, { watermarked: true });
-    if (clean) return clean;
-    if (marked) return marked;
+  const clean = Array.isArray(info) ? sceneUrl(info, { watermarked: false }) : undefined;
+  const marked = Array.isArray(info) ? sceneUrl(info, { watermarked: true }) : undefined;
+  const direct = pickString(entry, ["urlDefault", "url"]);
+  if (clean) {
+    const token = fileToken(entry);
+    const rest = [
+      ...(direct ? [transformImageUrl(direct), toHttps(direct)] : []),
+      ...(marked ? [marked] : []),
+      ...(token ? [`https://ci.xiaohongshu.com/${token}`] : []),
+    ].filter((u) => u && u !== clean);
+    return { url: clean, fallbacks: [...new Set(rest)] };
   }
-  const fileId = pickString(entry, ["fileId"]);
-  if (fileId) {
-    const token = fileId.split("!")[0];
-    if (token) return `https://ci.xiaohongshu.com/${token}`;
+  if (direct) {
+    const primary = transformImageUrl(direct);
+    const raw = toHttps(direct);
+    const rest = [...(marked ? [marked] : []), ...(raw !== primary ? [raw] : [])];
+    return { url: primary, fallbacks: rest };
   }
+  if (marked) return { url: marked, fallbacks: [] };
+  const token = fileToken(entry);
+  if (token) return { url: `https://ci.xiaohongshu.com/${token}`, fallbacks: [] };
   const traceId = pickString(entry, ["traceId"]);
-  if (traceId) return `https://sns-img-qc.xhscdn.com/${traceId}`;
+  if (traceId) return { url: `https://sns-img-qc.xhscdn.com/${traceId}`, fallbacks: [] };
   return undefined;
+}
+
+function fileToken(entry: Record<string, unknown>): string {
+  const fileId = pickString(entry, ["fileId"]);
+  if (!fileId) return "";
+  return fileId.split("!")[0];
 }
 
 /**
@@ -433,13 +447,15 @@ function sceneUrl(info: unknown[], opts: { watermarked: boolean }): string | und
 }
 
 /**
- * Filenames containing `watermark` (or `wm` tokens) are server-watermarked
- * renditions; the bare `wb_dft` file is the clean original.
+ * Filenames carrying a watermark scene token are server-watermarked
+ * renditions; the same scene without the token is the clean original.
  */
 export function looksWatermarked(url: string): boolean {
-  const file = url.split("/").pop()?.toLowerCase() ?? "";
-  if (file.includes("watermark")) return true;
-  return /(^|[^a-z])wm([^a-z]|$)/.test(file);
+  const file = (url.split("/").pop() ?? "").toLowerCase();
+  const excl = file.indexOf("!");
+  const token = excl >= 0 ? file.slice(excl + 1) : file;
+  if (token.includes("watermark")) return true;
+  return /(^|_)wm(_|$)/.test(token);
 }
 
 function num(value: unknown): number | undefined {
@@ -607,7 +623,7 @@ export function buildNoteFromRecord(
     } else if (images.length === 1) {
       const img = imageUrlOf(images[0]);
       if (img) {
-        const item: XhsItem = { type: "image", url: img };
+        const item: XhsItem = { type: "image", url: img.url };
         const w = num(images[0]["width"]);
         const h = num(images[0]["height"]);
         if (w !== undefined) item.width = w;
@@ -639,7 +655,7 @@ export function buildNoteFromRecord(
         ? { url: entryKeyUrl, watermarked: false, width: 0, height: 0 }
         : bestVideo(ownCandidates);
       if (own && img) {
-        const item: XhsItem = { type: "live", url: img, videoUrl: own.url };
+        const item: XhsItem = { type: "live", url: img.url, videoUrl: own.url };
         const w = num(entry["width"]);
         const h = num(entry["height"]);
         if (w !== undefined) item.width = w;
@@ -652,7 +668,7 @@ export function buildNoteFromRecord(
         return;
       }
       if (img) {
-        const item: XhsItem = { type: "image", url: img };
+        const item: XhsItem = { type: "image", url: img.url };
         const w = num(entry["width"]);
         const h = num(entry["height"]);
         if (w !== undefined) item.width = w;

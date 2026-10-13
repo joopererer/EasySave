@@ -383,7 +383,8 @@ class _ImageRef {
 /// (`wb_dft` clean vs `watermark`/`wm` watermarked); WB_PRV renditions are
 /// small previews. Returns null when nothing in the list has a URL.
 String? _sceneUrl(List<Object?> info, {required bool watermarked}) {
-  String? anyClean;
+  String? rawMarked;
+  String? anyCleanRaw;
   for (final e in info) {
     if (e is! Map<String, Object?>) continue;
     final u = _pickString(e, const ['url']);
@@ -391,50 +392,71 @@ String? _sceneUrl(List<Object?> info, {required bool watermarked}) {
     final scene = (e['imageScene'] as String?) ?? '';
     if (scene != 'WB_DFT' && scene != 'WB_PRV' && scene.isNotEmpty) continue;
     if (_looksWatermarked(u)) {
-      if (watermarked) return transformImageUrl(u);
+      rawMarked ??= u;
       continue;
     }
-    if (scene == 'WB_DFT') return transformImageUrl(u);
-    anyClean ??= transformImageUrl(u);
+    if (scene == 'WB_DFT') return u;
+    anyCleanRaw ??= u;
   }
-  if (watermarked) return null;
-  return anyClean;
+  if (watermarked) return rawMarked;
+  return anyCleanRaw;
 }
 
-/// Filenames containing `watermark` (or `wm` tokens) are server-watermarked
-/// renditions; the bare `wb_dft` file is the clean original.
+/// Filenames carrying a watermark scene token are server-watermarked
+/// renditions; the same scene without the token is the clean original.
 bool _looksWatermarked(String url) {
   final file = url.split('/').last.toLowerCase();
-  if (file.contains('watermark')) return true;
-  return RegExp(r'(^|[^a-z])wm([^a-z]|$)').hasMatch(file);
+  final excl = file.indexOf('!');
+  final token = excl >= 0 ? file.substring(excl + 1) : file;
+  if (token.contains('watermark')) return true;
+  return RegExp(r'(^|_)wm(_|$)').hasMatch(token);
 }
 
 _ImageRef? _imageUrlOf(Map<String, Object?> entry) {
+  // infoList scene renditions first: the direct urlDefault/ci URL is the
+  // watermarked original, while a clean WB_DFT scene often exists alongside.
+  final info = entry['infoList'];
+  final clean =
+      info is List ? _sceneUrl(info.cast<Object?>(), watermarked: false) : null;
+  final marked =
+      info is List ? _sceneUrl(info.cast<Object?>(), watermarked: true) : null;
   final direct = _pickString(entry, const ['urlDefault', 'url']);
+  final directRaw = direct == null ? null : toHttps(direct);
+  if (clean != null) {
+    final token = _fileToken(entry);
+    // Keep every raw rendition reachable (clean scenes other than the
+    // primary included), then the direct original, then the ci token.
+    final rest = [
+      if (info is List)
+        for (final e in info)
+          if (e is Map<String, Object?> && _pickString(e, const ['url']) != null)
+            toHttps(_pickString(e, const ['url'])!),
+      if (directRaw != null) directRaw,
+      if (token.isNotEmpty) 'https://ci.xiaohongshu.com/$token',
+    ].where((u) => u.isNotEmpty && u != clean).toSet().toList();
+    return _ImageRef(transformImageUrl(clean), rest);
+  }
   if (direct != null) {
     final primary = transformImageUrl(direct);
     final raw = toHttps(direct);
-    return _ImageRef(primary, raw == primary ? const [] : [raw]);
+    final rest = [
+      if (marked != null) marked,
+      if (raw != primary) raw,
+    ];
+    return _ImageRef(primary, rest);
   }
-  // Entries without a direct URL still carry renditions in infoList
-  // (prefer the clean default scene) or at least a fileId.
-  final info = entry['infoList'];
-  if (info is List) {
-    final clean = _sceneUrl(info.cast<Object?>(), watermarked: false);
-    final marked = _sceneUrl(info.cast<Object?>(), watermarked: true);
-    if (clean != null) {
-      return _ImageRef(clean, marked != null ? [marked] : const []);
-    }
-    if (marked != null) return _ImageRef(marked);
-  }
-  final fileId = _pickString(entry, const ['fileId']);
-  if (fileId != null) {
-    final token = fileId.split('!').first;
-    if (token.isNotEmpty) return _ImageRef('https://ci.xiaohongshu.com/$token');
-  }
+  if (marked != null) return _ImageRef(transformImageUrl(marked));
+  final token = _fileToken(entry);
+  if (token.isNotEmpty) return _ImageRef('https://ci.xiaohongshu.com/$token');
   final traceId = _pickString(entry, const ['traceId']);
   if (traceId != null) return _ImageRef('https://sns-img-qc.xhscdn.com/$traceId');
   return null;
+}
+
+String _fileToken(Map<String, Object?> entry) {
+  final fileId = _pickString(entry, const ['fileId']);
+  if (fileId == null) return '';
+  return fileId.split('!').first;
 }
 
 int? _asInt(Object? v) {
