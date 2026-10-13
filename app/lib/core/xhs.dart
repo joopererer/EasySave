@@ -370,30 +370,52 @@ _VideoCandidate? _bestVideo(List<_VideoCandidate> candidates) {
   return sorted[0];
 }
 
-String? _imageUrlOf(Map<String, Object?> entry) {
+/// Primary URL plus alternates serving the same bytes.
+class _ImageRef {
+  _ImageRef(this.url, [List<String>? fallbacks])
+      : fallbacks = fallbacks ?? const [];
+  final String url;
+  final List<String> fallbacks;
+}
+
+_ImageRef? _imageUrlOf(Map<String, Object?> entry) {
   final direct = _pickString(entry, const ['urlDefault', 'url']);
-  if (direct != null) return transformImageUrl(direct);
+  if (direct != null) {
+    final primary = transformImageUrl(direct);
+    final raw = toHttps(direct);
+    return _ImageRef(primary, raw == primary ? const [] : [raw]);
+  }
   // Entries without a direct URL still carry renditions in infoList
   // (prefer the default scene) or at least a fileId for ci.xiaohongshu.com.
   final info = entry['infoList'];
   if (info is List) {
     String? first;
+    String? dft;
     for (final e in info) {
       if (e is! Map<String, Object?>) continue;
       final u = _pickString(e, const ['url']);
       if (u == null) continue;
       first ??= u;
-      if (e['imageScene'] == 'WB_DFT') return transformImageUrl(u);
+      if (e['imageScene'] == 'WB_DFT') dft = u;
     }
-    if (first != null) return transformImageUrl(first);
+    final chosen = dft ?? first;
+    if (chosen != null) {
+      final primary = transformImageUrl(chosen);
+      final raw = toHttps(chosen);
+      final rest = [
+        if (first != null && first != chosen) toHttps(first),
+        if (raw != primary && raw != first) raw,
+      ];
+      return _ImageRef(primary, rest);
+    }
   }
   final fileId = _pickString(entry, const ['fileId']);
   if (fileId != null) {
     final token = fileId.split('!').first;
-    if (token.isNotEmpty) return 'https://ci.xiaohongshu.com/$token';
+    if (token.isNotEmpty) return _ImageRef('https://ci.xiaohongshu.com/$token');
   }
   final traceId = _pickString(entry, const ['traceId']);
-  if (traceId != null) return 'https://sns-img-qc.xhscdn.com/$traceId';
+  if (traceId != null) return _ImageRef('https://sns-img-qc.xhscdn.com/$traceId');
   return null;
 }
 
@@ -563,7 +585,11 @@ ParseResult buildNoteFromRecord(Map<String, Object?> note, String noteId) {
       final img = _imageUrlOf(images[0]);
       if (img != null) {
         items.add(MediaItem(
-            type: 'image', url: img, width: _asInt(images[0]['width']), height: _asInt(images[0]['height'])));
+            type: 'image',
+            url: img.url,
+            width: _asInt(images[0]['width']),
+            height: _asInt(images[0]['height']),
+            fallbacks: img.fallbacks));
       }
     }
   } else {
@@ -595,10 +621,11 @@ ParseResult buildNoteFromRecord(Map<String, Object?> note, String noteId) {
       if (own != null && img != null) {
         items.add(MediaItem(
             type: 'live',
-            url: img,
+            url: img.url,
             videoUrl: own.url,
             width: _asInt(entry['width']),
-            height: _asInt(entry['height'])));
+            height: _asInt(entry['height']),
+            fallbacks: img.fallbacks));
         continue;
       }
       if (own != null && img == null) {
@@ -608,9 +635,10 @@ ParseResult buildNoteFromRecord(Map<String, Object?> note, String noteId) {
       if (img != null) {
         items.add(MediaItem(
             type: 'image',
-            url: img,
+            url: img.url,
             width: _asInt(entry['width']),
-            height: _asInt(entry['height'])));
+            height: _asInt(entry['height']),
+            fallbacks: img.fallbacks));
       }
     }
     if (noteVideo != null && !noteVideoEmitted && images.length != 1) {

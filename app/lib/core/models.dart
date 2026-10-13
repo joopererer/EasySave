@@ -26,13 +26,24 @@ class PostAuthor {
 }
 
 class MediaItem {
-  MediaItem({required this.type, required this.url, this.videoUrl, this.width, this.height});
+  MediaItem({
+    required this.type,
+    required this.url,
+    this.videoUrl,
+    this.width,
+    this.height,
+    this.fallbacks = const [],
+  });
 
   final String type;
   final String url;
   final String? videoUrl;
   final num? width;
   final num? height;
+
+  /// Alternate URLs for the same bytes (e.g. the pre-transform original).
+  /// Never serialized: toJson must keep matching the spec fixtures exactly.
+  final List<String> fallbacks;
 
   Map<String, Object?> toJson() {
     final map = <String, Object?>{'type': type, 'url': url};

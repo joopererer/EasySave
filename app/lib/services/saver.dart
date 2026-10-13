@@ -71,15 +71,15 @@ Future<void> saveItems(
     final seq = i + 1;
     if (item.type == 'live' && item.videoUrl != null) {
       total += 2;
-      jobs.add(() => _saveOne(item.url, referer, 'image', '${post.id}_$seq.jpg', true));
-      jobs.add(() => _saveOne(item.videoUrl!, referer, 'video', '${post.id}_${seq}_live.mp4', false));
+      jobs.add(() => _saveOne([item.url, ...item.fallbacks], referer, 'image', '${post.id}_$seq.jpg', true));
+      jobs.add(() => _saveOne([item.videoUrl!], referer, 'video', '${post.id}_${seq}_live.mp4', false));
     } else if (item.type == 'video') {
       total += 1;
       final url = item.videoUrl ?? item.url;
-      jobs.add(() => _saveOne(url, referer, 'video', '${post.id}_$seq.mp4', false));
+      jobs.add(() => _saveOne([url, ...item.fallbacks], referer, 'video', '${post.id}_$seq.mp4', false));
     } else {
       total += 1;
-      jobs.add(() => _saveOne(item.url, referer, 'image', '${post.id}_$seq.jpg', true));
+      jobs.add(() => _saveOne([item.url, ...item.fallbacks], referer, 'image', '${post.id}_$seq.jpg', true));
     }
   }
   for (final job in jobs) {
@@ -90,26 +90,35 @@ Future<void> saveItems(
 }
 
 Future<void> _saveOne(
-  String url,
+  List<String> urls,
   String referer,
   String kind,
   String fallbackName,
   bool isImage,
 ) async {
-  final ext = _extensionFor(url, isImage ? 'jpg' : 'mp4');
-  final name = fallbackName.replaceFirst(RegExp(r'\.(jpg|mp4)$'), '.$ext');
-  final file = await _downloadToTemp(url, referer, 'easysave_$name');
-  try {
-    if (isImage) {
-      await Gal.putImage(file.path, album: albumName);
-    } else {
-      await Gal.putVideo(file.path, album: albumName);
-    }
-  } finally {
+  Object? lastError;
+  for (final url in urls) {
     try {
-      await file.delete();
-    } catch (_) {
-      // Best effort cleanup of the temp file.
+      final ext = _extensionFor(url, isImage ? 'jpg' : 'mp4');
+      final name = fallbackName.replaceFirst(RegExp(r'\.(jpg|mp4)$'), '.$ext');
+      final file = await _downloadToTemp(url, referer, 'easysave_$name');
+      try {
+        if (isImage) {
+          await Gal.putImage(file.path, album: albumName);
+        } else {
+          await Gal.putVideo(file.path, album: albumName);
+        }
+      } finally {
+        try {
+          await file.delete();
+        } catch (_) {
+          // Best effort cleanup of the temp file.
+        }
+      }
+      return;
+    } on Exception catch (e) {
+      lastError = e;
     }
   }
+  throw lastError ?? HttpException('下载失败：${urls.first}');
 }

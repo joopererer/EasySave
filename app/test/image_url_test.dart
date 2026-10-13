@@ -35,6 +35,16 @@ void main() {
       expect(result.ok, isTrue);
       expect(result.data?.items.single.url,
           equals('https://ci.xiaohongshu.com/notes_pre_post/x'));
+      // Fallbacks stay out of the serialized form (fixture parity).
+      expect(
+        result.data?.items.single.fallbacks,
+        equals([
+          'https://sns-webpic-qc.xhscdn.com/202610112129/a657f0bce4b0d577975cf2d1df487c06/notes_pre_post/x!nd_prv_wlteh_webp_3',
+          'https://sns-webpic-qc.xhscdn.com/202610112129/eb1fb79a62c72f9dbe14dd2909e2d83c/notes_pre_post/x!nd_dft_wlteh_webp_3',
+        ]),
+      );
+      expect(result.data?.items.single.toJson().containsKey('fallbacks'), isFalse);
+      expect(result.data?.toJson(), isNot(contains('fallbacks')));
     });
 
     test('falls back to the first infoList rendition without a DFT scene', () {

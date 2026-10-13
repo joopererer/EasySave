@@ -1,6 +1,7 @@
 // Preview page: thumbnail grid with per-item selection and album saving.
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../core/models.dart';
 import '../services/saver.dart';
@@ -20,13 +21,13 @@ class _PreviewPageState extends State<PreviewPage> {
   };
   bool _saving = false;
   String _status = '';
+  String _lastError = '';
 
   String _badgeFor(MediaItem item) {
     if (item.type == 'video') return '视频';
     if (item.type == 'live') return '实况';
     return '';
   }
-
   Future<void> _save() async {
     if (_selected.isEmpty || _saving) return;
     setState(() {
@@ -45,7 +46,10 @@ class _PreviewPageState extends State<PreviewPage> {
       setState(() => _status = '已保存到相册 EasySave');
     } catch (e) {
       if (!mounted) return;
-      setState(() => _status = '保存失败：$e');
+      setState(() {
+        _status = '保存失败：$e';
+        _lastError = '$e';
+      });
     } finally {
       if (mounted) setState(() => _saving = false);
     }
@@ -57,6 +61,27 @@ class _PreviewPageState extends State<PreviewPage> {
     return Scaffold(
       appBar: AppBar(
         title: Text(post.author.name ?? post.id),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.bug_report_outlined),
+            tooltip: '复制诊断信息',
+            onPressed: () async {
+              final lines = <String>[
+                'note: ${post.platform} ${post.id} ${post.url}',
+                if (_lastError.isNotEmpty) 'saveError: $_lastError',
+                for (var i = 0; i < post.items.length; i++)
+                  '[$i] ${post.items[i].type} ${post.items[i].url}'
+                      '${post.items[i].fallbacks.map((u) => '\n    alt: $u').join()}',
+              ];
+              await Clipboard.setData(ClipboardData(text: lines.join('\n')));
+              if (context.mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('诊断信息已复制')),
+                );
+              }
+            },
+          ),
+        ],
       ),
       body: Column(
         children: [
@@ -93,15 +118,7 @@ class _PreviewPageState extends State<PreviewPage> {
                           borderRadius: BorderRadius.circular(8),
                         ),
                         clipBehavior: Clip.antiAlias,
-                        child: Image.network(
-                          item.url,
-                          fit: BoxFit.cover,
-                          errorBuilder: (context, error, stackTrace) =>
-                              const ColoredBox(
-                            color: Colors.black12,
-                            child: Icon(Icons.broken_image),
-                          ),
-                        ),
+                        child: _Thumb(item: item),
                       ),
                       Positioned(
                         top: 4,
@@ -150,6 +167,42 @@ class _PreviewPageState extends State<PreviewPage> {
           ),
         ],
       ),
+    );
+  }
+}
+
+/// Thumbnail that walks through the primary URL and its fallbacks before
+/// showing the broken-image placeholder.
+class _Thumb extends StatefulWidget {
+  const _Thumb({required this.item});
+
+  final MediaItem item;
+
+  @override
+  State<_Thumb> createState() => _ThumbState();
+}
+
+class _ThumbState extends State<_Thumb> {
+  int _attempt = 0;
+
+  @override
+  Widget build(BuildContext context) {
+    final urls = [widget.item.url, ...widget.item.fallbacks];
+    return Image.network(
+      urls[_attempt.clamp(0, urls.length - 1)],
+      fit: BoxFit.cover,
+      errorBuilder: (context, error, stackTrace) {
+        if (_attempt + 1 < urls.length) {
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (mounted) setState(() => _attempt++);
+          });
+          return const ColoredBox(color: Colors.black12);
+        }
+        return const ColoredBox(
+          color: Colors.black12,
+          child: Icon(Icons.broken_image),
+        );
+      },
     );
   }
 }
