@@ -44,7 +44,7 @@ class _LoginPageState extends State<LoginPage> {
             color: Colors.blue.shade50,
             child: Text(
               widget.platform == PlatformKind.xhs
-                  ? '点右上角“登录”后用小红书 App 扫码，完成后点右上角“完成”。登录状态保存在本机，重启 App 依然有效。'
+                  ? '默认是二维码登录，点登录框下方的“验证码登录”或“密码登录”切换，在本机直接登录即可，无需扫码。完成后点右上角“完成”。登录状态保存在本机，重启 App 依然有效。'
                   : '请在下方页面完成登录，然后点右上角“完成”。登录状态保存在本机，重启 App 依然有效。',
               style: const TextStyle(fontSize: 13),
             ),

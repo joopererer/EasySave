@@ -9,11 +9,12 @@ String platformLabel(PlatformKind platform) =>
     platform == PlatformKind.xhs ? '小红书' : 'Instagram';
 
 String loginEntryUrl(PlatformKind platform) => platform == PlatformKind.xhs
-    ? 'https://www.xiaohongshu.com/explore'
+    ? 'https://www.xiaohongshu.com/login'
     : 'https://www.instagram.com/accounts/login/';
 
 /// 小红书移动端 UA 会命中 App 引流落地页（无登录入口），强制桌面 UA
-/// 进入桌面站：右上角"登录"为二维码，手机 App 扫码即登。
+/// 进入桌面站。登录框默认是二维码，下方有"验证码登录/密码登录"切换，
+/// 同一台手机上直接选密码或验证码登录即可，无需扫码。
 String? loginUserAgent(PlatformKind platform) => platform == PlatformKind.xhs
     ? 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
           '(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36'
