@@ -388,6 +388,25 @@ function bestVideo(candidates: VideoCandidate[]): VideoCandidate | undefined {
 function imageUrlOf(entry: Record<string, unknown>): string | undefined {
   const direct = pickString(entry, ["urlDefault", "url"]);
   if (direct) return transformImageUrl(direct);
+  // Entries without a direct URL still carry renditions in infoList
+  // (prefer the default scene) or at least a fileId for ci.xiaohongshu.com.
+  const info = entry["infoList"];
+  if (Array.isArray(info)) {
+    let first: string | undefined;
+    for (const e of info) {
+      if (!isRecord(e)) continue;
+      const u = pickString(e, ["url"]);
+      if (!u) continue;
+      first ??= u;
+      if (e["imageScene"] === "WB_DFT") return transformImageUrl(u);
+    }
+    if (first) return transformImageUrl(first);
+  }
+  const fileId = pickString(entry, ["fileId"]);
+  if (fileId) {
+    const token = fileId.split("!")[0];
+    if (token) return `https://ci.xiaohongshu.com/${token}`;
+  }
   const traceId = pickString(entry, ["traceId"]);
   if (traceId) return `https://sns-img-qc.xhscdn.com/${traceId}`;
   return undefined;

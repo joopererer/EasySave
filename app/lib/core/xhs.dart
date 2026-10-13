@@ -373,6 +373,25 @@ _VideoCandidate? _bestVideo(List<_VideoCandidate> candidates) {
 String? _imageUrlOf(Map<String, Object?> entry) {
   final direct = _pickString(entry, const ['urlDefault', 'url']);
   if (direct != null) return transformImageUrl(direct);
+  // Entries without a direct URL still carry renditions in infoList
+  // (prefer the default scene) or at least a fileId for ci.xiaohongshu.com.
+  final info = entry['infoList'];
+  if (info is List) {
+    String? first;
+    for (final e in info) {
+      if (e is! Map<String, Object?>) continue;
+      final u = _pickString(e, const ['url']);
+      if (u == null) continue;
+      first ??= u;
+      if (e['imageScene'] == 'WB_DFT') return transformImageUrl(u);
+    }
+    if (first != null) return transformImageUrl(first);
+  }
+  final fileId = _pickString(entry, const ['fileId']);
+  if (fileId != null) {
+    final token = fileId.split('!').first;
+    if (token.isNotEmpty) return 'https://ci.xiaohongshu.com/$token';
+  }
   final traceId = _pickString(entry, const ['traceId']);
   if (traceId != null) return 'https://sns-img-qc.xhscdn.com/$traceId';
   return null;
