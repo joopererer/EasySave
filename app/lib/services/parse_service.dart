@@ -10,6 +10,7 @@ import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 import '../core/instagram.dart';
 import '../core/models.dart';
 import '../core/xhs.dart';
+import 'links.dart';
 
 class ParseFailure implements Exception {
   ParseFailure(this.code, this.message);
@@ -26,7 +27,11 @@ Future<T> _withTimeout<T>(Future<T> Function() run, String what) {
 
 /// Load [url] headlessly and parse the post it resolves to.
 Future<ParsedPost> parsePostUrl(String url) {
-  return _withTimeout(() => _parseInner(url), '加载页面');
+  return _withTimeout(() async {
+    final resolved = await resolveShortLink(url)
+        .timeout(const Duration(seconds: 10), onTimeout: () => url);
+    return _parseInner(resolved);
+  }, '加载页面');
 }
 
 Future<ParsedPost> _parseInner(String url) async {
@@ -61,12 +66,18 @@ Future<ParsedPost> _parseInner(String url) async {
         host.endsWith('.xhslink.com') ||
         host == 'xhslink.cn' ||
         host.endsWith('.xhslink.cn');
+    final isInstagram = host == 'instagram.com' ||
+        host.endsWith('.instagram.com') ||
+        host == 'instagr.am' ||
+        host.endsWith('.instagr.am');
 
     ParseResult result;
     if (isXhs) {
       result = await _parseXhsPage(controller, finalUrl);
-    } else {
+    } else if (isInstagram) {
       result = await _parseInstagramPage(controller, finalUrl);
+    } else {
+      throw ParseFailure('UNSUPPORTED_URL', '不支持的页面：$finalUrl');
     }
     if (!result.ok || result.data == null) {
       throw ParseFailure(
