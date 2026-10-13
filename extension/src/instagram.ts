@@ -28,6 +28,8 @@ export interface InstagramItem {
   videoUrl?: string;
   width?: number;
   height?: number;
+  /** Video length in seconds, from `video_duration`. Absent when unknown. */
+  duration?: number;
 }
 
 export interface InstagramPost {
@@ -153,6 +155,10 @@ function mediaItem(media: Record<string, unknown>): InstagramItem | undefined {
       height: video.height,
     };
     if (image) item.videoUrl = video.url;
+    const rawDuration = media["video_duration"];
+    if (typeof rawDuration === "number" && Number.isFinite(rawDuration)) {
+      item.duration = rawDuration;
+    }
     return item;
   }
   if (image) return { type: "image", url: image.url, width: image.width, height: image.height };

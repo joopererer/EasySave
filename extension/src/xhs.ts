@@ -28,6 +28,8 @@ export interface XhsItem {
   videoUrl?: string;
   width?: number;
   height?: number;
+  /** Video length in seconds, from `video.capa.duration`. Absent when unknown. */
+  duration?: number;
 }
 
 export interface XhsNote {
@@ -443,6 +445,14 @@ function sceneRaws(entry: Record<string, unknown>): string[] {
   });
 }
 
+/** Video length in seconds from `video.capa.duration`, or undefined when unknown. */
+function videoDuration(video: unknown): number | undefined {
+  if (!isRecord(video)) return undefined;
+  const capa = video["capa"];
+  if (!isRecord(capa)) return undefined;
+  return num(capa["duration"]);
+}
+
 function fileToken(entry: Record<string, unknown>): string {
   const fileId = pickString(entry, ["fileId"]);
   if (!fileId) return "";
@@ -641,6 +651,8 @@ export function buildNoteFromRecord(
       const item: XhsItem = { type: "video", url: resolved.url };
       if (resolved.width !== undefined) item.width = resolved.width;
       if (resolved.height !== undefined) item.height = resolved.height;
+      const duration = videoDuration(note["video"]);
+      if (duration !== undefined) item.duration = duration;
       items.push(item);
     } else if (images.length === 1) {
       const img = imageUrlOf(images[0]);
@@ -703,6 +715,8 @@ export function buildNoteFromRecord(
       const item: XhsItem = { type: "video", url: noteVideo.url };
       if (noteVideo.width !== undefined) item.width = noteVideo.width;
       if (noteVideo.height !== undefined) item.height = noteVideo.height;
+      const duration = videoDuration(note["video"]);
+      if (duration !== undefined) item.duration = duration;
       items.push(item);
     }
   }

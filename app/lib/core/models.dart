@@ -9,6 +9,7 @@ abstract final class ParseErrorCode {
   static const blocked = 'BLOCKED';
   static const invalidPage = 'INVALID_PAGE';
   static const unsupportedUrl = 'UNSUPPORTED_URL';
+  static const timeout = 'TIMEOUT';
 }
 
 class PostAuthor {
@@ -32,6 +33,7 @@ class MediaItem {
     this.videoUrl,
     this.width,
     this.height,
+    this.duration,
     this.fallbacks = const [],
   });
 
@@ -40,6 +42,11 @@ class MediaItem {
   final String? videoUrl;
   final num? width;
   final num? height;
+
+  /// Video length in seconds, from `video.capa.duration` (XHS) or
+  /// `video_duration` (IG). Absent when the source provides none; the UI
+  /// then shows a bare play badge.
+  final num? duration;
 
   /// Alternate URLs for the same bytes (e.g. the pre-transform original).
   /// Never serialized: toJson must keep matching the spec fixtures exactly.
@@ -50,6 +57,7 @@ class MediaItem {
     if (videoUrl != null) map['videoUrl'] = videoUrl;
     if (width != null) map['width'] = width;
     if (height != null) map['height'] = height;
+    if (duration != null) map['duration'] = duration;
     return map;
   }
 }

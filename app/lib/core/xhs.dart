@@ -357,6 +357,16 @@ List<_VideoCandidate> _collectStreamCandidates(Object? container) {
   ].whereType<_VideoCandidate>().toList();
 }
 
+/// Video length in seconds from `video.capa.duration`, or null when the
+/// source provides none.
+num? videoDuration(Object? video) {
+  if (!_isRecord(video)) return null;
+  final capa = (video as Map).cast<String, Object?>()['capa'];
+  if (!_isRecord(capa)) return null;
+  final d = ((capa as Map).cast<String, Object?>())['duration'];
+  return d is num ? d : null;
+}
+
 /// Resolve the original video file: supplied originVideoKey wins, else the
 /// best non-watermarked stream rendition.
 ResolvedVideo? resolveVideoUrl(Object? video) {
@@ -709,6 +719,7 @@ ParseResult buildNoteFromRecord(Map<String, Object?> note, String noteId) {
           url: resolved.url,
           width: resolved.width,
           height: resolved.height,
+          duration: videoDuration(note['video']),
         ),
       );
     } else if (images.length == 1) {
@@ -794,6 +805,7 @@ ParseResult buildNoteFromRecord(Map<String, Object?> note, String noteId) {
           url: noteVideo.url,
           width: noteVideo.width,
           height: noteVideo.height,
+          duration: videoDuration(note['video']),
         ),
       );
     }

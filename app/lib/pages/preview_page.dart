@@ -1,7 +1,6 @@
 // Preview page: thumbnail grid with per-item selection and album saving.
 
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 
 import '../core/models.dart';
 import '../services/saver.dart';
@@ -22,7 +21,6 @@ class _PreviewPageState extends State<PreviewPage> {
   };
   bool _saving = false;
   String _status = '';
-  String _lastError = '';
 
   String _badgeFor(MediaItem item) {
     if (item.type == 'video') return '视频';
@@ -50,7 +48,6 @@ class _PreviewPageState extends State<PreviewPage> {
       if (!mounted) return;
       setState(() {
         _status = '保存失败：$e';
-        _lastError = '$e';
       });
     } finally {
       if (mounted) setState(() => _saving = false);
@@ -61,33 +58,7 @@ class _PreviewPageState extends State<PreviewPage> {
   Widget build(BuildContext context) {
     final post = widget.post;
     return Scaffold(
-      appBar: AppBar(
-        title: Text(post.author.name ?? post.id),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.bug_report_outlined),
-            tooltip: '复制诊断信息',
-            onPressed: () async {
-              final lines = <String>[
-                'note: ${post.platform} ${post.id} ${post.url}',
-                if (_lastError.isNotEmpty) 'saveError: $_lastError',
-                for (var i = 0; i < post.items.length; i++)
-                  '[$i] ${post.items[i].type} ${post.items[i].url}'
-                      '${post.items[i].fallbacks.map((u) => '\n    alt: $u').join()}',
-                for (var i = 0; i < widget.rawImages.length; i++)
-                  'raw[$i] keys=${widget.rawImages[i].keys.join(',')}'
-                      '${widget.rawImages[i].scenes.map((s) => '\n    ${s.scene}: ${s.url}').join()}',
-              ];
-              await Clipboard.setData(ClipboardData(text: lines.join('\n')));
-              if (context.mounted) {
-                ScaffoldMessenger.of(
-                  context,
-                ).showSnackBar(const SnackBar(content: Text('诊断信息已复制')));
-              }
-            },
-          ),
-        ],
-      ),
+      appBar: AppBar(title: Text(post.author.name ?? post.id)),
       body: Column(
         children: [
           Expanded(

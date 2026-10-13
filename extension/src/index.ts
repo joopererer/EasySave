@@ -8,7 +8,8 @@ export type ParseErrorCode =
   | "PRIVATE_OR_UNAVAILABLE"
   | "BLOCKED"
   | "INVALID_PAGE"
-  | "UNSUPPORTED_URL";
+  | "UNSUPPORTED_URL"
+  | "TIMEOUT";
 
 export interface ParseError {
   code: ParseErrorCode;

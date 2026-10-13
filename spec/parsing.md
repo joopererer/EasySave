@@ -4,17 +4,20 @@
 
 Fixture pairs used to validate this contract live under spec/fixtures/.
 
-Parsers produce `{ platform, id, url, author: { name?, id? }, title?, caption?, publishedAt?, items: [{ type: image|video|live, url, videoUrl?, width?, height? }] }`.
+Parsers produce `{ platform, id, url, author: { name?, id? }, title?, caption?, publishedAt?, items: [{ type: image|video|live, url, videoUrl?, width?, height?, duration? }] }`.
 `platform` is `xhs` or `instagram`. `url` is the canonical post URL.
 `items` preserves source order. `live` represents a still image paired with its
 motion asset via `videoUrl`. In v1, `live` is only an image+video pair; no
 motion-photo synthesis is performed.
+`duration` is the video length in seconds, present only on `video` items and
+only when the source provides it: XHS reads `video.capa.duration`, Instagram
+reads `video_duration`. When absent, the UI shows a bare play badge.
 
 v1 scope exclusions: comment-section images, Stories, and OG fallback on post
 pages. When structured parsing fails, return an explicit parse error instead of
 a partial or empty success.
 
-**Error model.** Parse failures use { code, message } and never return a successful empty result. The v1 codes are LOGIN_REQUIRED for a login wall or authenticated-only page, PRIVATE_OR_UNAVAILABLE for private, deleted, or unavailable content, BLOCKED for an anti-bot or challenge page, INVALID_PAGE for content that does not match the requested platform, and UNSUPPORTED_URL for page URLs whose host belongs to no supported platform. Blocked-page fixtures use `blocked.html` with an `expected.json` containing the corresponding error code.
+**Error model.** Parse failures use { code, message } and never return a successful empty result. The v1 codes are LOGIN_REQUIRED for a login wall or authenticated-only page, PRIVATE_OR_UNAVAILABLE for private, deleted, or unavailable content, BLOCKED for an anti-bot or challenge page, INVALID_PAGE for content that does not match the requested platform, UNSUPPORTED_URL for page URLs whose host belongs to no supported platform, and TIMEOUT for fetch/parse operations exceeding the 20-second budget. Blocked-page fixtures use `blocked.html` with an `expected.json` containing the corresponding error code.
 
 **Blocked-page判定.** XHS: an anonymous fetch returns the generic shell whose `__INITIAL_STATE__` holds only global `appSettings` and no `noteDetailMap[<id>]` entry for the requested note, even though the note id may appear in links/meta — this is authenticated-only content, so the expected code is LOGIN_REQUIRED. Instagram: an anonymous fetch returns the logged-out shell (`PolarisLoggedOut*` route, `CurrentUserInitialData` with `USER_ID` 0) with no product object matching the shortcode-derived media id — likewise LOGIN_REQUIRED. Only pages showing an explicit captcha/challenge interstitial use BLOCKED.
 

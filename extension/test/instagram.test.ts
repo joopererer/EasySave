@@ -2,7 +2,7 @@ import { readdirSync, readFileSync } from "node:fs";
 import { join, dirname, basename } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { parseInstagram, shortcodeToMediaId } from "../src/instagram";
+import { parseInstagram, shortcodeToMediaId, buildPostFromProduct } from "../src/instagram";
 
 const fixtureDir = join(
   dirname(fileURLToPath(import.meta.url)),
@@ -80,6 +80,32 @@ describe("shortcodeToMediaId", () => {
     const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
     for (let i = 0; i < alphabet.length; i++) {
       expect(shortcodeToMediaId(alphabet[i])).toBe(String(i));
+    }
+  });
+
+  it("reads video duration from video_duration, omits it when absent", () => {
+    const withDuration = buildPostFromProduct(
+      {
+        id: "1",
+        video_versions: [{ url: "https://example.com/v.mp4", width: 720, height: 1280 }],
+        video_duration: 8.5,
+      },
+      "B",
+    );
+    expect(withDuration.ok).toBe(true);
+    if (withDuration.ok) {
+      expect(withDuration.data.items[0].duration).toBe(8.5);
+    }
+    const withoutDuration = buildPostFromProduct(
+      {
+        id: "1",
+        video_versions: [{ url: "https://example.com/v.mp4", width: 720, height: 1280 }],
+      },
+      "B",
+    );
+    expect(withoutDuration.ok).toBe(true);
+    if (withoutDuration.ok) {
+      expect("duration" in withoutDuration.data.items[0]).toBe(false);
     }
   });
 });

@@ -120,12 +120,14 @@ MediaItem? _mediaItem(Map<String, Object?> media) {
   final image = _bestImage(media);
   final video = _bestVideoUrl(media);
   if (video != null) {
+    final rawDuration = media['video_duration'];
     return MediaItem(
       type: 'video',
       url: image != null ? image.url : video.url,
       videoUrl: image != null ? video.url : null,
       width: video.width,
       height: video.height,
+      duration: rawDuration is num ? rawDuration : null,
     );
   }
   if (image != null) {

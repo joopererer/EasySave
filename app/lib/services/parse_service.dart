@@ -21,7 +21,8 @@ class ParseFailure implements Exception {
 Future<T> _withTimeout<T>(Future<T> Function() run, String what) {
   return run().timeout(
     const Duration(seconds: 20),
-    onTimeout: () => throw ParseFailure('TIMEOUT', '$what超时（20秒），请重试'),
+    onTimeout: () =>
+        throw ParseFailure(ParseErrorCode.timeout, '$what超时（20秒），请重试'),
   );
 }
 
