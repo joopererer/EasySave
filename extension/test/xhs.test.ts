@@ -2,7 +2,7 @@ import { readdirSync, readFileSync } from "node:fs";
 import { join, dirname, basename } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { parseXhs, sanitizeJsUndefined } from "../src/xhs";
+import { parseXhs, sanitizeJsUndefined, imageTokenOf, originalImageUrl, jpegImageUrl } from "../src/xhs";
 
 const fixtureDir = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "spec", "fixtures", "xhs");
 
@@ -48,6 +48,24 @@ describe("xhs fixtures", () => {
   }
 });
 
+describe("original-bucket primary", () => {
+  const token = "notes_pre_post/1040g3k0325c98ukf4e00499d8a6r31c1c4anqs0";
+  const h5 = `http://sns-webpic-qc.xhscdn.com/202610132252/fccfbed52a062a916648e7d56c157af7/${token}!h5_1080jpg`;
+
+  it("strips the style suffix from any CDN URL", () => {
+    expect(imageTokenOf(h5)).toBe(token);
+    expect(imageTokenOf(`https://ci.xiaohongshu.com/${token}`)).toBe(token);
+    expect(imageTokenOf("https://example.com/a.jpg")).toBeUndefined();
+  });
+
+  it("builds original and JPEG URLs from the token", () => {
+    expect(originalImageUrl(token)).toBe(`https://sns-img-bd.xhscdn.com/${token}`);
+    expect(jpegImageUrl(token)).toBe(
+      `https://ci.xiaohongshu.com/${token}?imageView2/format/jpg`,
+    );
+  });
+});
+
 describe("sanitizeJsUndefined", () => {
   it("replaces undefined outside strings but keeps it inside strings", () => {
     expect(sanitizeJsUndefined('{"a":undefined,"b":"say undefined loudly"}')).toBe(
@@ -73,7 +91,7 @@ describe("sanitizeJsUndefined", () => {
       expect(result.data.items).toEqual([
         {
           type: "image",
-          url: "https://ci.xiaohongshu.com/notes_pre_post/1040g3k83264voo1al0dg5o2e1l408pfcf1dl208",
+          url: "https://sns-img-bd.xhscdn.com/notes_pre_post/1040g3k83264voo1al0dg5o2e1l408pfcf1dl208",
           width: 1290,
           height: 1608,
         },

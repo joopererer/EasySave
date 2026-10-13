@@ -33,7 +33,7 @@ void main() {
           {
             'type': 'image',
             'url':
-                'https://ci.xiaohongshu.com/notes_pre_post/1040g3k83264voo1al0dg5o2e1l408pfcf1dl208',
+                'https://sns-img-bd.xhscdn.com/notes_pre_post/1040g3k83264voo1al0dg5o2e1l408pfcf1dl208',
             'width': 1290,
             'height': 1608,
           },
@@ -58,7 +58,7 @@ void main() {
                 },
                 'imageList': [
                   {
-                    'urlDefault': 'https://sns-img-qc.xhscdn.com/trace',
+                    'urlDefault': 'https://sns-img-bd.xhscdn.com/trace',
                     'width': 10,
                     'height': 20,
                   },
@@ -82,7 +82,7 @@ void main() {
           'items': [
             {
               'type': 'image',
-              'url': 'https://ci.xiaohongshu.com/trace',
+              'url': 'https://sns-img-bd.xhscdn.com/trace',
               'width': 10,
               'height': 20,
             },

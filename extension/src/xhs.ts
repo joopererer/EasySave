@@ -386,43 +386,61 @@ function bestVideo(candidates: VideoCandidate[]): VideoCandidate | undefined {
 }
 
 function imageUrlOf(entry: Record<string, unknown>): { url: string; fallbacks: string[] } | undefined {
-  // infoList scene renditions first: the direct urlDefault/ci URL is the
-  // watermarked original, while a clean WB_DFT scene often exists alongside.
-  const info = entry["infoList"];
-  const cleans = Array.isArray(info) ? cleanScenes(info) : [];
-  const markeds = Array.isArray(info) ? markedScenes(info) : [];
-  const direct = pickString(entry, ["urlDefault", "url"]);
-  const directRaw = direct ? toHttps(direct) : undefined;
-  if (cleans.length > 0) {
-    const token = fileToken(entry);
-    const primary = toHttps(cleans[0]);
-    // Keep every raw rendition reachable (clean scenes other than the
-    // primary included), then the direct original, then the ci token.
+  // Primary: the bare original-bucket URL (upstream formula) — the token
+  // carries no watermark; the CDN only burns one in when a `!style`
+  // rendition is requested. JPEG transcode, scene renditions and the ci
+  // token trail as fallbacks.
+  const token = entryToken(entry);
+  if (token) {
+    const primary = originalImageUrl(token);
+    const direct = pickString(entry, ["urlDefault", "url"]);
     const rest = [
-      ...cleans.slice(1).map((u) => toHttps(u)),
-      ...markeds.map((u) => toHttps(u)),
-      ...(Array.isArray(info) ? info.flatMap((e) => {
-        if (!isRecord(e)) return [];
-        const u = pickString(e, ["url"]);
-        return u ? [toHttps(u)] : [];
-      }) : []),
-      ...(directRaw ? [directRaw] : []),
-      ...(token ? [`https://ci.xiaohongshu.com/${token}`] : []),
+      jpegImageUrl(token),
+      ...sceneRaws(entry),
+      ...(direct ? [toHttps(direct)] : []),
+      `https://ci.xiaohongshu.com/${token}`,
     ].filter((u) => u && u !== primary);
     return { url: primary, fallbacks: [...new Set(rest)] };
   }
+  const direct = pickString(entry, ["urlDefault", "url"]);
   if (direct) {
-    const primary = transformImageUrl(direct);
-    const raw = toHttps(direct);
-    const rest = [...markeds, ...(raw !== primary ? [raw] : [])];
-    return { url: primary, fallbacks: rest };
+    return { url: transformImageUrl(direct), fallbacks: [toHttps(direct)] };
   }
-  if (markeds.length > 0) return { url: transformImageUrl(markeds[0]), fallbacks: [] };
-  const token = fileToken(entry);
-  if (token) return { url: `https://ci.xiaohongshu.com/${token}`, fallbacks: [] };
   const traceId = pickString(entry, ["traceId"]);
   if (traceId) return { url: `https://sns-img-qc.xhscdn.com/${traceId}`, fallbacks: [] };
   return undefined;
+}
+
+/** Bare token from the richest source available: any scene rendition, the direct URL, then fileId. */
+function entryToken(entry: Record<string, unknown>): string | undefined {
+  const info = entry["infoList"];
+  if (Array.isArray(info)) {
+    for (const e of info) {
+      if (!isRecord(e)) continue;
+      const u = pickString(e, ["url"]);
+      if (!u) continue;
+      const token = imageTokenOf(u);
+      if (token) return token;
+    }
+  }
+  const direct = pickString(entry, ["urlDefault", "url"]);
+  if (direct) {
+    const token = imageTokenOf(direct);
+    if (token) return token;
+  }
+  const fileId = fileToken(entry);
+  return fileId || undefined;
+}
+
+/** Every raw scene rendition URL, https-normalized. */
+function sceneRaws(entry: Record<string, unknown>): string[] {
+  const info = entry["infoList"];
+  if (!Array.isArray(info)) return [];
+  return info.flatMap((e) => {
+    if (!isRecord(e)) return [];
+    const u = pickString(e, ["url"]);
+    return u ? [toHttps(u)] : [];
+  });
 }
 
 function fileToken(entry: Record<string, unknown>): string {
@@ -431,50 +449,35 @@ function fileToken(entry: Record<string, unknown>): string {
   return fileId.split("!")[0];
 }
 
-/**
- * Clean scene renditions, H5_DTL first, then WB_DFT, then anything else
- * without a watermark token. Raw URLs; the call site normalizes.
- * Watermarked renditions are excluded.
- */
-function cleanScenes(info: unknown[]): string[] {
-  const order = ["H5_DTL", "WB_DFT", ""];
-  const ranked: string[] = [];
-  const rest: string[] = [];
-  for (const e of info) {
-    if (!isRecord(e)) continue;
-    const u = pickString(e, ["url"]);
-    if (!u || looksWatermarked(u)) continue;
-    const scene = typeof e["imageScene"] === "string" ? (e["imageScene"] as string) : "";
-    if (order.includes(scene)) ranked.push(`${order.indexOf(scene)}|${u}`);
-    else rest.push(u);
+/** Extract the bare `notes_pre_post/...` token by stripping the style suffix (`!...`). */
+export function imageTokenOf(url: string): string | undefined {
+  let parsed: URL | undefined;
+  try {
+    parsed = new URL(toHttps(url));
+  } catch {
+    return undefined;
   }
-  ranked.sort();
-  return [...ranked.map((r) => r.slice(2)), ...rest];
+  const host = parsed.host.toLowerCase();
+  if (!host.endsWith(".xhscdn.com") && !host.endsWith(".xiaohongshu.com")) {
+    return undefined;
+  }
+  const withoutStyle = parsed.pathname.split("!")[0];
+  const parts = withoutStyle.split("/").filter((p) => p.length > 0);
+  const token =
+    parts.length > 2 && /^[0-9a-f]{32}$/.test(parts[1])
+      ? parts.slice(2).join("/")
+      : parts.join("/");
+  return token || undefined;
 }
 
-/** Raw URLs of the server-watermarked renditions in `info`. */
-function markedScenes(info: unknown[]): string[] {
-  const out: string[] = [];
-  for (const e of info) {
-    if (!isRecord(e)) continue;
-    const u = pickString(e, ["url"]);
-    if (!u) continue;
-    if (looksWatermarked(u)) out.push(u);
-  }
-  return out;
+/** Bare original-bucket URL for a token (upstream formula): unwatermarked bytes. */
+export function originalImageUrl(token: string): string {
+  return `https://sns-img-bd.xhscdn.com/${token}`;
 }
 
-/**
- * Filenames carrying a `watermark` scene token are server-watermarked;
- * scenes without the token (H5_DTL/H5_PRV/...) are clean. Unknown scenes
- * are treated as clean so new scene names fail open instead of hiding
- * behind the watermarked fallback.
- */
-export function looksWatermarked(url: string): boolean {
-  const file = (url.split("/").pop() ?? "").toLowerCase();
-  const excl = file.indexOf("!");
-  const token = excl >= 0 ? file.slice(excl + 1) : file;
-  return token.includes("watermark");
+/** Same as `originalImageUrl` but transcoded to JPEG by the CDN. */
+export function jpegImageUrl(token: string): string {
+  return `https://ci.xiaohongshu.com/${token}?imageView2/format/jpg`;
 }
 
 function num(value: unknown): number | undefined {

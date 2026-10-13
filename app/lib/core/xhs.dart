@@ -39,23 +39,37 @@ String toHttps(String url) {
       : url;
 }
 
-/// Rewrite an XHS CDN image URL to its canonical original form.
-String transformImageUrl(String url) {
-  final https = toHttps(url);
-  final parsed = Uri.tryParse(https);
-  if (parsed == null || !parsed.hasAuthority) return https;
+/// Extract the bare `notes_pre_post/...` token from any XHS CDN image URL
+/// by stripping the style suffix (`!...`).
+String? imageTokenOf(String url) {
+  final parsed = Uri.tryParse(toHttps(url));
+  if (parsed == null || !parsed.hasAuthority) return null;
   final host = parsed.host.toLowerCase();
   if (!host.endsWith('.xhscdn.com') && !host.endsWith('.xiaohongshu.com')) {
-    return https;
+    return null;
   }
   final withoutStyle = parsed.path.split('!').first;
   final parts = withoutStyle.split('/').where((p) => p.isNotEmpty).toList();
   final token = parts.length > 2 && _hex32.hasMatch(parts[1])
       ? parts.sublist(2).join('/')
       : parts.join('/');
-  if (token.isEmpty) return https;
+  return token.isEmpty ? null : token;
+}
+
+/// Rewrite an XHS CDN image URL to its canonical original form.
+String transformImageUrl(String url) {
+  final token = imageTokenOf(url);
+  if (token == null) return toHttps(url);
   return 'https://ci.xiaohongshu.com/$token';
 }
+
+/// Bare original-bucket URL for [token] (upstream formula): serves the
+/// unwatermarked bytes without requiring a style signature.
+String originalImageUrl(String token) => 'https://sns-img-bd.xhscdn.com/$token';
+
+/// Same as [originalImageUrl] but transcoded to JPEG by the CDN.
+String jpegImageUrl(String token) =>
+    'https://ci.xiaohongshu.com/$token?imageView2/format/jpg';
 
 class _Scan {
   _Scan(this.start, this.end);
@@ -416,100 +430,65 @@ class _ImageRef {
   final List<String> fallbacks;
 }
 
-/// Pick the watermark-free scene rendition: WB_DFT entries come in versions
-/// with and without watermark, distinguished by the trailing scene token
-/// (`wb_dft` clean vs `watermark` watermarked); WB_PRV renditions are
-/// small previews. Returns the raw URLs (normalization happens at the
-/// call site so diagnostics can show the original form).
-List<String> _cleanScenes(List<Object?> info) {
-  const order = ['H5_DTL', 'WB_DFT', ''];
-  final ranked = <String>[];
-  final rest = <String>[];
-  for (final e in info) {
-    if (e is! Map<String, Object?>) continue;
-    final u = _pickString(e, const ['url']);
-    if (u == null || _looksWatermarked(u)) continue;
-    final scene = (e['imageScene'] as String?) ?? '';
-    if (order.contains(scene)) {
-      ranked.add('${order.indexOf(scene)}|$u');
-    } else {
-      rest.add(u);
-    }
-  }
-  ranked.sort();
-  return [for (final r in ranked) r.substring(2), ...rest];
-}
-
-/// Raw URLs of the server-watermarked renditions in [info].
-List<String> _markedScenes(List<Object?> info) {
-  final out = <String>[];
-  for (final e in info) {
-    if (e is! Map<String, Object?>) continue;
-    final u = _pickString(e, const ['url']);
-    if (u == null) continue;
-    if (_looksWatermarked(u)) out.add(u);
-  }
-  return out;
-}
-
-/// Filenames carrying a watermark scene token are server-watermarked
-/// renditions; scenes without the token are clean (H5_DTL/H5_PRV carry no
-/// watermark token). Unknown scenes are treated as clean so new scene
-/// names fail open instead of hiding behind the watermarked fallback.
-bool _looksWatermarked(String url) {
-  final file = url.split('/').last.toLowerCase();
-  final excl = file.indexOf('!');
-  final token = excl >= 0 ? file.substring(excl + 1) : file;
-  return token.contains('watermark');
-}
-
 _ImageRef? _imageUrlOf(Map<String, Object?> entry) {
-  // Scene renditions first: H5_DTL (the watermark-free 1080p the app
-  // itself shows), then clean WB_DFT. The ci rewrite and the urlDefault
-  // original both carry the burned-in watermark, so they are fallbacks.
-  // Fallbacks stay raw (https-normalized); only the primary is rewritten
-  // by callers that need the canonical form.
-  // All fallbacks are https-normalized so HttpClient never downgrades.
-  final info = entry['infoList'];
-  final cleans = info is List
-      ? _cleanScenes(info.cast<Object?>())
-      : const <String>[];
-  final markeds = info is List
-      ? _markedScenes(info.cast<Object?>())
-      : const <String>[];
-  final direct = _pickString(entry, const ['urlDefault', 'url']);
-  final directRaw = direct == null ? null : toHttps(direct);
-  if (cleans.isNotEmpty) {
-    final token = _fileToken(entry);
-    // Keep every raw rendition reachable (clean scenes other than the
-    // primary included), then the direct original, then the ci token.
-    final primary = toHttps(cleans.first);
+  // Primary: the bare original-bucket URL (upstream formula) — the token
+  // carries no watermark; the CDN only burns one in when a `!style`
+  // rendition is requested. JPEG transcode, scene renditions and the ci
+  // token trail as fallbacks.
+  final token = _entryToken(entry);
+  if (token != null) {
+    final primary = originalImageUrl(token);
     final rest = [
-      for (final u in [...cleans.skip(1), ...markeds]) toHttps(u),
-      if (info is List)
-        for (final e in info)
-          if (e is Map<String, Object?> &&
-              _pickString(e, const ['url']) != null)
-            toHttps(_pickString(e, const ['url'])!),
-      if (directRaw != null) directRaw,
-      if (token.isNotEmpty) 'https://ci.xiaohongshu.com/$token',
+      jpegImageUrl(token),
+      ..._sceneRaws(entry),
+      if (_pickString(entry, const ['urlDefault', 'url']) case final d?)
+        toHttps(d),
+      'https://ci.xiaohongshu.com/$token',
     ].where((u) => u.isNotEmpty && u != primary).toSet().toList();
     return _ImageRef(primary, rest);
   }
+  final direct = _pickString(entry, const ['urlDefault', 'url']);
   if (direct != null) {
-    final primary = transformImageUrl(direct);
-    final raw = toHttps(direct);
-    final rest = [for (final u in markeds) toHttps(u), if (raw != primary) raw];
-    return _ImageRef(primary, rest);
+    return _ImageRef(transformImageUrl(direct), [toHttps(direct)]);
   }
-  if (markeds.isNotEmpty) return _ImageRef(transformImageUrl(markeds.first));
-  final token = _fileToken(entry);
-  if (token.isNotEmpty) return _ImageRef('https://ci.xiaohongshu.com/$token');
   final traceId = _pickString(entry, const ['traceId']);
   if (traceId != null) {
     return _ImageRef('https://sns-img-qc.xhscdn.com/$traceId');
   }
   return null;
+}
+
+/// Bare token from the richest source available: any scene rendition, the
+/// direct URL, then fileId.
+String? _entryToken(Map<String, Object?> entry) {
+  final info = entry['infoList'];
+  if (info is List) {
+    for (final e in info) {
+      if (e is! Map<String, Object?>) continue;
+      final u = _pickString(e, const ['url']);
+      if (u == null) continue;
+      final token = imageTokenOf(u);
+      if (token != null) return token;
+    }
+  }
+  final direct = _pickString(entry, const ['urlDefault', 'url']);
+  if (direct != null) {
+    final token = imageTokenOf(direct);
+    if (token != null) return token;
+  }
+  final fileToken = _fileToken(entry);
+  return fileToken.isEmpty ? null : fileToken;
+}
+
+/// Every raw scene rendition URL, https-normalized.
+List<String> _sceneRaws(Map<String, Object?> entry) {
+  final info = entry['infoList'];
+  if (info is! List) return const [];
+  return [
+    for (final e in info)
+      if (e is Map<String, Object?> && _pickString(e, const ['url']) != null)
+        toHttps(_pickString(e, const ['url'])!),
+  ];
 }
 
 String _fileToken(Map<String, Object?> entry) {
