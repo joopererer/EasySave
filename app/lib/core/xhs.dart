@@ -380,26 +380,39 @@ class _ImageRef {
 
 /// Pick the watermark-free scene rendition: WB_DFT entries come in versions
 /// with and without watermark, distinguished by the trailing scene token
-/// (`wb_dft` clean vs `watermark`/`wm` watermarked); WB_PRV renditions are
-/// small previews. Returns null when nothing in the list has a URL.
-String? _sceneUrl(List<Object?> info, {required bool watermarked}) {
-  String? rawMarked;
-  String? anyCleanRaw;
+/// (`wb_dft` clean vs `watermark` watermarked); WB_PRV renditions are
+/// small previews. Returns the raw URLs (normalization happens at the
+/// call site so diagnostics can show the original form).
+List<String> _cleanScenes(List<Object?> info) {
+  final out = <String>[];
   for (final e in info) {
     if (e is! Map<String, Object?>) continue;
     final u = _pickString(e, const ['url']);
     if (u == null) continue;
     final scene = (e['imageScene'] as String?) ?? '';
     if (scene != 'WB_DFT' && scene != 'WB_PRV' && scene.isNotEmpty) continue;
-    if (_looksWatermarked(u)) {
-      rawMarked ??= u;
-      continue;
+    if (_looksWatermarked(u)) continue;
+    if (scene == 'WB_DFT') {
+      out.insert(0, u);
+    } else {
+      out.add(u);
     }
-    if (scene == 'WB_DFT') return u;
-    anyCleanRaw ??= u;
   }
-  if (watermarked) return rawMarked;
-  return anyCleanRaw;
+  return out;
+}
+
+/// Raw URLs of the server-watermarked renditions in [info].
+List<String> _markedScenes(List<Object?> info) {
+  final out = <String>[];
+  for (final e in info) {
+    if (e is! Map<String, Object?>) continue;
+    final u = _pickString(e, const ['url']);
+    if (u == null) continue;
+    final scene = (e['imageScene'] as String?) ?? '';
+    if (scene != 'WB_DFT' && scene != 'WB_PRV' && scene.isNotEmpty) continue;
+    if (_looksWatermarked(u)) out.add(u);
+  }
+  return out;
 }
 
 /// Filenames carrying a watermark scene token are server-watermarked
@@ -415,37 +428,39 @@ bool _looksWatermarked(String url) {
 _ImageRef? _imageUrlOf(Map<String, Object?> entry) {
   // infoList scene renditions first: the direct urlDefault/ci URL is the
   // watermarked original, while a clean WB_DFT scene often exists alongside.
+  // All fallbacks are https-normalized so HttpClient never downgrades.
   final info = entry['infoList'];
-  final clean =
-      info is List ? _sceneUrl(info.cast<Object?>(), watermarked: false) : null;
-  final marked =
-      info is List ? _sceneUrl(info.cast<Object?>(), watermarked: true) : null;
+  final cleans =
+      info is List ? _cleanScenes(info.cast<Object?>()) : const <String>[];
+  final markeds =
+      info is List ? _markedScenes(info.cast<Object?>()) : const <String>[];
   final direct = _pickString(entry, const ['urlDefault', 'url']);
   final directRaw = direct == null ? null : toHttps(direct);
-  if (clean != null) {
+  if (cleans.isNotEmpty) {
     final token = _fileToken(entry);
     // Keep every raw rendition reachable (clean scenes other than the
     // primary included), then the direct original, then the ci token.
     final rest = [
+      for (final u in [...cleans.skip(1), ...markeds]) toHttps(u),
       if (info is List)
         for (final e in info)
           if (e is Map<String, Object?> && _pickString(e, const ['url']) != null)
             toHttps(_pickString(e, const ['url'])!),
       if (directRaw != null) directRaw,
       if (token.isNotEmpty) 'https://ci.xiaohongshu.com/$token',
-    ].where((u) => u.isNotEmpty && u != clean).toSet().toList();
-    return _ImageRef(transformImageUrl(clean), rest);
+    ].where((u) => u.isNotEmpty && u != cleans.first).toSet().toList();
+    return _ImageRef(transformImageUrl(cleans.first), rest);
   }
   if (direct != null) {
     final primary = transformImageUrl(direct);
     final raw = toHttps(direct);
     final rest = [
-      if (marked != null) marked,
+      for (final u in markeds) toHttps(u),
       if (raw != primary) raw,
     ];
     return _ImageRef(primary, rest);
   }
-  if (marked != null) return _ImageRef(transformImageUrl(marked));
+  if (markeds.isNotEmpty) return _ImageRef(transformImageUrl(markeds.first));
   final token = _fileToken(entry);
   if (token.isNotEmpty) return _ImageRef('https://ci.xiaohongshu.com/$token');
   final traceId = _pickString(entry, const ['traceId']);
@@ -696,7 +711,7 @@ ParseResult buildNoteFromRecord(Map<String, Object?> note, String noteId) {
   }
 
   final time = note['time'];
-  return ParseResult.ok(ParsedPost(
+  final parsed = ParsedPost(
     platform: 'xhs',
     id: noteId,
     url: 'https://www.xiaohongshu.com/explore/$noteId',
@@ -705,5 +720,26 @@ ParseResult buildNoteFromRecord(Map<String, Object?> note, String noteId) {
     title: _nonBlank(note['title']) ? note['title'] as String : null,
     caption: _pickString(note, const ['desc', 'description']),
     publishedAt: time is num && time.isFinite ? _toIsoUtc(time.toInt()) : null,
-  ));
+  );
+  return ParseResult.ok(parsed, [
+    for (final entry in images) _rawEntryOf(entry),
+  ]);
+}
+
+/// Snapshot of one raw image entry for diagnostics.
+RawImageEntry _rawEntryOf(Map<String, Object?> entry) {
+  final scenes = <RawScene>[];
+  final info = entry['infoList'];
+  if (info is List) {
+    for (final e in info) {
+      if (e is! Map<String, Object?>) continue;
+      final u = _pickString(e, const ['url']);
+      if (u == null) continue;
+      scenes.add(RawScene(
+        scene: (e['imageScene'] as String?) ?? '',
+        url: u,
+      ));
+    }
+  }
+  return RawImageEntry(keys: entry.keys.toList()..sort(), scenes: scenes);
 }

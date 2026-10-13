@@ -101,20 +101,43 @@ class ParseError {
   Map<String, Object?> toJson() => {'code': code, 'message': message};
 }
 
-/// Mirrors the TS `{ ok, data? , error? }` result shape.
-class ParseResult {
-  ParseResult.ok(this.data) : ok = true, error = null;
-  ParseResult.err(this.error) : ok = false, data = null;
-
-  final bool ok;
-  final ParsedPost? data;
-  final ParseError? error;
-}
-
 class ResolvedVideo {
   ResolvedVideo({required this.url, this.width, this.height});
 
   final String url;
   final num? width;
   final num? height;
+}
+
+/// Mirrors the TS `{ ok, data? , error? }` result shape. `rawImages`
+/// carries the untouched image entries for diagnostics only.
+class ParseResult {
+  ParseResult.ok(this.data, [List<RawImageEntry>? rawImages])
+      : ok = true,
+        error = null,
+        rawImages = rawImages ?? const [];
+  ParseResult.err(this.error) : ok = false, data = null, rawImages = const [];
+
+  final bool ok;
+  final ParsedPost? data;
+  final ParseError? error;
+  final List<RawImageEntry> rawImages;
+}
+
+/// One raw image entry per note image, for diagnostics: the entry's own
+/// keys plus every infoList rendition (scene + URL), so a "still
+/// watermarked" report shows exactly what the server offered.
+/// Never serialized into ParsedPost; only the diagnostics button reads it.
+class RawImageEntry {
+  RawImageEntry({required this.keys, required this.scenes});
+
+  final List<String> keys;
+  final List<RawScene> scenes;
+}
+
+class RawScene {
+  RawScene({required this.scene, required this.url});
+
+  final String scene;
+  final String url;
 }

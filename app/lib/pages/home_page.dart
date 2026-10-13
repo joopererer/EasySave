@@ -111,11 +111,16 @@ class _HomePageState extends State<HomePage> {
     if (_busy) return;
     setState(() => _busy = true);
     try {
-      final post = await parsePostUrl(link);
+      final outcome = await parsePostOutcome(link);
       if (!mounted) return;
       setState(() => _busy = false);
       await Navigator.of(context).push(
-        MaterialPageRoute<void>(builder: (_) => PreviewPage(post: post)),
+        MaterialPageRoute<void>(
+          builder: (_) => PreviewPage(
+            post: outcome.data,
+            rawImages: outcome.rawImages,
+          ),
+        ),
       );
     } on ParseFailure catch (e) {
       if (!mounted) return;

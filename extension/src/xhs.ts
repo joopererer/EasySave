@@ -389,25 +389,34 @@ function imageUrlOf(entry: Record<string, unknown>): { url: string; fallbacks: s
   // infoList scene renditions first: the direct urlDefault/ci URL is the
   // watermarked original, while a clean WB_DFT scene often exists alongside.
   const info = entry["infoList"];
-  const clean = Array.isArray(info) ? sceneUrl(info, { watermarked: false }) : undefined;
-  const marked = Array.isArray(info) ? sceneUrl(info, { watermarked: true }) : undefined;
+  const cleans = Array.isArray(info) ? cleanScenes(info) : [];
+  const markeds = Array.isArray(info) ? markedScenes(info) : [];
   const direct = pickString(entry, ["urlDefault", "url"]);
-  if (clean) {
+  const directRaw = direct ? toHttps(direct) : undefined;
+  if (cleans.length > 0) {
     const token = fileToken(entry);
+    // Keep every raw rendition reachable (clean scenes other than the
+    // primary included), then the direct original, then the ci token.
     const rest = [
-      ...(direct ? [transformImageUrl(direct), toHttps(direct)] : []),
-      ...(marked ? [marked] : []),
+      ...cleans.slice(1),
+      ...markeds,
+      ...(Array.isArray(info) ? info.flatMap((e) => {
+        if (!isRecord(e)) return [];
+        const u = pickString(e, ["url"]);
+        return u ? [toHttps(u)] : [];
+      }) : []),
+      ...(directRaw ? [directRaw] : []),
       ...(token ? [`https://ci.xiaohongshu.com/${token}`] : []),
-    ].filter((u) => u && u !== clean);
-    return { url: clean, fallbacks: [...new Set(rest)] };
+    ].filter((u) => u && u !== cleans[0]);
+    return { url: transformImageUrl(cleans[0]), fallbacks: [...new Set(rest)] };
   }
   if (direct) {
     const primary = transformImageUrl(direct);
     const raw = toHttps(direct);
-    const rest = [...(marked ? [marked] : []), ...(raw !== primary ? [raw] : [])];
+    const rest = [...markeds, ...(raw !== primary ? [raw] : [])];
     return { url: primary, fallbacks: rest };
   }
-  if (marked) return { url: marked, fallbacks: [] };
+  if (markeds.length > 0) return { url: transformImageUrl(markeds[0]), fallbacks: [] };
   const token = fileToken(entry);
   if (token) return { url: `https://ci.xiaohongshu.com/${token}`, fallbacks: [] };
   const traceId = pickString(entry, ["traceId"]);
@@ -422,28 +431,36 @@ function fileToken(entry: Record<string, unknown>): string {
 }
 
 /**
- * Pick the watermark-free scene rendition: WB_DFT entries come in versions
- * with and without watermark, distinguished by the trailing scene token
- * (`wb_dft` clean vs `watermark`/`wm` watermarked); WB_PRV renditions are
- * small previews. Returns undefined when nothing in the list has a URL.
+ * Clean scene renditions: WB_DFT preferred (first), WB_PRV previews after.
+ * Raw URLs; the call site normalizes. Watermarked renditions are excluded.
  */
-function sceneUrl(info: unknown[], opts: { watermarked: boolean }): string | undefined {
-  let anyClean: string | undefined;
+function cleanScenes(info: unknown[]): string[] {
+  const out: string[] = [];
   for (const e of info) {
     if (!isRecord(e)) continue;
     const u = pickString(e, ["url"]);
     if (!u) continue;
     const scene = typeof e["imageScene"] === "string" ? (e["imageScene"] as string) : "";
     if (scene !== "WB_DFT" && scene !== "WB_PRV" && scene !== "") continue;
-    if (looksWatermarked(u)) {
-      if (opts.watermarked) return transformImageUrl(u);
-      continue;
-    }
-    if (scene === "WB_DFT") return transformImageUrl(u);
-    anyClean ??= transformImageUrl(u);
+    if (looksWatermarked(u)) continue;
+    if (scene === "WB_DFT") out.unshift(u);
+    else out.push(u);
   }
-  if (opts.watermarked) return undefined;
-  return anyClean;
+  return out;
+}
+
+/** Raw URLs of the server-watermarked renditions in `info`. */
+function markedScenes(info: unknown[]): string[] {
+  const out: string[] = [];
+  for (const e of info) {
+    if (!isRecord(e)) continue;
+    const u = pickString(e, ["url"]);
+    if (!u) continue;
+    const scene = typeof e["imageScene"] === "string" ? (e["imageScene"] as string) : "";
+    if (scene !== "WB_DFT" && scene !== "WB_PRV" && scene !== "") continue;
+    if (looksWatermarked(u)) out.push(u);
+  }
+  return out;
 }
 
 /**

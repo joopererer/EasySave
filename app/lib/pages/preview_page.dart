@@ -7,9 +7,10 @@ import '../core/models.dart';
 import '../services/saver.dart';
 
 class PreviewPage extends StatefulWidget {
-  const PreviewPage({super.key, required this.post});
+  const PreviewPage({super.key, required this.post, this.rawImages = const []});
 
   final ParsedPost post;
+  final List<RawImageEntry> rawImages;
 
   @override
   State<PreviewPage> createState() => _PreviewPageState();
@@ -72,6 +73,11 @@ class _PreviewPageState extends State<PreviewPage> {
                 for (var i = 0; i < post.items.length; i++)
                   '[$i] ${post.items[i].type} ${post.items[i].url}'
                       '${post.items[i].fallbacks.map((u) => '\n    alt: $u').join()}',
+                for (var i = 0;
+                    i < widget.rawImages.length;
+                    i++)
+                  'raw[$i] keys=${widget.rawImages[i].keys.join(',')}'
+                      '${widget.rawImages[i].scenes.map((s) => '\n    ${s.scene}: ${s.url}').join()}',
               ];
               await Clipboard.setData(ClipboardData(text: lines.join('\n')));
               if (context.mounted) {

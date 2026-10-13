@@ -30,11 +30,27 @@ Future<ParsedPost> parsePostUrl(String url) {
   return _withTimeout(() async {
     final resolved = await resolveShortLink(url)
         .timeout(const Duration(seconds: 10), onTimeout: () => url);
+    return (await _parseInner(resolved)).data;
+  }, '加载页面');
+}
+
+/// Same as [parsePostUrl] but keeps the raw image entries for diagnostics.
+Future<ParseOutcome> parsePostOutcome(String url) {
+  return _withTimeout(() async {
+    final resolved = await resolveShortLink(url)
+        .timeout(const Duration(seconds: 10), onTimeout: () => url);
     return _parseInner(resolved);
   }, '加载页面');
 }
 
-Future<ParsedPost> _parseInner(String url) async {
+class ParseOutcome {
+  ParseOutcome({required this.data, required this.rawImages});
+
+  final ParsedPost data;
+  final List<RawImageEntry> rawImages;
+}
+
+Future<ParseOutcome> _parseInner(String url) async {
   final loaded = Completer<void>();
   InAppWebViewController? readyController;
   HeadlessInAppWebView? headless;
@@ -96,7 +112,7 @@ Future<ParsedPost> _parseInner(String url) async {
         result.error?.message ?? '解析失败',
       );
     }
-    return result.data!;
+    return ParseOutcome(data: result.data!, rawImages: result.rawImages);
   } finally {
     await headless?.dispose();
   }
