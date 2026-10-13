@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
-import 'pages/home_page.dart';
+import 'pages/main_shell.dart';
+import 'theme/app_theme.dart';
 
 void main() {
   runApp(const EasySaveApp());
@@ -13,11 +14,9 @@ class EasySaveApp extends StatelessWidget {
   Widget build(BuildContext context) {
     return MaterialApp(
       title: 'EasySave',
-      theme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(seedColor: Colors.red),
-        useMaterial3: true,
-      ),
-      home: const HomePage(),
+      theme: buildLightTheme(),
+      darkTheme: buildDarkTheme(),
+      home: const MainShell(),
     );
   }
 }

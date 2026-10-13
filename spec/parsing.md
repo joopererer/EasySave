@@ -19,6 +19,17 @@ a partial or empty success.
 
 **Error model.** Parse failures use { code, message } and never return a successful empty result. The v1 codes are LOGIN_REQUIRED for a login wall or authenticated-only page, PRIVATE_OR_UNAVAILABLE for private, deleted, or unavailable content, BLOCKED for an anti-bot or challenge page, INVALID_PAGE for content that does not match the requested platform, UNSUPPORTED_URL for page URLs whose host belongs to no supported platform, and TIMEOUT for fetch/parse operations exceeding the 20-second budget. Blocked-page fixtures use `blocked.html` with an `expected.json` containing the corresponding error code.
 
+**Error copy and actions (shared by the App and the extension).** User-facing copy is centralized per client but must stay consistent with this table:
+
+| code | message（用户文案） | action（操作按钮） |
+|---|---|---|
+| `LOGIN_REQUIRED` | 需要先登录小红书/Instagram | `goLogin` → [去登录]（跳对应平台登录页） |
+| `PRIVATE_OR_UNAVAILABLE` | 该帖子不存在、私密或已删除 | `backHome` → [返回首页] |
+| `BLOCKED` | 请求被对方限制，请稍后再试 | `retry` → [重试] |
+| `INVALID_PAGE` | 页面内容无法识别，可能已改版 | `retry` → [重试] + [复制诊断信息] |
+| `UNSUPPORTED_URL` | 不支持的链接，请粘贴小红书/Instagram 帖子链接 | `repaste` → [重新粘贴]（聚焦输入框） |
+| `TIMEOUT` | 网络超时，请检查网络后重试 | `retry` → [重试] |
+
 **Blocked-page判定.** XHS: an anonymous fetch returns the generic shell whose `__INITIAL_STATE__` holds only global `appSettings` and no `noteDetailMap[<id>]` entry for the requested note, even though the note id may appear in links/meta — this is authenticated-only content, so the expected code is LOGIN_REQUIRED. Instagram: an anonymous fetch returns the logged-out shell (`PolarisLoggedOut*` route, `CurrentUserInitialData` with `USER_ID` 0) with no product object matching the shortcode-derived media id — likewise LOGIN_REQUIRED. Only pages showing an explicit captcha/challenge interstitial use BLOCKED.
 
 Resolution policy: always select the highest resolution available.

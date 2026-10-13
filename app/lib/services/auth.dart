@@ -1,6 +1,7 @@
 // Login-state checks backed by the shared WebView cookie store.
 // Cookies persist across restarts, so login survives app relaunches.
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 
 enum PlatformKind { xhs, instagram }
@@ -40,4 +41,23 @@ Future<bool> isLoggedIn(PlatformKind platform) async {
   } catch (_) {
     return false;
   }
+}
+
+/// Clear session cookies for [platform] (logout).
+Future<void> logout(PlatformKind platform) async {
+  try {
+    await CookieManager.instance().deleteCookies(
+      url: WebUri(_cookieUrl(platform)),
+    );
+  } catch (_) {
+    // Best effort; the login page can also expire the session.
+  }
+}
+
+/// Broadcasts LOGIN_REQUIRED parse failures so the Mine tab can show
+/// per-platform "login expired" hints.
+abstract final class LoginExpiredBus {
+  static final ValueNotifier<String?> code = ValueNotifier<String?>(null);
+
+  static void notify(String errorCode) => code.value = errorCode;
 }
