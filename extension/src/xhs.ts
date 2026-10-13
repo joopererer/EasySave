@@ -389,18 +389,13 @@ function imageUrlOf(entry: Record<string, unknown>): string | undefined {
   const direct = pickString(entry, ["urlDefault", "url"]);
   if (direct) return transformImageUrl(direct);
   // Entries without a direct URL still carry renditions in infoList
-  // (prefer the default scene) or at least a fileId for ci.xiaohongshu.com.
+  // (prefer the clean default scene) or at least a fileId.
   const info = entry["infoList"];
   if (Array.isArray(info)) {
-    let first: string | undefined;
-    for (const e of info) {
-      if (!isRecord(e)) continue;
-      const u = pickString(e, ["url"]);
-      if (!u) continue;
-      first ??= u;
-      if (e["imageScene"] === "WB_DFT") return transformImageUrl(u);
-    }
-    if (first) return transformImageUrl(first);
+    const clean = sceneUrl(info, { watermarked: false });
+    const marked = sceneUrl(info, { watermarked: true });
+    if (clean) return clean;
+    if (marked) return marked;
   }
   const fileId = pickString(entry, ["fileId"]);
   if (fileId) {
@@ -410,6 +405,41 @@ function imageUrlOf(entry: Record<string, unknown>): string | undefined {
   const traceId = pickString(entry, ["traceId"]);
   if (traceId) return `https://sns-img-qc.xhscdn.com/${traceId}`;
   return undefined;
+}
+
+/**
+ * Pick the watermark-free scene rendition: WB_DFT entries come in versions
+ * with and without watermark, distinguished by the trailing scene token
+ * (`wb_dft` clean vs `watermark`/`wm` watermarked); WB_PRV renditions are
+ * small previews. Returns undefined when nothing in the list has a URL.
+ */
+function sceneUrl(info: unknown[], opts: { watermarked: boolean }): string | undefined {
+  let anyClean: string | undefined;
+  for (const e of info) {
+    if (!isRecord(e)) continue;
+    const u = pickString(e, ["url"]);
+    if (!u) continue;
+    const scene = typeof e["imageScene"] === "string" ? (e["imageScene"] as string) : "";
+    if (scene !== "WB_DFT" && scene !== "WB_PRV" && scene !== "") continue;
+    if (looksWatermarked(u)) {
+      if (opts.watermarked) return transformImageUrl(u);
+      continue;
+    }
+    if (scene === "WB_DFT") return transformImageUrl(u);
+    anyClean ??= transformImageUrl(u);
+  }
+  if (opts.watermarked) return undefined;
+  return anyClean;
+}
+
+/**
+ * Filenames containing `watermark` (or `wm` tokens) are server-watermarked
+ * renditions; the bare `wb_dft` file is the clean original.
+ */
+export function looksWatermarked(url: string): boolean {
+  const file = url.split("/").pop()?.toLowerCase() ?? "";
+  if (file.includes("watermark")) return true;
+  return /(^|[^a-z])wm([^a-z]|$)/.test(file);
 }
 
 function num(value: unknown): number | undefined {

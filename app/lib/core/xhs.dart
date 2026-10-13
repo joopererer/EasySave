@@ -378,6 +378,37 @@ class _ImageRef {
   final List<String> fallbacks;
 }
 
+/// Pick the watermark-free scene rendition: WB_DFT entries come in versions
+/// with and without watermark, distinguished by the trailing scene token
+/// (`wb_dft` clean vs `watermark`/`wm` watermarked); WB_PRV renditions are
+/// small previews. Returns null when nothing in the list has a URL.
+String? _sceneUrl(List<Object?> info, {required bool watermarked}) {
+  String? anyClean;
+  for (final e in info) {
+    if (e is! Map<String, Object?>) continue;
+    final u = _pickString(e, const ['url']);
+    if (u == null) continue;
+    final scene = (e['imageScene'] as String?) ?? '';
+    if (scene != 'WB_DFT' && scene != 'WB_PRV' && scene.isNotEmpty) continue;
+    if (_looksWatermarked(u)) {
+      if (watermarked) return transformImageUrl(u);
+      continue;
+    }
+    if (scene == 'WB_DFT') return transformImageUrl(u);
+    anyClean ??= transformImageUrl(u);
+  }
+  if (watermarked) return null;
+  return anyClean;
+}
+
+/// Filenames containing `watermark` (or `wm` tokens) are server-watermarked
+/// renditions; the bare `wb_dft` file is the clean original.
+bool _looksWatermarked(String url) {
+  final file = url.split('/').last.toLowerCase();
+  if (file.contains('watermark')) return true;
+  return RegExp(r'(^|[^a-z])wm([^a-z]|$)').hasMatch(file);
+}
+
 _ImageRef? _imageUrlOf(Map<String, Object?> entry) {
   final direct = _pickString(entry, const ['urlDefault', 'url']);
   if (direct != null) {
@@ -386,28 +417,15 @@ _ImageRef? _imageUrlOf(Map<String, Object?> entry) {
     return _ImageRef(primary, raw == primary ? const [] : [raw]);
   }
   // Entries without a direct URL still carry renditions in infoList
-  // (prefer the default scene) or at least a fileId for ci.xiaohongshu.com.
+  // (prefer the clean default scene) or at least a fileId.
   final info = entry['infoList'];
   if (info is List) {
-    String? first;
-    String? dft;
-    for (final e in info) {
-      if (e is! Map<String, Object?>) continue;
-      final u = _pickString(e, const ['url']);
-      if (u == null) continue;
-      first ??= u;
-      if (e['imageScene'] == 'WB_DFT') dft = u;
+    final clean = _sceneUrl(info.cast<Object?>(), watermarked: false);
+    final marked = _sceneUrl(info.cast<Object?>(), watermarked: true);
+    if (clean != null) {
+      return _ImageRef(clean, marked != null ? [marked] : const []);
     }
-    final chosen = dft ?? first;
-    if (chosen != null) {
-      final primary = transformImageUrl(chosen);
-      final raw = toHttps(chosen);
-      final rest = [
-        if (first != null && first != chosen) toHttps(first),
-        if (raw != primary && raw != first) raw,
-      ];
-      return _ImageRef(primary, rest);
-    }
+    if (marked != null) return _ImageRef(marked);
   }
   final fileId = _pickString(entry, const ['fileId']);
   if (fileId != null) {
