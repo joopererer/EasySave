@@ -8,6 +8,7 @@ import '../core/models.dart';
 import '../theme/app_theme.dart';
 import '../widgets/download_sheet.dart';
 import '../widgets/shared.dart';
+import 'player_page.dart';
 
 class PreviewPage extends StatefulWidget {
   const PreviewPage({super.key, required this.post, this.rawImages = const []});
@@ -53,6 +54,24 @@ class _PreviewPageState extends State<PreviewPage> {
 
   void _viewFullscreen(int index) {
     final item = widget.post.items[index];
+    if (item.type == 'video') {
+      Navigator.of(context).push(
+        MaterialPageRoute<void>(
+          builder: (_) =>
+              VideoPlayerPage(item: item, platform: widget.post.platform),
+        ),
+      );
+      return;
+    }
+    if (item.type == 'live' && item.videoUrl != null) {
+      Navigator.of(context).push(
+        MaterialPageRoute<void>(
+          builder: (_) =>
+              LivePlayerPage(item: item, platform: widget.post.platform),
+        ),
+      );
+      return;
+    }
     showDialog<void>(
       context: context,
       builder: (context) => Dialog.fullscreen(

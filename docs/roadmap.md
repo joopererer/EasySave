@@ -22,9 +22,9 @@
   - 验收：下载中按 Home 键，通知栏进度持续更新；返回 App 进度无丢失；拔网 1 张后恢复，该张自动重试成功；3 次全失败时仅该行标红，其余文件正常落盘
   - 方案评估（实施前写进 PR 描述）：`background_downloader` 与现有 `gal` 直存链路的衔接方式（下载到沙盒再 `Gal.putImage/putVideo` 落盘，还是直接下载到相册目录）；通知栏 channel 与 App 名称；iOS 后台模式是否需要额外配置
 
-## v1.1c 视频与 Live 预览（未实现）
+## v1.1c 视频与 Live 预览
 
-- [ ] 视频和 Live 图全屏预览
+- [x] 视频和 Live 图全屏预览（`video_player` + 平台 Referer；真机未发现编解码问题，未引入 `media_kit`）
   - 先用 `video_player` 实现，通过 `VideoPlayerController.networkUrl` 的 `httpHeaders` 传入对应平台的 Referer；只有在真机上测出 `video_player` 无法满足的问题（例如编码不支持）时，才评估 `media_kit`，并说明原因和 APK 体积影响
   - 视频：全屏播放，带控制条；切到后台时暂停，离开页面时释放播放器
   - Live 图：默认显示静态图，长按播放 motion（静音、循环），松手停止
