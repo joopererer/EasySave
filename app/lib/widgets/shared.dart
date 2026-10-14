@@ -98,6 +98,9 @@ class _CoverImageState extends State<CoverImage> {
       fit: widget.fit,
       width: widget.width,
       height: widget.height,
+      // Rebuilds (list refresh, navigation return) must not flash blank
+      // while the memory-cached image is re-resolved.
+      gaplessPlayback: true,
       // Thumbnails only need grid resolution; asking for the multi-MB
       // original for a ~120px cell is what made the grid feel slow.
       cacheWidth: widget.cacheWidth,

@@ -1,7 +1,5 @@
 // History tab: platform filter, date groups, undoable delete, empty state.
 
-import 'dart:convert';
-
 import 'package:flutter/material.dart';
 
 import '../core/models.dart';
@@ -40,10 +38,15 @@ class HistoryPageState extends State<HistoryPage> {
   }
 
   Future<void> _reload() async {
-    setState(() {
-      _loading = true;
-      _dbError = null;
-    });
+    // Silent refresh after the first load: swapping the whole list for a
+    // spinner on every return-from-preview reads as a freeze.
+    final silent = _records.isNotEmpty;
+    if (!silent) {
+      setState(() {
+        _loading = true;
+        _dbError = null;
+      });
+    }
     try {
       final records = await HistoryDb.instance().then((db) => db.recent());
       if (!mounted) return;
@@ -93,41 +96,35 @@ class HistoryPageState extends State<HistoryPage> {
     );
   }
 
-  void _open(HistoryRecord record) {
-    final items = <MediaItem>[];
-    if (record.itemsJson != null) {
-      try {
-        final decoded = jsonDecode(record.itemsJson!) as List;
-        for (final raw in decoded) {
-          final map = (raw as Map).cast<String, Object?>();
-          items.add(
-            MediaItem(
-              type: map['type'] as String? ?? 'image',
-              url: map['url'] as String? ?? '',
-              videoUrl: map['videoUrl'] as String?,
-              posterUrl: map['posterUrl'] as String?,
-              width: map['width'] as num?,
-              height: map['height'] as num?,
-              duration: map['duration'] as num?,
-            ),
-          );
-        }
-      } catch (_) {
-        // Fall through to the single-thumbnail fallback.
-      }
-    }
-    if (items.isEmpty && record.thumbnailUrl != null) {
-      items.add(MediaItem(type: 'image', url: record.thumbnailUrl!));
-    }
-    final post = ParsedPost(
-      platform: record.platform,
-      id: record.postId,
-      url: record.postUrl,
-      author: PostAuthor(name: record.authorName),
-      items: items,
-      title: record.title,
-      caption: record.caption,
+  Future<void> _confirmClearAll() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('清空历史记录？'),
+        content: const Text('将删除全部下载记录，相册中的文件不受影响。'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('取消'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('清空'),
+          ),
+        ],
+      ),
     );
+    if (confirmed != true || !mounted) return;
+    await HistoryDb.instance().then((db) => db.clear());
+    await _reload();
+    if (!mounted) return;
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(const SnackBar(content: Text('历史记录已清空')));
+  }
+
+  void _open(HistoryRecord record) {
+    final post = PreviewPage.postFromRecord(record);
     Navigator.of(context)
         .push(MaterialPageRoute<void>(builder: (_) => PreviewPage(post: post)))
         .then((_) => _reload());
@@ -136,7 +133,13 @@ class HistoryPageState extends State<HistoryPage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('历史')),
+      appBar: AppBar(
+        title: const Text('历史'),
+        actions: [
+          if (_records.isNotEmpty)
+            TextButton(onPressed: _confirmClearAll, child: const Text('清空')),
+        ],
+      ),
       body: Column(
         children: [
           Padding(

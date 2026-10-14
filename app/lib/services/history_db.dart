@@ -114,6 +114,10 @@ class HistoryDb {
     await _db.delete('history_records', where: 'id = ?', whereArgs: [id]);
   }
 
+  Future<void> clear() async {
+    await _db.delete('history_records');
+  }
+
   Future<void> reinsert(HistoryRecord record) async {
     await _db.insert(
       'history_records',

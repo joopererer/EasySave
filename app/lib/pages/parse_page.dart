@@ -62,7 +62,10 @@ class _ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.resumed) _checkClipboard();
+    if (state == AppLifecycleState.resumed) {
+      _checkClipboard();
+      _reloadRecent();
+    }
   }
 
   @override
@@ -89,6 +92,10 @@ class _ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
     final link = data?.text == null ? null : extractLink(data!.text!);
     if (link == null || !mounted || link == _lastLink) return;
     _lastLink = link;
+    // Same URL as the input box or the latest history entry: already
+    // parsed or one tap away, don't nag again.
+    if (link == _linkController.text.trim()) return;
+    if (_recent.isNotEmpty && link == _recent.first.postUrl) return;
     final go = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
@@ -356,6 +363,16 @@ class _ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
                 padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
                 child: Card(
                   child: ListTile(
+                    onTap: () {
+                      final post = PreviewPage.postFromRecord(record);
+                      Navigator.of(context)
+                          .push(
+                            MaterialPageRoute<void>(
+                              builder: (_) => PreviewPage(post: post),
+                            ),
+                          )
+                          .then((_) => _reloadRecent());
+                    },
                     leading: _thumbOf(context, record),
                     title: Text(
                       (record.title?.isNotEmpty == true)

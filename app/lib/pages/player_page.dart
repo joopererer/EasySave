@@ -288,6 +288,7 @@ class _LivePlayerPageState extends State<LivePlayerPage>
                       item: widget.item,
                       referer: refererFor(widget.platform),
                       fit: BoxFit.contain,
+                      cacheWidth: 1080,
                     ),
                     if (_starting)
                       const CircularProgressIndicator(color: Colors.white)
