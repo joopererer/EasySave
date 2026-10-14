@@ -86,7 +86,16 @@ class _PreviewPageState extends State<PreviewPage> {
     final post = widget.post;
     await DownloadSheet.show(context, post, List.of(_order));
     final db = await HistoryDb.instance();
-    final thumb = post.items.isEmpty ? null : post.items.first.url;
+    // Never store a video file URL as the thumbnail: image widgets cannot
+    // render it (mp4 bytes into the image decoder freezes the list).
+    String? thumb;
+    for (final item in post.items) {
+      if (item.type == 'video' && item.posterUrl != null) {
+        thumb = item.posterUrl;
+        break;
+      }
+      if (item.type == 'image' && thumb == null) thumb = item.url;
+    }
     await db.upsert(
       HistoryRecord(
         platform: post.platform,

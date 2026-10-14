@@ -223,22 +223,7 @@ class HistoryPageState extends State<HistoryPage> {
               child: Card(
                 child: ListTile(
                   onTap: () => _open(record),
-                  leading: record.thumbnailUrl == null
-                      ? null
-                      : ClipRRect(
-                          borderRadius: const BorderRadius.all(
-                            Radius.circular(8),
-                          ),
-                          child: Image.network(
-                            record.thumbnailUrl!,
-                            width: 48,
-                            height: 48,
-                            fit: BoxFit.cover,
-                            cacheWidth: 200,
-                            errorBuilder: (context, _, _) =>
-                                const Icon(Icons.broken_image),
-                          ),
-                        ),
+                  leading: _thumbOf(record),
                   title: Text(
                     (record.title?.isNotEmpty == true) ? record.title! : '无标题',
                     maxLines: 1,
@@ -253,6 +238,23 @@ class HistoryPageState extends State<HistoryPage> {
             ),
         ],
       ],
+    );
+  }
+
+  /// 48px leading thumbnail; null-safe — a video URL is never rendered.
+  Widget? _thumbOf(HistoryRecord record) {
+    final url = displayThumbnail(record);
+    if (url == null) return null;
+    return ClipRRect(
+      borderRadius: const BorderRadius.all(Radius.circular(8)),
+      child: Image.network(
+        url,
+        width: 48,
+        height: 48,
+        fit: BoxFit.cover,
+        cacheWidth: 200,
+        errorBuilder: (context, _, _) => const Icon(Icons.broken_image),
+      ),
     );
   }
 }

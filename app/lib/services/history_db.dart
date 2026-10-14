@@ -1,5 +1,7 @@
 // Download history stored in a local sqflite table.
 
+import 'dart:convert';
+
 import 'package:sqflite/sqflite.dart';
 
 class HistoryRecord {
@@ -119,4 +121,41 @@ class HistoryDb {
       conflictAlgorithm: ConflictAlgorithm.replace,
     );
   }
+}
+
+/// A stored thumbnail pointing at a video file (mp4 etc.) can never render
+/// in an image widget: feeding it to Image.network downloads megabytes of
+/// video into the image pipeline and freezes the list. Resolve the display
+/// thumbnail defensively: stored poster first, then the embedded items.
+String? displayThumbnail(HistoryRecord record) {
+  if (record.itemsJson != null) {
+    try {
+      final decoded = jsonDecode(record.itemsJson!) as List;
+      String? firstImage;
+      for (final raw in decoded) {
+        final map = (raw as Map).cast<String, Object?>();
+        final type = map['type'] as String?;
+        if (type == 'video' && map['posterUrl'] is String) {
+          return map['posterUrl'] as String;
+        }
+        if (type == 'image' && firstImage == null) {
+          firstImage = map['url'] as String?;
+        }
+      }
+      if (firstImage != null) return firstImage;
+    } catch (_) {
+      // Fall through to the stored thumbnail.
+    }
+  }
+  final stored = record.thumbnailUrl;
+  if (stored != null && !_looksLikeVideo(stored)) return stored;
+  return null;
+}
+
+bool _looksLikeVideo(String url) {
+  final path = Uri.tryParse(url)?.path.toLowerCase() ?? '';
+  return path.endsWith('.mp4') ||
+      path.endsWith('.mov') ||
+      path.endsWith('.webm') ||
+      path.endsWith('.m3u8');
 }
