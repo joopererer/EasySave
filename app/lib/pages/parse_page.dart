@@ -14,6 +14,7 @@ import '../services/auth.dart';
 import '../services/history_db.dart';
 import '../services/links.dart';
 import '../services/parse_service.dart';
+import '../services/saver.dart';
 import '../services/settings.dart';
 import '../theme/app_theme.dart';
 import '../widgets/shared.dart';
@@ -381,13 +382,12 @@ class _ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
     if (url == null) return null;
     return ClipRRect(
       borderRadius: const BorderRadius.all(Radius.circular(8)),
-      child: Image.network(
-        url,
+      child: CoverImage(
+        item: MediaItem(type: 'image', url: url),
+        referer: refererFor(record.platform),
+        cacheWidth: 200,
         width: 48,
         height: 48,
-        fit: BoxFit.cover,
-        cacheWidth: 200,
-        errorBuilder: (context, _, _) => const Icon(Icons.broken_image),
       ),
     );
   }

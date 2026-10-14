@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 
 import '../core/models.dart';
 import '../services/history_db.dart';
+import '../services/saver.dart';
 import '../theme/app_theme.dart';
 import '../widgets/shared.dart';
 import 'preview_page.dart';
@@ -247,13 +248,12 @@ class HistoryPageState extends State<HistoryPage> {
     if (url == null) return null;
     return ClipRRect(
       borderRadius: const BorderRadius.all(Radius.circular(8)),
-      child: Image.network(
-        url,
+      child: CoverImage(
+        item: MediaItem(type: 'image', url: url),
+        referer: refererFor(record.platform),
+        cacheWidth: 200,
         width: 48,
         height: 48,
-        fit: BoxFit.cover,
-        cacheWidth: 200,
-        errorBuilder: (context, _, _) => const Icon(Icons.broken_image),
       ),
     );
   }

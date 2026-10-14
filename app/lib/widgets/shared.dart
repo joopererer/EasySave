@@ -52,6 +52,72 @@ class GradientButton extends StatelessWidget {
   }
 }
 
+/// Image with CDN fallback rotation and platform Referer. XHS image hosts
+/// intermittently refuse the rewritten primary or require a Referer, so a
+/// bare Image.network hangs or 403s where the rotated list succeeds.
+class CoverImage extends StatefulWidget {
+  const CoverImage({
+    super.key,
+    required this.item,
+    required this.referer,
+    this.fit = BoxFit.cover,
+    this.cacheWidth,
+    this.width,
+    this.height,
+  });
+
+  final MediaItem item;
+  final String referer;
+  final BoxFit fit;
+  final int? cacheWidth;
+  final double? width;
+  final double? height;
+
+  @override
+  State<CoverImage> createState() => _CoverImageState();
+}
+
+class _CoverImageState extends State<CoverImage> {
+  int _attempt = 0;
+
+  @override
+  Widget build(BuildContext context) {
+    // Video items show their still-image cover; the item url itself may
+    // be an mp4 that Image.network cannot render.
+    final cover = widget.item.type == 'video' ? widget.item.posterUrl : null;
+    // Display order: CDN originals first. The rewritten ci.xiaohongshu.com
+    // primary is occasionally slow/unreachable from mobile networks (the
+    // 0/2/6 pattern); it stays in the rotation as a fallback.
+    final urls = [
+      ...widget.item.fallbacks,
+      if (cover != null) cover,
+      widget.item.url,
+    ];
+    return Image.network(
+      urls[_attempt.clamp(0, urls.length - 1)],
+      fit: widget.fit,
+      width: widget.width,
+      height: widget.height,
+      // Thumbnails only need grid resolution; asking for the multi-MB
+      // original for a ~120px cell is what made the grid feel slow.
+      cacheWidth: widget.cacheWidth,
+      headers: {'Referer': widget.referer},
+      errorBuilder: (context, error, stackTrace) {
+        if (_attempt + 1 < urls.length) {
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (mounted) setState(() => _attempt++);
+          });
+          return const ColoredBox(color: Colors.black12);
+        }
+        return const ColoredBox(
+          color: Colors.black12,
+          child: Icon(Icons.broken_image),
+        );
+      },
+    );
+  }
+}
+
 class PlatformTag extends StatelessWidget {
   const PlatformTag({super.key, required this.platform});
 

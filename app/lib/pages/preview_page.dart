@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../core/models.dart';
+import '../services/saver.dart';
 import '../theme/app_theme.dart';
 import '../widgets/download_sheet.dart';
 import '../widgets/shared.dart';
@@ -80,7 +81,12 @@ class _PreviewPageState extends State<PreviewPage> {
           children: [
             Center(
               child: InteractiveViewer(
-                child: _Thumb(key: ValueKey(item.url), item: item),
+                child: CoverImage(
+                  key: ValueKey(item.url),
+                  item: item,
+                  referer: refererFor(widget.post.platform),
+                  fit: BoxFit.contain,
+                ),
               ),
             ),
             Positioned(
@@ -184,9 +190,38 @@ class _PreviewPageState extends State<PreviewPage> {
                             Radius.circular(AppTokens.thumbRadius),
                           ),
                         ),
-                        clipBehavior: Clip.antiAlias,
-                        child: _Thumb(key: ValueKey(item.url), item: item),
+                        // The image is clipped strictly inside the border
+                        // ring (radius - border width) so square image
+                        // corners can never punch through the rounded frame.
+                        child: ClipRRect(
+                          borderRadius: const BorderRadius.all(
+                            Radius.circular(AppTokens.thumbRadius - 3),
+                          ),
+                          child: CoverImage(
+                            key: ValueKey(item.url),
+                            item: item,
+                            referer: refererFor(post.platform),
+                            cacheWidth: 400,
+                          ),
+                        ),
                       ),
+                      if (item.type == 'video' || item.type == 'live')
+                        const Center(
+                          child: DecoratedBox(
+                            decoration: BoxDecoration(
+                              color: Colors.black45,
+                              shape: BoxShape.circle,
+                            ),
+                            child: Padding(
+                              padding: EdgeInsets.all(8),
+                              child: Icon(
+                                Icons.play_arrow,
+                                color: Colors.white,
+                                size: 28,
+                              ),
+                            ),
+                          ),
+                        ),
                       Positioned(
                         top: 6,
                         right: 6,
@@ -271,52 +306,6 @@ class _PreviewPageState extends State<PreviewPage> {
           ),
         ],
       ),
-    );
-  }
-}
-
-/// Thumbnail that walks through the primary URL and its fallbacks before
-/// showing the broken-image placeholder.
-class _Thumb extends StatefulWidget {
-  const _Thumb({super.key, required this.item});
-
-  final MediaItem item;
-
-  @override
-  State<_Thumb> createState() => _ThumbState();
-}
-
-class _ThumbState extends State<_Thumb> {
-  int _attempt = 0;
-
-  @override
-  Widget build(BuildContext context) {
-    // Video items show their still-image cover; the item url itself may
-    // be an mp4 that Image.network cannot render.
-    final cover = widget.item.type == 'video' ? widget.item.posterUrl : null;
-    final urls = [
-      ...widget.item.fallbacks,
-      if (cover != null) cover,
-      widget.item.url,
-    ];
-    return Image.network(
-      urls[_attempt.clamp(0, urls.length - 1)],
-      fit: BoxFit.cover,
-      // Thumbnails only need grid resolution; asking for the multi-MB
-      // original for a ~120px cell is what made the grid feel slow.
-      cacheWidth: 400,
-      errorBuilder: (context, error, stackTrace) {
-        if (_attempt + 1 < urls.length) {
-          WidgetsBinding.instance.addPostFrameCallback((_) {
-            if (mounted) setState(() => _attempt++);
-          });
-          return const ColoredBox(color: Colors.black12);
-        }
-        return const ColoredBox(
-          color: Colors.black12,
-          child: Icon(Icons.broken_image),
-        );
-      },
     );
   }
 }

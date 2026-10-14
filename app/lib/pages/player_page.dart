@@ -8,6 +8,7 @@ import 'package:video_player/video_player.dart';
 
 import '../core/models.dart';
 import '../services/saver.dart';
+import '../widgets/shared.dart';
 
 /// Fullscreen video with a control bar. Pauses on backgrounding and
 /// releases the controller when the page is left.
@@ -189,6 +190,7 @@ class _LivePlayerPageState extends State<LivePlayerPage>
     with WidgetsBindingObserver {
   VideoPlayerController? _controller;
   bool _playing = false;
+  bool _starting = false;
   bool _failed = false;
 
   @override
@@ -204,7 +206,8 @@ class _LivePlayerPageState extends State<LivePlayerPage>
 
   Future<void> _start() async {
     final videoUrl = widget.item.videoUrl;
-    if (videoUrl == null || _playing) return;
+    if (videoUrl == null || _playing || _starting) return;
+    setState(() => _starting = true);
     try {
       final controller = VideoPlayerController.networkUrl(
         Uri.parse(videoUrl),
@@ -218,10 +221,18 @@ class _LivePlayerPageState extends State<LivePlayerPage>
         return;
       }
       _controller = controller;
-      setState(() => _playing = true);
+      setState(() {
+        _playing = true;
+        _starting = false;
+      });
       await controller.play();
     } catch (_) {
-      if (mounted) setState(() => _failed = true);
+      if (mounted) {
+        setState(() {
+          _failed = true;
+          _starting = false;
+        });
+      }
     }
   }
 
@@ -273,19 +284,21 @@ class _LivePlayerPageState extends State<LivePlayerPage>
               : Stack(
                   alignment: Alignment.center,
                   children: [
-                    Image.network(
-                      widget.item.url,
+                    CoverImage(
+                      item: widget.item,
+                      referer: refererFor(widget.platform),
                       fit: BoxFit.contain,
-                      errorBuilder: (context, _, _) =>
-                          const Icon(Icons.broken_image, color: Colors.white),
                     ),
-                    Positioned(
-                      bottom: 24,
-                      child: Text(
-                        _failed ? '播放失败，请重试' : '长按播放实况',
-                        style: const TextStyle(color: Colors.white70),
+                    if (_starting)
+                      const CircularProgressIndicator(color: Colors.white)
+                    else
+                      Positioned(
+                        bottom: 24,
+                        child: Text(
+                          _failed ? '播放失败，请重试' : '长按播放实况',
+                          style: const TextStyle(color: Colors.white70),
+                        ),
                       ),
-                    ),
                   ],
                 ),
         ),

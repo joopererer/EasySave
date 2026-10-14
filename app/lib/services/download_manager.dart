@@ -8,6 +8,7 @@ import 'dart:io';
 
 import 'package:background_downloader/background_downloader.dart';
 import 'package:flutter/foundation.dart';
+import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:gal/gal.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -242,6 +243,10 @@ class DownloadManager extends ChangeNotifier {
   StreamSubscription<TaskUpdate>? _updatesSub;
   bool _ready = false;
 
+  final _notifications = FlutterLocalNotificationsPlugin();
+  static const _channelId = 'easysave_downloads';
+  final Map<String, int> _lastShownPercent = {};
+
   // Retained: dropping the broadcast subscription would stop updates.
   Future<void> close() async {
     await _updatesSub?.cancel();
@@ -260,26 +265,87 @@ class DownloadManager extends ChangeNotifier {
     if (_ready) return;
     _ready = true;
     await FileDownloader().start();
+    try {
+      await _notifications.initialize(
+        settings: const InitializationSettings(
+          android: AndroidInitializationSettings('@mipmap/ic_launcher'),
+        ),
+      );
+      await _notifications
+          .resolvePlatformSpecificImplementation<
+            AndroidFlutterLocalNotificationsPlugin
+          >()
+          ?.createNotificationChannel(
+            const AndroidNotificationChannel(
+              _channelId,
+              '下载进度',
+              importance: Importance.low,
+            ),
+          );
+    } catch (_) {
+      // Notifications are best effort; downloads run regardless.
+    }
     _updatesSub = FileDownloader().updates.listen(_onUpdate);
     await _loadAndReconcile();
   }
 
-  /// Group notification per batch: a single "正在下载 n/m" notification.
-  void _configureGroupNotification(DownloadBatch batch) {
-    FileDownloader().configureNotificationForGroup(
-      batch.batchId,
-      running: const TaskNotification(
-        '正在下载 {numFinished}/{numTotal}',
-        'EasySave 后台下载中',
-      ),
-      complete: const TaskNotification('下载完成', '共 {numTotal} 个文件'),
-      error: const TaskNotification(
-        '部分文件下载失败',
-        '{numFailed}/{numTotal} 失败，可打开 App 单独重试',
-      ),
-      progressBar: true,
-      groupNotificationId: batch.batchId,
-    );
+  int _notificationId(DownloadBatch batch) =>
+      batch.batchId.hashCode & 0x7fffffff;
+
+  /// Single merged notification per batch with byte-level percent.
+  Future<void> _refreshNotification(DownloadBatch batch) async {
+    final active = [
+      for (final j in batch.jobs)
+        if (j.state != JobState.canceled) j,
+    ];
+    if (active.isEmpty) {
+      await _cancelNotification(batch);
+      return;
+    }
+    final done = batch.succeeded;
+    final percent =
+        (active.map((j) => j.progress).fold<double>(0, (a, b) => a + b) /
+                active.length *
+                100)
+            .round()
+            .clamp(0, 100);
+    final terminal = batch.isTerminal;
+    if (!terminal && _lastShownPercent[batch.batchId] == percent) return;
+    _lastShownPercent[batch.batchId] = percent;
+    try {
+      if (terminal) {
+        await _cancelNotification(batch);
+        return;
+      }
+      await _notifications.show(
+        id: _notificationId(batch),
+        title: '正在下载 $done/${active.length}',
+        body: '$percent%',
+        notificationDetails: NotificationDetails(
+          android: AndroidNotificationDetails(
+            _channelId,
+            '下载进度',
+            showProgress: true,
+            maxProgress: 100,
+            progress: percent,
+            ongoing: true,
+            autoCancel: false,
+            onlyAlertOnce: true,
+          ),
+        ),
+      );
+    } catch (_) {
+      // Best effort.
+    }
+  }
+
+  Future<void> _cancelNotification(DownloadBatch batch) async {
+    _lastShownPercent.remove(batch.batchId);
+    try {
+      await _notifications.cancel(id: _notificationId(batch));
+    } catch (_) {
+      // Best effort.
+    }
   }
 
   Future<DownloadBatch> startBatch(
@@ -325,7 +391,7 @@ class DownloadManager extends ChangeNotifier {
       ],
     );
     _batches[batchId] = batch;
-    _configureGroupNotification(batch);
+    unawaited(_refreshNotification(batch));
     await _persist(batch);
     for (final job in batch.jobs) {
       await _enqueueAttempt(batch, job);
@@ -391,6 +457,7 @@ class DownloadManager extends ChangeNotifier {
         job.state = JobState.active;
         job.progress = update.progress;
         notifyListeners();
+        unawaited(_refreshNotification(batch));
       }
       return;
     }
@@ -399,6 +466,7 @@ class DownloadManager extends ChangeNotifier {
       case TaskStatus.running:
         job.state = JobState.active;
         notifyListeners();
+        unawaited(_refreshNotification(batch));
       case TaskStatus.complete:
         unawaited(_finishFile(batch, job, task));
       case TaskStatus.failed:
@@ -494,6 +562,7 @@ class DownloadManager extends ChangeNotifier {
     }
     await _persist(batch);
     notifyListeners();
+    unawaited(_refreshNotification(batch));
   }
 
   String? _thumbnailFor(DownloadBatch batch) {
