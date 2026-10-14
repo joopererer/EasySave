@@ -2,6 +2,7 @@
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:http/http.dart' as http;
 
 import '../../core/error_copy.dart';
 import '../../core/models.dart';
@@ -52,9 +53,13 @@ class GradientButton extends StatelessWidget {
   }
 }
 
-/// Image with CDN fallback rotation and platform Referer. XHS image hosts
-/// intermittently refuse the rewritten primary or require a Referer, so a
-/// bare Image.network hangs or 403s where the rotated list succeeds.
+/// Image with CDN fallback rotation, platform Referer and per-URL timeout.
+///
+/// XHS image hosts intermittently blackhole a request (no data, no error)
+/// or require a Referer, and Image.network has no timeout — a bare one
+/// hangs the cell forever. So bytes are fetched with `http` (8s per URL)
+/// and rendered from memory; every cell resolves to pixels or a broken
+/// icon in bounded time.
 class CoverImage extends StatefulWidget {
   const CoverImage({
     super.key,
@@ -78,46 +83,87 @@ class CoverImage extends StatefulWidget {
 }
 
 class _CoverImageState extends State<CoverImage> {
-  int _attempt = 0;
+  static const _timeout = Duration(seconds: 8);
+  static http.Client? _client;
 
-  @override
-  Widget build(BuildContext context) {
+  Uint8List? _bytes;
+  bool _failed = false;
+  int _generation = 0;
+
+  List<String> get _urls {
     // Video items show their still-image cover; the item url itself may
-    // be an mp4 that Image.network cannot render.
+    // be an mp4 that cannot render as an image.
     final cover = widget.item.type == 'video' ? widget.item.posterUrl : null;
     // Display order: CDN originals first. The rewritten ci.xiaohongshu.com
     // primary is occasionally slow/unreachable from mobile networks (the
     // 0/2/6 pattern); it stays in the rotation as a fallback.
-    final urls = [
+    return [
       ...widget.item.fallbacks,
       if (cover != null) cover,
       widget.item.url,
     ];
-    return Image.network(
-      urls[_attempt.clamp(0, urls.length - 1)],
-      fit: widget.fit,
-      width: widget.width,
-      height: widget.height,
-      // Rebuilds (list refresh, navigation return) must not flash blank
-      // while the memory-cached image is re-resolved.
-      gaplessPlayback: true,
-      // Thumbnails only need grid resolution; asking for the multi-MB
-      // original for a ~120px cell is what made the grid feel slow.
-      cacheWidth: widget.cacheWidth,
-      headers: {'Referer': widget.referer},
-      errorBuilder: (context, error, stackTrace) {
-        if (_attempt + 1 < urls.length) {
-          WidgetsBinding.instance.addPostFrameCallback((_) {
-            if (mounted) setState(() => _attempt++);
-          });
-          return const ColoredBox(color: Colors.black12);
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  @override
+  void didUpdateWidget(CoverImage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.item.url != widget.item.url) _load();
+  }
+
+  Future<void> _load() async {
+    final generation = ++_generation;
+    setState(() {
+      _bytes = null;
+      _failed = false;
+    });
+    _client ??= http.Client();
+    for (final url in _urls) {
+      try {
+        final response = await _client!
+            .get(Uri.parse(url), headers: {'Referer': widget.referer})
+            .timeout(_timeout);
+        if (response.statusCode != 200 || response.bodyBytes.isEmpty) {
+          continue;
         }
-        return const ColoredBox(
-          color: Colors.black12,
-          child: Icon(Icons.broken_image),
-        );
-      },
-    );
+        if (!mounted || generation != _generation) return;
+        setState(() => _bytes = response.bodyBytes);
+        return;
+      } catch (_) {
+        // Timeout, DNS, TLS, 403 — try the next URL.
+      }
+    }
+    if (!mounted || generation != _generation) return;
+    setState(() => _failed = true);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final bytes = _bytes;
+    if (bytes != null) {
+      return Image.memory(
+        bytes,
+        fit: widget.fit,
+        width: widget.width,
+        height: widget.height,
+        gaplessPlayback: true,
+        cacheWidth: widget.cacheWidth,
+        errorBuilder: (context, _, _) =>
+            const ColoredBox(color: Colors.black12),
+      );
+    }
+    if (_failed) {
+      return const ColoredBox(
+        color: Colors.black12,
+        child: Icon(Icons.broken_image),
+      );
+    }
+    return const ColoredBox(color: Colors.black12);
   }
 }
 

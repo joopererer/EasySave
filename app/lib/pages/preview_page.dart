@@ -269,96 +269,96 @@ class _PreviewPageState extends State<PreviewPage> {
                                 : const ColoredBox(color: Colors.black12),
                           ),
                         ),
-                      if (item.type == 'video' || item.type == 'live')
-                        const Center(
-                          child: DecoratedBox(
-                            decoration: BoxDecoration(
-                              color: Colors.black45,
-                              shape: BoxShape.circle,
-                            ),
-                            child: Padding(
-                              padding: EdgeInsets.all(8),
-                              child: Icon(
-                                Icons.play_arrow,
-                                color: Colors.white,
-                                size: 28,
+                        if (item.type == 'video' || item.type == 'live')
+                          const Center(
+                            child: DecoratedBox(
+                              decoration: BoxDecoration(
+                                color: Colors.black45,
+                                shape: BoxShape.circle,
+                              ),
+                              child: Padding(
+                                padding: EdgeInsets.all(8),
+                                child: Icon(
+                                  Icons.play_arrow,
+                                  color: Colors.white,
+                                  size: 28,
+                                ),
                               ),
                             ),
                           ),
-                        ),
-                      Positioned(
-                        top: 6,
-                        right: 6,
-                        child: GestureDetector(
-                          onTap: () => _toggle(index),
-                          child: Container(
-                            width: 28,
-                            height: 28,
-                            decoration: BoxDecoration(
-                              shape: BoxShape.circle,
-                              color: selected
-                                  ? AppTokens.primary
-                                  : Colors.black45,
-                            ),
-                            alignment: Alignment.center,
-                            child: selected
-                                ? const Icon(
-                                    Icons.check,
-                                    color: Colors.white,
-                                    size: 18,
-                                  )
-                                : null,
-                          ),
-                        ),
-                      ),
-                      if (badge.isNotEmpty)
                         Positioned(
-                          left: 6,
-                          bottom: 6,
-                          child: Container(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 6,
-                              vertical: 2,
-                            ),
-                            decoration: BoxDecoration(
-                              color: Colors.black54,
-                              borderRadius: BorderRadius.circular(6),
-                            ),
-                            child: Text(
-                              badge,
-                              style: const TextStyle(
-                                color: Colors.white,
-                                fontSize: 11,
-                              ),
-                            ),
-                          ),
-                        ),
-                      if (selected)
-                        Positioned(
+                          top: 6,
                           right: 6,
-                          bottom: 6,
-                          child: Container(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 6,
-                              vertical: 2,
-                            ),
-                            decoration: BoxDecoration(
-                              color: AppTokens.primary,
-                              borderRadius: BorderRadius.circular(6),
-                            ),
-                            child: Text(
-                              '${selectedIndex + 1}/${_order.length}',
-                              style: const TextStyle(
-                                color: Colors.white,
-                                fontSize: 11,
+                          child: GestureDetector(
+                            onTap: () => _toggle(index),
+                            child: Container(
+                              width: 28,
+                              height: 28,
+                              decoration: BoxDecoration(
+                                shape: BoxShape.circle,
+                                color: selected
+                                    ? AppTokens.primary
+                                    : Colors.black45,
                               ),
+                              alignment: Alignment.center,
+                              child: selected
+                                  ? const Icon(
+                                      Icons.check,
+                                      color: Colors.white,
+                                      size: 18,
+                                    )
+                                  : null,
                             ),
                           ),
                         ),
-                    ],
+                        if (badge.isNotEmpty)
+                          Positioned(
+                            left: 6,
+                            bottom: 6,
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 6,
+                                vertical: 2,
+                              ),
+                              decoration: BoxDecoration(
+                                color: Colors.black54,
+                                borderRadius: BorderRadius.circular(6),
+                              ),
+                              child: Text(
+                                badge,
+                                style: const TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 11,
+                                ),
+                              ),
+                            ),
+                          ),
+                        if (selected)
+                          Positioned(
+                            right: 6,
+                            bottom: 6,
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 6,
+                                vertical: 2,
+                              ),
+                              decoration: BoxDecoration(
+                                color: AppTokens.primary,
+                                borderRadius: BorderRadius.circular(6),
+                              ),
+                              child: Text(
+                                '${selectedIndex + 1}/${_order.length}',
+                                style: const TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 11,
+                                ),
+                              ),
+                            ),
+                          ),
+                      ],
+                    ),
                   ),
-                ),
-              );
+                );
               },
             ),
           ),
