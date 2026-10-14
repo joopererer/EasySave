@@ -2,6 +2,7 @@
 
 import 'package:flutter/material.dart';
 
+import '../services/download_manager.dart';
 import 'history_page.dart';
 import 'mine_page.dart';
 import 'parse_page.dart';
@@ -13,9 +14,29 @@ class MainShell extends StatefulWidget {
   State<MainShell> createState() => _MainShellState();
 }
 
-class _MainShellState extends State<MainShell> {
+class _MainShellState extends State<MainShell> with WidgetsBindingObserver {
   int _index = 0;
   final _historyKey = GlobalKey<HistoryPageState>();
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    // Pick up downloads that completed while the app was suspended.
+    if (state == AppLifecycleState.resumed) {
+      DownloadManager.instance.reconcile();
+    }
+  }
 
   void _select(int i) {
     setState(() => _index = i);

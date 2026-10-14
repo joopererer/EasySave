@@ -1,13 +1,10 @@
 // Preview page: 2-column grid, collapsible caption, ordered selection,
 // fullscreen viewing, and saving through the download panel.
 
-import 'dart:convert';
-
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../core/models.dart';
-import '../services/history_db.dart';
 import '../theme/app_theme.dart';
 import '../widgets/download_sheet.dart';
 import '../widgets/shared.dart';
@@ -83,33 +80,9 @@ class _PreviewPageState extends State<PreviewPage> {
 
   Future<void> _save() async {
     if (_order.isEmpty) return;
-    final post = widget.post;
-    await DownloadSheet.show(context, post, List.of(_order));
-    final db = await HistoryDb.instance();
-    // Never store a video file URL as the thumbnail: image widgets cannot
-    // render it (mp4 bytes into the image decoder freezes the list).
-    String? thumb;
-    for (final item in post.items) {
-      if (item.type == 'video' && item.posterUrl != null) {
-        thumb = item.posterUrl;
-        break;
-      }
-      if (item.type == 'image' && thumb == null) thumb = item.url;
-    }
-    await db.upsert(
-      HistoryRecord(
-        platform: post.platform,
-        postId: post.id,
-        authorName: post.author.name,
-        title: post.title,
-        caption: post.caption,
-        thumbnailUrl: thumb,
-        postUrl: post.url,
-        fileCount: _order.length,
-        createdAt: DateTime.now(),
-        itemsJson: jsonEncode([for (final item in post.items) item.toJson()]),
-      ),
-    );
+    // History is written by DownloadManager when the batch terminates
+    // (including batches that finish while the app was killed).
+    await DownloadSheet.show(context, widget.post, List.of(_order));
   }
 
   @override
