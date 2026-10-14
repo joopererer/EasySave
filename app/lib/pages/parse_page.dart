@@ -363,16 +363,7 @@ class _ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
                 padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
                 child: Card(
                   child: ListTile(
-                    onTap: () {
-                      final post = PreviewPage.postFromRecord(record);
-                      Navigator.of(context)
-                          .push(
-                            MaterialPageRoute<void>(
-                              builder: (_) => PreviewPage(post: post),
-                            ),
-                          )
-                          .then((_) => _reloadRecent());
-                    },
+                    onTap: () => _openRecord(record),
                     leading: _thumbOf(context, record),
                     title: Text(
                       (record.title?.isNotEmpty == true)
@@ -391,6 +382,22 @@ class _ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
         ],
       ),
     );
+  }
+
+  bool _openingRecord = false;
+
+  void _openRecord(HistoryRecord record) {
+    // Guard against tap storms: a second push while the transition is
+    // still running stacks identical routes and makes "back" look dead.
+    if (_openingRecord) return;
+    _openingRecord = true;
+    final post = PreviewPage.postFromRecord(record);
+    Navigator.of(context)
+        .push(MaterialPageRoute<void>(builder: (_) => PreviewPage(post: post)))
+        .then((_) {
+          _openingRecord = false;
+          _reloadRecent();
+        });
   }
 
   /// 48px leading thumbnail; null-safe — a video URL is never rendered.

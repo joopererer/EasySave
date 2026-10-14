@@ -67,6 +67,20 @@ class _PreviewPageState extends State<PreviewPage> {
   late final List<int> _order = [
     for (var i = 0; i < widget.post.items.length; i++) i,
   ];
+  // Thumbnails only start fetching after the push transition settles:
+  // firing N concurrent original-size downloads inside the animation
+  // starves the raster thread and freezes the transition mid-way.
+  bool _imagesReady = false;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      Future.delayed(const Duration(milliseconds: 350), () {
+        if (mounted) setState(() => _imagesReady = true);
+      });
+    });
+  }
 
   bool get _selected => _order.isNotEmpty;
 
@@ -222,36 +236,39 @@ class _PreviewPageState extends State<PreviewPage> {
                 final selected = selectedIndex >= 0;
                 return GestureDetector(
                   onTap: () => _viewFullscreen(index),
-                  child: Stack(
-                    fit: StackFit.expand,
-                    children: [
-                      Container(
-                        decoration: BoxDecoration(
-                          border: Border.all(
-                            color: selected
-                                ? AppTokens.primary
-                                : Colors.transparent,
-                            width: 3,
+                  child: RepaintBoundary(
+                    child: Stack(
+                      fit: StackFit.expand,
+                      children: [
+                        Container(
+                          decoration: BoxDecoration(
+                            border: Border.all(
+                              color: selected
+                                  ? AppTokens.primary
+                                  : Colors.transparent,
+                              width: 3,
+                            ),
+                            borderRadius: const BorderRadius.all(
+                              Radius.circular(AppTokens.thumbRadius),
+                            ),
                           ),
-                          borderRadius: const BorderRadius.all(
-                            Radius.circular(AppTokens.thumbRadius),
+                          // The image is clipped strictly inside the border
+                          // ring (radius - border width) so square image
+                          // corners can never punch through the rounded frame.
+                          child: ClipRRect(
+                            borderRadius: const BorderRadius.all(
+                              Radius.circular(AppTokens.thumbRadius - 3),
+                            ),
+                            child: _imagesReady
+                                ? CoverImage(
+                                    key: ValueKey(item.url),
+                                    item: item,
+                                    referer: refererFor(post.platform),
+                                    cacheWidth: 400,
+                                  )
+                                : const ColoredBox(color: Colors.black12),
                           ),
                         ),
-                        // The image is clipped strictly inside the border
-                        // ring (radius - border width) so square image
-                        // corners can never punch through the rounded frame.
-                        child: ClipRRect(
-                          borderRadius: const BorderRadius.all(
-                            Radius.circular(AppTokens.thumbRadius - 3),
-                          ),
-                          child: CoverImage(
-                            key: ValueKey(item.url),
-                            item: item,
-                            referer: refererFor(post.platform),
-                            cacheWidth: 400,
-                          ),
-                        ),
-                      ),
                       if (item.type == 'video' || item.type == 'live')
                         const Center(
                           child: DecoratedBox(
@@ -340,7 +357,8 @@ class _PreviewPageState extends State<PreviewPage> {
                         ),
                     ],
                   ),
-                );
+                ),
+              );
               },
             ),
           ),

@@ -23,6 +23,7 @@ class HistoryPageState extends State<HistoryPage> {
   List<HistoryRecord> _records = [];
   bool _loading = true;
   String? _dbError;
+  bool _opening = false;
 
   @override
   void initState() {
@@ -124,10 +125,17 @@ class HistoryPageState extends State<HistoryPage> {
   }
 
   void _open(HistoryRecord record) {
+    // Guard against tap storms: a second push while the transition is
+    // still running stacks identical routes and makes "back" look dead.
+    if (_opening) return;
+    _opening = true;
     final post = PreviewPage.postFromRecord(record);
     Navigator.of(context)
         .push(MaterialPageRoute<void>(builder: (_) => PreviewPage(post: post)))
-        .then((_) => _reload());
+        .then((_) {
+          _opening = false;
+          _reload();
+        });
   }
 
   @override
