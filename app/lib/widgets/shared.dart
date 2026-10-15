@@ -1,5 +1,9 @@
 // Shared widgets: platform tag, error card with actions.
 
+import 'dart:async';
+import 'dart:ui' as ui show ImmutableBuffer, Codec;
+
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
@@ -57,9 +61,10 @@ class GradientButton extends StatelessWidget {
 ///
 /// XHS image hosts intermittently blackhole a request (no data, no error)
 /// or require a Referer, and Image.network has no timeout — a bare one
-/// hangs the cell forever. So bytes are fetched with `http` (8s per URL)
-/// and rendered from memory; every cell resolves to pixels or a broken
-/// icon in bounded time.
+/// hangs the cell forever. This provider walks the URL list with `http`
+/// (8s per URL) and decodes at [cacheWidth], so every cell resolves to
+/// pixels or a broken icon in bounded time. Bytes are transient (freed
+/// after decode like a stock NetworkImage); nothing full-size is pinned.
 class CoverImage extends StatefulWidget {
   const CoverImage({
     super.key,
@@ -83,88 +88,102 @@ class CoverImage extends StatefulWidget {
 }
 
 class _CoverImageState extends State<CoverImage> {
+  @override
+  Widget build(BuildContext context) {
+    return Image(
+      image: CdnImage(
+        urlsFor(widget.item),
+        referer: widget.referer,
+        cacheWidth: widget.cacheWidth,
+      ),
+      fit: widget.fit,
+      width: widget.width,
+      height: widget.height,
+      gaplessPlayback: true,
+      errorBuilder: (context, _, _) => const ColoredBox(
+        color: Colors.black12,
+        child: Icon(Icons.broken_image),
+      ),
+      loadingBuilder: (context, child, progress) =>
+          progress == null ? child : const ColoredBox(color: Colors.black12),
+    );
+  }
+}
+
+/// Display URLs for an item: video items resolve to their still-image
+/// cover (the item url itself may be an mp4), CDN originals first with
+/// the rewritten primary kept last as a fallback.
+List<String> urlsFor(MediaItem item) {
+  final cover = item.type == 'video' ? item.posterUrl : null;
+  return [...item.fallbacks, if (cover != null) cover, item.url];
+}
+
+/// Network image provider with per-URL timeout and Referer. Mirrors the
+/// stock NetworkImage memory profile (full bytes only live during the
+/// fetch; the codec decodes at [cacheWidth]).
+@immutable
+class CdnImage extends ImageProvider<CdnImage> {
+  const CdnImage(this.urls, {required this.referer, this.cacheWidth});
+
+  final List<String> urls;
+  final String referer;
+  final int? cacheWidth;
+
+  static final _client = http.Client();
   static const _timeout = Duration(seconds: 8);
-  static http.Client? _client;
 
-  Uint8List? _bytes;
-  bool _failed = false;
-  int _generation = 0;
-
-  List<String> get _urls {
-    // Video items show their still-image cover; the item url itself may
-    // be an mp4 that cannot render as an image.
-    final cover = widget.item.type == 'video' ? widget.item.posterUrl : null;
-    // Display order: CDN originals first. The rewritten ci.xiaohongshu.com
-    // primary is occasionally slow/unreachable from mobile networks (the
-    // 0/2/6 pattern); it stays in the rotation as a fallback.
-    return [
-      ...widget.item.fallbacks,
-      if (cover != null) cover,
-      widget.item.url,
-    ];
-  }
-
-  @override
-  void initState() {
-    super.initState();
-    _load();
-  }
-
-  @override
-  void didUpdateWidget(CoverImage oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    if (oldWidget.item.url != widget.item.url) _load();
-  }
-
-  Future<void> _load() async {
-    final generation = ++_generation;
-    setState(() {
-      _bytes = null;
-      _failed = false;
-    });
-    _client ??= http.Client();
-    for (final url in _urls) {
+  Future<Uint8List> _fetchBytes() async {
+    for (final url in urls) {
       try {
-        final response = await _client!
-            .get(Uri.parse(url), headers: {'Referer': widget.referer})
+        final response = await _client
+            .get(Uri.parse(url), headers: {'Referer': referer})
             .timeout(_timeout);
-        if (response.statusCode != 200 || response.bodyBytes.isEmpty) {
-          continue;
+        if (response.statusCode == 200 && response.bodyBytes.isNotEmpty) {
+          return response.bodyBytes;
         }
-        if (!mounted || generation != _generation) return;
-        setState(() => _bytes = response.bodyBytes);
-        return;
       } catch (_) {
         // Timeout, DNS, TLS, 403 — try the next URL.
       }
     }
-    if (!mounted || generation != _generation) return;
-    setState(() => _failed = true);
+    throw StateError('all image urls failed: ${urls.firstOrNull}');
   }
 
   @override
-  Widget build(BuildContext context) {
-    final bytes = _bytes;
-    if (bytes != null) {
-      return Image.memory(
-        bytes,
-        fit: widget.fit,
-        width: widget.width,
-        height: widget.height,
-        gaplessPlayback: true,
-        cacheWidth: widget.cacheWidth,
-        errorBuilder: (context, _, _) =>
-            const ColoredBox(color: Colors.black12),
-      );
-    }
-    if (_failed) {
-      return const ColoredBox(
-        color: Colors.black12,
-        child: Icon(Icons.broken_image),
-      );
-    }
-    return const ColoredBox(color: Colors.black12);
+  Future<CdnImage> obtainKey(ImageConfiguration configuration) =>
+      SynchronousFuture<CdnImage>(this);
+
+  @override
+  ImageStreamCompleter loadImage(CdnImage key, ImageDecoderCallback decode) {
+    return MultiFrameImageStreamCompleter(
+      codec: _loadAsync(key, decode),
+      scale: 1.0,
+      debugLabel: urls.firstOrNull,
+    );
   }
+
+  Future<ui.Codec> _loadAsync(CdnImage key, ImageDecoderCallback decode) async {
+    assert(key == this);
+    final bytes = await _fetchBytes();
+    final buffer = await ui.ImmutableBuffer.fromUint8List(bytes);
+    // Bypass the injected decoder on purpose: the stock callback in this
+    // Flutter revision has no resize hook, and decoding multi-MB originals
+    // at full size is what froze large posts.
+    // ignore: deprecated_member_use
+    return PaintingBinding.instance.instantiateImageCodecFromBuffer(
+      buffer,
+      cacheWidth: cacheWidth,
+    );
+  }
+
+  @override
+  bool operator ==(Object other) =>
+      other is CdnImage &&
+      listEquals(other.urls, urls) &&
+      other.referer == referer &&
+      other.cacheWidth == cacheWidth;
+
+  @override
+  int get hashCode => Object.hash(Object.hashAll(urls), referer, cacheWidth);
 }
 
 class PlatformTag extends StatelessWidget {
