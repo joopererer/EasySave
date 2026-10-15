@@ -47,8 +47,8 @@ void main() {
       );
       expect(fallbacks, contains('https://ci.xiaohongshu.com/$ciToken'));
       expect(
-        result.data?.items.single.toJson().containsKey('fallbacks'),
-        isFalse,
+        result.data?.items.single.toJson()['fallbacks'],
+        equals(result.data?.items.single.fallbacks),
       );
     });
 

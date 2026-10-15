@@ -51,10 +51,13 @@ void main() {
         ]),
       );
       expect(
-        result.data?.items.single.toJson().containsKey('fallbacks'),
-        isFalse,
+        result.data?.items.single.toJson()['fallbacks'],
+        equals(result.data?.items.single.fallbacks),
       );
-      expect(result.data?.toJson(), isNot(contains('fallbacks')));
+      expect(
+        (result.data?.toJson()['items'] as List).single,
+        containsPair('fallbacks', result.data?.items.single.fallbacks),
+      );
     });
 
     test('resolves a lone infoList rendition to the original bucket', () {

@@ -36,6 +36,11 @@ void main() {
                 'https://sns-img-bd.xhscdn.com/notes_pre_post/1040g3k83264voo1al0dg5o2e1l408pfcf1dl208',
             'width': 1290,
             'height': 1608,
+            'fallbacks': [
+              'https://ci.xiaohongshu.com/notes_pre_post/1040g3k83264voo1al0dg5o2e1l408pfcf1dl208?imageView2/format/jpg',
+              'https://sns-webpic-qc.xhscdn.com/202610112129/eb1fb79a62c72f9dbe14dd2909e2d83c/notes_pre_post/1040g3k83264voo1al0dg5o2e1l408pfcf1dl208!nd_dft_wlteh_webp_3',
+              'https://ci.xiaohongshu.com/notes_pre_post/1040g3k83264voo1al0dg5o2e1l408pfcf1dl208',
+            ],
           },
         ]),
       );
@@ -85,6 +90,10 @@ void main() {
               'url': 'https://sns-img-bd.xhscdn.com/trace',
               'width': 10,
               'height': 20,
+              'fallbacks': [
+                'https://ci.xiaohongshu.com/trace?imageView2/format/jpg',
+                'https://ci.xiaohongshu.com/trace',
+              ],
             },
           ],
         }),

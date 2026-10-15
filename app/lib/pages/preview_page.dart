@@ -38,6 +38,9 @@ class PreviewPage extends StatefulWidget {
               width: map['width'] as num?,
               height: map['height'] as num?,
               duration: map['duration'] as num?,
+              fallbacks:
+                  (map['fallbacks'] as List?)?.whereType<String>().toList() ??
+                  const [],
             ),
           );
         }

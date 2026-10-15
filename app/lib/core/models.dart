@@ -64,6 +64,10 @@ class MediaItem {
     if (width != null) map['width'] = width;
     if (height != null) map['height'] = height;
     if (duration != null) map['duration'] = duration;
+    // Fallbacks must survive the history round-trip: posts reopened from
+    // history rebuild their items from this JSON, and without the backup
+    // URLs a single slow CDN host hangs every cell.
+    if (fallbacks.isNotEmpty) map['fallbacks'] = fallbacks;
     return map;
   }
 }
