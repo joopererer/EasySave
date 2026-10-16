@@ -17,19 +17,11 @@ mkdirSync(distDir, { recursive: true });
 const parserOutFile = resolve(distDir, 'parser.js');
 const manifestOutFile = resolve(distDir, 'manifest.json');
 
-// 1. Bundle parser.js for release
-await esbuild.build({
-  entryPoints: [resolve(__dirname, '..', 'src', '_parse_page.ts')],
-  bundle: true,
-  platform: 'browser',
-  format: 'iife',
-  globalName: 'EasySaveParser',
-  define: { __VERSION__: JSON.stringify(version) },
-  minify: true,
-  outfile: parserOutFile,
-});
+// 1. Copy committed parser.js for release (matches committed app/assets/parser/parser.js)
+const appParserFile = resolve(rootDir, 'app', 'assets', 'parser', 'parser.js');
+const parserBytes = readFileSync(appParserFile);
+writeFileSync(parserOutFile, parserBytes);
 
-const parserBytes = readFileSync(parserOutFile);
 const sha256Hex = crypto.createHash('sha256').update(parserBytes).digest('hex');
 
 // 2. Sign with Ed25519 if private key is provided in env
