@@ -1,0 +1,17 @@
+{
+  "xhs": {
+    "xhs_live": "https://www.xiaohongshu.com/explore/6a342fd20000000021017867",
+    "xhs_multi": "https://www.xiaohongshu.com/explore/6aca089a000000000a01efb4",
+    "xhs_note": "https://www.xiaohongshu.com/explore/652f22a50000000019028c6d",
+    "xhs_video": "https://www.xiaohongshu.com/explore/6aca33420000000012035198",
+    "xhs_catalog": "https://www.xiaohongshu.com/explore/654c78a9000000001900d4f4",
+    "xhs_recipe": "https://www.xiaohongshu.com/explore/650e5a4a000000001900a2d4",
+    "xhs_ads": "https://www.xiaohongshu.com/explore/648f0c6a0000000019004b3e",
+    "xhs_blocked": "https://www.xiaohongshu.com/explore/6a342fd20000000021017867"
+  },
+  "instagram": {
+    "ig_carousel": "https://www.instagram.com/p/Ddl1WWnGyCN/",
+    "ig_reel": "https://www.instagram.com/p/DeTOj5WRMIh/",
+    "blocked": "https://www.instagram.com/p/Ddl1WWnGyCN/"
+  }
+}

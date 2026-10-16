@@ -8,7 +8,8 @@
     "build": "wxt build",
     "typecheck": "tsc --noEmit",
     "pretest": "npm run typecheck",
-    "test": "vitest run"
+    "test": "vitest run",
+    "build:parser": "node scripts/build_parser.js"
   },
   "devDependencies": {
     "@types/chrome": "^0.3.5",
