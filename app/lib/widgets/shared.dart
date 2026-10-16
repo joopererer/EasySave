@@ -286,3 +286,60 @@ class ErrorCard extends StatelessWidget {
     }
   }
 }
+
+/// Animated loading shimmer placeholder for thumbnails and cards.
+class ShimmerBox extends StatefulWidget {
+  const ShimmerBox({
+    super.key,
+    this.width,
+    this.height,
+    this.borderRadius = const BorderRadius.all(Radius.circular(8)),
+  });
+
+  final double? width;
+  final double? height;
+  final BorderRadiusGeometry borderRadius;
+
+  @override
+  State<ShimmerBox> createState() => _ShimmerBoxState();
+}
+
+class _ShimmerBoxState extends State<ShimmerBox>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _controller = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 1400),
+  )..repeat();
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: _controller,
+      builder: (context, child) {
+        return Container(
+          width: widget.width,
+          height: widget.height,
+          decoration: BoxDecoration(
+            borderRadius: widget.borderRadius,
+            gradient: LinearGradient(
+              begin: Alignment(-1.5 + 3.0 * _controller.value, -0.3),
+              end: Alignment(-0.5 + 3.0 * _controller.value, 0.3),
+              colors: const [
+                Color(0xFFEBE4DC),
+                Color(0xFFF7F3ED),
+                Color(0xFFEBE4DC),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+}
+

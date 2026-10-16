@@ -78,6 +78,7 @@ class _GalleryBrowserPageState extends State<GalleryBrowserPage> {
   );
 
   double _dragOffset = 0.0;
+  bool _isZoomed = false;
 
   @override
   void dispose() {
@@ -137,12 +138,16 @@ class _GalleryBrowserPageState extends State<GalleryBrowserPage> {
       body: SafeArea(
         child: GestureDetector(
           onVerticalDragUpdate: (details) {
-            setState(() {
-              _dragOffset += details.delta.dy;
-            });
+            if (_isZoomed) return;
+            if (_dragOffset > 0 || details.delta.dy > 0) {
+              setState(() {
+                _dragOffset = (_dragOffset + details.delta.dy).clamp(0.0, 400.0);
+              });
+            }
           },
           onVerticalDragEnd: (details) {
-            if (_dragOffset.abs() > 100 || details.primaryVelocity! > 500) {
+            if (_isZoomed) return;
+            if (_dragOffset > 100 || (details.primaryVelocity ?? 0) > 500) {
               Navigator.of(context).pop();
             } else {
               setState(() {
@@ -157,10 +162,15 @@ class _GalleryBrowserPageState extends State<GalleryBrowserPage> {
                 // 1. Horizontal PageView
                 PageView.builder(
                   controller: _pageController,
-                  physics: const BouncingScrollPhysics(),
+                  physics: _isZoomed
+                      ? const NeverScrollableScrollPhysics()
+                      : const BouncingScrollPhysics(),
                   itemCount: widget.items.length,
                   onPageChanged: (idx) {
-                    setState(() => _currentIndex = idx);
+                    setState(() {
+                      _currentIndex = idx;
+                      _isZoomed = false;
+                    });
                     // Scroll thumbnail into view
                     if (_thumbController.hasClients) {
                       _thumbController.animateTo(
@@ -175,6 +185,11 @@ class _GalleryBrowserPageState extends State<GalleryBrowserPage> {
                     return _BrowserItemView(
                       item: item,
                       platform: widget.platform,
+                      onZoomChanged: (zoomed) {
+                        if (_isZoomed != zoomed) {
+                          setState(() => _isZoomed = zoomed);
+                        }
+                      },
                       onRedownload: widget.onRedownload != null
                           ? () => widget.onRedownload!(item.index)
                           : null,
@@ -462,11 +477,13 @@ class _BrowserItemView extends StatefulWidget {
   const _BrowserItemView({
     required this.item,
     required this.platform,
+    this.onZoomChanged,
     this.onRedownload,
   });
 
   final GalleryBrowserItem item;
   final String platform;
+  final ValueChanged<bool>? onZoomChanged;
   final Future<void> Function()? onRedownload;
 
   @override
@@ -478,15 +495,34 @@ class _BrowserItemViewState extends State<_BrowserItemView> {
   bool _isPlaying = false;
   bool _isLiveHolding = false;
   bool _redownloading = false;
+  bool _isNotFound = false;
   String? _error;
 
   @override
   void initState() {
     super.initState();
+    if (widget.item.status == FileStatus.notFound) {
+      _isNotFound = true;
+    } else if (widget.item.asset != null) {
+      _checkAssetExistence();
+    }
+
     if (widget.item.status == FileStatus.found) {
       if (widget.item.isGif || widget.item.type == 'video') {
         _initVideo();
       }
+    }
+  }
+
+  Future<void> _checkAssetExistence() async {
+    final a = widget.item.asset;
+    if (a != null) {
+      try {
+        final exists = await a.exists;
+        if (!exists && mounted) {
+          setState(() => _isNotFound = true);
+        }
+      } catch (_) {}
     }
   }
 
@@ -585,7 +621,7 @@ class _BrowserItemViewState extends State<_BrowserItemView> {
     final it = widget.item;
 
     // 1. Missing file: "已从相册删除" placeholder + [重新下载]
-    if (it.status == FileStatus.notFound) {
+    if (it.status == FileStatus.notFound || _isNotFound) {
       return Center(
         child: Column(
           mainAxisSize: MainAxisSize.min,
@@ -887,24 +923,115 @@ class _BrowserItemViewState extends State<_BrowserItemView> {
       );
     }
 
-    // 5. Standard Image: InteractiveViewer with double-tap zoom
-    return InteractiveViewer(
-      minScale: 1.0,
-      maxScale: 4.0,
-      child: Center(
-        child: it.asset != null
-            ? AssetEntityImage(
-                it.asset!,
-                isOriginal: true,
-                fit: BoxFit.contain,
-              )
-            : CoverImage(
-                item: MediaItem(type: it.type, url: it.url),
-                referer: refererFor(widget.platform),
-                fit: BoxFit.contain,
-                cacheWidth: 1080,
-              ),
+    // 5. Standard Image: Zoomable with double-tap zoom & pinch pan
+    return _ZoomableImageView(
+      item: it,
+      platform: widget.platform,
+      onZoomChanged: widget.onZoomChanged,
+    );
+  }
+}
+
+class _ZoomableImageView extends StatefulWidget {
+  const _ZoomableImageView({
+    required this.item,
+    required this.platform,
+    this.onZoomChanged,
+  });
+
+  final GalleryBrowserItem item;
+  final String platform;
+  final ValueChanged<bool>? onZoomChanged;
+
+  @override
+  State<_ZoomableImageView> createState() => _ZoomableImageViewState();
+}
+
+class _ZoomableImageViewState extends State<_ZoomableImageView>
+    with SingleTickerProviderStateMixin {
+  late final TransformationController _transformationController =
+      TransformationController();
+  TapDownDetails? _doubleTapDetails;
+  late final AnimationController _animController = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 250),
+  );
+
+  @override
+  void initState() {
+    super.initState();
+    _transformationController.addListener(_handleTransform);
+  }
+
+  @override
+  void dispose() {
+    _transformationController.removeListener(_handleTransform);
+    _transformationController.dispose();
+    _animController.dispose();
+    super.dispose();
+  }
+
+  void _handleTransform() {
+    final scale = _transformationController.value.getMaxScaleOnAxis();
+    widget.onZoomChanged?.call(scale > 1.05);
+  }
+
+  void _onDoubleTap() {
+    final currentScale = _transformationController.value.getMaxScaleOnAxis();
+    final Matrix4 target;
+    if (currentScale < 1.5) {
+      final pos = _doubleTapDetails?.localPosition ?? Offset.zero;
+      const targetScale = 2.5;
+      final x = -pos.dx * (targetScale - 1);
+      final y = -pos.dy * (targetScale - 1);
+      target = Matrix4.identity()
+        ..translateByDouble(x, y, 0.0, 1.0)
+        ..scaleByDouble(targetScale, targetScale, 1.0, 1.0);
+    } else {
+      target = Matrix4.identity();
+    }
+
+    final animation = Matrix4Tween(
+      begin: _transformationController.value,
+      end: target,
+    ).animate(CurvedAnimation(parent: _animController, curve: Curves.easeOutCubic));
+
+    void listener() {
+      _transformationController.value = animation.value;
+    }
+
+    animation.addListener(listener);
+    _animController.forward(from: 0).then((_) {
+      animation.removeListener(listener);
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onDoubleTapDown: (details) => _doubleTapDetails = details,
+      onDoubleTap: _onDoubleTap,
+      child: InteractiveViewer(
+        transformationController: _transformationController,
+        minScale: 1.0,
+        maxScale: 5.0,
+        clipBehavior: Clip.none,
+        child: Center(
+          child: widget.item.asset != null
+              ? AssetEntityImage(
+                  widget.item.asset!,
+                  isOriginal: true,
+                  fit: BoxFit.contain,
+                )
+              : CoverImage(
+                  item: MediaItem(type: widget.item.type, url: widget.item.url),
+                  referer: refererFor(widget.platform),
+                  fit: BoxFit.contain,
+                  cacheWidth: 1080,
+                ),
+        ),
       ),
     );
   }
 }
+

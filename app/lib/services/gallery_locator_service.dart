@@ -5,6 +5,7 @@
 import 'package:flutter/foundation.dart';
 import 'package:photo_manager/photo_manager.dart';
 
+import '../core/models.dart';
 import 'history_db.dart';
 import 'settings.dart';
 
@@ -302,4 +303,56 @@ class GalleryLocatorService extends ChangeNotifier {
       await syncRecord(record);
     }
   }
+
+  /// Return the set of item indices for [post] that are already saved locally.
+  Future<Set<int>> findDownloadedIndices(ParsedPost post) async {
+    final result = <int>{};
+    try {
+      if (hasAccess && !_scanned) {
+        await scanAlbum();
+      }
+      final db = await HistoryDb.instance();
+      final record = await db.getByPostId(post.id);
+      if (record != null && record.files.isNotEmpty) {
+        for (final file in record.files) {
+          final asset = locateAsset(file, post.id);
+          if (asset != null) {
+            result.add(file.itemIndex);
+          }
+        }
+      }
+
+      // Check album assets for matches by postId and sequence
+      final cleanPostId = post.id.trim().toLowerCase();
+      if (cleanPostId.isNotEmpty) {
+        final matches = _allAssets.where((a) {
+          final t = (a.title ?? '').toLowerCase();
+          return t.contains(cleanPostId);
+        }).toList();
+
+        if (matches.isNotEmpty) {
+          for (var i = 0; i < post.items.length; i++) {
+            if (result.contains(i)) continue;
+            final it = post.items[i];
+            final isImage = it.type != 'video';
+            final seq = i + 1;
+            final matched = matches.any((a) {
+              final t = (a.title ?? '').toLowerCase();
+              if (isImage && a.type != AssetType.image) return false;
+              if (!isImage && a.type != AssetType.video) return false;
+              if (post.items.length == 1) return true;
+              return t.contains('_$seq.') || t.contains('-$seq.') || t.contains(' $seq.');
+            });
+            if (matched) {
+              result.add(i);
+            }
+          }
+        }
+      }
+    } catch (e) {
+      debugPrint('findDownloadedIndices error: $e');
+    }
+    return result;
+  }
 }
+

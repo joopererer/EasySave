@@ -600,8 +600,14 @@ class _ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
     final post = PreviewPage.postFromRecord(record);
     final locator = GalleryLocatorService.instance;
 
+    final downloadedIndices = record.files.map((f) => f.itemIndex).toSet();
+    final targetIndices = downloadedIndices.isNotEmpty
+        ? (downloadedIndices.toList()..sort())
+        : [for (var i = 0; i < post.items.length; i++) i];
+
     final items = <GalleryBrowserItem>[];
-    for (var i = 0; i < post.items.length; i++) {
+    for (final i in targetIndices) {
+      if (i < 0 || i >= post.items.length) continue;
       final postItem = post.items[i];
       HistoryFile? matchedFile;
       for (final f in record.files) {
@@ -654,6 +660,12 @@ class _ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
   /// 48px leading thumbnail; reads local album asset without CDN requests.
   Widget? _thumbOf(BuildContext context, HistoryRecord record) {
     final locator = GalleryLocatorService.instance;
+
+    // Show shimmering loading box while scanning or before scan completes
+    if (locator.isScanning || !locator.scanned) {
+      return const ShimmerBox(width: 48, height: 48);
+    }
+
     AssetEntity? asset;
     for (final f in record.files) {
       asset = locator.getAssetById(f.mediaId) ??

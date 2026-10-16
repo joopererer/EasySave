@@ -7,6 +7,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../core/models.dart';
+import '../services/gallery_locator_service.dart';
 import '../services/history_db.dart';
 import '../services/saver.dart';
 import '../theme/app_theme.dart';
@@ -38,6 +39,7 @@ class PreviewPage extends StatefulWidget {
               width: map['width'] as num?,
               height: map['height'] as num?,
               duration: map['duration'] as num?,
+              isGif: map['isGif'] as bool?,
               fallbacks:
                   (map['fallbacks'] as List?)?.whereType<String>().toList() ??
                   const [],
@@ -70,6 +72,7 @@ class _PreviewPageState extends State<PreviewPage> {
   late final List<int> _order = [
     for (var i = 0; i < widget.post.items.length; i++) i,
   ];
+  Set<int> _downloaded = {};
   // Thumbnails only start fetching after the push transition settles:
   // firing N concurrent original-size downloads inside the animation
   // starves the raster thread and freezes the transition mid-way.
@@ -78,10 +81,22 @@ class _PreviewPageState extends State<PreviewPage> {
   @override
   void initState() {
     super.initState();
+    _checkDownloaded();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       Future.delayed(const Duration(milliseconds: 350), () {
         if (mounted) setState(() => _imagesReady = true);
       });
+    });
+  }
+
+  Future<void> _checkDownloaded() async {
+    final downloaded =
+        await GalleryLocatorService.instance.findDownloadedIndices(widget.post);
+    if (!mounted) return;
+    setState(() {
+      _downloaded = downloaded;
+      // Default selection: deselect locally existing images to prevent duplicate downloads
+      _order.removeWhere((i) => _downloaded.contains(i));
     });
   }
 
@@ -294,6 +309,44 @@ class _PreviewPageState extends State<PreviewPage> {
                             ),
                           ),
                         ),
+                        if (_downloaded.contains(index))
+                          Positioned(
+                            top: 6,
+                            left: 6,
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 6,
+                                vertical: 2,
+                              ),
+                              decoration: BoxDecoration(
+                                color: Colors.black.withValues(alpha: 0.65),
+                                borderRadius: BorderRadius.circular(6),
+                                border: Border.all(
+                                  color: Colors.greenAccent.withValues(alpha: 0.7),
+                                  width: 1,
+                                ),
+                              ),
+                              child: const Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Icon(
+                                    Icons.check_circle,
+                                    size: 11,
+                                    color: Colors.greenAccent,
+                                  ),
+                                  SizedBox(width: 3),
+                                  Text(
+                                    '本地已有',
+                                    style: TextStyle(
+                                      color: Colors.white,
+                                      fontSize: 10,
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
                         if (badge.isNotEmpty)
                           Positioned(
                             left: 6,

@@ -24,7 +24,7 @@ class HistoryPage extends StatefulWidget {
   State<HistoryPage> createState() => HistoryPageState();
 }
 
-class HistoryPageState extends State<HistoryPage> {
+class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
   String _filter = 'all';
   List<HistoryRecord> _records = [];
   bool _loading = true;
@@ -34,14 +34,35 @@ class HistoryPageState extends State<HistoryPage> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     GalleryLocatorService.instance.addListener(_onLocatorChanged);
     _initPermissionsAndLoad();
   }
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     GalleryLocatorService.instance.removeListener(_onLocatorChanged);
     super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _checkPermissionAndRefresh();
+    }
+  }
+
+  Future<void> _checkPermissionAndRefresh() async {
+    final locator = GalleryLocatorService.instance;
+    final oldPerm = locator.permission;
+    final newPerm = await locator.checkPermission();
+    if (newPerm.hasAccess) {
+      await locator.scanAlbum(force: true);
+      await _reload();
+    } else if (newPerm != oldPerm) {
+      if (mounted) setState(() {});
+    }
   }
 
   void _onLocatorChanged() {
@@ -209,8 +230,14 @@ class HistoryPageState extends State<HistoryPage> {
     final post = PreviewPage.postFromRecord(record);
     final locator = GalleryLocatorService.instance;
 
+    final downloadedIndices = record.files.map((f) => f.itemIndex).toSet();
+    final targetIndices = downloadedIndices.isNotEmpty
+        ? (downloadedIndices.toList()..sort())
+        : [for (var i = 0; i < post.items.length; i++) i];
+
     final items = <GalleryBrowserItem>[];
-    for (var i = 0; i < post.items.length; i++) {
+    for (final i in targetIndices) {
+      if (i < 0 || i >= post.items.length) continue;
       final postItem = post.items[i];
       HistoryFile? matchedFile;
       for (final f in record.files) {
@@ -394,77 +421,92 @@ class HistoryPageState extends State<HistoryPage> {
     for (final record in visible) {
       groups.putIfAbsent(_groupLabel(record.createdAt), () => []).add(record);
     }
-    return ListView(
-      padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
-      children: [
-        for (final entry in groups.entries) ...[
-          Padding(
-            padding: const EdgeInsets.symmetric(vertical: 8),
-            child: Text(
-              entry.key,
-              style: const TextStyle(fontWeight: FontWeight.w600),
-            ),
-          ),
-          for (final record in entry.value)
-            Dismissible(
-              key: ValueKey('history-${record.id}'),
-              direction: DismissDirection.endToStart,
-              background: Container(
-                alignment: Alignment.centerRight,
-                padding: const EdgeInsets.only(right: 16),
-                child: const Icon(Icons.delete_outline),
+    return RefreshIndicator(
+      onRefresh: () async {
+        final locator = GalleryLocatorService.instance;
+        if (locator.hasAccess) {
+          await locator.scanAlbum(force: true);
+        }
+        await _reload();
+      },
+      child: ListView(
+        padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+        children: [
+          for (final entry in groups.entries) ...[
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 8),
+              child: Text(
+                entry.key,
+                style: const TextStyle(fontWeight: FontWeight.w600),
               ),
-              confirmDismiss: (_) async {
-                await _delete(record);
-                return false;
-              },
-              child: Card(
-                child: ListTile(
-                  onTap: () => _open(record),
-                  leading: _thumbOf(record),
-                  title: Text(
-                    (record.title?.isNotEmpty == true) ? record.title! : '无标题',
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                  subtitle: Row(
-                    children: [
-                      PlatformTag(platform: record.platform),
-                      const SizedBox(width: 6),
-                      Flexible(
-                        child: Text(
-                          '${record.authorName ?? ''} · ${record.fileCount} 个文件',
-                          overflow: TextOverflow.ellipsis,
+            ),
+            for (final record in entry.value)
+              Dismissible(
+                key: ValueKey('history-${record.id}'),
+                direction: DismissDirection.endToStart,
+                background: Container(
+                  alignment: Alignment.centerRight,
+                  padding: const EdgeInsets.only(right: 16),
+                  child: const Icon(Icons.delete_outline),
+                ),
+                confirmDismiss: (_) async {
+                  await _delete(record);
+                  return false;
+                },
+                child: Card(
+                  child: ListTile(
+                    onTap: () => _open(record),
+                    leading: _thumbOf(record),
+                    title: Text(
+                      (record.title?.isNotEmpty == true) ? record.title! : '无标题',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    subtitle: Row(
+                      children: [
+                        PlatformTag(platform: record.platform),
+                        const SizedBox(width: 6),
+                        Flexible(
+                          child: Text(
+                            '${record.authorName ?? ''} · ${record.fileCount} 个文件',
+                            overflow: TextOverflow.ellipsis,
+                          ),
                         ),
-                      ),
-                    ],
-                  ),
-                  trailing: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      IconButton(
-                        icon: const Icon(Icons.refresh, size: 20),
-                        tooltip: '重新解析',
-                        onPressed: () => _reparse(record),
-                      ),
-                      IconButton(
-                        icon: const Icon(Icons.open_in_new, size: 20),
-                        tooltip: '打开原帖',
-                        onPressed: () => _openOriginal(record.postUrl),
-                      ),
-                    ],
+                      ],
+                    ),
+                    trailing: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        IconButton(
+                          icon: const Icon(Icons.refresh, size: 20),
+                          tooltip: '重新解析',
+                          onPressed: () => _reparse(record),
+                        ),
+                        IconButton(
+                          icon: const Icon(Icons.open_in_new, size: 20),
+                          tooltip: '打开原帖',
+                          onPressed: () => _openOriginal(record.postUrl),
+                        ),
+                      ],
+                    ),
                   ),
                 ),
               ),
-            ),
+          ],
         ],
-      ],
+      ),
     );
   }
 
   /// 48px leading thumbnail reading local album photo_manager asset without CDN requests.
   Widget _thumbOf(HistoryRecord record) {
     final locator = GalleryLocatorService.instance;
+
+    // Show shimmering loading box while scanning or before scan completes
+    if (locator.isScanning || !locator.scanned) {
+      return const ShimmerBox(width: 48, height: 48);
+    }
+
     AssetEntity? asset;
     for (final f in record.files) {
       asset = locator.getAssetById(f.mediaId) ??
@@ -488,7 +530,7 @@ class HistoryPageState extends State<HistoryPage> {
       );
     }
 
-    // Only show "已从相册删除" when fully authorized and all files are confirmed not found
+    // Only show "已从相册删除" when fully authorized, scan completed, and all files are confirmed not found
     final allNotFound = record.files.isNotEmpty &&
         record.files.every((f) => f.status == FileStatus.notFound);
 
@@ -508,11 +550,11 @@ class HistoryPageState extends State<HistoryPage> {
     return Container(
       width: 48,
       height: 48,
-      decoration: BoxDecoration(
+      decoration: const BoxDecoration(
         color: AppTokens.beigeBg,
-        borderRadius: const BorderRadius.all(Radius.circular(8)),
+        borderRadius: BorderRadius.all(Radius.circular(8)),
       ),
-      child: Icon(
+      child: const Icon(
         Icons.photo_outlined,
         size: 24,
         color: AppTokens.textSecondary,
