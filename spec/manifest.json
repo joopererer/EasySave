@@ -5,7 +5,7 @@
   "signature": "e27cc5a61b93cc88019c7b639692f9728a901262bc590655dd80f851d1cbc24fe48ae5bc9ae45ac3875a5c413af0955f7ecfd78463c9729fe6d444a24f09d501",
   "platforms": {
     "xhs": {
-      "enabled": true,
+      "enabled": false,
       "notice": "小红书解析服务维护中，请稍后再试"
     },
     "instagram": {
