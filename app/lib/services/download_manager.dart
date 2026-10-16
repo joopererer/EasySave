@@ -13,6 +13,7 @@ import 'package:gal/gal.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../core/models.dart';
+import 'gallery_locator_service.dart';
 import 'history_db.dart';
 import 'parse_service.dart';
 import 'saver.dart';
@@ -180,10 +181,9 @@ List<PlannedFile> planFiles(
     return '$kind $n';
   }
 
-  var seq = 0;
   for (final index in selected) {
     final item = post.items[index];
-    seq++;
+    final seq = index + 1;
     // Display order: CDN originals first (the rewritten ci primary is
     // occasionally slow/unreachable from mobile networks); ci stays last
     // as a fallback so nothing is lost when only it serves the bytes.
@@ -581,6 +581,10 @@ class DownloadManager extends ChangeNotifier {
           ),
         ),
       );
+      final locator = GalleryLocatorService.instance;
+      if (locator.hasAccess) {
+        unawaited(locator.scanAlbum(force: true));
+      }
     }
     await _persist(batch);
     notifyListeners();

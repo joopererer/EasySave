@@ -308,6 +308,46 @@ class HistoryDb {
   }
 
   Future<void> upsert(HistoryRecord record) async {
+    final existing = await getByPostUrl(record.postUrl) ??
+        await getByPostId(record.postId);
+    if (existing != null) {
+      final fileMap = <String, HistoryFile>{};
+      for (final f in existing.files) {
+        fileMap['${f.itemIndex}_${f.isImage}'] = f;
+      }
+      for (final f in record.files) {
+        fileMap['${f.itemIndex}_${f.isImage}'] = f;
+      }
+      final mergedFiles = fileMap.values.toList()
+        ..sort((a, b) {
+          final cmp = a.itemIndex.compareTo(b.itemIndex);
+          if (cmp != 0) return cmp;
+          return (a.isImage ? 0 : 1).compareTo(b.isImage ? 0 : 1);
+        });
+
+      final mergedRecord = HistoryRecord(
+        id: existing.id,
+        platform: record.platform,
+        postId: record.postId,
+        authorName: record.authorName ?? existing.authorName,
+        title: (record.title?.isNotEmpty == true) ? record.title : existing.title,
+        caption: (record.caption?.isNotEmpty == true) ? record.caption : existing.caption,
+        thumbnailUrl: record.thumbnailUrl ?? existing.thumbnailUrl,
+        postUrl: record.postUrl,
+        fileCount: mergedFiles.length,
+        createdAt: DateTime.now(),
+        itemsJson: record.itemsJson ?? existing.itemsJson,
+        files: mergedFiles,
+      );
+      await _db.update(
+        'history_records',
+        mergedRecord.toMap(),
+        where: 'id = ?',
+        whereArgs: [existing.id],
+      );
+      return;
+    }
+
     await _db.insert(
       'history_records',
       record.toMap(),

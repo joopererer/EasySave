@@ -152,6 +152,38 @@ void main() {
       expect(reloadedPost1!.files[0].status, equals(FileStatus.found));
       expect(reloadedPost1.files[0].mediaId, equals('asset_1001'));
       expect(reloadedPost1.files[1].status, equals(FileStatus.notFound));
+
+      // 4. Test upsert merges newly downloaded files with existing files
+      final newDownloadRecord = HistoryRecord(
+        platform: 'xhs',
+        postId: 'post123',
+        authorName: 'alice',
+        title: 'Test Post 1',
+        postUrl: 'https://xhs.com/post123',
+        fileCount: 1,
+        createdAt: DateTime.now(),
+        files: [
+          HistoryFile(
+            filename: 'post123_3.jpg',
+            savedAt: DateTime.now().millisecondsSinceEpoch,
+            status: FileStatus.unknown,
+            itemIndex: 2,
+            isImage: true,
+          ),
+        ],
+      );
+
+      await historyDb.upsert(newDownloadRecord);
+      final mergedPost1 = await historyDb.getByPostId('post123');
+      expect(mergedPost1, isNotNull);
+      // Retains previously downloaded files (0, 1) + newly downloaded file (2)
+      expect(mergedPost1!.files.length, equals(3));
+      expect(mergedPost1.fileCount, equals(3));
+      expect(mergedPost1.files.map((f) => f.itemIndex).toList(), equals([0, 1, 2]));
+      // The found status and mediaId on item 0 are preserved!
+      expect(mergedPost1.files[0].status, equals(FileStatus.found));
+      expect(mergedPost1.files[0].mediaId, equals('asset_1001'));
     });
   });
 }
+

@@ -57,7 +57,7 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
     final locator = GalleryLocatorService.instance;
     final oldPerm = locator.permission;
     final newPerm = await locator.checkPermission();
-    if (newPerm.hasAccess) {
+    if (!oldPerm.hasAccess && newPerm.hasAccess) {
       await locator.scanAlbum(force: true);
       await _reload();
     } else if (newPerm != oldPerm) {
@@ -502,11 +502,6 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
   Widget _thumbOf(HistoryRecord record) {
     final locator = GalleryLocatorService.instance;
 
-    // Show shimmering loading box while scanning or before scan completes
-    if (locator.isScanning || !locator.scanned) {
-      return const ShimmerBox(width: 48, height: 48);
-    }
-
     AssetEntity? asset;
     for (final f in record.files) {
       asset = locator.getAssetById(f.mediaId) ??
@@ -528,6 +523,11 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
           ),
         ),
       );
+    }
+
+    // Show shimmering loading box only while scanning and asset not yet located
+    if (locator.isScanning || !locator.scanned) {
+      return const ShimmerBox(width: 48, height: 48);
     }
 
     // Only show "已从相册删除" when fully authorized, scan completed, and all files are confirmed not found
