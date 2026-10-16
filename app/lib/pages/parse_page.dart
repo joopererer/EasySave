@@ -15,9 +15,11 @@ import '../services/history_db.dart';
 import '../services/links.dart';
 import '../services/parse_service.dart';
 import '../services/saver.dart';
+import '../services/seal.dart';
 import '../services/settings.dart';
 import '../theme/app_theme.dart';
 import '../widgets/shared.dart';
+import 'batch_page.dart';
 import 'login_page.dart';
 import 'preview_page.dart';
 
@@ -85,12 +87,160 @@ class _ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
     setState(() => _recent = records);
   }
 
+  /// Single entry for clipboard dialog, paste button and share intents:
+  /// YouTube links detour to Seal, multiple links open the batch queue,
+  /// exactly one supported link resolves directly.
+  Future<void> _handleLinks(String text) async {
+    final yt = extractYouTubeLink(text);
+    if (yt != null) {
+      await _showYouTubeSheet(yt);
+      return;
+    }
+    final links = extractLinks(text);
+    if (links.length > 1) {
+      final go = await showDialog<bool>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: Text('发现 ${links.length} 个链接'),
+          content: SizedBox(
+            width: double.maxFinite,
+            child: ListView.builder(
+              shrinkWrap: true,
+              itemCount: links.length,
+              itemBuilder: (context, i) => Padding(
+                padding: const EdgeInsets.symmetric(vertical: 2),
+                child: Text(
+                  links[i],
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(fontSize: 12),
+                ),
+              ),
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(false),
+              child: const Text('取消'),
+            ),
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(true),
+              child: const Text('逐个解析'),
+            ),
+          ],
+        ),
+      );
+      if (go == true && mounted) {
+        await Navigator.of(context).push(
+          MaterialPageRoute<void>(builder: (_) => BatchPage(links: links)),
+        );
+        _reloadRecent();
+      }
+      return;
+    }
+    if (links.length == 1) {
+      await _resolve(links.first);
+      return;
+    }
+    if (mounted) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('没有找到支持的链接')));
+    }
+  }
+
+  Future<void> _showYouTubeSheet(String url) async {
+    final installed = await isSealInstalled();
+    if (!mounted) return;
+    await showModalBottomSheet<void>(
+      context: context,
+      builder: (context) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(20, 16, 20, 20),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              const Text(
+                'YouTube 视频由 Seal 下载',
+                style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                url,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(fontSize: 12),
+              ),
+              const SizedBox(height: 12),
+              if (installed)
+                GradientButton(
+                  label: '去 Seal 下载',
+                  onPressed: () async {
+                    final messenger = ScaffoldMessenger.of(context);
+                    Navigator.of(context).pop();
+                    try {
+                      await sendToSeal(url);
+                    } catch (_) {
+                      messenger.showSnackBar(
+                        const SnackBar(content: Text('跳转失败，请重试')),
+                      );
+                    }
+                  },
+                )
+              else ...[
+                const Text(
+                  '手机上没有检测到 Seal，请先安装：\n'
+                  '· F-Droid 搜索 Seal\n'
+                  '· GitHub JunkFood02/Seal Releases 下载 APK',
+                  style: TextStyle(fontSize: 14),
+                ),
+                const SizedBox(height: 12),
+                Row(
+                  children: [
+                    Expanded(
+                      child: OutlinedButton(
+                        onPressed: () {
+                          Clipboard.setData(ClipboardData(text: url));
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(content: Text('链接已复制')),
+                          );
+                        },
+                        child: const Text('复制链接'),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: OutlinedButton(
+                        onPressed: () {
+                          Clipboard.setData(
+                            const ClipboardData(text: sealReleasesUrl),
+                          );
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(content: Text('下载地址已复制')),
+                          );
+                        },
+                        child: const Text('复制下载地址'),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   Future<void> _checkClipboard() async {
     final settings = await AppSettings.load();
     if (!settings.autoClipboard || !mounted) return;
     final data = await Clipboard.getData(Clipboard.kTextPlain);
-    final link = data?.text == null ? null : extractLink(data!.text!);
-    if (link == null || !mounted || link == _lastLink) return;
+    final text = data?.text;
+    if (text == null || !mounted) return;
+    final link = extractLink(text);
+    if (link == null || link == _lastLink) return;
     _lastLink = link;
     // Same URL as the input box or the latest history entry: already
     // parsed or one tap away, don't nag again.
@@ -113,7 +263,7 @@ class _ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
         ],
       ),
     );
-    if (go == true && mounted) _resolve(link);
+    if (go == true && mounted) _handleLinks(text);
   }
 
   Future<void> _initShareIntent() async {
@@ -131,14 +281,9 @@ class _ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
     if (_handlingShare || files.isEmpty) return;
     _handlingShare = true;
     try {
-      for (final file in files) {
-        final link = extractLink(file.path);
-        if (link != null) {
-          if (!mounted) return;
-          await _resolve(link);
-          return;
-        }
-      }
+      final text = files.map((f) => f.path).join('\n');
+      if (text.trim().isEmpty || !mounted) return;
+      await _handleLinks(text);
     } finally {
       _handlingShare = false;
     }
@@ -215,8 +360,7 @@ class _ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
       case ErrorAction.backHome:
         setState(() => _errorCode = null);
       case ErrorAction.retry:
-        final link = extractLink(_linkController.text.trim());
-        if (link != null) _resolve(link);
+        _handleLinks(_linkController.text.trim());
       case ErrorAction.repaste:
         _inputFocus.requestFocus();
     }
@@ -309,16 +453,8 @@ class _ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
                     else
                       GradientButton(
                         label: '解析',
-                        onPressed: () {
-                          final link = extractLink(_linkController.text.trim());
-                          if (link == null) {
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              const SnackBar(content: Text('没有找到支持的链接')),
-                            );
-                            return;
-                          }
-                          _resolve(link);
-                        },
+                        onPressed: () =>
+                            _handleLinks(_linkController.text.trim()),
                       ),
                   ],
                 ),

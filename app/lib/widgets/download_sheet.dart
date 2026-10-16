@@ -11,6 +11,7 @@ import '../core/models.dart';
 import '../services/download_manager.dart';
 import '../services/saver.dart';
 import '../services/settings.dart';
+import '../services/share_service.dart';
 import '../theme/app_theme.dart';
 import 'shared.dart';
 
@@ -51,6 +52,7 @@ class DownloadSheet extends StatefulWidget {
 class _DownloadSheetState extends State<DownloadSheet> {
   String? _captionPath;
   bool _captionSaved = false;
+  bool _sharing = false;
 
   DownloadBatch? get _batch =>
       DownloadManager.instance.batchById(widget.batchId);
@@ -182,11 +184,20 @@ class _DownloadSheetState extends State<DownloadSheet> {
                         ),
                       ),
                       const SizedBox(width: 8),
-                      const Expanded(
-                        // v1.2 share target.
+                      Expanded(
                         child: OutlinedButton(
-                          onPressed: null,
-                          child: Text('分享'),
+                          onPressed: _sharing || doneCount == 0
+                              ? null
+                              : () => _share(batch),
+                          child: _sharing
+                              ? const SizedBox(
+                                  width: 16,
+                                  height: 16,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                  ),
+                                )
+                              : const Text('分享'),
                         ),
                       ),
                       const SizedBox(width: 8),
@@ -266,6 +277,22 @@ class _DownloadSheetState extends State<DownloadSheet> {
         return '失败$attempt：${job.error ?? '未知错误'}';
       case JobState.canceled:
         return '已取消';
+    }
+  }
+
+  Future<void> _share(DownloadBatch batch) async {
+    if (_sharing) return;
+    setState(() => _sharing = true);
+    try {
+      await shareBatch(batch);
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('分享失败，请重试')));
+      }
+    } finally {
+      if (mounted) setState(() => _sharing = false);
     }
   }
 }

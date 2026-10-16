@@ -32,11 +32,11 @@
 
 ## v1.2 分享与批量
 
-- [ ] 分享：把下载结果通过 Android 分享发给其他 App，附带原帖链接、作者、文案，用于和 UniPost 衔接
+- [x] 分享：把下载结果通过 Android 分享发给其他 App，附带原帖链接、作者、文案，用于和 UniPost 衔接
   - 验收：下载面板的 [分享] 可用；目标 App 收到图片和文本，链接、作者、文案齐全
-- [ ] 批量解析：一次粘贴多个链接，逐个解析并生成下载任务
+- [x] 批量解析：一次粘贴多个链接，逐个解析并生成下载任务
   - 验收：粘贴包含 3 个帖子链接的文本，一次生成 3 个下载任务
-- [ ] YouTube 交给 Seal：识别到 YouTube 链接（youtube.com/watch、youtu.be、/shorts/）时不解析，提示"YouTube 视频由 Seal 下载"，通过 Android 分享 intent 把链接发给 Seal（包名 com.junkfood.seal）；没安装 Seal 时显示下载指引（F-Droid / GitHub Releases）
+- [x] YouTube 交给 Seal：识别到 YouTube 链接（youtube.com/watch、youtu.be、/shorts/）时不解析，提示"YouTube 视频由 Seal 下载"，通过 Android 分享 intent 把链接发给 Seal（包名 com.junkfood.seal）；没安装 Seal 时显示下载指引（F-Droid / GitHub Releases）
   - 验收：已装 Seal 时一键跳转并自动填好链接；没装时显示指引，不报错
 
 ## v1.3a 解析器统一

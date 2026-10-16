@@ -26,6 +26,7 @@ export interface XhsItem {
   type: XhsItemType;
   url: string;
   videoUrl?: string;
+  fallbacks?: string[];
   /** Still-image cover for a video item (XHS `imageList[0]`). */
   posterUrl?: string;
   width?: number;
@@ -661,7 +662,7 @@ export function buildNoteFromRecord(
     } else if (images.length === 1) {
       const img = imageUrlOf(images[0]);
       if (img) {
-        const item: XhsItem = { type: "image", url: img.url };
+        const item: XhsItem = { type: "image", url: img.url, fallbacks: img.fallbacks };
         const w = num(images[0]["width"]);
         const h = num(images[0]["height"]);
         if (w !== undefined) item.width = w;
@@ -693,7 +694,7 @@ export function buildNoteFromRecord(
         ? { url: entryKeyUrl, watermarked: false, width: 0, height: 0 }
         : bestVideo(ownCandidates);
       if (own && img) {
-        const item: XhsItem = { type: "live", url: img.url, videoUrl: own.url };
+        const item: XhsItem = { type: "live", url: img.url, videoUrl: own.url, fallbacks: img.fallbacks };
         const w = num(entry["width"]);
         const h = num(entry["height"]);
         if (w !== undefined) item.width = w;
@@ -706,7 +707,7 @@ export function buildNoteFromRecord(
         return;
       }
       if (img) {
-        const item: XhsItem = { type: "image", url: img.url };
+        const item: XhsItem = { type: "image", url: img.url, fallbacks: img.fallbacks };
         const w = num(entry["width"]);
         const h = num(entry["height"]);
         if (w !== undefined) item.width = w;

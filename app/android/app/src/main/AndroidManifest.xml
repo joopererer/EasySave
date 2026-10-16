@@ -59,5 +59,7 @@
             <action android:name="android.intent.action.PROCESS_TEXT"/>
             <data android:mimeType="text/plain"/>
         </intent>
+        <!-- v1.2: PackageManager visibility for Seal detection on Android 11+. -->
+        <package android:name="com.junkfood.seal"/>
     </queries>
 </manifest>
