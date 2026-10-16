@@ -1,0 +1,177 @@
+{
+  "__typename": "Tweet",
+  "favorite_count": 523,
+  "lang": "zh",
+  "possibly_sensitive": false,
+  "created_at": "2026-10-16T02:10:02.000Z",
+  "display_text_range": [
+    0,
+    87
+  ],
+  "entities": {
+    "media": [
+      {
+        "display_url": "pic.x.com/kTgnBFZgSy",
+        "expanded_url": "https://x.com/Lucy_love_AI/status/2110916144072913327/photo/1",
+        "indices": [
+          88,
+          111
+        ],
+        "url": "https://t.co/kTgnBFZgSy"
+      }
+    ],
+    "urls": [
+      {
+        "display_url": "github.com/yxxbc/downvid",
+        "expanded_url": "https://github.com/yxxbc/downvid",
+        "indices": [
+          64,
+          87
+        ],
+        "url": "https://t.co/MxPttJdU6N"
+      }
+    ]
+  },
+  "id_str": "2110916144072913327",
+  "text": "发现一个下载神器。\n\n抖音、小红书、B 站、YouTube 等 1000 多个网站的视频，用它一个软件全搞定。\n\nGitHub：https://t.co/MxPttJdU6N https://t.co/kTgnBFZgSy",
+  "user": {
+    "id_str": "1744988460103180288",
+    "name": "露西的百宝箱",
+    "screen_name": "Lucy_love_AI",
+    "is_blue_verified": true,
+    "profile_image_shape": "Circle",
+    "verified": false,
+    "profile_image_url_https": "https://pbs.twimg.com/profile_images/1829469704173539329/wP9_sYa5_normal.jpg"
+  },
+  "edit_control": {
+    "edit_tweet_ids": [
+      "2110916144072913327"
+    ],
+    "editable_until_msecs": "1792120202000",
+    "edits_remaining": "5",
+    "is_edit_eligible": true
+  },
+  "mediaDetails": [
+    {
+      "display_url": "pic.x.com/kTgnBFZgSy",
+      "expanded_url": "https://x.com/Lucy_love_AI/status/2110916144072913327/photo/1",
+      "ext_media_availability": {
+        "status": "Available"
+      },
+      "indices": [
+        88,
+        111
+      ],
+      "media_url_https": "https://pbs.twimg.com/media/HUt7CpBbIAABV90.jpg",
+      "original_info": {
+        "focus_rects": [
+          {
+            "h": 562,
+            "w": 1003,
+            "x": 0,
+            "y": 0
+          },
+          {
+            "h": 971,
+            "w": 971,
+            "x": 0,
+            "y": 0
+          },
+          {
+            "h": 971,
+            "w": 852,
+            "x": 50,
+            "y": 0
+          },
+          {
+            "h": 971,
+            "w": 486,
+            "x": 233,
+            "y": 0
+          },
+          {
+            "h": 971,
+            "w": 1003,
+            "x": 0,
+            "y": 0
+          }
+        ],
+        "height": 971,
+        "width": 1003
+      },
+      "sizes": {
+        "large": {
+          "h": 971,
+          "resize": "fit",
+          "w": 1003
+        },
+        "medium": {
+          "h": 971,
+          "resize": "fit",
+          "w": 1003
+        },
+        "small": {
+          "h": 658,
+          "resize": "fit",
+          "w": 680
+        },
+        "thumb": {
+          "h": 150,
+          "resize": "crop",
+          "w": 150
+        }
+      },
+      "type": "photo",
+      "url": "https://t.co/kTgnBFZgSy"
+    }
+  ],
+  "photos": [
+    {
+      "backgroundColor": {
+        "red": 204,
+        "green": 214,
+        "blue": 221
+      },
+      "cropCandidates": [
+        {
+          "h": 562,
+          "w": 1003,
+          "x": 0,
+          "y": 0
+        },
+        {
+          "h": 971,
+          "w": 971,
+          "x": 0,
+          "y": 0
+        },
+        {
+          "h": 971,
+          "w": 852,
+          "x": 50,
+          "y": 0
+        },
+        {
+          "h": 971,
+          "w": 486,
+          "x": 233,
+          "y": 0
+        },
+        {
+          "h": 971,
+          "w": 1003,
+          "x": 0,
+          "y": 0
+        }
+      ],
+      "expandedUrl": "https://x.com/Lucy_love_AI/status/2110916144072913327/photo/1",
+      "url": "https://pbs.twimg.com/media/HUt7CpBbIAABV90.jpg",
+      "width": 1003,
+      "height": 971
+    }
+  ],
+  "conversation_count": 8,
+  "news_action_type": "conversation",
+  "isEdited": false,
+  "isStaleEdit": false
+}

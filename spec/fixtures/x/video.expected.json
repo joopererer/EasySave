@@ -1,0 +1,21 @@
+{
+  "platform": "x",
+  "id": "2111025862892269612",
+  "url": "https://x.com/eric_sayompoo/status/2111025862892269612",
+  "author": {
+    "name": " Eric",
+    "id": "eric_sayompoo"
+  },
+  "caption": "เหี้ยมาก 🤣🤣🤣🤣🤣 https://t.co/x1NF6F5x4q",
+  "publishedAt": "2026-10-16T09:26:01Z",
+  "items": [
+    {
+      "type": "video",
+      "url": "https://video.twimg.com/amplify_video/2111012183979278336/vid/avc1/1080x1920/l9NYXWS5ackwPSJx.mp4",
+      "posterUrl": "https://pbs.twimg.com/amplify_video_thumb/2111012183979278336/img/WT1XdmtmvO0i82FK.jpg?name=orig",
+      "width": 1080,
+      "height": 1920,
+      "duration": 10.041
+    }
+  ]
+}

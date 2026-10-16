@@ -5,15 +5,15 @@
 Fixture pairs used to validate this contract live under spec/fixtures/.
 
 Parsers produce `{ platform, id, url, author: { name?, id? }, title?, caption?, publishedAt?, items: [{ type: image|video|live, url, videoUrl?, posterUrl?, width?, height?, duration? }] }`.
-`platform` is `xhs` or `instagram`. `url` is the canonical post URL.
+`platform` is `xhs`, `instagram`, or `x`. `url` is the canonical post URL.
 `items` preserves source order. `live` represents a still image paired with its
 motion asset via `videoUrl`. In v1, `live` is only an image+video pair; no
 motion-photo synthesis is performed.
 `duration` is the video length in seconds, present only on `video` items and
 only when the source provides it: XHS reads `video.capa.duration`, Instagram
-reads `video_duration`. When absent, the UI shows a bare play badge.
+reads `video_duration`, X reads `video_info.duration_millis / 1000`. When absent, the UI shows a bare play badge.
 `posterUrl` is the still-image cover for a `video` item, taken from XHS
-`imageList[0]` (IG video items already carry the preview image in `url`, so
+`imageList[0]` or X `media_url_https?name=orig` (IG video items already carry the preview image in `url`, so
 it stays null there). The UI renders `posterUrl` for video thumbnails because
 the item `url` itself may be an mp4 that image widgets cannot display.
 
@@ -21,22 +21,37 @@ v1 scope exclusions: comment-section images, Stories, and OG fallback on post
 pages. When structured parsing fails, return an explicit parse error instead of
 a partial or empty success.
 
-**Error model.** Parse failures use { code, message } and never return a successful empty result. The v1 codes are LOGIN_REQUIRED for a login wall or authenticated-only page, PRIVATE_OR_UNAVAILABLE for private, deleted, or unavailable content, BLOCKED for an anti-bot or challenge page, INVALID_PAGE for content that does not match the requested platform, UNSUPPORTED_URL for page URLs whose host belongs to no supported platform, and TIMEOUT for fetch/parse operations exceeding the 20-second budget. Blocked-page fixtures use `blocked.html` with an `expected.json` containing the corresponding error code.
+**Error model.** Parse failures use { code, message } and never return a successful empty result. The v1 codes are LOGIN_REQUIRED for a login wall or authenticated-only page, PRIVATE_OR_UNAVAILABLE for private, deleted, or unavailable content, BLOCKED for an anti-bot or challenge page, INVALID_PAGE for content that does not match the requested platform, UNSUPPORTED_URL for page URLs whose host belongs to no supported platform, and TIMEOUT for fetch/parse operations exceeding the 20-second budget. Blocked-page fixtures use `blocked.html` or error JSON with an `expected.json` containing the corresponding error code.
 
 **Error copy and actions (shared by the App and the extension).** User-facing copy is centralized per client but must stay consistent with this table:
 
 | code | message（用户文案） | action（操作按钮） |
 |---|---|---|
-| `LOGIN_REQUIRED` | 需要先登录小红书/Instagram | `goLogin` → [去登录]（跳对应平台登录页） |
+| `LOGIN_REQUIRED` | 需要先登录对应平台（小红书/Instagram/X） | `goLogin` → [去登录]（跳对应平台登录页） |
 | `PRIVATE_OR_UNAVAILABLE` | 该帖子不存在、私密或已删除 | `backHome` → [返回首页] |
 | `BLOCKED` | 请求被对方限制，请稍后再试 | `retry` → [重试] |
 | `INVALID_PAGE` | 页面内容无法识别，可能已改版 | `retry` → [重试] + [复制诊断信息] |
-| `UNSUPPORTED_URL` | 不支持的链接，请粘贴小红书/Instagram 帖子链接 | `repaste` → [重新粘贴]（聚焦输入框） |
+| `UNSUPPORTED_URL` | 不支持的链接，请粘贴小红书/Instagram/X 帖子链接 | `repaste` → [重新粘贴]（聚焦输入框） |
 | `TIMEOUT` | 网络超时，请检查网络后重试 | `retry` → [重试] |
 
-**Blocked-page判定.** XHS: an anonymous fetch returns the generic shell whose `__INITIAL_STATE__` holds only global `appSettings` and no `noteDetailMap[<id>]` entry for the requested note, even though the note id may appear in links/meta — this is authenticated-only content, so the expected code is LOGIN_REQUIRED. Instagram: an anonymous fetch returns the logged-out shell (`PolarisLoggedOut*` route, `CurrentUserInitialData` with `USER_ID` 0) with no product object matching the shortcode-derived media id — likewise LOGIN_REQUIRED. Only pages showing an explicit captcha/challenge interstitial use BLOCKED.
+**Blocked-page判定.** XHS: an anonymous fetch returns the generic shell whose `__INITIAL_STATE__` holds only global `appSettings` and no `noteDetailMap[<id>]` entry for the requested note, even though the note id may appear in links/meta — this is authenticated-only content, so the expected code is LOGIN_REQUIRED. Instagram: an anonymous fetch returns the logged-out shell (`PolarisLoggedOut*` route, `CurrentUserInitialData` with `USER_ID` 0) with no product object matching the shortcode-derived media id — likewise LOGIN_REQUIRED. X: an anonymous fetch returning a `TweetTombstone` with viewer/age restrictions or sensitive content returns LOGIN_REQUIRED. Only pages showing an explicit captcha/challenge interstitial use BLOCKED.
 
 Resolution policy: always select the highest resolution available.
+
+## Parser entrypoint design
+
+**X fixture input is JSON rather than HTML.**
+Unlike Xiaohongshu and Instagram where data is scraped from embedded state scripts inside the full HTML document, X (Twitter) in v1.4 utilizes Twitter's public syndication API (`https://cdn.syndication.twimg.com/tweet-result`) which returns a structured JSON payload directly.
+
+**Entrypoint architecture:**
+The parser exports both a unified dispatch function and individual platform functions:
+1. `parse(input: string, pageUrl: string): string` — The single contract invoked by App WebView/JS runtime and browser extension.
+2. `parseX(input: string | Record<string, unknown>, pageUrl: string): string` — Specialized X platform parser.
+
+**Rationale for unified entrypoint with polymorphic `input`:**
+- **Uniform Call-site Contract**: The App's `ParseService` and extension background scripts interact with one predictable function `EasySaveParser.parse(input, pageUrl)`. The client doesn't need platform-specific branching for JavaScript method invocations.
+- **Graceful Input Handling**: For X URLs, `input` is the JSON response string from `cdn.syndication.twimg.com/tweet-result`. If non-JSON text (such as an HTML 404 Doge page) is passed, `parseX` safely catches the JSON parse exception and emits an appropriate error (`PRIVATE_OR_UNAVAILABLE` or `INVALID_PAGE`).
+- **Clean Testability**: Exporting `parseX` separately allows TS unit tests and fixture runners to test X payload parsing directly without unnecessary wrapping.
 
 ## Xiaohongshu
 
@@ -58,6 +73,58 @@ Resolution policy: always select the highest resolution available.
 
 **Fallback.** In v1 there is no OG fallback on post pages: when public JSON is unavailable, report private, deleted, login-gated, or empty pages as parse failures rather than returning an empty success. A profile URL may fall back to its `og:image`, but this is not a post result.
 
-**Risks.** Instagram changes script schemas and gates public data, CDN URLs expire, shortcode decoding can overflow for unexpected input, carousels mix media types, and regional/login/age restrictions can hide the product.
+## X (Twitter)
+
+**Data source and API.**
+- Endpoint: `https://cdn.syndication.twimg.com/tweet-result?id={id}&lang=en&token={token}`
+- Supported hosts: `x.com` and `twitter.com`.
+- Tweet ID matching: `/(?:x|twitter)\.com\/(?:[^/]+)\/status\/(\d+)/i`.
+- Token calculation: Derived deterministically from the numeric tweet ID (referenced from Vercel react-tweet & yt-dlp):
+  `token = ((Number(id) / 1e15) * Math.PI).toString(36).replace(/(0+|\.)/g, '')`
+
+**JSON field paths:**
+- `id`: `id_str` (fallback `id`).
+- `url`: Canonical post URL normalized to `https://x.com/{user.screen_name}/status/{id_str}`.
+- `author`: `{ name: user.name, id: user.screen_name }`.
+- `caption`: `text` (tweet text body, keeping newlines, links, and emojis intact).
+- `title`: Omitted (tweets have no separate title).
+- `publishedAt`: `created_at` string parsed into ISO 8601 UTC format (`YYYY-MM-DDTHH:mm:ssZ`).
+
+**Media resolution rules:**
+- Media entries reside in the root `mediaDetails` array.
+- **Photos (`type === "photo"`)**:
+  - Original image URL: Append `?name=orig` to `media_url_https` (e.g. `https://pbs.twimg.com/media/{key}.jpg?name=orig`).
+  - Dimensions: `original_info.width` and `original_info.height`.
+  - Emitted as `{ type: "image", url, width, height }`.
+- **Videos (`type === "video"`)**:
+  - Filter `video_info.variants` where `content_type === "video/mp4"`.
+  - Sort descending by numerical `bitrate`. Select the variant with the highest bitrate.
+  - `posterUrl`: Still cover image from `media_url_https?name=orig`.
+  - `duration`: Video duration in seconds from `video_info.duration_millis / 1000`.
+  - Dimensions: `original_info.width` and `original_info.height`.
+  - Emitted as `{ type: "video", url: highestBitrateMp4Url, posterUrl, width, height, duration }`.
+- **Animated GIFs (`type === "animated_gif"`)**:
+  - Classified as `{ type: "video" }` in the unified model (X delivers GIFs as looping silent MP4 video).
+  - Video URL: Selected from `video_info.variants` where `content_type === "video/mp4"`.
+  - `posterUrl`: Still cover image from `media_url_https?name=orig`.
+  - Dimensions: `original_info.width` and `original_info.height`.
+- **Quote Tweets**:
+  - When a post quotes another tweet (`quoted_tweet` present), only extract media from the top-level `mediaDetails` representing the post itself. Never merge `quoted_tweet.mediaDetails`.
+
+**Error classification:**
+- **`PRIVATE_OR_UNAVAILABLE`**:
+  - HTTP 404 response or HTML error page;
+  - Empty JSON object `{}`;
+  - `__typename === "TweetTombstone"` with message indicating the post was deleted or is no longer available.
+- **`LOGIN_REQUIRED`**:
+  - `__typename === "TweetTombstone"` with text indicating viewer limits (e.g., "account owner limits who can view their Posts", age-gated, or sensitive content requiring authentication).
+  - v1.4 does not perform WebView fallback; returns `LOGIN_REQUIRED` directly.
+
+**Cloud hot-update configuration:**
+To insulate against future changes in Twitter's syndication endpoint, `manifest.json` specifies:
+- `platforms.x.endpoint`: URL template (`"https://cdn.syndication.twimg.com/tweet-result?id={id}&lang=en&token={token}"`)
+- `platforms.x.tokenFormula`: Token calculation expression
+- `headers.x`: Request headers (e.g. `User-Agent`)
+- `platforms.x.enabled` & `platforms.x.notice`: Remote kill-switch and maintenance copy
 
 This document describes behavior only; no reference implementation code is copied.

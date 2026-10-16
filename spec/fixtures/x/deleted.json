@@ -1,0 +1,8 @@
+{
+  "__typename": "TweetTombstone",
+  "tombstone": {
+    "text": {
+      "text": "This Post was deleted by the Post author."
+    }
+  }
+}

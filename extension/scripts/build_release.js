@@ -40,12 +40,20 @@ const manifest = {
       enabled: true,
       notice: 'Instagram 解析服务维护中，请稍后再试',
     },
+    x: {
+      enabled: true,
+      notice: 'X 解析服务维护中，请稍后再试',
+      endpoint: 'https://cdn.syndication.twimg.com/tweet-result?id={id}&lang=en&token={token}',
+    },
   },
   headers: {
     xhs: {
       'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36',
     },
     instagram: {
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36',
+    },
+    x: {
       'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36',
     },
   },

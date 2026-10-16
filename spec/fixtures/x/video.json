@@ -1,0 +1,164 @@
+{
+  "__typename": "Tweet",
+  "favorite_count": 63056,
+  "lang": "th",
+  "possibly_sensitive": false,
+  "created_at": "2026-10-16T09:26:01.000Z",
+  "display_text_range": [
+    0,
+    43
+  ],
+  "entities": {
+    "media": [
+      {
+        "display_url": "pic.x.com/x1NF6F5x4q",
+        "expanded_url": "https://x.com/DerekNee/status/2111012337004204518/video/1",
+        "indices": [
+          15,
+          38
+        ],
+        "url": "https://t.co/x1NF6F5x4q"
+      }
+    ]
+  },
+  "id_str": "2111025862892269612",
+  "text": "เหี้ยมาก 🤣🤣🤣🤣🤣 https://t.co/x1NF6F5x4q",
+  "user": {
+    "id_str": "4912566457",
+    "name": " Eric",
+    "screen_name": "eric_sayompoo",
+    "is_blue_verified": true,
+    "profile_image_shape": "Circle",
+    "verified": false,
+    "profile_image_url_https": "https://pbs.twimg.com/profile_images/1697622530574663680/WZMbEHpp_normal.jpg"
+  },
+  "edit_control": {
+    "edit_tweet_ids": [
+      "2111025862892269612"
+    ],
+    "editable_until_msecs": "1792146361000",
+    "edits_remaining": "5",
+    "is_edit_eligible": true
+  },
+  "mediaDetails": [
+    {
+      "additional_media_info": {},
+      "display_url": "pic.x.com/x1NF6F5x4q",
+      "expanded_url": "https://x.com/DerekNee/status/2111012337004204518/video/1",
+      "ext_media_availability": {
+        "status": "Available"
+      },
+      "indices": [
+        15,
+        38
+      ],
+      "media_url_https": "https://pbs.twimg.com/amplify_video_thumb/2111012183979278336/img/WT1XdmtmvO0i82FK.jpg",
+      "original_info": {
+        "focus_rects": [],
+        "height": 1920,
+        "width": 1080
+      },
+      "sizes": {
+        "large": {
+          "h": 1920,
+          "resize": "fit",
+          "w": 1080
+        },
+        "medium": {
+          "h": 1200,
+          "resize": "fit",
+          "w": 675
+        },
+        "small": {
+          "h": 680,
+          "resize": "fit",
+          "w": 383
+        },
+        "thumb": {
+          "h": 150,
+          "resize": "crop",
+          "w": 150
+        }
+      },
+      "type": "video",
+      "url": "https://t.co/x1NF6F5x4q",
+      "video_info": {
+        "aspect_ratio": [
+          9,
+          16
+        ],
+        "duration_millis": 10041,
+        "variants": [
+          {
+            "content_type": "application/x-mpegURL",
+            "url": "https://video.twimg.com/amplify_video/2111012183979278336/pl/grGy5IAgXsmgSGmF.m3u8?v=cfc"
+          },
+          {
+            "bitrate": 632000,
+            "content_type": "video/mp4",
+            "url": "https://video.twimg.com/amplify_video/2111012183979278336/vid/avc1/320x568/GnTmiQDmw5fd1Lyg.mp4"
+          },
+          {
+            "bitrate": 950000,
+            "content_type": "video/mp4",
+            "url": "https://video.twimg.com/amplify_video/2111012183979278336/vid/avc1/480x852/iu5G7eWrKo4imEcL.mp4"
+          },
+          {
+            "bitrate": 2176000,
+            "content_type": "video/mp4",
+            "url": "https://video.twimg.com/amplify_video/2111012183979278336/vid/avc1/720x1280/vIp5UTIbCLNw4c_H.mp4"
+          },
+          {
+            "bitrate": 10368000,
+            "content_type": "video/mp4",
+            "url": "https://video.twimg.com/amplify_video/2111012183979278336/vid/avc1/1080x1920/l9NYXWS5ackwPSJx.mp4"
+          }
+        ]
+      }
+    }
+  ],
+  "photos": [],
+  "video": {
+    "aspectRatio": [
+      9,
+      16
+    ],
+    "contentType": "media_entity",
+    "durationMs": 10041,
+    "mediaAvailability": {
+      "status": "available"
+    },
+    "poster": "https://pbs.twimg.com/amplify_video_thumb/2111012183979278336/img/WT1XdmtmvO0i82FK.jpg",
+    "variants": [
+      {
+        "type": "application/x-mpegURL",
+        "src": "https://video.twimg.com/amplify_video/2111012183979278336/pl/grGy5IAgXsmgSGmF.m3u8?v=cfc"
+      },
+      {
+        "type": "video/mp4",
+        "src": "https://video.twimg.com/amplify_video/2111012183979278336/vid/avc1/320x568/GnTmiQDmw5fd1Lyg.mp4"
+      },
+      {
+        "type": "video/mp4",
+        "src": "https://video.twimg.com/amplify_video/2111012183979278336/vid/avc1/480x852/iu5G7eWrKo4imEcL.mp4"
+      },
+      {
+        "type": "video/mp4",
+        "src": "https://video.twimg.com/amplify_video/2111012183979278336/vid/avc1/720x1280/vIp5UTIbCLNw4c_H.mp4"
+      },
+      {
+        "type": "video/mp4",
+        "src": "https://video.twimg.com/amplify_video/2111012183979278336/vid/avc1/1080x1920/l9NYXWS5ackwPSJx.mp4"
+      }
+    ],
+    "videoId": {
+      "type": "tweet",
+      "id": "2111025862892269612"
+    },
+    "viewCount": 0
+  },
+  "conversation_count": 533,
+  "news_action_type": "conversation",
+  "isEdited": false,
+  "isStaleEdit": false
+}

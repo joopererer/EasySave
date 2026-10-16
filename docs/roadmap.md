@@ -47,21 +47,22 @@
 
 ## v1.3b 解析器云端热更新
 
-- [ ] 发布物：manifest.json（parserVersion、minAppVersion、sha256、Ed25519 签名、各平台启用开关和维护提示、各平台请求头/UA）+ parser.js
-- [ ] App：启动时检查更新，最多每 6 小时一次；下载后校验签名和哈希，缓存为"最近一个可用版本"；任何一步失败都回退到 App 内置版本；parserVersion 显示在"我的"页和诊断信息中
-- [ ] 安全：公钥内置在 App 中，签名验证失败时拒绝加载；严禁执行未签名的代码
-- [ ] 远程开关：平台被关闭时，解析该平台的链接显示维护提示，不发起请求
-- [ ] 发布流程：GitHub Actions 在推送 parser-v* tag 时运行全部 fixture 测试，通过后打包、签名，发布到 GitHub Releases；私钥只存放在 GitHub Secrets 中
-- [ ] 插件：遵守 Chrome MV3 规定，不加载远程代码，只拉取 manifest 中的平台开关和请求头配置
+- [x] 发布物：manifest.json（parserVersion、minAppVersion、sha256、Ed25519 签名、各平台启用开关和维护提示、各平台请求头/UA）+ parser.js
+- [x] App：启动时检查更新，最多每 6 小时一次；下载后校验签名和哈希，缓存为"最近一个可用版本"；任何一步失败都回退到 App 内置版本；parserVersion 显示在"我的"页和诊断信息中
+- [x] 安全：公钥内置在 App 中，签名验证失败时拒绝加载；严禁执行未签名的代码
+- [x] 远程开关：平台被关闭时，解析该平台的链接显示维护提示，不发起请求
+- [x] 发布流程：GitHub Actions 在推送 parser-v* tag 时运行全部 fixture 测试，通过后打包、签名，发布到 GitHub Releases；私钥只存放在 GitHub Secrets 中
+- [x] 插件：遵守 Chrome MV3 规定，不加载远程代码，只拉取 manifest 中的平台开关和请求头配置
   - 验收：故意把一个解析规则改错，发布修复版 parser-v*，手机 App 不重装即可恢复正常；把签名改坏，App 拒绝加载并回退到内置版本
 
 ## v1.4 X (Twitter)
 
-- [ ] 优先使用公开嵌入接口 cdn.syndication.twimg.com/tweet-result；需要登录的推文（敏感内容、锁定账号）回退到 WebView
-- [ ] 图片取原图（name=orig），视频取码率最高的 mp4
-- [ ] 参考 yt-dlp 的 Twitter 提取器（Unlicense，可以直接参考）
-- [ ] 先采集 fixture（单图、多图、视频、GIF），再写 spec，再实现；按 v1.3 架构只写 TS 一份，支持热更新
-  - 验收：四种 fixture 测试通过；真机上从 X App 分享链接能下载
+- [ ] 只使用公开嵌入接口 cdn.syndication.twimg.com/tweet-result；需要登录的推文（敏感内容、锁定账号）返回 LOGIN_REQUIRED，不做 WebView 兜底
+- [ ] 请求方式参考 Vercel 的 react-tweet（MIT）中 token 的计算方法，以及 yt-dlp 的 Twitter 提取器
+- [ ] 图片取原图（name=orig），视频取码率最高的 mp4，GIF 作为无声 mp4 视频提取，引用推文只下载被分享推文自身的媒体
+- [ ] 接口 URL 模板、token 算法参数和请求头纳入 manifest.json 云端热更新配置
+- [ ] 先采集 fixture（单图、多图、视频、GIF、引用推文、已删除），再写 spec，再实现；按 v1.3 架构只写 TS 一份，支持热更新
+  - 验收：全部 X fixture 测试通过；真机上从 X App 分享链接能下载
 
 ## v1.5 TikTok
 

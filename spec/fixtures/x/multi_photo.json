@@ -1,0 +1,399 @@
+{
+  "__typename": "Tweet",
+  "favorite_count": 1095,
+  "lang": "zh",
+  "possibly_sensitive": false,
+  "created_at": "2026-10-16T10:13:12.000Z",
+  "display_text_range": [
+    0,
+    144
+  ],
+  "entities": {
+    "media": [
+      {
+        "display_url": "pic.x.com/FQqOPHoRVP",
+        "expanded_url": "https://x.com/uu_remote/status/2111037737172336975/photo/1",
+        "indices": [
+          145,
+          168
+        ],
+        "url": "https://t.co/FQqOPHoRVP"
+      }
+    ]
+  },
+  "id_str": "2111037737172336975",
+  "text": "UU远程开放调用协议上线，实现在APP内直接调用UU远程的远控能力。\n如果你是一个独立开发者，需要把UU远程的远控能力接入你的APP，可以前往GitHub查看我们的接入引导指引。目前支持在APP内以小窗模式观看远端电脑屏幕，也支持在APP内快速发起远控。欢迎大家体验后向我们提出优化建议。 https://t.co/FQqOPHoRVP",
+  "user": {
+    "id_str": "1935589483417939970",
+    "name": "网易UU远程",
+    "screen_name": "uu_remote",
+    "is_blue_verified": true,
+    "profile_image_shape": "Circle",
+    "verified": false,
+    "profile_image_url_https": "https://pbs.twimg.com/profile_images/1935589759323123712/yTYwehdF_normal.png"
+  },
+  "edit_control": {
+    "edit_tweet_ids": [
+      "2111037737172336975"
+    ],
+    "editable_until_msecs": "1792149192000",
+    "edits_remaining": "5",
+    "is_edit_eligible": true
+  },
+  "mediaDetails": [
+    {
+      "display_url": "pic.x.com/FQqOPHoRVP",
+      "expanded_url": "https://x.com/uu_remote/status/2111037737172336975/photo/1",
+      "ext_media_availability": {
+        "status": "Available"
+      },
+      "indices": [
+        145,
+        168
+      ],
+      "media_url_https": "https://pbs.twimg.com/media/HUvpORCbMAA0Cvf.jpg",
+      "original_info": {
+        "focus_rects": [
+          {
+            "h": 605,
+            "w": 1080,
+            "x": 0,
+            "y": 742
+          },
+          {
+            "h": 1080,
+            "w": 1080,
+            "x": 0,
+            "y": 360
+          },
+          {
+            "h": 1231,
+            "w": 1080,
+            "x": 0,
+            "y": 209
+          },
+          {
+            "h": 1440,
+            "w": 720,
+            "x": 324,
+            "y": 0
+          },
+          {
+            "h": 1440,
+            "w": 1080,
+            "x": 0,
+            "y": 0
+          }
+        ],
+        "height": 1440,
+        "width": 1080
+      },
+      "sizes": {
+        "large": {
+          "h": 1440,
+          "resize": "fit",
+          "w": 1080
+        },
+        "medium": {
+          "h": 1200,
+          "resize": "fit",
+          "w": 900
+        },
+        "small": {
+          "h": 680,
+          "resize": "fit",
+          "w": 510
+        },
+        "thumb": {
+          "h": 150,
+          "resize": "crop",
+          "w": 150
+        }
+      },
+      "type": "photo",
+      "url": "https://t.co/FQqOPHoRVP"
+    },
+    {
+      "display_url": "pic.x.com/FQqOPHoRVP",
+      "expanded_url": "https://x.com/uu_remote/status/2111037737172336975/photo/1",
+      "ext_media_availability": {
+        "status": "Available"
+      },
+      "indices": [
+        145,
+        168
+      ],
+      "media_url_https": "https://pbs.twimg.com/media/HUvpOQlaEAA1YeY.jpg",
+      "original_info": {
+        "focus_rects": [
+          {
+            "h": 605,
+            "w": 1080,
+            "x": 0,
+            "y": 835
+          },
+          {
+            "h": 1080,
+            "w": 1080,
+            "x": 0,
+            "y": 360
+          },
+          {
+            "h": 1231,
+            "w": 1080,
+            "x": 0,
+            "y": 209
+          },
+          {
+            "h": 1440,
+            "w": 720,
+            "x": 0,
+            "y": 0
+          },
+          {
+            "h": 1440,
+            "w": 1080,
+            "x": 0,
+            "y": 0
+          }
+        ],
+        "height": 1440,
+        "width": 1080
+      },
+      "sizes": {
+        "large": {
+          "h": 1440,
+          "resize": "fit",
+          "w": 1080
+        },
+        "medium": {
+          "h": 1200,
+          "resize": "fit",
+          "w": 900
+        },
+        "small": {
+          "h": 680,
+          "resize": "fit",
+          "w": 510
+        },
+        "thumb": {
+          "h": 150,
+          "resize": "crop",
+          "w": 150
+        }
+      },
+      "type": "photo",
+      "url": "https://t.co/FQqOPHoRVP"
+    },
+    {
+      "display_url": "pic.x.com/FQqOPHoRVP",
+      "expanded_url": "https://x.com/uu_remote/status/2111037737172336975/photo/1",
+      "ext_media_availability": {
+        "status": "Available"
+      },
+      "indices": [
+        145,
+        168
+      ],
+      "media_url_https": "https://pbs.twimg.com/media/HUvpOQlbQAAOx9P.jpg",
+      "original_info": {
+        "focus_rects": [
+          {
+            "h": 605,
+            "w": 1080,
+            "x": 0,
+            "y": 670
+          },
+          {
+            "h": 1080,
+            "w": 1080,
+            "x": 0,
+            "y": 360
+          },
+          {
+            "h": 1231,
+            "w": 1080,
+            "x": 0,
+            "y": 209
+          },
+          {
+            "h": 1440,
+            "w": 720,
+            "x": 0,
+            "y": 0
+          },
+          {
+            "h": 1440,
+            "w": 1080,
+            "x": 0,
+            "y": 0
+          }
+        ],
+        "height": 1440,
+        "width": 1080
+      },
+      "sizes": {
+        "large": {
+          "h": 1440,
+          "resize": "fit",
+          "w": 1080
+        },
+        "medium": {
+          "h": 1200,
+          "resize": "fit",
+          "w": 900
+        },
+        "small": {
+          "h": 680,
+          "resize": "fit",
+          "w": 510
+        },
+        "thumb": {
+          "h": 150,
+          "resize": "crop",
+          "w": 150
+        }
+      },
+      "type": "photo",
+      "url": "https://t.co/FQqOPHoRVP"
+    }
+  ],
+  "photos": [
+    {
+      "backgroundColor": {
+        "red": 204,
+        "green": 214,
+        "blue": 221
+      },
+      "cropCandidates": [
+        {
+          "h": 605,
+          "w": 1080,
+          "x": 0,
+          "y": 742
+        },
+        {
+          "h": 1080,
+          "w": 1080,
+          "x": 0,
+          "y": 360
+        },
+        {
+          "h": 1231,
+          "w": 1080,
+          "x": 0,
+          "y": 209
+        },
+        {
+          "h": 1440,
+          "w": 720,
+          "x": 324,
+          "y": 0
+        },
+        {
+          "h": 1440,
+          "w": 1080,
+          "x": 0,
+          "y": 0
+        }
+      ],
+      "expandedUrl": "https://x.com/uu_remote/status/2111037737172336975/photo/1",
+      "url": "https://pbs.twimg.com/media/HUvpORCbMAA0Cvf.jpg",
+      "width": 1080,
+      "height": 1440
+    },
+    {
+      "backgroundColor": {
+        "red": 204,
+        "green": 214,
+        "blue": 221
+      },
+      "cropCandidates": [
+        {
+          "h": 605,
+          "w": 1080,
+          "x": 0,
+          "y": 835
+        },
+        {
+          "h": 1080,
+          "w": 1080,
+          "x": 0,
+          "y": 360
+        },
+        {
+          "h": 1231,
+          "w": 1080,
+          "x": 0,
+          "y": 209
+        },
+        {
+          "h": 1440,
+          "w": 720,
+          "x": 0,
+          "y": 0
+        },
+        {
+          "h": 1440,
+          "w": 1080,
+          "x": 0,
+          "y": 0
+        }
+      ],
+      "expandedUrl": "https://x.com/uu_remote/status/2111037737172336975/photo/1",
+      "url": "https://pbs.twimg.com/media/HUvpOQlaEAA1YeY.jpg",
+      "width": 1080,
+      "height": 1440
+    },
+    {
+      "backgroundColor": {
+        "red": 204,
+        "green": 214,
+        "blue": 221
+      },
+      "cropCandidates": [
+        {
+          "h": 605,
+          "w": 1080,
+          "x": 0,
+          "y": 670
+        },
+        {
+          "h": 1080,
+          "w": 1080,
+          "x": 0,
+          "y": 360
+        },
+        {
+          "h": 1231,
+          "w": 1080,
+          "x": 0,
+          "y": 209
+        },
+        {
+          "h": 1440,
+          "w": 720,
+          "x": 0,
+          "y": 0
+        },
+        {
+          "h": 1440,
+          "w": 1080,
+          "x": 0,
+          "y": 0
+        }
+      ],
+      "expandedUrl": "https://x.com/uu_remote/status/2111037737172336975/photo/1",
+      "url": "https://pbs.twimg.com/media/HUvpOQlbQAAOx9P.jpg",
+      "width": 1080,
+      "height": 1440
+    }
+  ],
+  "conversation_count": 211,
+  "news_action_type": "conversation",
+  "isEdited": false,
+  "isStaleEdit": false,
+  "note_tweet": {
+    "id": "Tm90ZVR3ZWV0UmVzdWx0czoyMTExMDM3NzM3MDU5MTE1MDA4"
+  }
+}

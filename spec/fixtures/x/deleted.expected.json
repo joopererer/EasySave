@@ -1,0 +1,6 @@
+{
+  "error": {
+    "code": "PRIVATE_OR_UNAVAILABLE",
+    "message": "This post is private, deleted, or unavailable."
+  }
+}

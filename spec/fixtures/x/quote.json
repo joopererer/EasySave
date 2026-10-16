@@ -1,0 +1,575 @@
+{
+  "__typename": "Tweet",
+  "favorite_count": 126,
+  "lang": "zh",
+  "possibly_sensitive": false,
+  "created_at": "2026-10-16T10:34:14.000Z",
+  "display_text_range": [
+    0,
+    143
+  ],
+  "entities": {
+    "media": [
+      {
+        "display_url": "pic.x.com/GhEIqR2eDm",
+        "expanded_url": "https://x.com/gkxspace/status/2111043031700844656/photo/1",
+        "indices": [
+          143,
+          166
+        ],
+        "url": "https://t.co/GhEIqR2eDm"
+      }
+    ]
+  },
+  "id_str": "2111043031700844656",
+  "text": "好家伙，网易做生产力工具这是真要卷死同行啊？？？\n\n前有 UU 远程成了玩 AI 出门挂机标配，现在“叭哥说”又把 AI 语音输入做的贼爽！\n\n两个产品都是完全终身免费，活菩萨不多说...\n\n而且，他们真的把“听劝”做到极致了，听我娓娓道来😁\n\n我的 Typeless 是年付 144 https://t.co/GhEIqR2eDm",
+  "user": {
+    "id_str": "1881991469730594816",
+    "name": "余温",
+    "screen_name": "gkxspace",
+    "is_blue_verified": true,
+    "profile_image_shape": "Circle",
+    "verified": false,
+    "profile_image_url_https": "https://pbs.twimg.com/profile_images/1952432952928784384/k7SIkQ7I_normal.jpg"
+  },
+  "edit_control": {
+    "edit_tweet_ids": [
+      "2111043031700844656"
+    ],
+    "editable_until_msecs": "1792150454000",
+    "edits_remaining": "5",
+    "is_edit_eligible": true
+  },
+  "mediaDetails": [
+    {
+      "display_url": "pic.x.com/GhEIqR2eDm",
+      "expanded_url": "https://x.com/gkxspace/status/2111043031700844656/photo/1",
+      "ext_media_availability": {
+        "status": "Available"
+      },
+      "indices": [
+        143,
+        166
+      ],
+      "media_url_https": "https://pbs.twimg.com/media/HUvucWEa8AEUmOK.jpg",
+      "original_info": {
+        "focus_rects": [
+          {
+            "h": 590,
+            "w": 1054,
+            "x": 0,
+            "y": 0
+          },
+          {
+            "h": 1054,
+            "w": 1054,
+            "x": 0,
+            "y": 0
+          },
+          {
+            "h": 1166,
+            "w": 1023,
+            "x": 31,
+            "y": 0
+          },
+          {
+            "h": 1166,
+            "w": 583,
+            "x": 262,
+            "y": 0
+          },
+          {
+            "h": 1166,
+            "w": 1054,
+            "x": 0,
+            "y": 0
+          }
+        ],
+        "height": 1166,
+        "width": 1054
+      },
+      "sizes": {
+        "large": {
+          "h": 1166,
+          "resize": "fit",
+          "w": 1054
+        },
+        "medium": {
+          "h": 1166,
+          "resize": "fit",
+          "w": 1054
+        },
+        "small": {
+          "h": 680,
+          "resize": "fit",
+          "w": 615
+        },
+        "thumb": {
+          "h": 150,
+          "resize": "crop",
+          "w": 150
+        }
+      },
+      "type": "photo",
+      "url": "https://t.co/GhEIqR2eDm"
+    },
+    {
+      "display_url": "pic.x.com/GhEIqR2eDm",
+      "expanded_url": "https://x.com/gkxspace/status/2111043031700844656/photo/1",
+      "ext_media_availability": {
+        "status": "Available"
+      },
+      "indices": [
+        143,
+        166
+      ],
+      "media_url_https": "https://pbs.twimg.com/media/HUvucWGaAAAYa1x.jpg",
+      "original_info": {
+        "focus_rects": [
+          {
+            "h": 859,
+            "w": 1534,
+            "x": 66,
+            "y": 0
+          },
+          {
+            "h": 859,
+            "w": 859,
+            "x": 410,
+            "y": 0
+          },
+          {
+            "h": 859,
+            "w": 754,
+            "x": 462,
+            "y": 0
+          },
+          {
+            "h": 859,
+            "w": 430,
+            "x": 624,
+            "y": 0
+          },
+          {
+            "h": 859,
+            "w": 1600,
+            "x": 0,
+            "y": 0
+          }
+        ],
+        "height": 859,
+        "width": 1600
+      },
+      "sizes": {
+        "large": {
+          "h": 859,
+          "resize": "fit",
+          "w": 1600
+        },
+        "medium": {
+          "h": 644,
+          "resize": "fit",
+          "w": 1200
+        },
+        "small": {
+          "h": 365,
+          "resize": "fit",
+          "w": 680
+        },
+        "thumb": {
+          "h": 150,
+          "resize": "crop",
+          "w": 150
+        }
+      },
+      "type": "photo",
+      "url": "https://t.co/GhEIqR2eDm"
+    }
+  ],
+  "photos": [
+    {
+      "backgroundColor": {
+        "red": 204,
+        "green": 214,
+        "blue": 221
+      },
+      "cropCandidates": [
+        {
+          "h": 590,
+          "w": 1054,
+          "x": 0,
+          "y": 0
+        },
+        {
+          "h": 1054,
+          "w": 1054,
+          "x": 0,
+          "y": 0
+        },
+        {
+          "h": 1166,
+          "w": 1023,
+          "x": 31,
+          "y": 0
+        },
+        {
+          "h": 1166,
+          "w": 583,
+          "x": 262,
+          "y": 0
+        },
+        {
+          "h": 1166,
+          "w": 1054,
+          "x": 0,
+          "y": 0
+        }
+      ],
+      "expandedUrl": "https://x.com/gkxspace/status/2111043031700844656/photo/1",
+      "url": "https://pbs.twimg.com/media/HUvucWEa8AEUmOK.jpg",
+      "width": 1054,
+      "height": 1166
+    },
+    {
+      "backgroundColor": {
+        "red": 204,
+        "green": 214,
+        "blue": 221
+      },
+      "cropCandidates": [
+        {
+          "h": 859,
+          "w": 1534,
+          "x": 66,
+          "y": 0
+        },
+        {
+          "h": 859,
+          "w": 859,
+          "x": 410,
+          "y": 0
+        },
+        {
+          "h": 859,
+          "w": 754,
+          "x": 462,
+          "y": 0
+        },
+        {
+          "h": 859,
+          "w": 430,
+          "x": 624,
+          "y": 0
+        },
+        {
+          "h": 859,
+          "w": 1600,
+          "x": 0,
+          "y": 0
+        }
+      ],
+      "expandedUrl": "https://x.com/gkxspace/status/2111043031700844656/photo/1",
+      "url": "https://pbs.twimg.com/media/HUvucWGaAAAYa1x.jpg",
+      "width": 1600,
+      "height": 859
+    }
+  ],
+  "conversation_count": 44,
+  "news_action_type": "conversation",
+  "quoted_tweet": {
+    "favorite_count": 21,
+    "lang": "zh",
+    "possibly_sensitive": false,
+    "reply_count": 19,
+    "retweet_count": 0,
+    "created_at": "2026-10-16T03:00:04.000Z",
+    "display_text_range": [
+      0,
+      159
+    ],
+    "entities": {
+      "media": [
+        {
+          "display_url": "pic.x.com/E0ezOLghal",
+          "expanded_url": "https://x.com/bageshuo/status/2110928734052049187/photo/1",
+          "indices": [
+            160,
+            183
+          ],
+          "url": "https://t.co/E0ezOLghal"
+        }
+      ],
+      "urls": [
+        {
+          "display_url": "bug.youdao.com/activity.html#/",
+          "expanded_url": "https://bug.youdao.com/activity.html#/",
+          "indices": [
+            97,
+            120
+          ],
+          "url": "https://t.co/NB5rfy4bwo"
+        }
+      ]
+    },
+    "id_str": "2110928734052049187",
+    "text": "网易叭哥说10万奖金寻找联合创始人，一起决定产品未来的方向！\n\n现金奖金、官网认证、面试直通、代码留名…更多奖励与规则详见图片！\n\n活动时间：2026年10月16日-10月30日\n\n参与链接： https://t.co/NB5rfy4bwo\n\n感谢每一位关注、使用、夸奖、吐槽叭哥说的总裁们，让我们一起把产品做得更好！ https://t.co/E0ezOLghal",
+    "user": {
+      "id_str": "2102329537447280640",
+      "name": "neteasebageshuo",
+      "screen_name": "bageshuo",
+      "is_blue_verified": false,
+      "profile_image_shape": "Circle",
+      "verified": false,
+      "profile_image_url_https": "https://pbs.twimg.com/profile_images/2102330099257495552/veaN_Cwi_normal.jpg"
+    },
+    "edit_control": {
+      "edit_tweet_ids": [
+        "2110928734052049187"
+      ],
+      "editable_until_msecs": "1792123204000",
+      "edits_remaining": "5",
+      "is_edit_eligible": true
+    },
+    "mediaDetails": [
+      {
+        "display_url": "pic.x.com/E0ezOLghal",
+        "expanded_url": "https://x.com/bageshuo/status/2110928734052049187/photo/1",
+        "ext_media_availability": {
+          "status": "Available"
+        },
+        "indices": [
+          160,
+          183
+        ],
+        "media_url_https": "https://pbs.twimg.com/media/HUuFcftbgAEyYr3.png",
+        "original_info": {
+          "focus_rects": [
+            {
+              "h": 392,
+              "w": 700,
+              "x": 0,
+              "y": 0
+            },
+            {
+              "h": 700,
+              "w": 700,
+              "x": 0,
+              "y": 0
+            },
+            {
+              "h": 798,
+              "w": 700,
+              "x": 0,
+              "y": 0
+            },
+            {
+              "h": 800,
+              "w": 400,
+              "x": 140,
+              "y": 0
+            },
+            {
+              "h": 800,
+              "w": 700,
+              "x": 0,
+              "y": 0
+            }
+          ],
+          "height": 800,
+          "width": 700
+        },
+        "sizes": {
+          "large": {
+            "h": 800,
+            "resize": "fit",
+            "w": 700
+          },
+          "medium": {
+            "h": 800,
+            "resize": "fit",
+            "w": 700
+          },
+          "small": {
+            "h": 680,
+            "resize": "fit",
+            "w": 595
+          },
+          "thumb": {
+            "h": 150,
+            "resize": "crop",
+            "w": 150
+          }
+        },
+        "type": "photo",
+        "url": "https://t.co/E0ezOLghal"
+      },
+      {
+        "display_url": "pic.x.com/E0ezOLghal",
+        "expanded_url": "https://x.com/bageshuo/status/2110928734052049187/photo/1",
+        "ext_media_availability": {
+          "status": "Available"
+        },
+        "indices": [
+          160,
+          183
+        ],
+        "media_url_https": "https://pbs.twimg.com/media/HUuFcftboAArK1R.jpg",
+        "original_info": {
+          "focus_rects": [
+            {
+              "h": 197,
+              "w": 352,
+              "x": 0,
+              "y": 51
+            },
+            {
+              "h": 352,
+              "w": 352,
+              "x": 0,
+              "y": 0
+            },
+            {
+              "h": 401,
+              "w": 352,
+              "x": 0,
+              "y": 0
+            },
+            {
+              "h": 704,
+              "w": 352,
+              "x": 0,
+              "y": 0
+            },
+            {
+              "h": 1200,
+              "w": 352,
+              "x": 0,
+              "y": 0
+            }
+          ],
+          "height": 1200,
+          "width": 352
+        },
+        "sizes": {
+          "large": {
+            "h": 1200,
+            "resize": "fit",
+            "w": 352
+          },
+          "medium": {
+            "h": 1200,
+            "resize": "fit",
+            "w": 352
+          },
+          "small": {
+            "h": 680,
+            "resize": "fit",
+            "w": 199
+          },
+          "thumb": {
+            "h": 150,
+            "resize": "crop",
+            "w": 150
+          }
+        },
+        "type": "photo",
+        "url": "https://t.co/E0ezOLghal"
+      }
+    ],
+    "photos": [
+      {
+        "backgroundColor": {
+          "red": 204,
+          "green": 214,
+          "blue": 221
+        },
+        "cropCandidates": [
+          {
+            "h": 392,
+            "w": 700,
+            "x": 0,
+            "y": 0
+          },
+          {
+            "h": 700,
+            "w": 700,
+            "x": 0,
+            "y": 0
+          },
+          {
+            "h": 798,
+            "w": 700,
+            "x": 0,
+            "y": 0
+          },
+          {
+            "h": 800,
+            "w": 400,
+            "x": 140,
+            "y": 0
+          },
+          {
+            "h": 800,
+            "w": 700,
+            "x": 0,
+            "y": 0
+          }
+        ],
+        "expandedUrl": "https://x.com/bageshuo/status/2110928734052049187/photo/1",
+        "url": "https://pbs.twimg.com/media/HUuFcftbgAEyYr3.png",
+        "width": 700,
+        "height": 800
+      },
+      {
+        "backgroundColor": {
+          "red": 204,
+          "green": 214,
+          "blue": 221
+        },
+        "cropCandidates": [
+          {
+            "h": 197,
+            "w": 352,
+            "x": 0,
+            "y": 51
+          },
+          {
+            "h": 352,
+            "w": 352,
+            "x": 0,
+            "y": 0
+          },
+          {
+            "h": 401,
+            "w": 352,
+            "x": 0,
+            "y": 0
+          },
+          {
+            "h": 704,
+            "w": 352,
+            "x": 0,
+            "y": 0
+          },
+          {
+            "h": 1200,
+            "w": 352,
+            "x": 0,
+            "y": 0
+          }
+        ],
+        "expandedUrl": "https://x.com/bageshuo/status/2110928734052049187/photo/1",
+        "url": "https://pbs.twimg.com/media/HUuFcftboAArK1R.jpg",
+        "width": 352,
+        "height": 1200
+      }
+    ],
+    "isEdited": false,
+    "isStaleEdit": false
+  },
+  "isEdited": false,
+  "isStaleEdit": false,
+  "note_tweet": {
+    "id": "Tm90ZVR3ZWV0UmVzdWx0czoyMTExMDQzMDMxNTk1OTE3MzEy"
+  }
+}
