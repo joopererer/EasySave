@@ -239,8 +239,64 @@ class _ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
     final data = await Clipboard.getData(Clipboard.kTextPlain);
     final text = data?.text;
     if (text == null || !mounted) return;
-    final link = extractLink(text);
-    if (link == null || link == _lastLink) return;
+    // YouTube detours to Seal before the supported-link check — otherwise
+    // extractLink filters it out and no prompt ever appears.
+    final yt = extractYouTubeLink(text);
+    if (yt != null) {
+      if (yt == _lastLink || yt == _linkController.text.trim()) return;
+      _lastLink = yt;
+      final go = await showDialog<bool>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('检测到 YouTube 链接'),
+          content: Text(yt, maxLines: 3, overflow: TextOverflow.ellipsis),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(false),
+              child: const Text('取消'),
+            ),
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(true),
+              child: const Text('去 Seal'),
+            ),
+          ],
+        ),
+      );
+      if (go == true && mounted) _handleLinks(text);
+      return;
+    }
+    final links = extractLinks(text);
+    if (links.isEmpty || !mounted) return;
+    if (links.length > 1) {
+      final key = 'batch:${links.join('|')}';
+      if (key == _lastLink) return;
+      _lastLink = key;
+      final go = await showDialog<bool>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: Text('检测到 ${links.length} 个链接'),
+          content: Text(
+            links.take(3).join('\n'),
+            maxLines: 4,
+            overflow: TextOverflow.ellipsis,
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(false),
+              child: const Text('取消'),
+            ),
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(true),
+              child: const Text('逐个解析'),
+            ),
+          ],
+        ),
+      );
+      if (go == true && mounted) _handleLinks(text);
+      return;
+    }
+    final link = links.single;
+    if (link == _lastLink) return;
     _lastLink = link;
     // Same URL as the input box or the latest history entry: already
     // parsed or one tap away, don't nag again.
