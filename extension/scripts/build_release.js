@@ -91,4 +91,8 @@ const manifest = {
 
 writeFileSync(manifestOutFile, JSON.stringify(manifest, null, 2) + '\n', 'utf8');
 console.log(`Generated manifest: ${manifestOutFile}`);
+
+const specManifestFile = resolve(rootDir, 'spec', 'manifest.json');
+writeFileSync(specManifestFile, JSON.stringify(manifest, null, 2) + '\n', 'utf8');
+console.log(`Updated spec manifest: ${specManifestFile}`);
 console.log(`Bundle SHA256: ${sha256Hex}`);

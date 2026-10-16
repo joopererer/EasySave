@@ -20,17 +20,14 @@ import '../generated/parser_version.dart';
 /// Ed25519 public key (32 bytes raw, hex encoded) for parser bundle verification.
 /// Replace this constant with your generated public key.
 const String kDefaultParserPublicKeyHex =
-    '0000000000000000000000000000000000000000000000000000000000000000';
+    'ca4f1c302d00220e32178d2e9b47fd589dffc38e8c9711fe93327a44aa199ded';
 
 const String kDefaultManifestUrl =
     'https://raw.githubusercontent.com/joopererer/EasySave/master/spec/manifest.json';
 
 const String kPrefKeyLastUpdateCheckMs = 'parser_last_update_check_ms';
 
-enum ParserSource {
-  builtin,
-  remote,
-}
+enum ParserSource { builtin, remote }
 
 class PlatformConfig {
   PlatformConfig({this.enabled = true, this.notice = ''});
@@ -43,10 +40,7 @@ class PlatformConfig {
     notice: json['notice'] as String? ?? '',
   );
 
-  Map<String, dynamic> toJson() => {
-    'enabled': enabled,
-    'notice': notice,
-  };
+  Map<String, dynamic> toJson() => {'enabled': enabled, 'notice': notice};
 }
 
 class ParserManifest {
@@ -84,8 +78,9 @@ class ParserManifest {
     if (rawHeaders != null) {
       for (final entry in rawHeaders.entries) {
         if (entry.value is Map) {
-          headers[entry.key.toString()] =
-              (entry.value as Map).map((k, v) => MapEntry(k.toString(), v.toString()));
+          headers[entry.key.toString()] = (entry.value as Map).map(
+            (k, v) => MapEntry(k.toString(), v.toString()),
+          );
         }
       }
     }
@@ -158,12 +153,21 @@ class UpdateVerifier {
 
   /// Check if currentAppVersion meets minAppVersion requirement.
   /// Ignores build numbers (e.g. 1.0.0+2 -> 1.0.0).
-  static bool isAppVersionSupported(String currentAppVersion, String minAppVersion) {
+  static bool isAppVersionSupported(
+    String currentAppVersion,
+    String minAppVersion,
+  ) {
     final currentClean = currentAppVersion.split('+').first.trim();
     final minClean = minAppVersion.split('+').first.trim();
 
-    final currentParts = currentClean.split('.').map((e) => int.tryParse(e) ?? 0).toList();
-    final minParts = minClean.split('.').map((e) => int.tryParse(e) ?? 0).toList();
+    final currentParts = currentClean
+        .split('.')
+        .map((e) => int.tryParse(e) ?? 0)
+        .toList();
+    final minParts = minClean
+        .split('.')
+        .map((e) => int.tryParse(e) ?? 0)
+        .toList();
 
     while (currentParts.length < 3) {
       currentParts.add(0);
@@ -197,7 +201,8 @@ class ParserManager {
 
   String get activeVersion => _activeVersion;
   ParserSource get activeSource => _activeSource;
-  String get activeSourceLabel => _activeSource == ParserSource.remote ? '云端' : '内置';
+  String get activeSourceLabel =>
+      _activeSource == ParserSource.remote ? '云端' : '内置';
   ParserManifest? get activeManifest => _activeManifest;
 
   void configure({
@@ -249,7 +254,10 @@ class ParserManager {
         final scriptBytes = scriptFile.readAsBytesSync();
 
         // Verify hash
-        final isHashValid = UpdateVerifier.verifySha256(scriptBytes, manifest.sha256);
+        final isHashValid = UpdateVerifier.verifySha256(
+          scriptBytes,
+          manifest.sha256,
+        );
         // Verify signature
         final isSigValid = await UpdateVerifier.verifyEd25519(
           scriptBytes,
@@ -263,17 +271,24 @@ class ParserManager {
           appVersion = info.version;
         } catch (_) {}
 
-        final isAppSupported = UpdateVerifier.isAppVersionSupported(appVersion, manifest.minAppVersion);
+        final isAppSupported = UpdateVerifier.isAppVersionSupported(
+          appVersion,
+          manifest.minAppVersion,
+        );
 
         if (isHashValid && isSigValid && isAppSupported) {
           _activeVersion = manifest.parserVersion;
           _activeSource = ParserSource.remote;
           _activeScript = utf8.decode(scriptBytes);
           _activeManifest = manifest;
-          debugPrint('ParserManager: loaded remote parser v$_activeVersion from cache');
+          debugPrint(
+            'ParserManager: loaded remote parser v$_activeVersion from cache',
+          );
           return;
         } else {
-          debugPrint('ParserManager: cached parser verification failed; falling back to builtin');
+          debugPrint(
+            'ParserManager: cached parser verification failed; falling back to builtin',
+          );
           // Invalidate broken cache
           try {
             scriptFile.deleteSync();
@@ -282,7 +297,9 @@ class ParserManager {
         }
       }
     } catch (e) {
-      debugPrint('ParserManager: cache read error: $e; falling back to builtin');
+      debugPrint(
+        'ParserManager: cache read error: $e; falling back to builtin',
+      );
     }
 
     await _loadBuiltin();
@@ -313,19 +330,26 @@ class ParserManager {
 
       const sixHoursMs = 6 * 3600 * 1000;
       if (!force && (now - lastCheck < sixHoursMs)) {
-        debugPrint('ParserManager: update check throttled (< 6 hours since last check)');
+        debugPrint(
+          'ParserManager: update check throttled (< 6 hours since last check)',
+        );
         return false;
       }
 
       final manifestUri = Uri.parse(_manifestUrl);
-      final manifestResp = await _client.get(manifestUri).timeout(const Duration(seconds: 10));
+      final manifestResp = await _client
+          .get(manifestUri)
+          .timeout(const Duration(seconds: 10));
       if (manifestResp.statusCode != 200) {
-        debugPrint('ParserManager: manifest fetch failed (HTTP ${manifestResp.statusCode})');
+        debugPrint(
+          'ParserManager: manifest fetch failed (HTTP ${manifestResp.statusCode})',
+        );
         return false;
       }
 
       final manifestJson =
-          jsonDecode(utf8.decode(manifestResp.bodyBytes)) as Map<String, dynamic>;
+          jsonDecode(utf8.decode(manifestResp.bodyBytes))
+              as Map<String, dynamic>;
       final manifest = ParserManifest.fromJson(manifestJson);
 
       // Verify minAppVersion
@@ -335,16 +359,27 @@ class ParserManager {
         appVersion = info.version;
       } catch (_) {}
 
-      if (!UpdateVerifier.isAppVersionSupported(appVersion, manifest.minAppVersion)) {
-        debugPrint('ParserManager: minAppVersion (${manifest.minAppVersion}) > current ($appVersion), skipping');
+      if (!UpdateVerifier.isAppVersionSupported(
+        appVersion,
+        manifest.minAppVersion,
+      )) {
+        debugPrint(
+          'ParserManager: minAppVersion (${manifest.minAppVersion}) > current ($appVersion), skipping',
+        );
         return false;
       }
 
       // Download parser.js
-      final parserUri = manifestUri.resolve('parser.js');
-      final parserResp = await _client.get(parserUri).timeout(const Duration(seconds: 15));
+      final parserUri = manifestUri.path.endsWith('/spec/manifest.json')
+          ? manifestUri.resolve('../app/assets/parser/parser.js')
+          : manifestUri.resolve('parser.js');
+      final parserResp = await _client
+          .get(parserUri)
+          .timeout(const Duration(seconds: 15));
       if (parserResp.statusCode != 200) {
-        debugPrint('ParserManager: parser.js fetch failed (HTTP ${parserResp.statusCode})');
+        debugPrint(
+          'ParserManager: parser.js fetch failed (HTTP ${parserResp.statusCode})',
+        );
         return false;
       }
 
@@ -352,7 +387,9 @@ class ParserManager {
 
       // Verify SHA256
       if (!UpdateVerifier.verifySha256(parserBytes, manifest.sha256)) {
-        debugPrint('ParserManager: parser.js SHA256 mismatch! Remote rejected.');
+        debugPrint(
+          'ParserManager: parser.js SHA256 mismatch! Remote rejected.',
+        );
         return false;
       }
 
@@ -363,7 +400,9 @@ class ParserManager {
         publicKeyHex: _publicKeyHex,
       );
       if (!isSigValid) {
-        debugPrint('ParserManager: parser.js Ed25519 signature invalid! Remote rejected.');
+        debugPrint(
+          'ParserManager: parser.js Ed25519 signature invalid! Remote rejected.',
+        );
         return false;
       }
 
@@ -386,7 +425,9 @@ class ParserManager {
 
       // Update check timestamp
       await prefs.setInt(kPrefKeyLastUpdateCheckMs, now);
-      debugPrint('ParserManager: successfully updated to remote parser v$_activeVersion');
+      debugPrint(
+        'ParserManager: successfully updated to remote parser v$_activeVersion',
+      );
       return true;
     } catch (e) {
       debugPrint('ParserManager: error during update check: $e');
