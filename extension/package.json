@@ -6,8 +6,9 @@
   "scripts": {
     "dev": "wxt",
     "build": "wxt build",
+    "postinstall": "wxt prepare",
     "typecheck": "tsc --noEmit",
-    "pretest": "npm run typecheck",
+    "pretest": "wxt prepare && npm run typecheck",
     "test": "vitest run",
     "build:parser": "node scripts/build_parser.js",
     "build:release": "node scripts/build_release.js"

@@ -15,6 +15,8 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -45,3 +47,11 @@ jobs:
             extension/dist/parser.js
           name: Parser ${{ github.ref_name }}
           generate_release_notes: true
+
+      - name: Commit signed manifest and bundle to master
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git checkout master
+          git add spec/manifest.json spec/parser.js
+          git diff --staged --quiet || (git commit -m "chore(release): update signed manifest & parser bundle for ${{ github.ref_name }} [skip ci]" && git push origin master)
