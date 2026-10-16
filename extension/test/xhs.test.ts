@@ -2,7 +2,15 @@ import { readdirSync, readFileSync } from "node:fs";
 import { join, dirname, basename } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { parseXhs, sanitizeJsUndefined, imageTokenOf, originalImageUrl, jpegImageUrl } from "../src/xhs";
+import {
+  parseXhs,
+  sanitizeJsUndefined,
+  imageTokenOf,
+  originalImageUrl,
+  jpegImageUrl,
+  findNoteInStates,
+  buildNoteFromRecord,
+} from "../src/xhs";
 
 const fixtureDir = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "spec", "fixtures", "xhs");
 
@@ -103,4 +111,246 @@ describe("sanitizeJsUndefined", () => {
       ]);
     }
   });
+
+  it("findNoteInStates and buildNoteFromRecord parse decoded INITIAL_STATE JSON directly", () => {
+    const id = "6aca089a000000000a01efb4";
+    const state = {
+      note: {
+        noteDetailMap: {
+          [id]: {
+            note: {
+              noteId: id,
+              title: "t",
+              desc: "d",
+              time: 1791625370000,
+              user: { nickname: "momo", userId: "604e0d4800000000010065ec" },
+              imageList: [
+                {
+                  urlDefault: "https://sns-img-bd.xhscdn.com/trace",
+                  width: 10,
+                  height: 20,
+                },
+              ],
+            },
+          },
+        },
+      },
+    };
+    const note = findNoteInStates([state], id)!;
+    const result = buildNoteFromRecord(note, id);
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.data).toEqual({
+        platform: "xhs",
+        id: id,
+        url: `https://www.xiaohongshu.com/explore/${id}`,
+        author: { name: "momo", id: "604e0d4800000000010065ec" },
+        title: "t",
+        caption: "d",
+        publishedAt: "2026-10-10T09:42:50Z",
+        items: [
+          {
+            type: "image",
+            url: "https://sns-img-bd.xhscdn.com/trace",
+            width: 10,
+            height: 20,
+            fallbacks: [
+              "https://ci.xiaohongshu.com/trace?imageView2/format/jpg",
+              "https://ci.xiaohongshu.com/trace",
+            ],
+          },
+        ],
+      });
+    }
+  });
 });
+
+describe("video duration", () => {
+  const id = "6aca089a000000000a01efb4";
+  it("xhs reads duration from video.capa", () => {
+    const state = {
+      note: {
+        noteDetailMap: {
+          [id]: {
+            note: {
+              noteId: id,
+              type: "video",
+              title: "t",
+              desc: "d",
+              time: 1791625370000,
+              user: { nickname: "momo", userId: "604e0d4800000000010065ec" },
+              imageList: [],
+              video: {
+                consumer: { originVideoKey: "https://example.com/v.mp4" },
+                capa: { duration: 14 },
+              },
+            },
+          },
+        },
+      },
+    };
+    const note = findNoteInStates([state], id)!;
+    const result = buildNoteFromRecord(note, id);
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.data.items[0].duration).toBe(14);
+    }
+  });
+
+  it("xhs omits duration without capa", () => {
+    const state = {
+      note: {
+        noteDetailMap: {
+          [id]: {
+            note: {
+              noteId: id,
+              type: "video",
+              title: "t",
+              desc: "d",
+              time: 1791625370000,
+              user: { nickname: "momo", userId: "604e0d4800000000010065ec" },
+              imageList: [],
+              video: {
+                consumer: { originVideoKey: "https://example.com/v.mp4" },
+              },
+            },
+          },
+        },
+      },
+    };
+    const note = findNoteInStates([state], id)!;
+    const result = buildNoteFromRecord(note, id);
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect("duration" in result.data.items[0]).toBe(false);
+    }
+  });
+});
+
+describe("imageUrlOf fallbacks", () => {
+  const id = "6aca089a000000000a01efb4";
+  const noteWith = (images: Array<Record<string, unknown>>) => ({
+    noteId: id,
+    title: "t",
+    user: { nickname: "momo" },
+    imageList: images,
+  });
+
+  it("prefers the infoList token as original-bucket URL", () => {
+    const result = buildNoteFromRecord(
+      noteWith([
+        {
+          width: 100,
+          height: 200,
+          infoList: [
+            {
+              imageScene: "WB_PRV",
+              url: "http://sns-webpic-qc.xhscdn.com/202610112129/a657f0bce4b0d577975cf2d1df487c06/notes_pre_post/x!nd_prv_wlteh_webp_3",
+            },
+            {
+              imageScene: "WB_DFT",
+              url: "http://sns-webpic-qc.xhscdn.com/202610112129/eb1fb79a62c72f9dbe14dd2909e2d83c/notes_pre_post/x!nd_dft_wlteh_webp_3",
+            },
+          ],
+        },
+      ]),
+      id,
+    );
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.data.items[0].url).toBe("https://sns-img-bd.xhscdn.com/notes_pre_post/x");
+      expect(result.data.items[0].fallbacks).toEqual([
+        "https://ci.xiaohongshu.com/notes_pre_post/x?imageView2/format/jpg",
+        "https://sns-webpic-qc.xhscdn.com/202610112129/a657f0bce4b0d577975cf2d1df487c06/notes_pre_post/x!nd_prv_wlteh_webp_3",
+        "https://sns-webpic-qc.xhscdn.com/202610112129/eb1fb79a62c72f9dbe14dd2909e2d83c/notes_pre_post/x!nd_dft_wlteh_webp_3",
+        "https://ci.xiaohongshu.com/notes_pre_post/x",
+      ]);
+    }
+  });
+
+  it("resolves a lone infoList rendition to the original bucket", () => {
+    const result = buildNoteFromRecord(
+      noteWith([
+        {
+          width: 100,
+          height: 200,
+          infoList: [
+            {
+              imageScene: "WB_PRV",
+              url: "http://sns-webpic-qc.xhscdn.com/202610112129/a657f0bce4b0d577975cf2d1df487c06/notes_pre_post/y!nd_prv_wlteh_webp_3",
+            },
+          ],
+        },
+      ]),
+      id,
+    );
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.data.items[0].url).toBe("https://sns-img-bd.xhscdn.com/notes_pre_post/y");
+    }
+  });
+
+  it("falls back to fileId for the original bucket", () => {
+    const result = buildNoteFromRecord(
+      noteWith([
+        {
+          width: 100,
+          height: 200,
+          fileId: "notes_pre_post/1040g3k83264voo1al0dg5o2e1l408pfcf1dl208",
+          traceId: "sometrace",
+        },
+      ]),
+      id,
+    );
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.data.items[0].url).toBe(
+        "https://sns-img-bd.xhscdn.com/notes_pre_post/1040g3k83264voo1al0dg5o2e1l408pfcf1dl208",
+      );
+    }
+  });
+
+  it("serves the bare token URL with JPEG transcode first fallback", () => {
+    const token = "notes_pre_post/1040g3k0325c98ukf4e00499d8a6r31c1c4anqs0";
+    const h5 = `http://sns-webpic-qc.xhscdn.com/202610132252/fccfbed52a062a916648e7d56c157af7/${token}!h5_1080jpg`;
+    const result = buildNoteFromRecord(
+      noteWith([
+        {
+          width: 1290,
+          height: 1608,
+          urlDefault: h5,
+          fileId: token,
+          infoList: [
+            { imageScene: "H5_DTL", url: h5 },
+            {
+              imageScene: "H5_PRV",
+              url: h5.replace("h5_1080jpg", "style_d4c824bab532bfe9"),
+            },
+          ],
+        },
+      ]),
+      id,
+    );
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.data.items[0].url).toBe(`https://sns-img-bd.xhscdn.com/${token}`);
+      const fallbacks = result.data.items[0].fallbacks ?? [];
+      expect(fallbacks[0]).toBe(`https://ci.xiaohongshu.com/${token}?imageView2/format/jpg`);
+      expect(fallbacks).toContain(`https://ci.xiaohongshu.com/${token}`);
+    }
+  });
+
+  it("falls back to fileId token when no URL is present", () => {
+    const result = buildNoteFromRecord(
+      noteWith([
+        { width: 100, height: 200, fileId: "notes_pre_post/x" },
+      ]),
+      id,
+    );
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.data.items[0].url).toBe("https://sns-img-bd.xhscdn.com/notes_pre_post/x");
+    }
+  });
+});
+

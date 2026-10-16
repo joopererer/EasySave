@@ -15,6 +15,11 @@ abstract final class ParseErrorCode {
 class PostAuthor {
   PostAuthor({this.name, this.id});
 
+  factory PostAuthor.fromJson(Map<String, dynamic> json) => PostAuthor(
+    name: json['name'] as String?,
+    id: json['id'] as String?,
+  );
+
   final String? name;
   final String? id;
 
@@ -37,6 +42,19 @@ class MediaItem {
     this.duration,
     this.fallbacks = const [],
   });
+
+  factory MediaItem.fromJson(Map<String, dynamic> json) => MediaItem(
+    type: json['type'] as String? ?? 'image',
+    url: json['url'] as String? ?? '',
+    videoUrl: json['videoUrl'] as String?,
+    posterUrl: json['posterUrl'] as String?,
+    width: json['width'] as num?,
+    height: json['height'] as num?,
+    duration: json['duration'] as num?,
+    fallbacks:
+        (json['fallbacks'] as List?)?.whereType<String>().toList() ??
+        const [],
+  );
 
   final String type;
   final String url;
@@ -86,6 +104,24 @@ class ParsedPost {
     this.publishedAt,
   });
 
+  factory ParsedPost.fromJson(Map<String, dynamic> json) => ParsedPost(
+    platform: json['platform'] as String,
+    id: json['id'] as String,
+    url: json['url'] as String,
+    author: json['author'] is Map
+        ? PostAuthor.fromJson((json['author'] as Map).cast<String, dynamic>())
+        : PostAuthor(),
+    items: [
+      if (json['items'] is List)
+        for (final item in json['items'] as List)
+          if (item is Map)
+            MediaItem.fromJson(item.cast<String, dynamic>()),
+    ],
+    title: json['title'] as String?,
+    caption: json['caption'] as String?,
+    publishedAt: json['publishedAt'] as String?,
+  );
+
   final String platform;
   final String id;
   final String url;
@@ -113,6 +149,11 @@ class ParsedPost {
 class ParseError {
   ParseError({required this.code, required this.message});
 
+  factory ParseError.fromJson(Map<String, dynamic> json) => ParseError(
+    code: json['code'] as String? ?? ParseErrorCode.invalidPage,
+    message: json['message'] as String? ?? '解析失败',
+  );
+
   final String code;
   final String message;
 
@@ -135,6 +176,21 @@ class ParseResult {
       error = null,
       rawImages = rawImages ?? const [];
   ParseResult.err(this.error) : ok = false, data = null, rawImages = const [];
+
+  factory ParseResult.fromJson(Map<String, dynamic> json) {
+    final ok = json['ok'] == true;
+    if (ok) {
+      final data = json['data'] is Map
+          ? ParsedPost.fromJson((json['data'] as Map).cast<String, dynamic>())
+          : null;
+      return ParseResult.ok(data);
+    } else {
+      final error = json['error'] is Map
+          ? ParseError.fromJson((json['error'] as Map).cast<String, dynamic>())
+          : ParseError(code: ParseErrorCode.invalidPage, message: '解析失败');
+      return ParseResult.err(error);
+    }
+  }
 
   final bool ok;
   final ParsedPost? data;

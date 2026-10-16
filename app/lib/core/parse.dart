@@ -1,11 +1,9 @@
 // Platform dispatcher: picks the right pure parser from the page URL.
-// Mirrors extension/src/index.ts.
+// In v1.3a+, parsing is handled by parser.js injected into the WebView.
 
-import 'instagram.dart';
 import 'models.dart';
-import 'xhs.dart';
 
-bool _isXhsHost(String host) =>
+bool isXhsHost(String host) =>
     host == 'xiaohongshu.com' ||
     host.endsWith('.xiaohongshu.com') ||
     host == 'xhslink.com' ||
@@ -13,13 +11,14 @@ bool _isXhsHost(String host) =>
     host == 'xhslink.cn' ||
     host.endsWith('.xhslink.cn');
 
-bool _isInstagramHost(String host) =>
+bool isInstagramHost(String host) =>
     host == 'instagram.com' ||
     host.endsWith('.instagram.com') ||
     host == 'instagr.am' ||
     host.endsWith('.instagr.am');
 
-/// Parse a supported post page. Unsupported hosts fail with UNSUPPORTED_URL.
+/// Parse a supported post page. Dart platform parsers were replaced by
+/// the unified JS parser bundle in v1.3a.
 ParseResult parse(String html, String pageUrl) {
   final host = Uri.tryParse(pageUrl)?.host.toLowerCase();
   if (host == null || host.isEmpty) {
@@ -30,12 +29,18 @@ ParseResult parse(String html, String pageUrl) {
       ),
     );
   }
-  if (_isXhsHost(host)) return parseXhs(html, pageUrl);
-  if (_isInstagramHost(host)) return parseInstagram(html, pageUrl);
+  if (!isXhsHost(host) && !isInstagramHost(host)) {
+    return ParseResult.err(
+      ParseError(
+        code: ParseErrorCode.unsupportedUrl,
+        message: 'Unsupported host: $host',
+      ),
+    );
+  }
   return ParseResult.err(
     ParseError(
-      code: ParseErrorCode.unsupportedUrl,
-      message: 'Unsupported host: $host',
+      code: ParseErrorCode.invalidPage,
+      message: 'Dart platform parsers removed; use JS parser via ParseService',
     ),
   );
 }

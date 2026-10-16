@@ -3,6 +3,7 @@
 
 import 'dart:async';
 
+import 'package:easysave/generated/parser_version.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:package_info_plus/package_info_plus.dart';
@@ -524,7 +525,7 @@ class _ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
                 code: _errorCode!,
                 onAction: _onErrorAction,
                 diagnostics: () =>
-                    'platform=?, code=$_errorCode, url=${_linkController.text.trim()}, app=$_appVersion',
+                    'platform=?, code=$_errorCode, url=${_linkController.text.trim()}, app=$_appVersion, parser=${ParserVersion.version}',
               ),
             ),
           Padding(

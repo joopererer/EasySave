@@ -751,21 +751,3 @@ export function buildNoteFromRecord(
   }
   return { ok: true, data };
 }
-
-
-export function parseXhsState(state: unknown, _url: string): XhsResult | undefined {
-  if (!isRecord(state)) return undefined;
-  const noteMap = state["noteDetailMap"];
-  if (!isRecord(noteMap)) return undefined;
-  const entries = Object.values(noteMap);
-  for (const entry of entries) {
-    if (!isRecord(entry)) continue;
-    const note = isRecord(entry["note"]) ? (entry["note"] as Record<string, unknown>) : entry;
-    if (isNoteShaped(note)) {
-      const noteId = nonBlank(note["noteId"]) ? (note["noteId"] as string) : undefined;
-      if (noteId === undefined) continue;
-      return buildNoteFromRecord(note, noteId);
-    }
-  }
-  return undefined;
-}

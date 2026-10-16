@@ -41,8 +41,8 @@
 
 ## v1.3a 解析器统一
 
-- [ ] 把 extension/src 的 TS 解析器打包成一个可注入 WebView 的独立 JS（输入：页面数据；输出：spec 中的统一模型 JSON 或错误模型）
-- [ ] App 在页面加载完成后注入这个 JS 执行，用它的结果替换 Dart 解析器；保留 Dart 的统一模型和错误模型定义，删除 Dart 的平台解析器；fixture 测试只在 TS 端运行
+- [x] 把 extension/src 的 TS 解析器打包成一个可注入 WebView 的独立 JS（输入：页面数据；输出：spec 中的统一模型 JSON 或错误模型）
+- [x] App 在页面加载完成后注入这个 JS 执行，用它的结果替换 Dart 解析器；保留 Dart 的统一模型和错误模型定义，删除 Dart 的平台解析器；fixture 测试只在 TS 端运行
   - 验收：小红书和 IG 的全部真机测试流程与 v1.1 结果一致；以后新增平台只需要写 TS 一份
 
 ## v1.3b 解析器云端热更新

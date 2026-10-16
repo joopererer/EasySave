@@ -2,6 +2,7 @@
 
 import 'dart:io';
 
+import 'package:easysave/generated/parser_version.dart';
 import 'package:flutter/material.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 
@@ -249,6 +250,10 @@ class _MinePageState extends State<MinePage> {
               children: [
                 ListTile(title: const Text('清除缓存'), onTap: _clearCache),
                 ListTile(title: const Text('版本号'), subtitle: Text(_version)),
+                ListTile(
+                  title: const Text('解析器版本'),
+                  subtitle: Text(ParserVersion.version),
+                ),
               ],
             ),
           ),

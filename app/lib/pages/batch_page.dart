@@ -2,6 +2,7 @@
 // single-post parse outcome. Each success opens the standard PreviewPage
 // (its own download batch); failures show the error copy inline.
 
+import 'package:easysave/generated/parser_version.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -206,7 +207,8 @@ class _BatchPageState extends State<BatchPage> {
               ClipboardData(
                 text:
                     'platform=${_platformOf(item.link)}, '
-                    'code=${item.errorCode}, url=${item.link}',
+                    'code=${item.errorCode}, url=${item.link}, '
+                    'parser=${ParserVersion.version}',
               ),
             );
             ScaffoldMessenger.of(
