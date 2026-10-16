@@ -11,8 +11,8 @@ import '../services/history_db.dart';
 import '../services/saver.dart';
 import '../theme/app_theme.dart';
 import '../widgets/download_sheet.dart';
+import '../widgets/gallery_browser.dart';
 import '../widgets/shared.dart';
-import 'player_page.dart';
 
 class PreviewPage extends StatefulWidget {
   const PreviewPage({super.key, required this.post, this.rawImages = const []});
@@ -89,6 +89,7 @@ class _PreviewPageState extends State<PreviewPage> {
 
   String _badgeFor(MediaItem item) {
     if (item.type == 'video') {
+      if (item.isGif == true) return 'GIF';
       final duration = item.duration;
       if (duration != null && duration.isFinite) {
         final total = duration.round();
@@ -98,7 +99,7 @@ class _PreviewPageState extends State<PreviewPage> {
       }
       return '▶';
     }
-    if (item.type == 'live') return 'Live';
+    if (item.type == 'live') return 'LIVE';
     return '';
   }
 
@@ -113,55 +114,34 @@ class _PreviewPageState extends State<PreviewPage> {
   }
 
   void _viewFullscreen(int index) {
-    final item = widget.post.items[index];
-    if (item.type == 'video') {
-      Navigator.of(context).push(
-        MaterialPageRoute<void>(
-          builder: (_) =>
-              VideoPlayerPage(item: item, platform: widget.post.platform),
-        ),
-      );
-      return;
-    }
-    if (item.type == 'live' && item.videoUrl != null) {
-      Navigator.of(context).push(
-        MaterialPageRoute<void>(
-          builder: (_) =>
-              LivePlayerPage(item: item, platform: widget.post.platform),
-        ),
-      );
-      return;
-    }
-    showDialog<void>(
-      context: context,
-      builder: (context) => Dialog.fullscreen(
-        backgroundColor: Colors.black,
-        child: Stack(
-          children: [
-            Center(
-              child: InteractiveViewer(
-                child: CoverImage(
-                  key: ValueKey(item.url),
-                  item: item,
-                  referer: refererFor(widget.post.platform),
-                  fit: BoxFit.contain,
-                  // Full-res decodes of multi-MB originals evict the grid
-                  // thumbnails from the image cache; returning then
-                  // re-decodes everything (the visible lag). 1080px is
-                  // plenty for a phone screen.
-                  cacheWidth: 1080,
-                ),
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => GalleryBrowserPage(
+          items: [
+            for (var i = 0; i < widget.post.items.length; i++)
+              GalleryBrowserItem(
+                index: i,
+                type: widget.post.items[i].type,
+                url: widget.post.items[i].url,
+                videoUrl: widget.post.items[i].videoUrl,
+                isGif: widget.post.items[i].isGif ?? false,
+                status: FileStatus.found,
               ),
-            ),
-            Positioned(
-              top: 8,
-              right: 8,
-              child: IconButton(
-                icon: const Icon(Icons.close, color: Colors.white),
-                onPressed: () => Navigator.of(context).pop(),
-              ),
-            ),
           ],
+          initialIndex: index,
+          authorName: widget.post.author.name ?? '',
+          title: widget.post.title ?? widget.post.id,
+          platform: widget.post.platform,
+          postUrl: widget.post.url,
+          selectedIndices: _order.toSet(),
+          onSelectionChanged: (set) {
+            setState(() {
+              _order.removeWhere((i) => !set.contains(i));
+              for (final i in set) {
+                if (!_order.contains(i)) _order.add(i);
+              }
+            });
+          },
         ),
       ),
     );

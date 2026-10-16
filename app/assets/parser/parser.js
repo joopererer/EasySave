@@ -872,6 +872,7 @@ var EasySaveParser = (() => {
         if (best && typeof best["url"] === "string") {
           items.push({
             type: "video",
+            isGif: true,
             url: best["url"],
             posterUrl: mediaUrlHttps ? normalizeImageUrl(mediaUrlHttps) : void 0,
             width,

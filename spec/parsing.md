@@ -4,11 +4,14 @@
 
 Fixture pairs used to validate this contract live under spec/fixtures/.
 
-Parsers produce `{ platform, id, url, author: { name?, id? }, title?, caption?, publishedAt?, items: [{ type: image|video|live, url, videoUrl?, posterUrl?, width?, height?, duration? }] }`.
+Parsers produce `{ platform, id, url, author: { name?, id? }, title?, caption?, publishedAt?, items: [{ type: image|video|live, url, isGif?, videoUrl?, posterUrl?, width?, height?, duration? }] }`.
 `platform` is `xhs`, `instagram`, or `x`. `url` is the canonical post URL.
 `items` preserves source order. `live` represents a still image paired with its
 motion asset via `videoUrl`. In v1, `live` is only an image+video pair; no
 motion-photo synthesis is performed.
+`isGif` is an optional boolean flag (`isGif: true`) present only on `video` items
+that represent looping animated GIFs (e.g. X animated GIFs). For normal videos,
+`isGif` is absent (omitted).
 `duration` is the video length in seconds, present only on `video` items and
 only when the source provides it: XHS reads `video.capa.duration`, Instagram
 reads `video_duration`, X reads `video_info.duration_millis / 1000`. When absent, the UI shows a bare play badge.
@@ -104,10 +107,12 @@ The parser exports both a unified dispatch function and individual platform func
   - Dimensions: `original_info.width` and `original_info.height`.
   - Emitted as `{ type: "video", url: highestBitrateMp4Url, posterUrl, width, height, duration }`.
 - **Animated GIFs (`type === "animated_gif"`)**:
-  - Classified as `{ type: "video" }` in the unified model (X delivers GIFs as looping silent MP4 video).
+  - Classified as `{ type: "video", isGif: true }` in the unified model (X delivers GIFs as looping silent MP4 video).
+  - `isGif: true` is an optional boolean flag preserved across the parser and data models for backward compatibility.
   - Video URL: Selected from `video_info.variants` where `content_type === "video/mp4"`.
   - `posterUrl`: Still cover image from `media_url_https?name=orig`.
   - Dimensions: `original_info.width` and `original_info.height`.
+  - Emitted as `{ type: "video", isGif: true, url: highestBitrateMp4Url, posterUrl, width, height }`.
 - **Quote Tweets**:
   - When a post quotes another tweet (`quoted_tweet` present), only extract media from the top-level `mediaDetails` representing the post itself. Never merge `quoted_tweet.mediaDetails`.
 

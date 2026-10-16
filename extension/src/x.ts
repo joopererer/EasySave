@@ -27,6 +27,7 @@ export type XItemType = "image" | "video";
 export interface XItem {
   type: XItemType;
   url: string;
+  isGif?: boolean;
   videoUrl?: string;
   posterUrl?: string;
   width?: number;
@@ -253,6 +254,7 @@ export function parseX(
       if (best && typeof best["url"] === "string") {
         items.push({
           type: "video",
+          isGif: true,
           url: best["url"] as string,
           posterUrl: mediaUrlHttps ? normalizeImageUrl(mediaUrlHttps) : undefined,
           width,

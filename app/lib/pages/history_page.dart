@@ -1,11 +1,17 @@
-// History tab: platform filter, date groups, undoable delete, empty state.
+// History tab: platform filter, date groups, undoable delete, empty state,
+// local photo_manager album resolution, permission banners, and unified fullscreen browser.
 
 import 'package:flutter/material.dart';
+import 'package:photo_manager/photo_manager.dart';
+import 'package:photo_manager_image_provider/photo_manager_image_provider.dart';
+import 'package:url_launcher/url_launcher.dart';
 
-import '../core/models.dart';
+import '../services/gallery_locator_service.dart';
 import '../services/history_db.dart';
-import '../services/saver.dart';
+import '../services/parse_service.dart';
 import '../theme/app_theme.dart';
+import '../widgets/download_sheet.dart';
+import '../widgets/gallery_browser.dart';
 import '../widgets/shared.dart';
 import 'preview_page.dart';
 
@@ -28,7 +34,29 @@ class HistoryPageState extends State<HistoryPage> {
   @override
   void initState() {
     super.initState();
-    _reload();
+    GalleryLocatorService.instance.addListener(_onLocatorChanged);
+    _initPermissionsAndLoad();
+  }
+
+  @override
+  void dispose() {
+    GalleryLocatorService.instance.removeListener(_onLocatorChanged);
+    super.dispose();
+  }
+
+  void _onLocatorChanged() {
+    if (mounted) setState(() {});
+  }
+
+  Future<void> _initPermissionsAndLoad() async {
+    final locator = GalleryLocatorService.instance;
+    await locator.checkPermission();
+    if (locator.permission == PermissionState.notDetermined) {
+      await locator.requestPermission();
+    } else if (locator.hasAccess) {
+      await locator.scanAlbum();
+    }
+    await _reload();
   }
 
   /// Reload from DB; called by the shell every time the tab becomes visible
@@ -39,8 +67,6 @@ class HistoryPageState extends State<HistoryPage> {
   }
 
   Future<void> _reload() async {
-    // Silent refresh after the first load: swapping the whole list for a
-    // spinner on every return-from-preview reads as a freeze.
     final silent = _records.isNotEmpty;
     if (!silent) {
       setState(() {
@@ -50,6 +76,10 @@ class HistoryPageState extends State<HistoryPage> {
     }
     try {
       final records = await HistoryDb.instance().then((db) => db.recent());
+      final locator = GalleryLocatorService.instance;
+      if (locator.hasAccess) {
+        await locator.syncAll(records);
+      }
       if (!mounted) return;
       setState(() {
         _records = records;
@@ -124,14 +154,113 @@ class HistoryPageState extends State<HistoryPage> {
     ).showSnackBar(const SnackBar(content: Text('历史记录已清空')));
   }
 
+  Future<void> _reparse(HistoryRecord record) async {
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Row(
+          children: [
+            SizedBox(
+              width: 16,
+              height: 16,
+              child: CircularProgressIndicator(
+                strokeWidth: 2,
+                color: Colors.white,
+              ),
+            ),
+            SizedBox(width: 12),
+            Text('正在重新解析...'),
+          ],
+        ),
+        duration: Duration(seconds: 10),
+      ),
+    );
+    try {
+      final outcome = await parsePostOutcome(record.postUrl);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).hideCurrentSnackBar();
+      Navigator.of(context).push(
+        MaterialPageRoute<void>(
+          builder: (_) => PreviewPage(
+            post: outcome.data,
+            rawImages: outcome.rawImages,
+          ),
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).hideCurrentSnackBar();
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('解析失败：$e')),
+      );
+    }
+  }
+
+  Future<void> _openOriginal(String url) async {
+    final uri = Uri.tryParse(url);
+    if (uri != null) {
+      await launchUrl(uri, mode: LaunchMode.externalApplication);
+    }
+  }
+
   void _open(HistoryRecord record) {
-    // Guard against tap storms: a second push while the transition is
-    // still running stacks identical routes and makes "back" look dead.
     if (_opening) return;
     _opening = true;
+
     final post = PreviewPage.postFromRecord(record);
+    final locator = GalleryLocatorService.instance;
+
+    final items = <GalleryBrowserItem>[];
+    for (var i = 0; i < post.items.length; i++) {
+      final postItem = post.items[i];
+      HistoryFile? matchedFile;
+      for (final f in record.files) {
+        if (f.itemIndex == i) {
+          matchedFile = f;
+          break;
+        }
+      }
+      AssetEntity? asset;
+      FileStatus status = FileStatus.unknown;
+      if (matchedFile != null) {
+        asset = locator.getAssetById(matchedFile.mediaId) ??
+            locator.locateAsset(matchedFile, record.postId);
+        status = matchedFile.status;
+      }
+      items.add(
+        GalleryBrowserItem(
+          index: i,
+          type: postItem.type,
+          url: postItem.url,
+          videoUrl: postItem.videoUrl,
+          isGif: postItem.isGif ?? false,
+          asset: asset,
+          status: status,
+          filename: matchedFile?.filename,
+        ),
+      );
+    }
+
     Navigator.of(context)
-        .push(MaterialPageRoute<void>(builder: (_) => PreviewPage(post: post)))
+        .push(
+          MaterialPageRoute<void>(
+            builder: (_) => GalleryBrowserPage(
+              items: items,
+              authorName: record.authorName ?? '',
+              title: (record.title?.isNotEmpty == true)
+                  ? record.title!
+                  : record.postId,
+              platform: record.platform,
+              postUrl: record.postUrl,
+              onReparse: () => _reparse(record),
+              onRedownload: (index) async {
+                await DownloadSheet.show(context, post, [index]);
+                await locator.scanAlbum(force: true);
+                await locator.syncRecord(record);
+                if (mounted) setState(() {});
+              },
+            ),
+          ),
+        )
         .then((_) {
           _opening = false;
           _reload();
@@ -140,6 +269,8 @@ class HistoryPageState extends State<HistoryPage> {
 
   @override
   Widget build(BuildContext context) {
+    final locator = GalleryLocatorService.instance;
+
     return Scaffold(
       appBar: AppBar(
         title: const Text('历史'),
@@ -150,6 +281,60 @@ class HistoryPageState extends State<HistoryPage> {
       ),
       body: Column(
         children: [
+          // Permission Warning Banners
+          if (locator.isDenied)
+            Container(
+              margin: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+              decoration: BoxDecoration(
+                color: Colors.amber.shade50,
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: Colors.amber.shade200),
+              ),
+              child: Row(
+                children: [
+                  Icon(Icons.info_outline, color: Colors.amber.shade800, size: 20),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      '未获得相册权限，无法定位本地文件',
+                      style: TextStyle(color: Colors.amber.shade900, fontSize: 13),
+                    ),
+                  ),
+                  TextButton(
+                    onPressed: () => locator.openSettings(),
+                    child: const Text('去设置'),
+                  ),
+                ],
+              ),
+            )
+          else if (locator.isLimited)
+            Container(
+              margin: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+              decoration: BoxDecoration(
+                color: Colors.blue.shade50,
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: Colors.blue.shade200),
+              ),
+              child: Row(
+                children: [
+                  Icon(Icons.info_outline, color: Colors.blue.shade800, size: 20),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      '仅授权了部分照片，未授权的媒体无法显示',
+                      style: TextStyle(color: Colors.blue.shade900, fontSize: 13),
+                    ),
+                  ),
+                  TextButton(
+                    onPressed: () => locator.reRequestLimited(),
+                    child: const Text('管理权限'),
+                  ),
+                ],
+              ),
+            ),
+
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
             child: SegmentedButton<String>(
@@ -159,7 +344,6 @@ class HistoryPageState extends State<HistoryPage> {
                 ButtonSegment(value: 'instagram', label: Text('Instagram')),
                 ButtonSegment(value: 'x', label: Text('X')),
               ],
-
               selected: {_filter},
               onSelectionChanged: (selected) =>
                   setState(() => _filter = selected.first),
@@ -243,10 +427,33 @@ class HistoryPageState extends State<HistoryPage> {
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                   ),
-                  subtitle: Text(
-                    '${record.authorName ?? ''} · ${record.fileCount} 个文件',
+                  subtitle: Row(
+                    children: [
+                      PlatformTag(platform: record.platform),
+                      const SizedBox(width: 6),
+                      Flexible(
+                        child: Text(
+                          '${record.authorName ?? ''} · ${record.fileCount} 个文件',
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                    ],
                   ),
-                  trailing: PlatformTag(platform: record.platform),
+                  trailing: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      IconButton(
+                        icon: const Icon(Icons.refresh, size: 20),
+                        tooltip: '重新解析',
+                        onPressed: () => _reparse(record),
+                      ),
+                      IconButton(
+                        icon: const Icon(Icons.open_in_new, size: 20),
+                        tooltip: '打开原帖',
+                        onPressed: () => _openOriginal(record.postUrl),
+                      ),
+                    ],
+                  ),
                 ),
               ),
             ),
@@ -255,18 +462,60 @@ class HistoryPageState extends State<HistoryPage> {
     );
   }
 
-  /// 48px leading thumbnail; null-safe — a video URL is never rendered.
-  Widget? _thumbOf(HistoryRecord record) {
-    final url = displayThumbnail(record);
-    if (url == null) return null;
-    return ClipRRect(
-      borderRadius: const BorderRadius.all(Radius.circular(8)),
-      child: CoverImage(
-        item: MediaItem(type: 'image', url: url),
-        referer: refererFor(record.platform),
-        cacheWidth: 200,
+  /// 48px leading thumbnail reading local album photo_manager asset without CDN requests.
+  Widget _thumbOf(HistoryRecord record) {
+    final locator = GalleryLocatorService.instance;
+    AssetEntity? asset;
+    for (final f in record.files) {
+      asset = locator.getAssetById(f.mediaId) ??
+          locator.locateAsset(f, record.postId);
+      if (asset != null) break;
+    }
+
+    if (asset != null) {
+      return ClipRRect(
+        borderRadius: const BorderRadius.all(Radius.circular(8)),
+        child: SizedBox(
+          width: 48,
+          height: 48,
+          child: AssetEntityImage(
+            asset,
+            isOriginal: false,
+            thumbnailSize: const ThumbnailSize.square(150),
+            fit: BoxFit.cover,
+          ),
+        ),
+      );
+    }
+
+    // Only show "已从相册删除" when fully authorized and all files are confirmed not found
+    final allNotFound = record.files.isNotEmpty &&
+        record.files.every((f) => f.status == FileStatus.notFound);
+
+    if (locator.isFullyAuthorized && allNotFound) {
+      return Container(
         width: 48,
         height: 48,
+        decoration: BoxDecoration(
+          color: Colors.grey.shade200,
+          borderRadius: const BorderRadius.all(Radius.circular(8)),
+        ),
+        child: const Icon(Icons.broken_image, size: 24, color: Colors.grey),
+      );
+    }
+
+    // Default neutral placeholder when not found or permissions unknown
+    return Container(
+      width: 48,
+      height: 48,
+      decoration: BoxDecoration(
+        color: AppTokens.beigeBg,
+        borderRadius: const BorderRadius.all(Radius.circular(8)),
+      ),
+      child: Icon(
+        Icons.photo_outlined,
+        size: 24,
+        color: AppTokens.textSecondary,
       ),
     );
   }

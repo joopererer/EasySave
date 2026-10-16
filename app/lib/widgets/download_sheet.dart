@@ -35,7 +35,7 @@ class DownloadSheet extends StatefulWidget {
       selected,
       album: settings.albumName,
       nameFor: (label, seq, ext) =>
-          '${settings.fileName(postId: post.id, seq: seq, author: author)}.$ext',
+          settings.fileName(postId: post.id, seq: seq, author: author),
     );
     if (!context.mounted) return;
     await showModalBottomSheet<void>(

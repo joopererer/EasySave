@@ -6,19 +6,22 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:package_info_plus/package_info_plus.dart';
+import 'package:photo_manager/photo_manager.dart';
+import 'package:photo_manager_image_provider/photo_manager_image_provider.dart';
 import 'package:receive_sharing_intent/receive_sharing_intent.dart';
 
 import '../core/error_copy.dart';
 import '../core/models.dart';
 import '../services/auth.dart';
+import '../services/gallery_locator_service.dart';
 import '../services/history_db.dart';
 import '../services/links.dart';
 import '../services/parse_service.dart';
-import '../services/saver.dart';
 import '../services/seal.dart';
 import '../services/settings.dart';
 import '../services/update_service.dart';
 import '../theme/app_theme.dart';
+import '../widgets/gallery_browser.dart';
 import '../widgets/shared.dart';
 import 'batch_page.dart';
 import 'login_page.dart';
@@ -86,6 +89,10 @@ class _ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
       (db) => db.recent(limit: 3),
     );
     if (!mounted) return;
+    final locator = GalleryLocatorService.instance;
+    if (locator.hasAccess) {
+      await locator.syncAll(records);
+    }
     setState(() => _recent = records);
   }
 
@@ -589,27 +596,113 @@ class _ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
     // still running stacks identical routes and makes "back" look dead.
     if (_openingRecord) return;
     _openingRecord = true;
+
     final post = PreviewPage.postFromRecord(record);
+    final locator = GalleryLocatorService.instance;
+
+    final items = <GalleryBrowserItem>[];
+    for (var i = 0; i < post.items.length; i++) {
+      final postItem = post.items[i];
+      HistoryFile? matchedFile;
+      for (final f in record.files) {
+        if (f.itemIndex == i) {
+          matchedFile = f;
+          break;
+        }
+      }
+      AssetEntity? asset;
+      FileStatus status = FileStatus.unknown;
+      if (matchedFile != null) {
+        asset = locator.getAssetById(matchedFile.mediaId) ??
+            locator.locateAsset(matchedFile, record.postId);
+        status = matchedFile.status;
+      }
+      items.add(
+        GalleryBrowserItem(
+          index: i,
+          type: postItem.type,
+          url: postItem.url,
+          videoUrl: postItem.videoUrl,
+          isGif: postItem.isGif ?? false,
+          asset: asset,
+          status: status,
+          filename: matchedFile?.filename,
+        ),
+      );
+    }
+
     Navigator.of(context)
-        .push(MaterialPageRoute<void>(builder: (_) => PreviewPage(post: post)))
+        .push(
+          MaterialPageRoute<void>(
+            builder: (_) => GalleryBrowserPage(
+              items: items,
+              authorName: record.authorName ?? '',
+              title: (record.title?.isNotEmpty == true)
+                  ? record.title!
+                  : record.postId,
+              platform: record.platform,
+              postUrl: record.postUrl,
+            ),
+          ),
+        )
         .then((_) {
           _openingRecord = false;
           _reloadRecent();
         });
   }
 
-  /// 48px leading thumbnail; null-safe — a video URL is never rendered.
+  /// 48px leading thumbnail; reads local album asset without CDN requests.
   Widget? _thumbOf(BuildContext context, HistoryRecord record) {
-    final url = displayThumbnail(record);
-    if (url == null) return null;
-    return ClipRRect(
-      borderRadius: const BorderRadius.all(Radius.circular(8)),
-      child: CoverImage(
-        item: MediaItem(type: 'image', url: url),
-        referer: refererFor(record.platform),
-        cacheWidth: 200,
+    final locator = GalleryLocatorService.instance;
+    AssetEntity? asset;
+    for (final f in record.files) {
+      asset = locator.getAssetById(f.mediaId) ??
+          locator.locateAsset(f, record.postId);
+      if (asset != null) break;
+    }
+
+    if (asset != null) {
+      return ClipRRect(
+        borderRadius: const BorderRadius.all(Radius.circular(8)),
+        child: SizedBox(
+          width: 48,
+          height: 48,
+          child: AssetEntityImage(
+            asset,
+            isOriginal: false,
+            thumbnailSize: const ThumbnailSize.square(150),
+            fit: BoxFit.cover,
+          ),
+        ),
+      );
+    }
+
+    final allNotFound = record.files.isNotEmpty &&
+        record.files.every((f) => f.status == FileStatus.notFound);
+
+    if (locator.isFullyAuthorized && allNotFound) {
+      return Container(
         width: 48,
         height: 48,
+        decoration: BoxDecoration(
+          color: Colors.grey.shade200,
+          borderRadius: const BorderRadius.all(Radius.circular(8)),
+        ),
+        child: const Icon(Icons.broken_image, size: 24, color: Colors.grey),
+      );
+    }
+
+    return Container(
+      width: 48,
+      height: 48,
+      decoration: const BoxDecoration(
+        color: AppTokens.beigeBg,
+        borderRadius: BorderRadius.all(Radius.circular(8)),
+      ),
+      child: const Icon(
+        Icons.photo_outlined,
+        size: 24,
+        color: AppTokens.textSecondary,
       ),
     );
   }

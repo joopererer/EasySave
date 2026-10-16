@@ -94,3 +94,24 @@ describe("extractTweetId", () => {
     ).toBe("2111025862892269612");
   });
 });
+
+describe("isGif field distinction", () => {
+  it("ensures normal video has no isGif property while animated_gif has isGif: true", () => {
+    const videoInput = readFileSync(join(fixtureDir, "video.json"), "utf-8");
+    const videoResult = parseX(videoInput, "https://x.com/test/status/video");
+    expect(videoResult.ok).toBe(true);
+    if (videoResult.ok) {
+      expect(videoResult.data.items[0].type).toBe("video");
+      expect(videoResult.data.items[0]).not.toHaveProperty("isGif");
+    }
+
+    const gifInput = readFileSync(join(fixtureDir, "gif.json"), "utf-8");
+    const gifResult = parseX(gifInput, "https://x.com/test/status/gif");
+    expect(gifResult.ok).toBe(true);
+    if (gifResult.ok) {
+      expect(gifResult.data.items[0].type).toBe("video");
+      expect(gifResult.data.items[0].isGif).toBe(true);
+    }
+  });
+});
+

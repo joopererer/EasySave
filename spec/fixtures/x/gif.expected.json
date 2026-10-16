@@ -11,6 +11,7 @@
   "items": [
     {
       "type": "video",
+      "isGif": true,
       "url": "https://video.twimg.com/tweet_video/HUuKTrJW8AARzW5.mp4",
       "posterUrl": "https://pbs.twimg.com/tweet_video_thumb/HUuKTrJW8AARzW5.jpg?name=orig",
       "width": 900,

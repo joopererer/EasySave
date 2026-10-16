@@ -35,6 +35,7 @@ class MediaItem {
   MediaItem({
     required this.type,
     required this.url,
+    this.isGif,
     this.videoUrl,
     this.posterUrl,
     this.width,
@@ -46,6 +47,7 @@ class MediaItem {
   factory MediaItem.fromJson(Map<String, dynamic> json) => MediaItem(
     type: json['type'] as String? ?? 'image',
     url: json['url'] as String? ?? '',
+    isGif: json['isGif'] as bool?,
     videoUrl: json['videoUrl'] as String?,
     posterUrl: json['posterUrl'] as String?,
     width: json['width'] as num?,
@@ -58,6 +60,7 @@ class MediaItem {
 
   final String type;
   final String url;
+  final bool? isGif;
   final String? videoUrl;
 
   /// Still-image cover for a video item (XHS `imageList[0]`). IG video
@@ -76,7 +79,9 @@ class MediaItem {
   final List<String> fallbacks;
 
   Map<String, Object?> toJson() {
-    final map = <String, Object?>{'type': type, 'url': url};
+    final map = <String, Object?>{'type': type};
+    if (isGif == true) map['isGif'] = true;
+    map['url'] = url;
     if (videoUrl != null) map['videoUrl'] = videoUrl;
     if (posterUrl != null) map['posterUrl'] = posterUrl;
     if (width != null) map['width'] = width;

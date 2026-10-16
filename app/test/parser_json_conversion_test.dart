@@ -140,6 +140,26 @@ void main() {
       expect(item.type, equals('image'));
       expect(item.url, equals('https://example.com/i.jpg'));
       expect(item.fallbacks, isEmpty);
+      expect(item.isGif, isNull);
+      expect(item.toJson().containsKey('isGif'), isFalse);
+    });
+
+    test('MediaItem distinguishes GIF video from normal video', () {
+      final normalVideo = MediaItem.fromJson({
+        'type': 'video',
+        'url': 'https://example.com/v.mp4',
+      });
+      expect(normalVideo.isGif, isNull);
+      expect(normalVideo.toJson().containsKey('isGif'), isFalse);
+
+      final gifVideo = MediaItem.fromJson({
+        'type': 'video',
+        'isGif': true,
+        'url': 'https://example.com/g.mp4',
+      });
+      expect(gifVideo.isGif, isTrue);
+      expect(gifVideo.toJson()['isGif'], isTrue);
     });
   });
 }
+

@@ -553,6 +553,17 @@ class DownloadManager extends ChangeNotifier {
     if (!batch.historyWritten) {
       batch.historyWritten = true;
       final thumb = _thumbnailFor(batch);
+      final files = [
+        for (final job in batch.jobs)
+          if (job.saved && job.state == JobState.done)
+            HistoryFile(
+              filename: job.filename,
+              savedAt: DateTime.now().millisecondsSinceEpoch,
+              itemIndex: job.itemIndex,
+              isImage: job.isImage,
+              status: FileStatus.unknown,
+            ),
+      ];
       await HistoryDb.instance().then(
         (db) => db.upsert(
           HistoryRecord(
@@ -566,6 +577,7 @@ class DownloadManager extends ChangeNotifier {
             fileCount: batch.succeeded,
             createdAt: DateTime.now(),
             itemsJson: batch.itemsJson,
+            files: files,
           ),
         ),
       );
