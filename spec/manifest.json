@@ -1,11 +1,11 @@
 {
   "parserVersion": "1.0.0",
   "minAppVersion": "1.0.0",
-  "sha256": "c56f5b60a1ce61b08279b396690d9a91b2159aa8736ba4ce6c92b6a0fa24c6ff",
-  "signature": "99c4d51fb5f5a0da734403ea9902ab64f935d7b932e96991fd2fa52ddc30ba59791358d24ad3213b0d043c6b29cdc493563705ea85a30e0ae349535bfa532305",
+  "sha256": "eed92ab49fd69bfbb180ad0289cebd855a2721ab03d80724b542fbfb33ad5dab",
+  "signature": "e27cc5a61b93cc88019c7b639692f9728a901262bc590655dd80f851d1cbc24fe48ae5bc9ae45ac3875a5c413af0955f7ecfd78463c9729fe6d444a24f09d501",
   "platforms": {
     "xhs": {
-      "enabled": false,
+      "enabled": true,
       "notice": "小红书解析服务维护中，请稍后再试"
     },
     "instagram": {
