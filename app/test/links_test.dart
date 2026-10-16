@@ -39,7 +39,11 @@ void main() {
       expect(isSupportedLink('https://xhslink.cn/o/UJ01yHnFbS'), isTrue);
       expect(isSupportedLink('https://www.instagram.com/reels/abc/'), isTrue);
       expect(isSupportedLink('https://instagr.am/p/abc/'), isTrue);
+      expect(isSupportedLink('https://x.com/Lucy_love_AI/status/2110916144072913327'), isTrue);
+      expect(isSupportedLink('https://twitter.com/user/status/12345678'), isTrue);
+      expect(isSupportedLink('https://t.co/xyz123'), isTrue);
       expect(isSupportedLink('https://evil-xiaohongshu.com/x'), isFalse);
     });
   });
 }
+

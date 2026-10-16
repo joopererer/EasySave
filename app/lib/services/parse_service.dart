@@ -1,11 +1,13 @@
 // Headless parsing: load a post URL (short links follow redirects
-// automatically), inject parser.js and execute EasySaveParser.parsePage().
+// automatically), inject parser.js and execute EasySaveParser.
 // Throws [ParseFailure] so callers can distinguish login walls.
 
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math' as math;
 
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
+import 'package:http/http.dart' as http;
 
 import '../core/models.dart';
 import '../core/parse.dart';
@@ -33,6 +35,8 @@ void _checkPlatform(String url) {
     platform = 'xhs';
   } else if (isInstagramHost(host)) {
     platform = 'instagram';
+  } else if (isXHost(host)) {
+    platform = 'x';
   }
 
   if (platform.isNotEmpty && !ParserManager.instance.isPlatformEnabled(platform)) {
@@ -42,7 +46,40 @@ void _checkPlatform(String url) {
   }
 }
 
-/// Load [url] headlessly and parse the post it resolves to.
+String? extractTweetId(String url) {
+  final match = RegExp(
+    r'(?:x|twitter)\.com/(?:[^/]+)/status/(\d+)',
+    caseSensitive: false,
+  ).firstMatch(url);
+  if (match != null) return match.group(1);
+  final fallback = RegExp(r'/status/(\d+)').firstMatch(url);
+  return fallback?.group(1);
+}
+
+String calculateXToken(String id) {
+  final numId = double.tryParse(id) ?? 0.0;
+  final val = (numId / 1e15) * math.pi;
+  final intPart = val.floor();
+  var fracPart = val - intPart;
+  var res = intPart.toRadixString(36);
+  if (fracPart > 0) {
+    var fracStr = '';
+    for (var i = 0; i < 8; i++) {
+      fracPart *= 36;
+      var d = fracPart.floor();
+      if (i == 7) {
+        final remainder = fracPart - d;
+        if (remainder >= 0.5) d += 1;
+      }
+      fracStr += d.toRadixString(36);
+      fracPart -= d;
+    }
+    res += '.$fracStr';
+  }
+  return res.replaceAll(RegExp(r'(0+|\.)'), '');
+}
+
+/// Load [url] and parse the post it resolves to.
 Future<ParsedPost> parsePostUrl(String url) {
   _checkPlatform(url);
   return _withTimeout(() async {
@@ -71,9 +108,117 @@ class ParseOutcome {
   final List<RawImageEntry> rawImages;
 }
 
+Future<ParseOutcome> _runParserJs(String input, String pageUrl) async {
+  final loaded = Completer<void>();
+  InAppWebViewController? readyController;
+  HeadlessInAppWebView? headless;
+  try {
+    headless = HeadlessInAppWebView(
+      initialData: InAppWebViewInitialData(data: '<html><body></body></html>'),
+      onLoadStop: (controller, uri) {
+        readyController ??= controller;
+        if (!loaded.isCompleted) loaded.complete();
+      },
+      onReceivedError: (controller, request, error) {
+        readyController ??= controller;
+        if (!loaded.isCompleted) loaded.complete();
+      },
+    );
+    await headless.run();
+    await loaded.future.timeout(const Duration(seconds: 5));
+    final controller = readyController ?? headless.webViewController;
+    if (controller == null) {
+      throw ParseFailure(ParseErrorCode.invalidPage, 'JS 引擎未能初始化');
+    }
+
+    final parserJs = await ParserManager.instance.getActiveScript();
+    await controller.evaluateJavascript(source: parserJs);
+    final jsResult = await controller.evaluateJavascript(
+      source:
+          'EasySaveParser.parse(${jsonEncode(input)}, ${jsonEncode(pageUrl)})',
+    );
+
+    if (jsResult == null) {
+      throw ParseFailure(ParseErrorCode.invalidPage, '解析结果为空');
+    }
+
+    Map<String, dynamic> resultJson;
+    try {
+      if (jsResult is String) {
+        resultJson = (jsonDecode(jsResult) as Map).cast<String, dynamic>();
+      } else if (jsResult is Map) {
+        resultJson = jsResult.cast<String, dynamic>();
+      } else {
+        throw ParseFailure(ParseErrorCode.invalidPage, '解析器返回非 JSON 结果');
+      }
+    } catch (e) {
+      if (e is ParseFailure) rethrow;
+      throw ParseFailure(ParseErrorCode.invalidPage, '解析器结果格式错误: $e');
+    }
+
+    final ok = resultJson['ok'] == true;
+    if (!ok) {
+      final error = resultJson['error'] as Map?;
+      final code = error?['code']?.toString() ?? ParseErrorCode.invalidPage;
+      final message = error?['message']?.toString() ?? '解析失败';
+      throw ParseFailure(code, message);
+    }
+
+    final dataMap = resultJson['data'] as Map?;
+    if (dataMap == null) {
+      throw ParseFailure(ParseErrorCode.invalidPage, '解析结果中没有数据');
+    }
+
+    final post = ParsedPost.fromJson(dataMap.cast<String, dynamic>());
+    return ParseOutcome(data: post, rawImages: const []);
+  } finally {
+    await headless?.dispose();
+  }
+}
+
+Future<ParseOutcome> _parseXPost(String url) async {
+  final tweetId = extractTweetId(url);
+  if (tweetId == null) {
+    throw ParseFailure(ParseErrorCode.unsupportedUrl, '无法识别推文链接: $url');
+  }
+
+  final token = calculateXToken(tweetId);
+  final endpointTpl = ParserManager.instance.getPlatformEndpoint('x');
+  final endpointUrl = endpointTpl
+      .replaceAll('{id}', tweetId)
+      .replaceAll('{token}', token);
+
+  final headers = ParserManager.instance.getPlatformHeaders('x') ??
+      const {
+        'User-Agent':
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36',
+      };
+
+  http.Response response;
+  try {
+    response = await http
+        .get(Uri.parse(endpointUrl), headers: headers)
+        .timeout(const Duration(seconds: 15));
+  } catch (e) {
+    throw ParseFailure(ParseErrorCode.timeout, '请求 X 接口超时，请重试');
+  }
+
+  if (response.statusCode == 404) {
+    throw ParseFailure(ParseErrorCode.privateOrUnavailable, '该帖子不存在、私密或已删除');
+  }
+
+  final jsonStr = utf8.decode(response.bodyBytes);
+  return _runParserJs(jsonStr, url);
+}
+
 Future<ParseOutcome> _parseInner(String url) async {
   // Remote platform switch check: do not start WebView or make requests if disabled
   _checkPlatform(url);
+
+  final host = Uri.tryParse(url)?.host.toLowerCase() ?? '';
+  if (isXHost(host)) {
+    return _parseXPost(url);
+  }
 
   final loaded = Completer<void>();
   InAppWebViewController? readyController;

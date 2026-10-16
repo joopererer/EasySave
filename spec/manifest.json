@@ -1,7 +1,7 @@
 {
-  "parserVersion": "1.0.1",
+  "parserVersion": "1.1.0",
   "minAppVersion": "1.0.0",
-  "sha256": "eed92ab49fd69bfbb180ad0289cebd855a2721ab03d80724b542fbfb33ad5dab",
+  "sha256": "a59ca556927684657c15c8e8b4b805a8b37fa2356ba43f758b2f06d959461890",
   "signature": "1a4a027c6fce862a3c96daa239c354f1e02931e2444234d5c5a6d217f36b925dc36b674daa48172f60c8adf375cafacff8d3d6dbb54dbd887e552c6f7f708504",
   "platforms": {
     "xhs": {
@@ -11,6 +11,11 @@
     "instagram": {
       "enabled": true,
       "notice": "Instagram 解析服务维护中，请稍后再试"
+    },
+    "x": {
+      "enabled": true,
+      "notice": "X (Twitter) 解析服务维护中，请稍后再试",
+      "endpoint": "https://cdn.syndication.twimg.com/tweet-result?id={id}&lang=en&token={token}"
     }
   },
   "headers": {
@@ -18,6 +23,9 @@
       "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
     },
     "instagram": {
+      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
+    },
+    "x": {
       "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
     }
   }

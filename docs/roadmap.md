@@ -57,12 +57,13 @@
 
 ## v1.4 X (Twitter)
 
-- [ ] 只使用公开嵌入接口 cdn.syndication.twimg.com/tweet-result；需要登录的推文（敏感内容、锁定账号）返回 LOGIN_REQUIRED，不做 WebView 兜底
-- [ ] 请求方式参考 Vercel 的 react-tweet（MIT）中 token 的计算方法，以及 yt-dlp 的 Twitter 提取器
-- [ ] 图片取原图（name=orig），视频取码率最高的 mp4，GIF 作为无声 mp4 视频提取，引用推文只下载被分享推文自身的媒体
-- [ ] 接口 URL 模板、token 算法参数和请求头纳入 manifest.json 云端热更新配置
-- [ ] 先采集 fixture（单图、多图、视频、GIF、引用推文、已删除），再写 spec，再实现；按 v1.3 架构只写 TS 一份，支持热更新
+- [x] 只使用公开嵌入接口 cdn.syndication.twimg.com/tweet-result；需要登录的推文（敏感内容、锁定账号）返回 LOGIN_REQUIRED，不做 WebView 兜底
+- [x] 请求方式参考 Vercel 的 react-tweet（MIT）中 token 的计算方法，以及 yt-dlp 的 Twitter 提取器
+- [x] 图片取原图（name=orig），视频取码率最高的 mp4，GIF 作为无声 mp4 视频提取，引用推文只下载被分享推文自身的媒体
+- [x] 接口 URL 模板、token 算法参数和请求头纳入 manifest.json 云端热更新配置
+- [x] 先采集 fixture（单图、多图、视频、GIF、引用推文、已删除），再写 spec，再实现；按 v1.3 架构只写 TS 一份，支持热更新
   - 验收：全部 X fixture 测试通过；真机上从 X App 分享链接能下载
+
 
 ## v1.5 TikTok
 

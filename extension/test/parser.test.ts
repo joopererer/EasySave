@@ -6,7 +6,6 @@ import { fileURLToPath } from 'url';
 // Helper to get __dirname in ES modules
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
-// console.log('__dirname:', __dirname);
 
 const fixturesDir = resolve(__dirname, '../../spec/fixtures');
 const sourcesPath = resolve(fixturesDir, 'sources.json');
@@ -65,27 +64,31 @@ describe('Parser bundle verification', () => {
     const platformSources = sources[platform] || {};
     const pairs = [];
     for (const file of files) {
-      if (file.endsWith('.html')) {
-        const htmlPath = join(platformDir, file);
-        const jsonPath = join(platformDir, file.replace('.html', '.expected.json'));
-        const html = readFileSync(htmlPath, 'utf-8');
+      if (file.endsWith('.expected.json')) continue;
+      const isHtml = file.endsWith('.html');
+      const isJson = platform === 'x' && file.endsWith('.json');
+      if (isHtml || isJson) {
+        const ext = isHtml ? '.html' : '.json';
+        const inputPath = join(platformDir, file);
+        const jsonPath = join(platformDir, file.replace(ext, '.expected.json'));
+        const input = readFileSync(inputPath, 'utf-8');
         const expected = JSON.parse(readFileSync(jsonPath, 'utf-8'));
         // Get pageUrl from sources.json
-        const basename = file.replace('.html', '');
+        const basename = file.replace(ext, '');
         const url = platformSources[basename] || `https://${platform}.com/test/${basename}`;
-        pairs.push({ html, expected, url });
+        pairs.push({ input, expected, url });
       }
     }
     return pairs;
   }
 
-  // Test parse function for each fixture
-  for (const platform of ['xhs', 'instagram']) {
+  // Test parse function for each platform
+  for (const platform of ['xhs', 'instagram', 'x']) {
     const pairs = getFixturePairs(platform);
     describe(`parse() for ${platform}`, () => {
-      for (const { html, expected, url } of pairs) {
+      for (const { input, expected, url } of pairs) {
         it(`should parse ${url}`, () => {
-          const resultJson = EasySaveParser.parse(html, url);
+          const resultJson = EasySaveParser.parse(input, url);
           const result = JSON.parse(resultJson);
           // Check if this is a failure case fixture (has top-level error field)
           const isFailureFixture = !!(expected as any).error;
@@ -109,5 +112,11 @@ describe('Parser bundle verification', () => {
   // Test parsePage function exists
   it('parsePage function exists', () => {
     expect(typeof EasySaveParser.parsePage).toBe('function');
+  });
+
+  // Test calculateToken function exists
+  it('calculateToken function exists', () => {
+    expect(typeof EasySaveParser.calculateToken).toBe('function');
+    expect(EasySaveParser.calculateToken('2110916144072913327')).toBe('547mzovpdmp');
   });
 });

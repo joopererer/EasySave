@@ -17,6 +17,12 @@ bool isInstagramHost(String host) =>
     host == 'instagr.am' ||
     host.endsWith('.instagr.am');
 
+bool isXHost(String host) =>
+    host == 'x.com' ||
+    host.endsWith('.x.com') ||
+    host == 'twitter.com' ||
+    host.endsWith('.twitter.com');
+
 /// Parse a supported post page. Dart platform parsers were replaced by
 /// the unified JS parser bundle in v1.3a.
 ParseResult parse(String html, String pageUrl) {
@@ -29,7 +35,7 @@ ParseResult parse(String html, String pageUrl) {
       ),
     );
   }
-  if (!isXhsHost(host) && !isInstagramHost(host)) {
+  if (!isXhsHost(host) && !isInstagramHost(host) && !isXHost(host)) {
     return ParseResult.err(
       ParseError(
         code: ParseErrorCode.unsupportedUrl,

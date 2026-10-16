@@ -23,8 +23,15 @@ bool isSupportedLink(String url) {
       host == 'instagram.com' ||
       host.endsWith('.instagram.com') ||
       host == 'instagr.am' ||
-      host.endsWith('.instagr.am');
+      host.endsWith('.instagr.am') ||
+      host == 'x.com' ||
+      host.endsWith('.x.com') ||
+      host == 'twitter.com' ||
+      host.endsWith('.twitter.com') ||
+      host == 't.co' ||
+      host.endsWith('.t.co');
 }
+
 
 /// Extract the first supported post URL from free text (share sheets often
 /// include surrounding copy). Returns null when there is none.
@@ -95,7 +102,10 @@ Future<String> resolveShortLink(String url) async {
       host == 'xhslink.com' ||
       host.endsWith('.xhslink.com') ||
       host == 'xhslink.cn' ||
-      host.endsWith('.xhslink.cn');
+      host.endsWith('.xhslink.cn') ||
+      host == 't.co' ||
+      host.endsWith('.t.co');
+
   if (!isShort || uri == null) return url;
   final client = HttpClient();
   try {

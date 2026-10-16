@@ -2,6 +2,7 @@
 
 import { parseInstagram, type InstagramResult } from "./instagram";
 import { parseXhs, type XhsResult } from "./xhs";
+import { parseX, type XResult } from "./x";
 
 export type ParseErrorCode =
   | "LOGIN_REQUIRED"
@@ -16,7 +17,11 @@ export interface ParseError {
   message: string;
 }
 
-export type ParseResult = XhsResult | InstagramResult | { ok: false; error: ParseError };
+export type ParseResult =
+  | XhsResult
+  | InstagramResult
+  | XResult
+  | { ok: false; error: ParseError };
 
 function hostnameOf(pageUrl: string): string | undefined {
   try {
@@ -27,26 +32,51 @@ function hostnameOf(pageUrl: string): string | undefined {
 }
 
 function isXhsHost(host: string): boolean {
-  return host === "xiaohongshu.com" || host.endsWith(".xiaohongshu.com") || host === "xhslink.com" || host.endsWith(".xhslink.com");
+  return (
+    host === "xiaohongshu.com" ||
+    host.endsWith(".xiaohongshu.com") ||
+    host === "xhslink.com" ||
+    host.endsWith(".xhslink.com")
+  );
 }
 
 function isInstagramHost(host: string): boolean {
-  return host === "instagram.com" || host.endsWith(".instagram.com") || host === "instagr.am" || host.endsWith(".instagr.am");
+  return (
+    host === "instagram.com" ||
+    host.endsWith(".instagram.com") ||
+    host === "instagr.am" ||
+    host.endsWith(".instagr.am")
+  );
+}
+
+function isXHost(host: string): boolean {
+  return (
+    host === "x.com" ||
+    host.endsWith(".x.com") ||
+    host === "twitter.com" ||
+    host.endsWith(".twitter.com")
+  );
 }
 
 /**
  * Parse a supported post page. Unsupported hosts fail with UNSUPPORTED_URL;
  * every other failure comes from the platform parser's own error model.
  */
-export function parse(html: string, pageUrl: string): ParseResult {
+export function parse(input: string, pageUrl: string): ParseResult {
   const host = hostnameOf(pageUrl);
   if (!host) {
-    return { ok: false, error: { code: "UNSUPPORTED_URL", message: `Cannot parse URL: ${pageUrl}` } };
+    return {
+      ok: false,
+      error: { code: "UNSUPPORTED_URL", message: `Cannot parse URL: ${pageUrl}` },
+    };
   }
-  if (isXhsHost(host)) return parseXhs(html, pageUrl);
-  if (isInstagramHost(host)) return parseInstagram(html, pageUrl);
+  if (isXhsHost(host)) return parseXhs(input, pageUrl);
+  if (isInstagramHost(host)) return parseInstagram(input, pageUrl);
+  if (isXHost(host)) return parseX(input, pageUrl);
   return {
     ok: false,
     error: { code: "UNSUPPORTED_URL", message: `Unsupported host: ${host}` },
   };
 }
+
+export { parseXhs, parseInstagram, parseX };

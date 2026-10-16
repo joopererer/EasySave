@@ -12,8 +12,9 @@ void main() {
   );
 
   group('Parser JSON -> Dart unified model conversion from fixtures', () {
-    for (final platform in ['xhs', 'instagram']) {
+    for (final platform in ['xhs', 'instagram', 'x']) {
       final dir = Directory('${fixturesDir.path}/$platform');
+
       if (!dir.existsSync()) continue;
 
       final jsonFiles = dir

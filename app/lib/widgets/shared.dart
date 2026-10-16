@@ -194,14 +194,19 @@ class PlatformTag extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final isXhs = platform == 'xhs';
+    final isX = platform == 'x';
+    final color = isXhs
+        ? AppTokens.platformXhs
+        : (isX ? AppTokens.platformX : AppTokens.platformIg);
+    final label = isXhs ? '小红书' : (isX ? 'X' : 'Instagram');
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
       decoration: BoxDecoration(
-        color: isXhs ? AppTokens.platformXhs : AppTokens.platformIg,
+        color: color,
         borderRadius: BorderRadius.circular(8),
       ),
       child: Text(
-        isXhs ? '小红书' : 'Instagram',
+        label,
         style: const TextStyle(
           color: Colors.white,
           fontSize: 11,
@@ -211,6 +216,7 @@ class PlatformTag extends StatelessWidget {
     );
   }
 }
+
 
 /// Error card driven by the centralized error copy: message, action button,
 /// and a diagnostics button on INVALID_PAGE failures.

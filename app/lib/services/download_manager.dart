@@ -16,6 +16,8 @@ import '../core/models.dart';
 import 'history_db.dart';
 import 'parse_service.dart';
 import 'saver.dart';
+import 'update_service.dart';
+
 
 /// Max download attempts per file, first try included. The plugin's native
 /// retries stay at 0 so this counter is the single source of truth.
@@ -400,10 +402,18 @@ class DownloadManager extends ChangeNotifier {
     return batch;
   }
 
-  Map<String, String> _headersFor(String platform) => {
-    'Referer': refererFor(platform),
-    'User-Agent': 'Mozilla/5.0 (Linux; Android 10)',
-  };
+  Map<String, String> _headersFor(String platform) {
+    final manifestHeaders = ParserManager.instance.getPlatformHeaders(platform);
+    final headers = <String, String>{
+      'Referer': refererFor(platform),
+      'User-Agent': 'Mozilla/5.0 (Linux; Android 10)',
+    };
+    if (manifestHeaders != null && manifestHeaders.isNotEmpty) {
+      headers.addAll(manifestHeaders);
+    }
+    return headers;
+  }
+
 
   Future<void> _enqueueAttempt(DownloadBatch batch, DownloadJob job) async {
     job.attempts++;

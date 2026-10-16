@@ -1,7 +1,10 @@
 export interface PlatformConfig {
   enabled: boolean;
   notice: string;
+  endpoint?: string;
+  tokenFormula?: string;
 }
+
 
 export interface ExtensionManifest {
   parserVersion: string;

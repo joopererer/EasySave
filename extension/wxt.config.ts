@@ -9,9 +9,13 @@ export default defineConfig({
     host_permissions: [
       "*://*.xiaohongshu.com/*",
       "*://*.instagram.com/*",
+      "*://*.twitter.com/*",
+      "*://*.x.com/*",
       "*://*.xhscdn.com/*",
       "*://ci.xiaohongshu.com/*",
       "*://*.cdninstagram.com/*",
+      "*://*.twimg.com/*",
+      "*://cdn.syndication.twimg.com/*",
       "*://raw.githubusercontent.com/*",
     ],
     declarative_net_request: {
@@ -26,7 +30,12 @@ export default defineConfig({
     web_accessible_resources: [
       {
         resources: ["page-bridge.js"],
-        matches: ["*://*.xiaohongshu.com/*", "*://*.instagram.com/*"],
+        matches: [
+          "*://*.xiaohongshu.com/*",
+          "*://*.instagram.com/*",
+          "*://*.twitter.com/*",
+          "*://*.x.com/*",
+        ],
       },
     ],
   },

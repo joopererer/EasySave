@@ -3,7 +3,7 @@ import {
   MANIFEST_URL,
   verifyManifestSignature,
 } from "../src/manifest";
-
+import { calculateToken } from "../src/x";
 
 async function fetchManifest(): Promise<ExtensionManifest | null> {
   try {
@@ -50,6 +50,7 @@ async function applyManifestHeaders(
       let urlFilter = "*";
       if (platform === "xhs") urlFilter = "*://*.xiaohongshu.com/*";
       else if (platform === "instagram") urlFilter = "*://*.instagram.com/*";
+      else if (platform === "x") urlFilter = "*://*.twimg.com/*";
 
       newRules.push({
         id: ruleId++,
@@ -108,6 +109,67 @@ export default defineBackground(() => {
           });
         } catch {
           sendResponse({ enabled: true, notice: "" });
+        }
+      })();
+      return true;
+    }
+
+    if (type === "EASYSAVE_FETCH_TWEET") {
+      const tweetId = (message as { id?: string }).id ?? "";
+      void (async () => {
+        try {
+          const storage = await chrome.storage.local.get("easysave_manifest");
+          const manifest = storage.easysave_manifest as ExtensionManifest | undefined;
+          const endpointTpl =
+            manifest?.platforms?.x?.endpoint ||
+            "https://cdn.syndication.twimg.com/tweet-result?id={id}&lang=en&token={token}";
+          const token = calculateToken(tweetId);
+          const url = endpointTpl
+            .replace("{id}", tweetId)
+            .replace("{token}", token);
+          const ua =
+            manifest?.headers?.x?.["User-Agent"] ||
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36";
+
+          const res = await fetch(url, {
+            headers: {
+              "User-Agent": ua,
+              Accept: "application/json, text/plain, */*",
+            },
+          });
+
+          if (res.status === 404) {
+            sendResponse({
+              ok: false,
+              error: {
+                code: "PRIVATE_OR_UNAVAILABLE",
+                message: "This post is private, deleted, or unavailable.",
+              },
+            });
+            return;
+          }
+
+          if (!res.ok) {
+            sendResponse({
+              ok: false,
+              error: {
+                code: "PRIVATE_OR_UNAVAILABLE",
+                message: `Failed to fetch tweet (HTTP ${res.status})`,
+              },
+            });
+            return;
+          }
+
+          const json = await res.json();
+          sendResponse({ ok: true, data: json });
+        } catch (err: any) {
+          sendResponse({
+            ok: false,
+            error: {
+              code: "TIMEOUT",
+              message: err?.message || "Network error fetching tweet",
+            },
+          });
         }
       })();
       return true;

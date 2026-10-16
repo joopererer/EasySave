@@ -1,9 +1,16 @@
 export default defineContentScript({
-  matches: ["*://*.xiaohongshu.com/*", "*://*.instagram.com/*"],
+  matches: [
+    "*://*.xiaohongshu.com/*",
+    "*://*.instagram.com/*",
+    "*://*.twitter.com/*",
+    "*://*.x.com/*",
+  ],
   main() {
     const host = location.hostname.toLowerCase();
     const isXhs = host === "xiaohongshu.com" || host.endsWith(".xiaohongshu.com");
     const isInstagram = host === "instagram.com" || host.endsWith(".instagram.com");
+    const isX = host === "x.com" || host.endsWith(".x.com") || host === "twitter.com" || host.endsWith(".twitter.com");
+
 
     const PREFIX = "easysave";
     const isExtAlive = (): boolean => {
@@ -173,11 +180,15 @@ export default defineContentScript({
       let result: import("../src/index").ParseResult;
       if (isXhs) {
         result = await parseXhsCurrent(url, parse);
-      } else {
+      } else if (isInstagram) {
         const shortcode = shortcodeFromUrl(url) ?? shortcodeFromPage();
         result = shortcode
           ? await parseInstagramCurrent(url, shortcode, parse)
           : parse(document.documentElement.outerHTML, url);
+      } else if (isX) {
+        result = await parseXCurrent(url);
+      } else {
+        result = parse(document.documentElement.outerHTML, url);
       }
       if (!result.ok && isXhs && hasPostIdentity(url)) {
         const fetched = await fetchAndParse(url);
@@ -187,6 +198,44 @@ export default defineContentScript({
       lastResult = result;
       return result;
     }
+
+    function tweetIdFromUrl(url: string): string | undefined {
+      const m = /(?:x|twitter)\.com\/(?:[^/]+)\/status\/(\d+)/i.exec(url);
+      return m ? m[1] : undefined;
+    }
+
+    async function parseXCurrent(
+      url: string,
+    ): Promise<import("../src/index").ParseResult> {
+      const tweetId = tweetIdFromUrl(url);
+      if (!tweetId) {
+        return {
+          ok: false,
+          error: {
+            code: "UNSUPPORTED_URL",
+            message: "请在推文详情页（/status/<id>）点击下载",
+          },
+        };
+      }
+      const resp = await new Promise<{ ok: boolean; data?: unknown; error?: { code: import("../src/index").ParseErrorCode; message: string } }>((resolve) => {
+        chrome.runtime.sendMessage(
+          { type: "EASYSAVE_FETCH_TWEET", id: tweetId },
+          (res) => resolve(res || { ok: false }),
+        );
+      });
+      if (!resp || !resp.ok) {
+        return {
+          ok: false,
+          error: resp?.error ?? {
+            code: "PRIVATE_OR_UNAVAILABLE",
+            message: "推文数据获取失败",
+          },
+        };
+      }
+      const { parseX } = await import("../src/x");
+      return parseX(resp.data as Record<string, unknown>, url);
+    }
+
 
     async function parseXhsCurrent(
       url: string,
@@ -325,6 +374,7 @@ export default defineContentScript({
     function hasPostIdentity(pageUrl: string): boolean {
       if (isXhs) return noteIdFromUrl(pageUrl) !== undefined;
       if (isInstagram) return /\/(?:p|reel|tv)\/([A-Za-z0-9-_]+)/.test(pageUrl);
+      if (isX) return tweetIdFromUrl(pageUrl) !== undefined;
       return false;
     }
 
@@ -340,8 +390,13 @@ export default defineContentScript({
         const sc = shortcodeFromUrl(location.href);
         return sc ? `ig:${sc}` : undefined;
       }
+      if (isX) {
+        const id = tweetIdFromUrl(location.href);
+        return id ? `x:${id}` : undefined;
+      }
       return undefined;
     }
+
 
     function resultMismatch(
       result: import("../src/index").ParseResult,
@@ -391,7 +446,8 @@ export default defineContentScript({
       }
 
       // Check remote platform switch before parsing or initiating any request
-      const platformKey = isXhs ? "xhs" : isInstagram ? "instagram" : "";
+      const platformKey = isXhs ? "xhs" : isInstagram ? "instagram" : isX ? "x" : "";
+
       if (platformKey) {
         try {
           const config = await new Promise<{ enabled?: boolean; notice?: string }>((resolve) => {
@@ -457,11 +513,12 @@ export default defineContentScript({
           thumb = img;
         } else {
           const v = document.createElement("video");
-          v.src = item.videoUrl ?? item.url;
+          v.src = ("videoUrl" in item && item.videoUrl ? item.videoUrl : item.url);
           v.muted = true;
           v.preload = "metadata";
           thumb = v;
         }
+
         const tick = document.createElement("div");
         tick.className = `${PREFIX}-tick`;
         tick.textContent = "✓";
@@ -548,8 +605,17 @@ export default defineContentScript({
       panelEl = panel;
     }
 
-    if (!isXhs && !isInstagram) {
-      btn.style.display = "none";
+    function checkBtnVisibility(): void {
+      if (isX) {
+        btn.style.display = tweetIdFromUrl(location.href) ? "" : "none";
+      } else if (!isXhs && !isInstagram) {
+        btn.style.display = "none";
+      }
+    }
+    checkBtnVisibility();
+    if (isX) {
+      setInterval(checkBtnVisibility, 1000);
     }
   },
 });
+

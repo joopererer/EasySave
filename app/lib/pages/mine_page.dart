@@ -19,8 +19,7 @@ class MinePage extends StatefulWidget {
 
 class _MinePageState extends State<MinePage> {
   final Map<PlatformKind, bool> _loggedIn = {
-    PlatformKind.xhs: false,
-    PlatformKind.instagram: false,
+    for (final p in PlatformKind.values) p: false,
   };
   bool _checkingLogin = true;
   AppSettings _settings = AppSettings();
@@ -47,16 +46,19 @@ class _MinePageState extends State<MinePage> {
     final settings = await AppSettings.load();
     final xhs = await isLoggedIn(PlatformKind.xhs);
     final ig = await isLoggedIn(PlatformKind.instagram);
+    final x = await isLoggedIn(PlatformKind.x);
     final info = await PackageInfo.fromPlatform();
     if (!mounted) return;
     setState(() {
       _settings = settings;
       _loggedIn[PlatformKind.xhs] = xhs;
       _loggedIn[PlatformKind.instagram] = ig;
+      _loggedIn[PlatformKind.x] = x;
       _checkingLogin = false;
       _version = '${info.version}+${info.buildNumber}';
     });
   }
+
 
   Future<void> _saveSettings() => _settings.save();
 

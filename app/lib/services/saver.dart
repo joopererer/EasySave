@@ -9,9 +9,13 @@ import 'package:path_provider/path_provider.dart';
 
 import '../core/models.dart';
 
-String refererFor(String platform) => platform == 'xhs'
-    ? 'https://www.xiaohongshu.com/'
-    : 'https://www.instagram.com/';
+String refererFor(String platform) {
+  if (platform == 'xhs') return 'https://www.xiaohongshu.com/';
+  if (platform == 'instagram') return 'https://www.instagram.com/';
+  if (platform == 'x') return 'https://x.com/';
+  return '';
+}
+
 
 /// Import a finished temp download into the album, then delete the temp.
 Future<void> saveToGallery(String path, bool isImage, String album) async {

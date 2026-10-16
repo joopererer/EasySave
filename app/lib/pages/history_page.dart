@@ -157,7 +157,9 @@ class HistoryPageState extends State<HistoryPage> {
                 ButtonSegment(value: 'all', label: Text('全部')),
                 ButtonSegment(value: 'xhs', label: Text('小红书')),
                 ButtonSegment(value: 'instagram', label: Text('Instagram')),
+                ButtonSegment(value: 'x', label: Text('X')),
               ],
+
               selected: {_filter},
               onSelectionChanged: (selected) =>
                   setState(() => _filter = selected.first),

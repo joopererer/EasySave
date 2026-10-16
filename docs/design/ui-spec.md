@@ -27,7 +27,9 @@
 | `error` | `#EA3B48` | `#F26A75` | `colorScheme.error`；失败项标红、删除 |
 | `platformXhs` | `#EA1C42` 纯色 | 同左 | 小红书标签底色（白字） |
 | `platformIg` | `#CE35A8` 纯色 | 同左 | Instagram 标签底色（白字） |
+| `platformX` | `#0F1419` 纯色 | 同左 | X (Twitter) 标签底色（白字） |
 | `overlayScrim` | `Black54` | `Black54` | 全屏查看、下载面板遮罩 |
+
 
 ### 1.2 形状与阴影
 
@@ -55,7 +57,8 @@
 
 ### 1.5 平台标签样式
 
-白字小胶囊（圆角 8~10，11sp 加粗）：小红书 `#EA1C42` 纯色，Instagram `#CE35A8` 纯色。出现在历史卡片、预览页 AppBar 副标题、下载面板标题旁。
+白字小胶囊（圆角 8~10，11sp 加粗）：小红书 `#EA1C42` 纯色，Instagram `#CE35A8` 纯色，X (Twitter) `#0F1419` 纯色。出现在历史卡片、预览页 AppBar 副标题、下载面板标题旁。
+
 
 ## 2. 逐页布局与组件
 

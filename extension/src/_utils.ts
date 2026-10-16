@@ -14,3 +14,7 @@ export function isXhsHost(host: string): boolean {
 export function isInstagramHost(host: string): boolean {
   return /instagram\.com|instagr\.am/.test(host);
 }
+
+export function isXHost(host: string): boolean {
+  return /x\.com|twitter\.com/.test(host);
+}

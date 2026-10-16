@@ -4,14 +4,29 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 
-enum PlatformKind { xhs, instagram }
+enum PlatformKind { xhs, instagram, x }
 
-String platformLabel(PlatformKind platform) =>
-    platform == PlatformKind.xhs ? '小红书' : 'Instagram';
+String platformLabel(PlatformKind platform) {
+  switch (platform) {
+    case PlatformKind.xhs:
+      return '小红书';
+    case PlatformKind.instagram:
+      return 'Instagram';
+    case PlatformKind.x:
+      return 'X';
+  }
+}
 
-String loginEntryUrl(PlatformKind platform) => platform == PlatformKind.xhs
-    ? 'https://www.xiaohongshu.com/login'
-    : 'https://www.instagram.com/accounts/login/';
+String loginEntryUrl(PlatformKind platform) {
+  switch (platform) {
+    case PlatformKind.xhs:
+      return 'https://www.xiaohongshu.com/login';
+    case PlatformKind.instagram:
+      return 'https://www.instagram.com/accounts/login/';
+    case PlatformKind.x:
+      return 'https://x.com/i/flow/login';
+  }
+}
 
 /// 小红书移动端 UA 会命中 App 引流落地页（无登录入口），强制桌面 UA
 /// 进入桌面站。登录框默认是二维码，下方有"验证码登录/密码登录"切换，
@@ -21,14 +36,22 @@ String? loginUserAgent(PlatformKind platform) => platform == PlatformKind.xhs
           '(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36'
     : null;
 
-String _cookieUrl(PlatformKind platform) => platform == PlatformKind.xhs
-    ? 'https://www.xiaohongshu.com'
-    : 'https://www.instagram.com';
+String _cookieUrl(PlatformKind platform) {
+  switch (platform) {
+    case PlatformKind.xhs:
+      return 'https://www.xiaohongshu.com';
+    case PlatformKind.instagram:
+      return 'https://www.instagram.com';
+    case PlatformKind.x:
+      return 'https://x.com';
+  }
+}
 
 /// Session cookie names that only exist after a real login.
 bool _isSessionCookie(PlatformKind platform, String name) {
   if (platform == PlatformKind.xhs) return name == 'web_session';
-  return name == 'sessionid';
+  if (platform == PlatformKind.instagram) return name == 'sessionid';
+  return name == 'auth_token';
 }
 
 /// True when the persistent cookie store holds a session cookie.
@@ -58,6 +81,5 @@ Future<void> logout(PlatformKind platform) async {
 /// per-platform "login expired" hints.
 abstract final class LoginExpiredBus {
   static final ValueNotifier<String?> code = ValueNotifier<String?>(null);
-
-  static void notify(String errorCode) => code.value = errorCode;
+  static void notify(String? value) => code.value = value;
 }

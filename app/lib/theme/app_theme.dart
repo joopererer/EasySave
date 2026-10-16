@@ -14,6 +14,8 @@ abstract final class AppTokens {
   static const textSecondary = Color(0xFFA89B92);
   static const platformXhs = Color(0xFFEA1C42);
   static const platformIg = Color(0xFFCE35A8);
+  static const platformX = Color(0xFF0F1419);
+
 
   static const darkBackground = Color(0xFF1A1412);
   static const darkCard = Color(0xFF26201C);

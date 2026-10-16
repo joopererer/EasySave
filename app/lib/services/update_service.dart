@@ -30,18 +30,33 @@ const String kPrefKeyLastUpdateCheckMs = 'parser_last_update_check_ms';
 enum ParserSource { builtin, remote }
 
 class PlatformConfig {
-  PlatformConfig({this.enabled = true, this.notice = ''});
+  PlatformConfig({
+    this.enabled = true,
+    this.notice = '',
+    this.endpoint = '',
+    this.tokenFormula = '',
+  });
 
   final bool enabled;
   final String notice;
+  final String endpoint;
+  final String tokenFormula;
 
   factory PlatformConfig.fromJson(Map<String, dynamic> json) => PlatformConfig(
     enabled: json['enabled'] as bool? ?? true,
     notice: json['notice'] as String? ?? '',
+    endpoint: json['endpoint'] as String? ?? '',
+    tokenFormula: json['tokenFormula'] as String? ?? '',
   );
 
-  Map<String, dynamic> toJson() => {'enabled': enabled, 'notice': notice};
+  Map<String, dynamic> toJson() => {
+    'enabled': enabled,
+    'notice': notice,
+    if (endpoint.isNotEmpty) 'endpoint': endpoint,
+    if (tokenFormula.isNotEmpty) 'tokenFormula': tokenFormula,
+  };
 }
+
 
 class ParserManifest {
   ParserManifest({
@@ -503,4 +518,31 @@ class ParserManager {
     if (cfg == null || cfg.enabled) return null;
     return cfg.notice.isNotEmpty ? cfg.notice : '该平台解析服务维护中，请稍后再试';
   }
+
+  /// Request headers for a platform (from manifest, with sensible defaults)
+  Map<String, String>? getPlatformHeaders(String platform) {
+    if (_activeManifest != null && _activeManifest!.headers.containsKey(platform)) {
+      return _activeManifest!.headers[platform];
+    }
+    if (platform == 'x') {
+      return const {
+        'User-Agent':
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36',
+      };
+    }
+    return null;
+  }
+
+  /// Endpoint template for a platform (from manifest, with sensible defaults)
+  String getPlatformEndpoint(String platform) {
+    if (_activeManifest != null && _activeManifest!.platforms.containsKey(platform)) {
+      final ep = _activeManifest!.platforms[platform]?.endpoint;
+      if (ep != null && ep.isNotEmpty) return ep;
+    }
+    if (platform == 'x') {
+      return 'https://cdn.syndication.twimg.com/tweet-result?id={id}&lang=en&token={token}';
+    }
+    return '';
+  }
 }
+
