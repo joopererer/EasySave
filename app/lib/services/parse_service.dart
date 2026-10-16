@@ -26,8 +26,25 @@ Future<T> _withTimeout<T>(Future<T> Function() run, String what) {
   );
 }
 
+void _checkPlatform(String url) {
+  final host = Uri.tryParse(url)?.host.toLowerCase() ?? '';
+  String platform = '';
+  if (isXhsHost(host)) {
+    platform = 'xhs';
+  } else if (isInstagramHost(host)) {
+    platform = 'instagram';
+  }
+
+  if (platform.isNotEmpty && !ParserManager.instance.isPlatformEnabled(platform)) {
+    final notice = ParserManager.instance.getMaintenanceNotice(platform) ??
+        '该平台解析服务维护中，请稍后再试';
+    throw ParseFailure(ParseErrorCode.blocked, notice);
+  }
+}
+
 /// Load [url] headlessly and parse the post it resolves to.
 Future<ParsedPost> parsePostUrl(String url) {
+  _checkPlatform(url);
   return _withTimeout(() async {
     final resolved = await resolveShortLink(
       url,
@@ -38,6 +55,7 @@ Future<ParsedPost> parsePostUrl(String url) {
 
 /// Same as [parsePostUrl] but keeps the raw image entries for diagnostics.
 Future<ParseOutcome> parsePostOutcome(String url) {
+  _checkPlatform(url);
   return _withTimeout(() async {
     final resolved = await resolveShortLink(
       url,
@@ -55,19 +73,7 @@ class ParseOutcome {
 
 Future<ParseOutcome> _parseInner(String url) async {
   // Remote platform switch check: do not start WebView or make requests if disabled
-  final host = Uri.tryParse(url)?.host.toLowerCase() ?? '';
-  String platform = '';
-  if (isXhsHost(host)) {
-    platform = 'xhs';
-  } else if (isInstagramHost(host)) {
-    platform = 'instagram';
-  }
-
-  if (platform.isNotEmpty && !ParserManager.instance.isPlatformEnabled(platform)) {
-    final notice = ParserManager.instance.getMaintenanceNotice(platform) ??
-        '该平台解析服务维护中，请稍后再试';
-    throw ParseFailure(ParseErrorCode.blocked, notice);
-  }
+  _checkPlatform(url);
 
   final loaded = Completer<void>();
   InAppWebViewController? readyController;

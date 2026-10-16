@@ -336,9 +336,15 @@ class ParserManager {
         return false;
       }
 
-      final manifestUri = Uri.parse(_manifestUrl);
+      final baseManifestUri = Uri.parse(_manifestUrl);
+      final manifestUri = force
+          ? baseManifestUri.replace(queryParameters: {
+              ...baseManifestUri.queryParameters,
+              't': '$now',
+            })
+          : baseManifestUri;
       final manifestResp = await _client
-          .get(manifestUri)
+          .get(manifestUri, headers: const {'Cache-Control': 'no-cache'})
           .timeout(const Duration(seconds: 10));
       if (manifestResp.statusCode != 200) {
         debugPrint(
@@ -370,9 +376,15 @@ class ParserManager {
       }
 
       // Download parser.js
-      final parserUri = manifestUri.resolve('parser.js');
+      final baseParserUri = manifestUri.resolve('parser.js');
+      final parserUri = force
+          ? baseParserUri.replace(queryParameters: {
+              ...baseParserUri.queryParameters,
+              't': '$now',
+            })
+          : baseParserUri;
       final parserResp = await _client
-          .get(parserUri)
+          .get(parserUri, headers: const {'Cache-Control': 'no-cache'})
           .timeout(const Duration(seconds: 15));
       if (parserResp.statusCode != 200) {
         debugPrint(

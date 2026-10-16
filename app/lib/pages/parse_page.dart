@@ -39,6 +39,7 @@ class _ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
   bool _busy = false;
   bool _cancelRequested = false;
   String? _errorCode;
+  String? _errorMessage;
   String _lastLink = '';
   String _appVersion = '';
   List<HistoryRecord> _recent = [];
@@ -352,6 +353,7 @@ class _ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
       _busy = true;
       _cancelRequested = false;
       _errorCode = null;
+      _errorMessage = null;
     });
     try {
       final outcome = await parsePostOutcome(link);
@@ -369,6 +371,7 @@ class _ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
       setState(() {
         _busy = false;
         _errorCode = e.code;
+        _errorMessage = e.message;
       });
       if (e.code == ParseErrorCode.loginRequired) {
         LoginExpiredBus.notify(e.code);
@@ -378,6 +381,7 @@ class _ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
       setState(() {
         _busy = false;
         _errorCode = ParseErrorCode.invalidPage;
+        _errorMessage = null;
       });
     }
   }
@@ -523,6 +527,7 @@ class _ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
               padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
               child: ErrorCard(
                 code: _errorCode!,
+                message: _errorMessage,
                 onAction: _onErrorAction,
                 diagnostics: () =>
                     'platform=?, code=$_errorCode, url=${_linkController.text.trim()}, app=$_appVersion, parser=${ParserManager.instance.activeVersion}(${ParserManager.instance.activeSourceLabel})',

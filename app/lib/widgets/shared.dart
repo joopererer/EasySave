@@ -219,16 +219,20 @@ class ErrorCard extends StatelessWidget {
     super.key,
     required this.code,
     required this.onAction,
+    this.message,
     this.diagnostics,
   });
 
   final String code;
+  final String? message;
   final Future<void> Function(ErrorAction action) onAction;
   final String Function()? diagnostics;
 
   @override
   Widget build(BuildContext context) {
     final copy = errorCopyFor(code);
+    final displayMessage =
+        (message != null && message!.isNotEmpty) ? message! : copy.message;
     return Card(
       color: SecondaryBg.pink(context),
       child: Padding(
@@ -237,7 +241,7 @@ class ErrorCard extends StatelessWidget {
           crossAxisAlignment: CrossAxisAlignment.start,
           mainAxisSize: MainAxisSize.min,
           children: [
-            Text(copy.message, style: const TextStyle(fontSize: 14)),
+            Text(displayMessage, style: const TextStyle(fontSize: 14)),
             const SizedBox(height: 8),
             Wrap(
               spacing: 8,
