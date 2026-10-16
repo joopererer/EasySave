@@ -21,6 +21,7 @@ const manifestOutFile = resolve(distDir, 'manifest.json');
 const appParserFile = resolve(rootDir, 'app', 'assets', 'parser', 'parser.js');
 const parserBytes = readFileSync(appParserFile);
 writeFileSync(parserOutFile, parserBytes);
+writeFileSync(resolve(rootDir, 'spec', 'parser.js'), parserBytes);
 
 const sha256Hex = crypto.createHash('sha256').update(parserBytes).digest('hex');
 

@@ -370,9 +370,7 @@ class ParserManager {
       }
 
       // Download parser.js
-      final parserUri = manifestUri.path.endsWith('/spec/manifest.json')
-          ? manifestUri.resolve('../app/assets/parser/parser.js')
-          : manifestUri.resolve('parser.js');
+      final parserUri = manifestUri.resolve('parser.js');
       final parserResp = await _client
           .get(parserUri)
           .timeout(const Duration(seconds: 15));
