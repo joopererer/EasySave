@@ -151,36 +151,56 @@ class UpdateVerifier {
     }
   }
 
+  /// Canonicalize manifest JSON by sorting keys recursively (omitting 'signature')
+  /// into compact JSON matching Node.js JSON.stringify.
+  static String canonicalizeManifest(Map<String, dynamic> json) {
+    dynamic sortVal(dynamic v) {
+      if (v is Map) {
+        final sortedKeys = v.keys.map((k) => k.toString()).toList()..sort();
+        final map = <String, dynamic>{};
+        for (final k in sortedKeys) {
+          if (k == 'signature') continue;
+          map[k] = sortVal(v[k]);
+        }
+        return map;
+      }
+      return v;
+    }
+
+    final sorted = sortVal(json);
+    return jsonEncode(sorted);
+  }
+
+  /// Compare two semantic version strings (ignoring +build metadata).
+  /// Returns > 0 if v1 > v2, < 0 if v1 < v2, 0 if v1 == v2.
+  static int compareVersions(String v1, String v2) {
+    final v1Clean = v1.split('+').first.trim();
+    final v2Clean = v2.split('+').first.trim();
+
+    final p1 = v1Clean.split('.').map((e) => int.tryParse(e) ?? 0).toList();
+    final p2 = v2Clean.split('.').map((e) => int.tryParse(e) ?? 0).toList();
+
+    while (p1.length < 3) {
+      p1.add(0);
+    }
+    while (p2.length < 3) {
+      p2.add(0);
+    }
+
+    for (var i = 0; i < 3; i++) {
+      if (p1[i] > p2[i]) return 1;
+      if (p1[i] < p2[i]) return -1;
+    }
+    return 0;
+  }
+
   /// Check if currentAppVersion meets minAppVersion requirement.
   /// Ignores build numbers (e.g. 1.0.0+2 -> 1.0.0).
   static bool isAppVersionSupported(
     String currentAppVersion,
     String minAppVersion,
   ) {
-    final currentClean = currentAppVersion.split('+').first.trim();
-    final minClean = minAppVersion.split('+').first.trim();
-
-    final currentParts = currentClean
-        .split('.')
-        .map((e) => int.tryParse(e) ?? 0)
-        .toList();
-    final minParts = minClean
-        .split('.')
-        .map((e) => int.tryParse(e) ?? 0)
-        .toList();
-
-    while (currentParts.length < 3) {
-      currentParts.add(0);
-    }
-    while (minParts.length < 3) {
-      minParts.add(0);
-    }
-
-    for (var i = 0; i < 3; i++) {
-      if (currentParts[i] > minParts[i]) return true;
-      if (currentParts[i] < minParts[i]) return false;
-    }
-    return true; // equal
+    return compareVersions(currentAppVersion, minAppVersion) >= 0;
   }
 }
 
@@ -258,9 +278,12 @@ class ParserManager {
           scriptBytes,
           manifest.sha256,
         );
-        // Verify signature
+        // Verify signature of canonical manifest
+        final canonicalString =
+            UpdateVerifier.canonicalizeManifest(manifestJson);
+        final canonicalBytes = Uint8List.fromList(utf8.encode(canonicalString));
         final isSigValid = await UpdateVerifier.verifyEd25519(
-          scriptBytes,
+          canonicalBytes,
           signatureHex: manifest.signature,
           publicKeyHex: _publicKeyHex,
         );
@@ -276,7 +299,13 @@ class ParserManager {
           manifest.minAppVersion,
         );
 
-        if (isHashValid && isSigValid && isAppSupported) {
+        // Anti-downgrade check: remote parserVersion must be strictly greater than built-in version
+        final isNewerThanBuiltin = UpdateVerifier.compareVersions(
+          manifest.parserVersion,
+          ParserVersion.version,
+        ) > 0;
+
+        if (isHashValid && isSigValid && isAppSupported && isNewerThanBuiltin) {
           _activeVersion = manifest.parserVersion;
           _activeSource = ParserSource.remote;
           _activeScript = utf8.decode(scriptBytes);
@@ -365,6 +394,18 @@ class ParserManager {
         appVersion = info.version;
       } catch (_) {}
 
+      // Anti-downgrade check: remote parserVersion must be strictly greater than built-in version
+      if (UpdateVerifier.compareVersions(
+            manifest.parserVersion,
+            ParserVersion.version,
+          ) <=
+          0) {
+        debugPrint(
+          'ParserManager: remote parserVersion (${manifest.parserVersion}) <= builtin (${ParserVersion.version}), skipping',
+        );
+        return false;
+      }
+
       if (!UpdateVerifier.isAppVersionSupported(
         appVersion,
         manifest.minAppVersion,
@@ -403,15 +444,18 @@ class ParserManager {
         return false;
       }
 
-      // Verify Ed25519 signature
+      // Verify Ed25519 signature of canonical manifest
+      final canonicalString =
+          UpdateVerifier.canonicalizeManifest(manifestJson);
+      final canonicalBytes = Uint8List.fromList(utf8.encode(canonicalString));
       final isSigValid = await UpdateVerifier.verifyEd25519(
-        parserBytes,
+        canonicalBytes,
         signatureHex: manifest.signature,
         publicKeyHex: _publicKeyHex,
       );
       if (!isSigValid) {
         debugPrint(
-          'ParserManager: parser.js Ed25519 signature invalid! Remote rejected.',
+          'ParserManager: manifest Ed25519 signature invalid! Remote rejected.',
         );
         return false;
       }

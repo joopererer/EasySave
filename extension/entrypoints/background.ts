@@ -1,26 +1,24 @@
-interface PlatformConfig {
-  enabled: boolean;
-  notice: string;
-}
+import {
+  ExtensionManifest,
+  MANIFEST_URL,
+  verifyManifestSignature,
+} from "../src/manifest";
 
-interface ExtensionManifest {
-  parserVersion: string;
-  minAppVersion: string;
-  sha256: string;
-  signature: string;
-  platforms?: Record<string, PlatformConfig>;
-  headers?: Record<string, Record<string, string>>;
-}
-
-const MANIFEST_URL =
-  "https://raw.githubusercontent.com/joopererer/EasySave/master/spec/manifest.json";
 
 async function fetchManifest(): Promise<ExtensionManifest | null> {
   try {
-    const res = await fetch(MANIFEST_URL);
+    const res = await fetch(MANIFEST_URL, { cache: "no-cache" });
     if (!res.ok) return null;
     const data = (await res.json()) as ExtensionManifest;
     if (data && typeof data === "object") {
+      const isValid = await verifyManifestSignature(data);
+      if (!isValid) {
+        console.warn(
+          "EasySave: manifest signature verification failed! Ignoring cloud config.",
+        );
+        return null;
+      }
+
       await chrome.storage.local.set({
         easysave_manifest: data,
         easysave_manifest_time: Date.now(),
