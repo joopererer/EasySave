@@ -9,7 +9,8 @@
     "typecheck": "tsc --noEmit",
     "pretest": "npm run typecheck",
     "test": "vitest run",
-    "build:parser": "node scripts/build_parser.js"
+    "build:parser": "node scripts/build_parser.js",
+    "build:release": "node scripts/build_release.js"
   },
   "devDependencies": {
     "@types/chrome": "^0.3.5",

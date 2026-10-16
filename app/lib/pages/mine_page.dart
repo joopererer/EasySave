@@ -2,12 +2,12 @@
 
 import 'dart:io';
 
-import 'package:easysave/generated/parser_version.dart';
 import 'package:flutter/material.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 
 import '../services/auth.dart';
 import '../services/settings.dart';
+import '../services/update_service.dart';
 import 'login_page.dart';
 
 class MinePage extends StatefulWidget {
@@ -252,7 +252,29 @@ class _MinePageState extends State<MinePage> {
                 ListTile(title: const Text('版本号'), subtitle: Text(_version)),
                 ListTile(
                   title: const Text('解析器版本'),
-                  subtitle: Text(ParserVersion.version),
+                  subtitle: Text(
+                    '${ParserManager.instance.activeVersion} (${ParserManager.instance.activeSourceLabel})',
+                  ),
+                  trailing: IconButton(
+                    icon: const Icon(Icons.refresh, size: 20),
+                    tooltip: '检查更新',
+                    onPressed: () async {
+                      final messenger = ScaffoldMessenger.of(context);
+                      messenger.showSnackBar(
+                        const SnackBar(content: Text('正在检查解析器更新…')),
+                      );
+                      final updated = await ParserManager.instance.checkForUpdates(force: true);
+                      if (!mounted) return;
+                      setState(() {});
+                      messenger.showSnackBar(
+                        SnackBar(
+                          content: Text(
+                            updated ? '解析器已更新到最新版本' : '当前已是最新解析器',
+                          ),
+                        ),
+                      );
+                    },
+                  ),
                 ),
               ],
             ),

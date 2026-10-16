@@ -5,13 +5,14 @@ export default defineConfig({
     name: "EasySave",
     description: "Media download assistant",
     version: "0.1.0",
-    permissions: ["activeTab", "downloads", "declarativeNetRequest", "scripting"],
+    permissions: ["activeTab", "downloads", "declarativeNetRequest", "scripting", "storage", "alarms"],
     host_permissions: [
       "*://*.xiaohongshu.com/*",
       "*://*.instagram.com/*",
       "*://*.xhscdn.com/*",
       "*://ci.xiaohongshu.com/*",
       "*://*.cdninstagram.com/*",
+      "*://raw.githubusercontent.com/*",
     ],
     declarative_net_request: {
       rule_resources: [

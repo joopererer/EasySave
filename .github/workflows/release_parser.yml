@@ -1,0 +1,47 @@
+name: Release Parser Bundle
+
+on:
+  push:
+    tags:
+      - 'parser-v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Test, Build, Sign and Publish
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+          cache-dependency-path: extension/package.json
+
+      - name: Install dependencies
+        working-directory: extension
+        run: npm install
+
+      - name: Run all tests (fixtures & bundle freshness)
+        working-directory: extension
+        run: npm test
+
+      - name: Build, hash, and sign parser release
+        working-directory: extension
+        env:
+          PARSER_SIGNING_KEY: ${{ secrets.PARSER_SIGNING_KEY }}
+        run: npm run build:release
+
+      - name: Publish to GitHub Releases
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            extension/dist/manifest.json
+            extension/dist/parser.js
+          name: Parser ${{ github.ref_name }}
+          generate_release_notes: true

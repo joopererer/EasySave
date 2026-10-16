@@ -389,6 +389,26 @@ export default defineContentScript({
         showMessage("插件已更新，请刷新本页面后重试。");
         return;
       }
+
+      // Check remote platform switch before parsing or initiating any request
+      const platformKey = isXhs ? "xhs" : isInstagram ? "instagram" : "";
+      if (platformKey) {
+        try {
+          const config = await new Promise<{ enabled?: boolean; notice?: string }>((resolve) => {
+            chrome.runtime.sendMessage(
+              { type: "EASYSAVE_GET_PLATFORM_CONFIG", platform: platformKey },
+              (resp) => resolve(resp || {}),
+            );
+          });
+          if (config && config.enabled === false) {
+            showMessage(config.notice || "该平台解析服务维护中，请稍后再试");
+            return;
+          }
+        } catch {
+          // Ignore message errors
+        }
+      }
+
       let result = await parseCurrent();
       // The page may navigate mid-parse (reels swipe before data lands):
       // if the result no longer matches the current post, parse once more.

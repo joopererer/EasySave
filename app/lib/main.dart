@@ -1,7 +1,10 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import 'pages/main_shell.dart';
 import 'services/download_manager.dart';
+import 'services/update_service.dart';
 import 'theme/app_theme.dart';
 
 Future<void> main() async {
@@ -9,6 +12,8 @@ Future<void> main() async {
   // Register background-download callbacks and recover batches that
   // finished while the app was dead.
   await DownloadManager.instance.init();
+  await ParserManager.instance.init();
+  unawaited(ParserManager.instance.checkForUpdates());
   runApp(const EasySaveApp());
 }
 

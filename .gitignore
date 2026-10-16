@@ -4,6 +4,7 @@ extension/.wxt/
 app/.dart_tool/
 app/build/
 extension/.output/
+extension/dist/
 .idea/
 
 spec/fixtures/_raw/

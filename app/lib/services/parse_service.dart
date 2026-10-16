@@ -5,11 +5,12 @@
 import 'dart:async';
 import 'dart:convert';
 
-import 'package:flutter/services.dart' show rootBundle;
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 
 import '../core/models.dart';
+import '../core/parse.dart';
 import 'links.dart';
+import 'update_service.dart';
 
 class ParseFailure implements Exception {
   ParseFailure(this.code, this.message);
@@ -52,14 +53,22 @@ class ParseOutcome {
   final List<RawImageEntry> rawImages;
 }
 
-String? _cachedParserJs;
-
-Future<String> _getParserJs() async {
-  return _cachedParserJs ??=
-      await rootBundle.loadString('assets/parser/parser.js');
-}
-
 Future<ParseOutcome> _parseInner(String url) async {
+  // Remote platform switch check: do not start WebView or make requests if disabled
+  final host = Uri.tryParse(url)?.host.toLowerCase() ?? '';
+  String platform = '';
+  if (isXhsHost(host)) {
+    platform = 'xhs';
+  } else if (isInstagramHost(host)) {
+    platform = 'instagram';
+  }
+
+  if (platform.isNotEmpty && !ParserManager.instance.isPlatformEnabled(platform)) {
+    final notice = ParserManager.instance.getMaintenanceNotice(platform) ??
+        '该平台解析服务维护中，请稍后再试';
+    throw ParseFailure(ParseErrorCode.blocked, notice);
+  }
+
   final loaded = Completer<void>();
   InAppWebViewController? readyController;
   HeadlessInAppWebView? headless;
@@ -94,7 +103,7 @@ Future<ParseOutcome> _parseInner(String url) async {
       throw ParseFailure('INVALID_PAGE', '页面未能加载');
     }
 
-    final parserJs = await _getParserJs();
+    final parserJs = await ParserManager.instance.getActiveScript();
     dynamic jsResult;
     try {
       await controller.evaluateJavascript(source: parserJs);
