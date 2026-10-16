@@ -25,43 +25,12 @@ writeFileSync(resolve(rootDir, 'spec', 'parser.js'), parserBytes);
 
 const sha256Hex = crypto.createHash('sha256').update(parserBytes).digest('hex');
 
-// 2. Sign with Ed25519 if private key is provided in env
-let signatureHex = '';
-const privateKeyHex = (process.env.PARSER_SIGNING_KEY || '').trim();
-
-if (privateKeyHex) {
-  try {
-    const rawKey = Buffer.from(privateKeyHex, 'hex');
-    if (rawKey.length !== 32) {
-      throw new Error(`Invalid private key length: expected 32 bytes (64 hex chars), got ${rawKey.length} bytes`);
-    }
-    // PKCS8 header for Ed25519 private key: 302e020100300506032b657004220420
-    const pkcs8Key = Buffer.concat([
-      Buffer.from('302e020100300506032b657004220420', 'hex'),
-      rawKey,
-    ]);
-    const privKeyObj = crypto.createPrivateKey({
-      key: pkcs8Key,
-      format: 'der',
-      type: 'pkcs8',
-    });
-    const sig = crypto.sign(null, parserBytes, privKeyObj);
-    signatureHex = sig.toString('hex');
-    console.log(`Successfully signed parser.js with Ed25519 (signature length: ${signatureHex.length / 2} bytes)`);
-  } catch (err) {
-    console.error('Error signing parser release:', err.message);
-    process.exit(1);
-  }
-} else {
-  console.warn('WARNING: PARSER_SIGNING_KEY not set. Generating release with empty signature for dry-run.');
-}
-
-// 3. Generate manifest.json
+// 2. Prepare manifest structure
 const manifest = {
   parserVersion: version,
   minAppVersion: '1.0.0',
   sha256: sha256Hex,
-  signature: signatureHex,
+  signature: '',
   platforms: {
     xhs: {
       enabled: true,
@@ -81,6 +50,54 @@ const manifest = {
     },
   },
 };
+
+export function canonicalizeManifest(val) {
+  function sortObj(v) {
+    if (v === null || typeof v !== 'object' || Array.isArray(v)) return v;
+    const sorted = {};
+    for (const key of Object.keys(v).sort()) {
+      if (key === 'signature') continue;
+      sorted[key] = sortObj(v[key]);
+    }
+    return sorted;
+  }
+  return JSON.stringify(sortObj(val));
+}
+
+const canonicalManifestString = canonicalizeManifest(manifest);
+const canonicalBytes = Buffer.from(canonicalManifestString, 'utf8');
+
+// 3. Sign canonical manifest with Ed25519 if private key is provided in env
+let signatureHex = '';
+const privateKeyHex = (process.env.PARSER_SIGNING_KEY || '').trim();
+
+if (privateKeyHex) {
+  try {
+    const rawKey = Buffer.from(privateKeyHex, 'hex');
+    if (rawKey.length !== 32) {
+      throw new Error(`Invalid private key length: expected 32 bytes (64 hex chars), got ${rawKey.length} bytes`);
+    }
+    // PKCS8 header for Ed25519 private key: 302e020100300506032b657004220420
+    const pkcs8Key = Buffer.concat([
+      Buffer.from('302e020100300506032b657004220420', 'hex'),
+      rawKey,
+    ]);
+    const privKeyObj = crypto.createPrivateKey({
+      key: pkcs8Key,
+      format: 'der',
+      type: 'pkcs8',
+    });
+    const sig = crypto.sign(null, canonicalBytes, privKeyObj);
+    signatureHex = sig.toString('hex');
+    manifest.signature = signatureHex;
+    console.log(`Successfully signed canonical manifest with Ed25519 (signature length: ${signatureHex.length / 2} bytes)`);
+  } catch (err) {
+    console.error('Error signing parser release:', err.message);
+    process.exit(1);
+  }
+} else {
+  console.warn('WARNING: PARSER_SIGNING_KEY not set. Generating release with empty signature for dry-run.');
+}
 
 writeFileSync(manifestOutFile, JSON.stringify(manifest, null, 2) + '\n', 'utf8');
 console.log(`Generated manifest: ${manifestOutFile}`);
