@@ -8,6 +8,8 @@ import 'package:photo_manager/photo_manager.dart';
 import 'package:photo_manager_image_provider/photo_manager_image_provider.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import '../core/models.dart';
+import '../services/auth.dart';
 import '../services/gallery_locator_service.dart';
 import '../services/history_db.dart';
 import '../services/parse_service.dart';
@@ -15,6 +17,7 @@ import '../theme/app_theme.dart';
 import '../widgets/download_sheet.dart';
 import '../widgets/gallery_browser.dart';
 import '../widgets/shared.dart';
+import 'login_page.dart';
 import 'preview_page.dart';
 
 class HistoryPage extends StatefulWidget {
@@ -227,6 +230,70 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).hideCurrentSnackBar();
+
+      final isLoginRequired =
+          e is ParseFailure && e.code == ParseErrorCode.loginRequired;
+
+      final cachedPost = PreviewPage.postFromRecord(record);
+      if (cachedPost.items.isNotEmpty) {
+        Navigator.of(context).push(
+          MaterialPageRoute<void>(
+            builder: (_) => PreviewPage(
+              post: cachedPost,
+            ),
+          ),
+        );
+        if (isLoginRequired) {
+          LoginExpiredBus.notify(ParseErrorCode.loginRequired);
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: const Text('已使用本地记录打开预览（重新解析需登录）'),
+              action: SnackBarAction(
+                label: '去登录',
+                onPressed: () {
+                  final platform = record.platform == 'xhs'
+                      ? PlatformKind.xhs
+                      : (record.platform == 'instagram'
+                          ? PlatformKind.instagram
+                          : PlatformKind.x);
+                  Navigator.of(context).push(
+                    MaterialPageRoute<void>(
+                      builder: (_) => LoginPage(platform: platform),
+                    ),
+                  );
+                },
+              ),
+            ),
+          );
+        }
+        return;
+      }
+
+      if (isLoginRequired) {
+        LoginExpiredBus.notify(ParseErrorCode.loginRequired);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: const Text('该内容需要登录后查看，请先登录'),
+            action: SnackBarAction(
+              label: '去登录',
+              onPressed: () {
+                final platform = record.platform == 'xhs'
+                    ? PlatformKind.xhs
+                    : (record.platform == 'instagram'
+                        ? PlatformKind.instagram
+                        : PlatformKind.x);
+                Navigator.of(context).push(
+                  MaterialPageRoute<void>(
+                    builder: (_) => LoginPage(platform: platform),
+                  ),
+                );
+              },
+            ),
+          ),
+        );
+        return;
+      }
+
       final msg = e is ParseFailure ? e.message : '$e';
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('解析失败：$msg')),

@@ -91,6 +91,7 @@ class _ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
     if (!mounted) return;
     setState(() => _recent = records);
     final locator = GalleryLocatorService.instance;
+    await locator.checkPermission();
     if (locator.hasAccess) {
       await locator.preloadMediaIds(records);
       if (mounted) setState(() {});
@@ -687,14 +688,11 @@ class _ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
       );
     }
 
-    // Show shimmering loading box ONLY if the record's files have never been located before
-    // and scanning is actively underway
-    final isUnlocated = record.files.any(
-      (f) =>
-          f.status == FileStatus.unknown &&
-          (f.mediaId == null || f.mediaId!.isEmpty),
+    // Show shimmering loading box while preloading known mediaIds or scanning album
+    final hasPendingFiles = record.files.any(
+      (f) => f.status != FileStatus.notFound,
     );
-    if (isUnlocated && (locator.isScanning || !locator.scanned)) {
+    if (hasPendingFiles && (locator.isScanning || !locator.scanned)) {
       return const ShimmerBox(width: 48, height: 48);
     }
 

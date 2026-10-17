@@ -48,6 +48,10 @@ class GalleryLocatorService extends ChangeNotifier {
 
   /// Preload AssetEntities for known mediaIds without scanning entire album.
   Future<void> preloadMediaIds(List<HistoryRecord> records) async {
+    if (!_permission.hasAccess) {
+      await checkPermission();
+      if (!_permission.hasAccess) return;
+    }
     final idsToFetch = <String>{};
     for (final r in records) {
       for (final f in r.files) {

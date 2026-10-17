@@ -11,6 +11,7 @@ import 'package:http/http.dart' as http;
 
 import '../core/models.dart';
 import '../core/parse.dart';
+import 'auth.dart';
 import 'links.dart';
 import 'update_service.dart';
 
@@ -224,14 +225,15 @@ Future<ParseOutcome> _parseInner(String url) async {
   }
 
   var targetUrl = url;
-  if (isXhsHost(host)) {
+  final isXhs = isXhsHost(host);
+  if (isXhs) {
     final match = RegExp(
       r'/(?:explore|discovery/item)/([a-f0-9]{24})',
       caseSensitive: false,
     ).firstMatch(url);
     if (match != null) {
       final noteId = match.group(1);
-      targetUrl = 'https://www.xiaohongshu.com/discovery/item/$noteId';
+      targetUrl = 'https://www.xiaohongshu.com/explore/$noteId';
     }
   }
 
@@ -241,6 +243,9 @@ Future<ParseOutcome> _parseInner(String url) async {
   try {
     headless = HeadlessInAppWebView(
       initialUrlRequest: URLRequest(url: WebUri.uri(Uri.parse(targetUrl))),
+      initialSettings: InAppWebViewSettings(
+        userAgent: isXhs ? loginUserAgent(PlatformKind.xhs) : null,
+      ),
       // XHS pages auto-navigate to xhsdiscover:// (app-open scheme) after
       // load. Cancel every non-http(s) navigation so the WebView stays on
       // the note page, whose DOM/state holds the data we parse.
