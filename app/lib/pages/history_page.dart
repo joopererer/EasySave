@@ -227,8 +227,9 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).hideCurrentSnackBar();
+      final msg = e is ParseFailure ? e.message : '$e';
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('解析失败：$e')),
+        SnackBar(content: Text('解析失败：$msg')),
       );
     }
   }

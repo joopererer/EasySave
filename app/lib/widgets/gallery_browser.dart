@@ -518,7 +518,7 @@ class _ThumbnailImage extends StatelessWidget {
       item: MediaItem(type: item.type, url: item.url),
       referer: refererFor(platform),
       fit: BoxFit.cover,
-      cacheWidth: 120,
+      cacheWidth: 400,
     );
   }
 }
@@ -922,11 +922,24 @@ class _BrowserItemViewState extends State<_BrowserItemView> {
                           isOriginal: true,
                           fit: BoxFit.contain,
                         )
-                      : CoverImage(
-                          item: MediaItem(type: it.type, url: it.url),
-                          referer: refererFor(widget.platform),
-                          fit: BoxFit.contain,
-                          cacheWidth: 1080,
+                      : Stack(
+                          fit: StackFit.passthrough,
+                          alignment: Alignment.center,
+                          children: [
+                            CoverImage(
+                              item: MediaItem(type: it.type, url: it.url),
+                              referer: refererFor(widget.platform),
+                              fit: BoxFit.contain,
+                              cacheWidth: 400,
+                            ),
+                            CoverImage(
+                              item: MediaItem(type: it.type, url: it.url),
+                              referer: refererFor(widget.platform),
+                              fit: BoxFit.contain,
+                              cacheWidth: 1080,
+                              placeholder: const SizedBox.shrink(),
+                            ),
+                          ],
                         ),
                 ),
               ),
@@ -1073,11 +1086,30 @@ class _ZoomableImageViewState extends State<_ZoomableImageView>
                   isOriginal: true,
                   fit: BoxFit.contain,
                 )
-              : CoverImage(
-                  item: MediaItem(type: widget.item.type, url: widget.item.url),
-                  referer: refererFor(widget.platform),
-                  fit: BoxFit.contain,
-                  cacheWidth: 1080,
+              : Stack(
+                  fit: StackFit.passthrough,
+                  alignment: Alignment.center,
+                  children: [
+                    CoverImage(
+                      item: MediaItem(
+                        type: widget.item.type,
+                        url: widget.item.url,
+                      ),
+                      referer: refererFor(widget.platform),
+                      fit: BoxFit.contain,
+                      cacheWidth: 400,
+                    ),
+                    CoverImage(
+                      item: MediaItem(
+                        type: widget.item.type,
+                        url: widget.item.url,
+                      ),
+                      referer: refererFor(widget.platform),
+                      fit: BoxFit.contain,
+                      cacheWidth: 1080,
+                      placeholder: const SizedBox.shrink(),
+                    ),
+                  ],
                 ),
         ),
       ),

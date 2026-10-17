@@ -89,11 +89,14 @@ class _ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
       (db) => db.recent(limit: 3),
     );
     if (!mounted) return;
+    setState(() => _recent = records);
     final locator = GalleryLocatorService.instance;
     if (locator.hasAccess) {
+      await locator.preloadMediaIds(records);
+      if (mounted) setState(() {});
       await locator.syncAll(records);
+      if (mounted) setState(() {});
     }
-    setState(() => _recent = records);
   }
 
   /// Single entry for clipboard dialog, paste button and share intents:
@@ -661,11 +664,6 @@ class _ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
   Widget? _thumbOf(BuildContext context, HistoryRecord record) {
     final locator = GalleryLocatorService.instance;
 
-    // Show shimmering loading box while scanning or before scan completes
-    if (locator.isScanning || !locator.scanned) {
-      return const ShimmerBox(width: 48, height: 48);
-    }
-
     AssetEntity? asset;
     for (final f in record.files) {
       asset = locator.getAssetById(f.mediaId) ??
@@ -687,6 +685,17 @@ class _ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
           ),
         ),
       );
+    }
+
+    // Show shimmering loading box ONLY if the record's files have never been located before
+    // and scanning is actively underway
+    final isUnlocated = record.files.any(
+      (f) =>
+          f.status == FileStatus.unknown &&
+          (f.mediaId == null || f.mediaId!.isEmpty),
+    );
+    if (isUnlocated && (locator.isScanning || !locator.scanned)) {
+      return const ShimmerBox(width: 48, height: 48);
     }
 
     final allNotFound = record.files.isNotEmpty &&

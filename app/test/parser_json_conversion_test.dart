@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:easysave/core/models.dart';
+import 'package:easysave/services/parse_service.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
@@ -159,6 +160,14 @@ void main() {
       });
       expect(gifVideo.isGif, isTrue);
       expect(gifVideo.toJson()['isGif'], isTrue);
+    });
+
+    test('ParseFailure toString returns message or formatted code', () {
+      final f1 = ParseFailure('INVALID_PAGE', '页面无法打开');
+      expect(f1.toString(), equals('页面无法打开'));
+
+      final f2 = ParseFailure('TIMEOUT', '');
+      expect(f2.toString(), equals('解析失败 (TIMEOUT)'));
     });
   });
 }

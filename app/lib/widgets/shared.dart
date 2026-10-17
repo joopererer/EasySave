@@ -74,6 +74,7 @@ class CoverImage extends StatefulWidget {
     this.cacheWidth,
     this.width,
     this.height,
+    this.placeholder,
   });
 
   final MediaItem item;
@@ -82,6 +83,7 @@ class CoverImage extends StatefulWidget {
   final int? cacheWidth;
   final double? width;
   final double? height;
+  final Widget? placeholder;
 
   @override
   State<CoverImage> createState() => _CoverImageState();
@@ -105,7 +107,9 @@ class _CoverImageState extends State<CoverImage> {
         child: Icon(Icons.broken_image),
       ),
       loadingBuilder: (context, child, progress) =>
-          progress == null ? child : const ColoredBox(color: Colors.black12),
+          progress == null
+              ? child
+              : (widget.placeholder ?? const ColoredBox(color: Colors.black12)),
     );
   }
 }
@@ -132,13 +136,44 @@ class CdnImage extends ImageProvider<CdnImage> {
   static final _client = http.Client();
   static const _timeout = Duration(seconds: 8);
 
+  static final Map<String, Uint8List> _rawByteCache = {};
+  static final List<String> _cacheKeysOrder = [];
+  static const int _maxCachedImages = 100;
+
+  static void cacheBytes(String url, Uint8List bytes) {
+    if (_rawByteCache.containsKey(url)) {
+      _cacheKeysOrder.remove(url);
+      _cacheKeysOrder.add(url);
+      _rawByteCache[url] = bytes;
+      return;
+    }
+    if (_cacheKeysOrder.length >= _maxCachedImages) {
+      final oldest = _cacheKeysOrder.removeAt(0);
+      _rawByteCache.remove(oldest);
+    }
+    _rawByteCache[url] = bytes;
+    _cacheKeysOrder.add(url);
+  }
+
+  static Uint8List? getCachedBytes(List<String> urls) {
+    for (final u in urls) {
+      final b = _rawByteCache[u];
+      if (b != null) return b;
+    }
+    return null;
+  }
+
   Future<Uint8List> _fetchBytes() async {
+    final cached = getCachedBytes(urls);
+    if (cached != null) return cached;
+
     for (final url in urls) {
       try {
         final response = await _client
             .get(Uri.parse(url), headers: {'Referer': referer})
             .timeout(_timeout);
         if (response.statusCode == 200 && response.bodyBytes.isNotEmpty) {
+          cacheBytes(url, response.bodyBytes);
           return response.bodyBytes;
         }
       } catch (_) {

@@ -18,6 +18,9 @@ class ParseFailure implements Exception {
   ParseFailure(this.code, this.message);
   final String code;
   final String message;
+
+  @override
+  String toString() => message.isNotEmpty ? message : '解析失败 ($code)';
 }
 
 Future<T> _withTimeout<T>(Future<T> Function() run, String what) {
@@ -220,12 +223,24 @@ Future<ParseOutcome> _parseInner(String url) async {
     return _parseXPost(url);
   }
 
+  var targetUrl = url;
+  if (isXhsHost(host)) {
+    final match = RegExp(
+      r'/(?:explore|discovery/item)/([a-f0-9]{24})',
+      caseSensitive: false,
+    ).firstMatch(url);
+    if (match != null) {
+      final noteId = match.group(1);
+      targetUrl = 'https://www.xiaohongshu.com/discovery/item/$noteId';
+    }
+  }
+
   final loaded = Completer<void>();
   InAppWebViewController? readyController;
   HeadlessInAppWebView? headless;
   try {
     headless = HeadlessInAppWebView(
-      initialUrlRequest: URLRequest(url: WebUri.uri(Uri.parse(url))),
+      initialUrlRequest: URLRequest(url: WebUri.uri(Uri.parse(targetUrl))),
       // XHS pages auto-navigate to xhsdiscover:// (app-open scheme) after
       // load. Cancel every non-http(s) navigation so the WebView stays on
       // the note page, whose DOM/state holds the data we parse.
