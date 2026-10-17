@@ -19,8 +19,44 @@ class _LoginPageState extends State<LoginPage> {
   InAppWebViewController? _controller;
   double _progress = 0;
 
+  Future<void> _handleComplete() async {
+    final ok = await isLoggedIn(widget.platform);
+    if (!mounted) return;
+
+    if (!ok) {
+      final confirmExit = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('未检测到登录状态'),
+          content: Text(
+            widget.platform == PlatformKind.xhs
+                ? '尚未检测到小红书登录信息。\n\n若尚未登录，请点击下方页面右下角“我”或任意笔记进入登录页面；\n若您刚刚已完成登录，请点击右上角刷新图标，或稍等数秒后再点“完成”。'
+                : '尚未检测到登录信息，确定要退出吗？',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(true),
+              child: const Text('仍要退出'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(ctx).pop(false),
+              child: const Text('继续登录'),
+            ),
+          ],
+        ),
+      );
+      if (confirmExit != true || !mounted) return;
+    }
+
+    Navigator.of(context).pop(ok);
+  }
+
   @override
   Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final bannerBg = isDark ? const Color(0xFF1E293B) : Colors.blue.shade50;
+    final bannerText = isDark ? const Color(0xFF93C5FD) : Colors.blue.shade900;
+
     return Scaffold(
       appBar: AppBar(
         title: Text('${platformLabel(widget.platform)}登录'),
@@ -31,7 +67,7 @@ class _LoginPageState extends State<LoginPage> {
             onPressed: () => _controller?.reload(),
           ),
           TextButton(
-            onPressed: () => Navigator.of(context).pop(true),
+            onPressed: _handleComplete,
             child: const Text('完成', style: TextStyle(color: Colors.white)),
           ),
         ],
@@ -40,13 +76,17 @@ class _LoginPageState extends State<LoginPage> {
         children: [
           Container(
             width: double.infinity,
-            padding: const EdgeInsets.all(8),
-            color: Colors.blue.shade50,
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+            color: bannerBg,
             child: Text(
               widget.platform == PlatformKind.xhs
-                  ? '默认是二维码登录，点登录框下方的“验证码登录”或“密码登录”切换，在本机直接登录即可，无需扫码。完成后点右上角“完成”。登录状态保存在本机，重启 App 依然有效。'
+                  ? '若显示手机版页面，可点击右下角“我”或任意笔记进入登录；若显示桌面版，可切换“验证码/密码登录”。登录成功后点右上角“完成”。登录状态保存在本机，重启 App 依然有效。'
                   : '请在下方页面完成登录，然后点右上角“完成”。登录状态保存在本机，重启 App 依然有效。',
-              style: const TextStyle(fontSize: 13),
+              style: TextStyle(
+                fontSize: 13,
+                height: 1.4,
+                color: bannerText,
+              ),
             ),
           ),
           if (_progress < 1)
@@ -59,6 +99,10 @@ class _LoginPageState extends State<LoginPage> {
               initialSettings: InAppWebViewSettings(
                 javaScriptEnabled: true,
                 domStorageEnabled: true,
+                databaseEnabled: true,
+                thirdPartyCookiesEnabled: true,
+                sharedCookiesEnabled: true,
+                cacheEnabled: true,
                 mediaPlaybackRequiresUserGesture: false,
                 userAgent: loginUserAgent(widget.platform),
               ),

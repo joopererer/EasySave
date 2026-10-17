@@ -21,6 +21,7 @@ import '../services/seal.dart';
 import '../services/settings.dart';
 import '../services/update_service.dart';
 import '../theme/app_theme.dart';
+import '../widgets/download_sheet.dart';
 import '../widgets/gallery_browser.dart';
 import '../widgets/shared.dart';
 import 'batch_page.dart';
@@ -652,6 +653,13 @@ class _ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
                   : record.postId,
               platform: record.platform,
               postUrl: record.postUrl,
+              onReparse: () => _resolve(record.postUrl),
+              onRedownload: (index) async {
+                await DownloadSheet.show(context, post, [index]);
+                await locator.scanAlbum(force: true);
+                await locator.syncRecord(record);
+                if (mounted) setState(() {});
+              },
             ),
           ),
         )

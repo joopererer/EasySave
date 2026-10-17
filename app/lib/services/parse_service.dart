@@ -244,6 +244,12 @@ Future<ParseOutcome> _parseInner(String url) async {
     headless = HeadlessInAppWebView(
       initialUrlRequest: URLRequest(url: WebUri.uri(Uri.parse(targetUrl))),
       initialSettings: InAppWebViewSettings(
+        javaScriptEnabled: true,
+        domStorageEnabled: true,
+        databaseEnabled: true,
+        thirdPartyCookiesEnabled: true,
+        sharedCookiesEnabled: true,
+        cacheEnabled: true,
         userAgent: isXhs ? loginUserAgent(PlatformKind.xhs) : null,
       ),
       // XHS pages auto-navigate to xhsdiscover:// (app-open scheme) after
@@ -278,8 +284,21 @@ Future<ParseOutcome> _parseInner(String url) async {
     dynamic jsResult;
     try {
       await controller.evaluateJavascript(source: parserJs);
+      final pageUrlJson = jsonEncode(targetUrl);
       jsResult = await controller.evaluateJavascript(
-        source: 'EasySaveParser.parsePage()',
+        source: '''
+(() => {
+  try {
+    const res = JSON.parse(EasySaveParser.parsePage());
+    if (res && res.ok) return JSON.stringify(res);
+  } catch (_) {}
+  try {
+    return EasySaveParser.parse(document.documentElement.outerHTML, $pageUrlJson);
+  } catch (e) {
+    return JSON.stringify({ ok: false, error: { code: 'INVALID_PAGE', message: String(e) } });
+  }
+})()
+''',
       );
     } catch (e) {
       throw ParseFailure(ParseErrorCode.invalidPage, 'JS 执行异常: $e');

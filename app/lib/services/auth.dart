@@ -60,7 +60,15 @@ Future<bool> isLoggedIn(PlatformKind platform) async {
     final cookies = await CookieManager.instance().getCookies(
       url: WebUri(_cookieUrl(platform)),
     );
-    return cookies.any((c) => _isSessionCookie(platform, c.name));
+    if (cookies.any((c) => _isSessionCookie(platform, c.name))) return true;
+
+    if (platform == PlatformKind.xhs) {
+      final edithCookies = await CookieManager.instance().getCookies(
+        url: WebUri('https://edith.xiaohongshu.com'),
+      );
+      if (edithCookies.any((c) => _isSessionCookie(platform, c.name))) return true;
+    }
+    return false;
   } catch (_) {
     return false;
   }
@@ -72,6 +80,11 @@ Future<void> logout(PlatformKind platform) async {
     await CookieManager.instance().deleteCookies(
       url: WebUri(_cookieUrl(platform)),
     );
+    if (platform == PlatformKind.xhs) {
+      await CookieManager.instance().deleteCookies(
+        url: WebUri('https://edith.xiaohongshu.com'),
+      );
+    }
   } catch (_) {
     // Best effort; the login page can also expire the session.
   }
