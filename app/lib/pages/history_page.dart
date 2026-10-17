@@ -1,6 +1,8 @@
 // History tab: platform filter, date groups, undoable delete, empty state,
 // local photo_manager album resolution, permission banners, and unified fullscreen browser.
 
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:photo_manager/photo_manager.dart';
 import 'package:photo_manager_image_provider/photo_manager_image_provider.dart';
@@ -70,14 +72,28 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
   }
 
   Future<void> _initPermissionsAndLoad() async {
+    // 1. Immediately load records from DB so UI displays previous content instantly!
+    await _reload();
+
+    // 2. Check permissions; if granted, preload known mediaIds and start background scan/sync
     final locator = GalleryLocatorService.instance;
     await locator.checkPermission();
     if (locator.permission == PermissionState.notDetermined) {
       await locator.requestPermission();
     } else if (locator.hasAccess) {
-      await locator.scanAlbum();
+      await locator.preloadMediaIds(_records);
+      if (mounted) setState(() {});
+      unawaited(_backgroundScanAndSync());
     }
-    await _reload();
+  }
+
+  Future<void> _backgroundScanAndSync() async {
+    final locator = GalleryLocatorService.instance;
+    await locator.scanAlbum();
+    if (_records.isNotEmpty) {
+      await locator.syncAll(_records);
+    }
+    if (mounted) setState(() {});
   }
 
   /// Reload from DB; called by the shell every time the tab becomes visible
@@ -97,15 +113,16 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
     }
     try {
       final records = await HistoryDb.instance().then((db) => db.recent());
-      final locator = GalleryLocatorService.instance;
-      if (locator.hasAccess) {
-        await locator.syncAll(records);
-      }
       if (!mounted) return;
       setState(() {
         _records = records;
         _loading = false;
       });
+      final locator = GalleryLocatorService.instance;
+      if (locator.hasAccess) {
+        await locator.preloadMediaIds(records);
+        if (mounted) setState(() {});
+      }
     } catch (e) {
       if (!mounted) return;
       setState(() {
@@ -525,8 +542,14 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
       );
     }
 
-    // Show shimmering loading box only while scanning and asset not yet located
-    if (locator.isScanning || !locator.scanned) {
+    // Show shimmering loading box ONLY if the record's files have never been located before
+    // (e.g. fresh database migration from v1 or empty initial state) and scanning is actively underway
+    final isUnlocated = record.files.any(
+      (f) =>
+          f.status == FileStatus.unknown &&
+          (f.mediaId == null || f.mediaId!.isEmpty),
+    );
+    if (isUnlocated && (locator.isScanning || !locator.scanned)) {
       return const ShimmerBox(width: 48, height: 48);
     }
 

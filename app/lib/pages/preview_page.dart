@@ -95,8 +95,6 @@ class _PreviewPageState extends State<PreviewPage> {
     if (!mounted) return;
     setState(() {
       _downloaded = downloaded;
-      // Default selection: deselect locally existing images to prevent duplicate downloads
-      _order.removeWhere((i) => _downloaded.contains(i));
     });
   }
 
@@ -186,6 +184,25 @@ class _PreviewPageState extends State<PreviewPage> {
             PlatformTag(platform: post.platform),
           ],
         ),
+        actions: [
+          if (post.items.isNotEmpty)
+            TextButton(
+              onPressed: () {
+                setState(() {
+                  if (_order.length == post.items.length) {
+                    _order.clear();
+                  } else {
+                    _order
+                      ..clear()
+                      ..addAll([for (var i = 0; i < post.items.length; i++) i]);
+                  }
+                });
+              },
+              child: Text(
+                _order.length == post.items.length ? '全不选' : '全选',
+              ),
+            ),
+        ],
       ),
       body: Column(
         children: [

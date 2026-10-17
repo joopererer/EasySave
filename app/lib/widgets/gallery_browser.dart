@@ -79,8 +79,9 @@ class _GalleryBrowserPageState extends State<GalleryBrowserPage> {
 
   double _dragOffset = 0.0;
   bool _isZoomed = false;
-  bool _isPinching = false;
   int _pointerCount = 0;
+  Offset? _dragStart;
+  bool _isPullDownActive = false;
 
   @override
   void dispose() {
@@ -139,106 +140,112 @@ class _GalleryBrowserPageState extends State<GalleryBrowserPage> {
       backgroundColor: Colors.black.withValues(alpha: opacity),
       body: SafeArea(
         child: Listener(
-          onPointerDown: (_) {
+          onPointerDown: (event) {
             _pointerCount++;
-            if (_pointerCount >= 2 && _dragOffset > 0) {
-              setState(() => _dragOffset = 0.0);
+            if (_pointerCount == 1) {
+              if (!_isZoomed) {
+                _dragStart = event.position;
+                _isPullDownActive = false;
+              }
+            } else {
+              _dragStart = null;
+              _isPullDownActive = false;
+              if (_dragOffset > 0) {
+                setState(() => _dragOffset = 0.0);
+              }
             }
           },
-          onPointerUp: (_) {
-            _pointerCount = (_pointerCount - 1).clamp(0, 10);
-            if (_pointerCount == 0 && _isPinching) {
-              setState(() => _isPinching = false);
-            }
-          },
-          onPointerCancel: (_) {
-            _pointerCount = (_pointerCount - 1).clamp(0, 10);
-            if (_pointerCount == 0 && _isPinching) {
-              setState(() => _isPinching = false);
-            }
-          },
-          child: GestureDetector(
-            onVerticalDragStart: (details) {
-              if (_isZoomed || _isPinching || _pointerCount > 1) return;
-            },
-            onVerticalDragUpdate: (details) {
-              if (_isZoomed || _isPinching || _pointerCount > 1) {
-                if (_dragOffset > 0) {
-                  setState(() => _dragOffset = 0.0);
-                }
+          onPointerMove: (event) {
+            if (_pointerCount != 1 || _isZoomed || _dragStart == null) return;
+            final dy = event.position.dy - _dragStart!.dy;
+            final dx = event.position.dx - _dragStart!.dx;
+
+            if (!_isPullDownActive) {
+              // Initiate downward pull only when dragging straight down
+              if (dy > 18 && dy > dx.abs() * 1.5) {
+                _isPullDownActive = true;
+              } else if (dx.abs() > 18 || dy < -18) {
+                // Horizontal swipe (for PageView) or upward swipe
+                _dragStart = null;
                 return;
               }
-              if (_dragOffset > 0 || details.delta.dy > 0) {
-                setState(() {
-                  _dragOffset = (_dragOffset + details.delta.dy).clamp(0.0, 400.0);
-                });
-              }
-            },
-            onVerticalDragEnd: (details) {
-              if (_isZoomed || _isPinching || _pointerCount > 1) {
-                if (_dragOffset > 0) {
-                  setState(() => _dragOffset = 0.0);
-                }
-                return;
-              }
-              final velocity = details.primaryVelocity ?? 0;
-              final shouldPop =
-                  _dragOffset > 160.0 || (_dragOffset > 80.0 && velocity > 1000.0);
-              if (shouldPop) {
+            }
+
+            if (_isPullDownActive) {
+              final offset = (dy - 18).clamp(0.0, 400.0);
+              setState(() {
+                _dragOffset = offset;
+              });
+            }
+          },
+          onPointerUp: (event) {
+            _pointerCount = (_pointerCount - 1).clamp(0, 10);
+            if (_pointerCount == 0) {
+              if (_isPullDownActive && _dragOffset > 150.0) {
                 Navigator.of(context).pop();
-              } else {
+              } else if (_dragOffset > 0) {
                 setState(() {
                   _dragOffset = 0.0;
+                  _isPullDownActive = false;
+                  _dragStart = null;
                 });
+              } else {
+                _isPullDownActive = false;
+                _dragStart = null;
               }
-            },
-            child: Transform.translate(
-              offset: Offset(0, _dragOffset),
-              child: Stack(
-                children: [
-                  // 1. Horizontal PageView
-                  PageView.builder(
-                    controller: _pageController,
-                    physics: (_isZoomed || _isPinching || _pointerCount > 1)
-                        ? const NeverScrollableScrollPhysics()
-                        : const BouncingScrollPhysics(),
-                    itemCount: widget.items.length,
-                    onPageChanged: (idx) {
-                      setState(() {
-                        _currentIndex = idx;
-                        _isZoomed = false;
-                        _isPinching = false;
-                      });
-                      // Scroll thumbnail into view
-                      if (_thumbController.hasClients) {
-                        _thumbController.animateTo(
-                          idx * 56.0,
-                          duration: const Duration(milliseconds: 250),
-                          curve: Curves.easeOut,
-                        );
-                      }
-                    },
-                    itemBuilder: (context, idx) {
-                      final item = widget.items[idx];
-                      return _BrowserItemView(
-                        item: item,
-                        platform: widget.platform,
-                        onZoomChanged: (zoomed) {
-                          if (_isZoomed != zoomed) {
-                            setState(() => _isZoomed = zoomed);
-                          }
-                        },
-                        onPinchingChanged: (pinching) {
-                          if (_isPinching != pinching) {
-                            setState(() => _isPinching = pinching);
-                          }
-                        },
-                        onRedownload: widget.onRedownload != null
-                            ? () => widget.onRedownload!(item.index)
-                            : null,
+            }
+          },
+          onPointerCancel: (event) {
+            _pointerCount = (_pointerCount - 1).clamp(0, 10);
+            if (_pointerCount == 0) {
+              _isPullDownActive = false;
+              _dragStart = null;
+              if (_dragOffset > 0) {
+                setState(() => _dragOffset = 0.0);
+              }
+            }
+          },
+          child: Transform.translate(
+            offset: Offset(0, _dragOffset),
+            child: Stack(
+              children: [
+                // 1. Horizontal PageView
+                PageView.builder(
+                  controller: _pageController,
+                  physics: (_isZoomed || _pointerCount > 1)
+                      ? const NeverScrollableScrollPhysics()
+                      : const BouncingScrollPhysics(),
+                  itemCount: widget.items.length,
+                  onPageChanged: (idx) {
+                    setState(() {
+                      _currentIndex = idx;
+                      _isZoomed = false;
+                    });
+                    // Scroll thumbnail into view
+                    if (_thumbController.hasClients) {
+                      _thumbController.animateTo(
+                        idx * 56.0,
+                        duration: const Duration(milliseconds: 250),
+                        curve: Curves.easeOut,
                       );
-                    },
-                  ),
+                    }
+                  },
+                  itemBuilder: (context, idx) {
+                    final item = widget.items[idx];
+                    return _BrowserItemView(
+                      item: item,
+                      platform: widget.platform,
+                      onZoomChanged: (zoomed) {
+                        if (_isZoomed != zoomed) {
+                          setState(() => _isZoomed = zoomed);
+                        }
+                      },
+                      onRedownload: widget.onRedownload != null
+                          ? () => widget.onRedownload!(item.index)
+                          : null,
+                    );
+                  },
+                ),
 
                 // 2. Top Bar
                 Positioned(
@@ -481,9 +488,8 @@ class _GalleryBrowserPageState extends State<GalleryBrowserPage> {
           ),
         ),
       ),
-    ),
-  );
-}
+    );
+  }
 }
 
 class _ThumbnailImage extends StatelessWidget {
@@ -522,14 +528,12 @@ class _BrowserItemView extends StatefulWidget {
     required this.item,
     required this.platform,
     this.onZoomChanged,
-    this.onPinchingChanged,
     this.onRedownload,
   });
 
   final GalleryBrowserItem item;
   final String platform;
   final ValueChanged<bool>? onZoomChanged;
-  final ValueChanged<bool>? onPinchingChanged;
   final Future<void> Function()? onRedownload;
 
   @override
@@ -974,7 +978,6 @@ class _BrowserItemViewState extends State<_BrowserItemView> {
       item: it,
       platform: widget.platform,
       onZoomChanged: widget.onZoomChanged,
-      onPinchingChanged: widget.onPinchingChanged,
     );
   }
 }
@@ -984,13 +987,11 @@ class _ZoomableImageView extends StatefulWidget {
     required this.item,
     required this.platform,
     this.onZoomChanged,
-    this.onPinchingChanged,
   });
 
   final GalleryBrowserItem item;
   final String platform;
   final ValueChanged<bool>? onZoomChanged;
-  final ValueChanged<bool>? onPinchingChanged;
 
   @override
   State<_ZoomableImageView> createState() => _ZoomableImageViewState();
@@ -1023,9 +1024,6 @@ class _ZoomableImageViewState extends State<_ZoomableImageView>
   void _handleTransform() {
     final scale = _transformationController.value.getMaxScaleOnAxis();
     widget.onZoomChanged?.call(scale > 1.05);
-    if (scale <= 1.05) {
-      widget.onPinchingChanged?.call(false);
-    }
   }
 
   void _onDoubleTap() {
@@ -1068,25 +1066,6 @@ class _ZoomableImageViewState extends State<_ZoomableImageView>
         minScale: 1.0,
         maxScale: 5.0,
         clipBehavior: Clip.none,
-        onInteractionStart: (details) {
-          if (details.pointerCount >= 2) {
-            widget.onPinchingChanged?.call(true);
-          }
-        },
-        onInteractionUpdate: (details) {
-          final scale = _transformationController.value.getMaxScaleOnAxis();
-          widget.onZoomChanged?.call(scale > 1.05);
-          if (details.pointerCount >= 2 || scale > 1.05) {
-            widget.onPinchingChanged?.call(true);
-          }
-        },
-        onInteractionEnd: (details) {
-          final scale = _transformationController.value.getMaxScaleOnAxis();
-          widget.onZoomChanged?.call(scale > 1.05);
-          if (details.pointerCount <= 1 && scale <= 1.05) {
-            widget.onPinchingChanged?.call(false);
-          }
-        },
         child: Center(
           child: widget.item.asset != null
               ? AssetEntityImage(

@@ -46,6 +46,33 @@ class GalleryLocatorService extends ChangeNotifier {
     return _idMap[mediaId];
   }
 
+  /// Preload AssetEntities for known mediaIds without scanning entire album.
+  Future<void> preloadMediaIds(List<HistoryRecord> records) async {
+    final idsToFetch = <String>{};
+    for (final r in records) {
+      for (final f in r.files) {
+        final id = f.mediaId;
+        if (id != null && id.isNotEmpty && !_idMap.containsKey(id)) {
+          idsToFetch.add(id);
+        }
+      }
+    }
+    if (idsToFetch.isEmpty) return;
+    final futures = idsToFetch.map((id) async {
+      try {
+        final asset = await AssetEntity.fromId(id);
+        if (asset != null) {
+          _idMap[id] = asset;
+          if (asset.title != null && asset.title!.isNotEmpty) {
+            _exactMap[asset.title!.toLowerCase()] = asset;
+          }
+        }
+      } catch (_) {}
+    });
+    await Future.wait(futures);
+    notifyListeners();
+  }
+
   /// Check current permission state without prompting the user.
   Future<PermissionState> checkPermission() async {
     try {
