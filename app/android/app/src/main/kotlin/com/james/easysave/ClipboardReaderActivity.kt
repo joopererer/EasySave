@@ -17,11 +17,26 @@ import android.widget.Toast
  * the background or flashing a visible window.
  */
 class ClipboardReaderActivity : Activity() {
+    private var done = false
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
             window.setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
         }
+    }
+
+    // Read only once the window has focus: on Android 10+ a non-focused caller
+    // gets an empty clipboard (verified on device: onCreate read was null).
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        if (hasFocus && !done) {
+            done = true
+            readAndFinish()
+        }
+    }
+
+    private fun readAndFinish() {
         val cm = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
         val clip = cm.primaryClip
         val text: String? =

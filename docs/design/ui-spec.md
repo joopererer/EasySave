@@ -353,11 +353,11 @@
 - 外形：**渐变色圆形按钮**（复用主按钮渐变 `LinearGradient([#FC494C, #FA662E])`），直径约 56px，中心放 EasySave 图标或"↓"符号，带柔和投影（`cardShadow`）。
 - 拖动与吸附：可直接拖动；**松手后吸附到最近的左/右屏幕边缘**，并保留上下位置。
 - 闲置态：无操作时**略微透明**（约 80% 不透明度），交互或有内容时恢复不透明。
-- 链接提示：当剪贴板中出现可解析链接时，悬浮球右上角显示**绿点**（`success` `#43A047`）并**轻微晃动一次**。
+- 链接提示：**不做**"剪贴板有链接就显示绿点/晃动"（Android 10+ 后台收不到剪贴板变化回调，真机已确认）。改为**仅在点击悬浮球时读取剪贴板**（见 §2.7.2）。
 
 #### 2.7.2 点击与圆形菜单
 
-- 点击行为：先读取剪贴板（通过**短暂打开一个透明页面**读取，读取完成**立即关闭**）。
+- 点击行为：先读取剪贴板（通过**短暂打开一个透明页面**读取，读取完成**立即关闭**）。**透明页面必须在获得窗口焦点后再读**（真机 MIUI 上在 `onCreate` 直接读会返回空），读完立即 `finish`。
   - 剪贴板无支持链接：轻提示"先在 App 里复制链接"。
   - 有链接：悬浮球**向屏幕内侧**展开**圆形菜单**（以悬浮球为圆心的扇形/环状布局，逐项带图标 + 文字），同时铺一层**半透明遮罩**（`overlayScrim` `Black54`）；点击菜单外的空白处收起菜单。
 - 菜单四项（以当前悬浮球所在边为基准向屏幕内展开）：
@@ -368,7 +368,7 @@
 
 #### 2.7.3 选择下载面板
 
-- 形态：半透明/浅底圆角面板（`radiusCard` 24 + `elevationSheet`），覆盖在当前 App 之上（不出 App，故用系统悬浮窗而非 App 内 BottomSheet）。
+- 形态：复用**后台服务已有的 Flutter 引擎**，把 **FlutterView 挂到悬浮窗**（`TYPE_APPLICATION_OVERLAY`）显示，圆角卡片（`radiusCard` 24），覆盖在当前 App 之上；**不新建第三个 Flutter 引擎**。首版亦可退化为原生 Kotlin 面板（见 `docs/tasks/v1.6.md` 方案对比）。
 - 内容：帖子封面头图（可选）+ **九宫格媒体缩略图**（3 列，圆角 `radiusThumb` 16），每格右上角圆形勾选框（选中红底白勾 `✓`）。
 - 顶部/底部：**全选 / 取消全选**入口；底部主按钮"**下载选中（N）**"（红橙渐变胶囊），次按钮"取消"。
 - 确认后：关闭面板，转入后台下载，流程同"全部下载"（悬浮球显示进度环 + 通知栏进度）。
@@ -432,7 +432,7 @@
 | 11 | [删除确认面板.png](file:///d:/workspace/IdeaProjects/EasySave/docs/design/gallery-prototype/删除确认面板.png) | 删除确认面板（Modal Bottom Sheet） | 默认仅删除记录（支持 SnackBar 撤销）；可勾选"同时删除相册中的 N 个文件"（默认不勾选，不支持撤销，通过 `MediaStore.createDeleteRequest` 走系统确认） |
 | 12 | [排序_类型.png](file:///d:/workspace/IdeaProjects/EasySave/docs/design/gallery-prototype/排序_类型.png) | 排序与分组 | 工具栏图标高亮；按类型分组展示（视频 / Live 图 / GIF / 图片），组标题带数量统计且吸顶 |
 | 13 | [搜索.png](file:///d:/workspace/IdeaProjects/EasySave/docs/design/gallery-prototype/搜索.png) | 搜索与筛选 | 展开搜索输入框；按标题和作者实时过滤；页面副文案实时更新统计；生效筛选显示为可清除的小标签 Chip |
-| 14 | [外观.png](file:///d:/workspace/IdeaProjects/EasySave/docs/design/bubble-prototype/外观.png) | 悬浮球 - 外观 | 渐变圆形按钮，可拖动，松手吸附最近左/右边缘；闲置略微透明；剪贴板有可解析链接时显示绿点并晃动一次 |
+| 14 | [外观.png](file:///d:/workspace/IdeaProjects/EasySave/docs/design/bubble-prototype/外观.png) | 悬浮球 - 外观 | 渐变圆形按钮，可拖动，松手吸附最近左/右边缘；闲置略微透明；**不显示剪贴板绿点**（点击时才读剪贴板） |
 | 15 | [点击.png](file:///d:/workspace/IdeaProjects/EasySave/docs/design/bubble-prototype/点击.png) | 悬浮球 - 圆形菜单 | 点击读取剪贴板后向屏幕内侧展开四项圆形菜单（全部下载 / 选择下载 / 复制文案 / 打开 EasySave），带半透明遮罩，点空白收起 |
 | 16 | [全部下载.png](file:///d:/workspace/IdeaProjects/EasySave/docs/design/bubble-prototype/全部下载.png) | 悬浮球 - 全部下载 | 后台解析下载、不打开 App 界面；悬浮球显示"已完成 / 总数"与进度环；通知栏同步进度 |
 | 17 | [选择下载.png](file:///d:/workspace/IdeaProjects/EasySave/docs/design/bubble-prototype/选择下载.png) | 悬浮球 - 选择下载面板 | 当前 App 上层弹出九宫格缩略图（可勾选 + 全选），确认后转入后台下载 |
