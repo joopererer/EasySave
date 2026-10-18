@@ -4,6 +4,8 @@ import 'dart:convert';
 
 import 'package:sqflite/sqflite.dart';
 
+import '../core/models.dart';
+
 enum FileStatus {
   unknown,
   found,
@@ -177,6 +179,50 @@ class HistoryRecord {
   final String? itemsJson;
 
   final List<HistoryFile> files;
+
+  /// Rebuild the parsed post from the stored `items_json`. Shared by the
+  /// history cards and the preview page so both decode identically. Falls back
+  /// to the stored thumbnail when no item list was persisted.
+  ParsedPost toPost() {
+    final items = <MediaItem>[];
+    if (itemsJson != null) {
+      try {
+        final decoded = jsonDecode(itemsJson!) as List;
+        for (final raw in decoded) {
+          final map = (raw as Map).cast<String, Object?>();
+          items.add(
+            MediaItem(
+              type: map['type'] as String? ?? 'image',
+              url: map['url'] as String? ?? '',
+              videoUrl: map['videoUrl'] as String?,
+              posterUrl: map['posterUrl'] as String?,
+              width: map['width'] as num?,
+              height: map['height'] as num?,
+              duration: map['duration'] as num?,
+              isGif: map['isGif'] as bool?,
+              fallbacks:
+                  (map['fallbacks'] as List?)?.whereType<String>().toList() ??
+                  const [],
+            ),
+          );
+        }
+      } catch (_) {
+        // Fall through to the single-thumbnail fallback.
+      }
+    }
+    if (items.isEmpty && thumbnailUrl != null) {
+      items.add(MediaItem(type: 'image', url: thumbnailUrl!));
+    }
+    return ParsedPost(
+      platform: platform,
+      id: postId,
+      url: postUrl,
+      author: PostAuthor(name: authorName),
+      items: items,
+      title: title,
+      caption: caption,
+    );
+  }
 
   Map<String, Object?> toMap() => {
     'platform': platform,

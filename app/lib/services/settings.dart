@@ -2,6 +2,15 @@
 
 import 'package:shared_preferences/shared_preferences.dart';
 
+/// History page view modes (ui-spec §2.4.1).
+enum HistoryView { posts, all, creators }
+
+/// Posts-view layout (ui-spec §2.4.3 / §2.4.4).
+enum HistoryLayout { waterfall, list }
+
+/// Sort modes (ui-spec §2.4.7).
+enum HistorySort { latest, earliest, type, mostFiles, author }
+
 class AppSettings {
   static const defaultAlbumName = 'EasySave';
   static const defaultNamePattern = '{id}_{seq}';
@@ -11,13 +20,33 @@ class AppSettings {
   bool saveCaptionTxt = false;
   bool autoClipboard = true;
 
+  // Persisted history page preferences.
+  HistoryView historyView = HistoryView.posts;
+  HistoryLayout historyLayout = HistoryLayout.waterfall;
+  HistorySort historySort = HistorySort.latest;
+
   static Future<AppSettings> load() async {
     final prefs = await SharedPreferences.getInstance();
     return AppSettings()
       ..albumName = prefs.getString('albumName') ?? defaultAlbumName
       ..namePattern = prefs.getString('namePattern') ?? defaultNamePattern
       ..saveCaptionTxt = prefs.getBool('saveCaptionTxt') ?? false
-      ..autoClipboard = prefs.getBool('autoClipboard') ?? true;
+      ..autoClipboard = prefs.getBool('autoClipboard') ?? true
+      ..historyView = _enumFromName(
+        HistoryView.values,
+        prefs.getString('historyView'),
+        HistoryView.posts,
+      )
+      ..historyLayout = _enumFromName(
+        HistoryLayout.values,
+        prefs.getString('historyLayout'),
+        HistoryLayout.waterfall,
+      )
+      ..historySort = _enumFromName(
+        HistorySort.values,
+        prefs.getString('historySort'),
+        HistorySort.latest,
+      );
   }
 
   Future<void> save() async {
@@ -26,6 +55,17 @@ class AppSettings {
     await prefs.setString('namePattern', namePattern);
     await prefs.setBool('saveCaptionTxt', saveCaptionTxt);
     await prefs.setBool('autoClipboard', autoClipboard);
+    await prefs.setString('historyView', historyView.name);
+    await prefs.setString('historyLayout', historyLayout.name);
+    await prefs.setString('historySort', historySort.name);
+  }
+
+  static T _enumFromName<T extends Enum>(List<T> values, String? name, T fallback) {
+    if (name == null) return fallback;
+    for (final v in values) {
+      if (v.name == name) return v;
+    }
+    return fallback;
   }
 
   /// Expand {id} {seq} {date} {author}; unknown tokens stay untouched.

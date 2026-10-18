@@ -956,15 +956,20 @@ class _BrowserItemViewState extends State<_BrowserItemView> {
                         ),
                       ),
                       const SizedBox(width: 8),
-                      IconButton(
-                        icon: Icon(
-                          c.value.volume == 0 ? Icons.volume_off : Icons.volume_up,
-                          color: Colors.white,
-                          size: 20,
+                      ValueListenableBuilder<VideoPlayerValue>(
+                        valueListenable: c,
+                        builder: (context, value, _) => IconButton(
+                          icon: Icon(
+                            value.volume == 0
+                                ? Icons.volume_off
+                                : Icons.volume_up,
+                            color: Colors.white,
+                            size: 20,
+                          ),
+                          onPressed: () {
+                            c.setVolume(value.volume == 0 ? 1.0 : 0.0);
+                          },
                         ),
-                        onPressed: () {
-                          c.setVolume(c.value.volume == 0 ? 1.0 : 0.0);
-                        },
                       ),
                     ],
                   ),

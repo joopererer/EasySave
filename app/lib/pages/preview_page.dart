@@ -1,8 +1,6 @@
 // Preview page: 2-column grid, collapsible caption, ordered selection,
 // fullscreen viewing, and saving through the download panel.
 
-import 'dart:convert';
-
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -23,46 +21,7 @@ class PreviewPage extends StatefulWidget {
 
   /// Rebuild a post from a stored history record (shared by the history
   /// list and the home "recent" cards).
-  static ParsedPost postFromRecord(HistoryRecord record) {
-    final items = <MediaItem>[];
-    if (record.itemsJson != null) {
-      try {
-        final decoded = jsonDecode(record.itemsJson!) as List;
-        for (final raw in decoded) {
-          final map = (raw as Map).cast<String, Object?>();
-          items.add(
-            MediaItem(
-              type: map['type'] as String? ?? 'image',
-              url: map['url'] as String? ?? '',
-              videoUrl: map['videoUrl'] as String?,
-              posterUrl: map['posterUrl'] as String?,
-              width: map['width'] as num?,
-              height: map['height'] as num?,
-              duration: map['duration'] as num?,
-              isGif: map['isGif'] as bool?,
-              fallbacks:
-                  (map['fallbacks'] as List?)?.whereType<String>().toList() ??
-                  const [],
-            ),
-          );
-        }
-      } catch (_) {
-        // Fall through to the single-thumbnail fallback.
-      }
-    }
-    if (items.isEmpty && record.thumbnailUrl != null) {
-      items.add(MediaItem(type: 'image', url: record.thumbnailUrl!));
-    }
-    return ParsedPost(
-      platform: record.platform,
-      id: record.postId,
-      url: record.postUrl,
-      author: PostAuthor(name: record.authorName),
-      items: items,
-      title: record.title,
-      caption: record.caption,
-    );
-  }
+  static ParsedPost postFromRecord(HistoryRecord record) => record.toPost();
 
   @override
   State<PreviewPage> createState() => _PreviewPageState();
