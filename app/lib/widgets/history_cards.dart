@@ -310,93 +310,98 @@ class WaterfallPostCard extends StatelessWidget {
     return GestureDetector(
       onTap: selectionMode ? onToggleSelect : onTap,
       onLongPress: onLongPress,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
+      child: Stack(
+        clipBehavior: Clip.none,
         children: [
-          Stack(
-            children: [
-              ClipRRect(
+          // Back layer: peeks 5px on the right and bottom so the card has a
+          // soft stacked shadow on both edges.
+          Positioned.fill(
+            child: Container(
+              decoration: BoxDecoration(
+                color: Theme.of(context).cardColor,
                 borderRadius: radius,
-                child: AspectRatio(
-                  aspectRatio: aspectRatioFor(cover),
-                  child: Stack(
-                    fit: StackFit.expand,
-                    children: [
-                      HistoryThumb(record: record, fit: BoxFit.cover),
-                      // Bottom dark gradient with platform tag + title.
-                      Positioned(
-                        left: 0,
-                        right: 0,
-                        bottom: 0,
-                        child: Container(
-                          padding: const EdgeInsets.fromLTRB(10, 22, 10, 10),
-                          decoration: const BoxDecoration(
-                            gradient: LinearGradient(
-                              begin: Alignment.topCenter,
-                              end: Alignment.bottomCenter,
-                              colors: [Colors.transparent, Colors.black87],
-                            ),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withValues(alpha: 0.14),
+                    blurRadius: 10,
+                    offset: const Offset(2, 5),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.only(right: 5, bottom: 5),
+            child: ClipRRect(
+              borderRadius: radius,
+              child: AspectRatio(
+                aspectRatio: aspectRatioFor(cover),
+                child: Stack(
+                  fit: StackFit.expand,
+                  children: [
+                    HistoryThumb(record: record, fit: BoxFit.cover),
+                    // Bottom dark gradient with platform tag + title.
+                    Positioned(
+                      left: 0,
+                      right: 0,
+                      bottom: 0,
+                      child: Container(
+                        padding: const EdgeInsets.fromLTRB(10, 22, 10, 10),
+                        decoration: const BoxDecoration(
+                          gradient: LinearGradient(
+                            begin: Alignment.topCenter,
+                            end: Alignment.bottomCenter,
+                            colors: [Colors.transparent, Colors.black87],
                           ),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              PlatformTag(platform: record.platform),
-                              const SizedBox(height: 4),
-                              Text(
-                                title,
-                                maxLines: 2,
-                                overflow: TextOverflow.ellipsis,
-                                style: const TextStyle(
-                                  color: Colors.white,
-                                  fontSize: 13,
-                                  fontWeight: FontWeight.w600,
-                                ),
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            PlatformTag(platform: record.platform),
+                            const SizedBox(height: 4),
+                            Text(
+                              title,
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 13,
+                                fontWeight: FontWeight.w600,
                               ),
-                            ],
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                    ...coverBadges(
+                      context,
+                      cover: cover,
+                      fileCount: fileCount,
+                    ),
+                    if (selectionMode)
+                      Positioned(
+                        top: 6,
+                        right: 6,
+                        child: _SelectionDot(selected: selected),
+                      ),
+                    if (selectionMode && selected)
+                      Positioned.fill(
+                        child: IgnorePointer(
+                          child: DecoratedBox(
+                            decoration: BoxDecoration(
+                              borderRadius: radius,
+                              border: Border.all(
+                                color: AppTokens.primary,
+                                width: 2.5,
+                              ),
+                            ),
                           ),
                         ),
                       ),
-                    ],
-                  ),
+                  ],
                 ),
               ),
-              ...coverBadges(context, cover: cover, fileCount: fileCount),
-              if (selectionMode)
-                Positioned(
-                  top: 6,
-                  right: 6,
-                  child: _SelectionDot(selected: selected),
-                ),
-              if (selectionMode && selected)
-                Positioned.fill(
-                  child: IgnorePointer(
-                    child: DecoratedBox(
-                      decoration: BoxDecoration(
-                        borderRadius: radius,
-                        border: Border.all(color: AppTokens.primary, width: 2.5),
-                      ),
-                    ),
-                  ),
-                ),
-            ],
-          ),
-          // Soft stacked-card shadow beneath the cover.
-          Container(
-            height: 8,
-            margin: const EdgeInsets.symmetric(horizontal: 10),
-            decoration: BoxDecoration(
-              color: Theme.of(context).cardColor,
-              borderRadius: const BorderRadius.vertical(
-                bottom: Radius.circular(20),
-              ),
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.black.withValues(alpha: 0.10),
-                  blurRadius: 8,
-                  offset: const Offset(0, 4),
-                ),
-              ],
             ),
           ),
         ],
@@ -422,6 +427,40 @@ class _SelectionDot extends StatelessWidget {
       child: selected
           ? const Icon(Icons.check, color: Colors.white, size: 14)
           : null,
+    );
+  }
+}
+
+/// Semi-transparent dark format pill for the 全部 view (视频 / LIVE / GIF).
+class _TranslucentBadge extends StatelessWidget {
+  const _TranslucentBadge({required this.label});
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+      decoration: BoxDecoration(
+        color: Colors.black.withValues(alpha: 0.5),
+        borderRadius: BorderRadius.circular(6),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (label == '视频') ...[
+            const Icon(Icons.play_arrow, color: Colors.white, size: 11),
+            const SizedBox(width: 1),
+          ],
+          Text(
+            label,
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 10,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ],
+      ),
     );
   }
 }
@@ -642,6 +681,7 @@ class AllMediaCard extends StatelessWidget {
         ? post.items[itemIndex]
         : null;
     final radius = BorderRadius.circular(16);
+    final badge = listTypeBadge(item);
 
     return GestureDetector(
       onTap: selectionMode ? onToggleSelect : onTap,
@@ -658,6 +698,12 @@ class AllMediaCard extends StatelessWidget {
                 itemIndex: itemIndex,
                 fit: BoxFit.cover,
               ),
+              if (badge != null)
+                Positioned(
+                  top: 6,
+                  left: 6,
+                  child: _TranslucentBadge(label: badge),
+                ),
               if (selectionMode)
                 Positioned(
                   top: 6,

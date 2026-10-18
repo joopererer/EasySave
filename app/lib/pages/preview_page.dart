@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../core/models.dart';
+import '../services/download_manager.dart';
 import '../services/gallery_locator_service.dart';
 import '../services/history_db.dart';
 import '../services/saver.dart';
@@ -14,10 +15,19 @@ import '../widgets/gallery_browser.dart';
 import '../widgets/shared.dart';
 
 class PreviewPage extends StatefulWidget {
-  const PreviewPage({super.key, required this.post, this.rawImages = const []});
+  const PreviewPage({
+    super.key,
+    required this.post,
+    this.rawImages = const [],
+    this.onSaved,
+  });
 
   final ParsedPost post;
   final List<RawImageEntry> rawImages;
+
+  /// Called once a save (or local association) succeeds, so the caller can
+  /// clear the paste box.
+  final VoidCallback? onSaved;
 
   /// Rebuild a post from a stored history record (shared by the history
   /// list and the home "recent" cards).
@@ -123,9 +133,66 @@ class _PreviewPageState extends State<PreviewPage> {
 
   Future<void> _save() async {
     if (_order.isEmpty) return;
-    // History is written by DownloadManager when the batch terminates
-    // (including batches that finish while the app was killed).
-    await DownloadSheet.show(context, widget.post, List.of(_order));
+    final locator = GalleryLocatorService.instance;
+    // Re-check which selected items are already in the album right before
+    // saving: those are associated with the history record instead of being
+    // downloaded again.
+    final downloaded = await locator.findDownloadedIndices(widget.post);
+    final toAssociate = _order.where(downloaded.contains).toList();
+    final toDownload = _order.where((i) => !downloaded.contains(i)).toList();
+    if (!mounted) return;
+
+    var associated = 0;
+    if (toAssociate.isNotEmpty) {
+      associated = await locator.associateExisting(widget.post, toAssociate);
+    }
+    if (!mounted) return;
+
+    // Everything was already local: just link the records and go back.
+    if (toDownload.isEmpty) {
+      widget.onSaved?.call();
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('已将 $associated 个本地文件关联到历史记录')),
+      );
+      Navigator.of(context).pop(true);
+      return;
+    }
+
+    final batch = await DownloadSheet.show(context, widget.post, toDownload);
+    if (!mounted || batch == null) return;
+    // User chose "后台下载": the batch keeps running, stay on the preview.
+    if (!batch.isTerminal) return;
+
+    final failed = batch.jobs.where((j) => j.state == JobState.failed).length;
+    final done = batch.succeeded;
+    if (failed == 0 && done > 0) {
+      widget.onSaved?.call();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            associated > 0
+                ? '已保存 $done 个文件，并关联 $associated 个本地文件'
+                : '已保存 $done 个文件到相册',
+          ),
+        ),
+      );
+      Navigator.of(context).pop(true);
+      return;
+    }
+
+    if (failed > 0) {
+      // Keep the preview open; the sheet already carries per-row retry.
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('$failed 个文件保存失败'),
+          action: SnackBarAction(
+            label: '重试',
+            onPressed: () => DownloadManager.instance.retryBatch(batch),
+          ),
+        ),
+      );
+    }
   }
 
   @override

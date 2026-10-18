@@ -648,6 +648,16 @@ class DownloadManager extends ChangeNotifier {
     await _enqueueAttempt(batch, job);
   }
 
+  /// Retry every failed job in the batch (manual "重试" from the preview page).
+  Future<void> retryBatch(DownloadBatch batch) async {
+    final failed = batch.jobs
+        .where((j) => j.state == JobState.failed)
+        .toList();
+    for (final job in failed) {
+      await retryJob(batch, job);
+    }
+  }
+
   Future<void> cancelBatch(DownloadBatch batch) async {
     final ids = [
       for (final job in batch.jobs)

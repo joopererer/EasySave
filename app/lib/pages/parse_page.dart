@@ -45,6 +45,7 @@ class _ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
   String? _errorCode;
   String? _errorMessage;
   String _lastLink = '';
+  String _currentLink = '';
   String _appVersion = '';
   List<HistoryRecord> _recent = [];
   StreamSubscription<List<SharedMediaFile>>? _shareSub;
@@ -361,6 +362,15 @@ class _ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
 
   Future<void> _resolve(String link) async {
     if (_busy) return;
+    _currentLink = link;
+    // Reflect the link actually being parsed (it may come from a share intent,
+    // not the box), so retry / login flows re-use the correct one.
+    if (_linkController.text != link) {
+      _linkController.value = TextEditingValue(
+        text: link,
+        selection: TextSelection.collapsed(offset: link.length),
+      );
+    }
     setState(() {
       _busy = true;
       _cancelRequested = false;
@@ -373,8 +383,13 @@ class _ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
       setState(() => _busy = false);
       await Navigator.of(context).push(
         MaterialPageRoute<void>(
-          builder: (_) =>
-              PreviewPage(post: outcome.data, rawImages: outcome.rawImages),
+          builder: (_) => PreviewPage(
+            post: outcome.data,
+            rawImages: outcome.rawImages,
+            onSaved: () {
+              if (mounted) _linkController.clear();
+            },
+          ),
         ),
       );
       _reloadRecent();
@@ -402,28 +417,13 @@ class _ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
   Future<void> _onErrorAction(ErrorAction action) async {
     switch (action) {
       case ErrorAction.goLogin:
-        final platform = await showDialog<PlatformKind>(
-          context: context,
-          builder: (context) => AlertDialog(
-            title: const Text('需要登录'),
-            content: const Text('请选择要登录的平台，登录后重新解析。'),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.of(context).pop(null),
-                child: const Text('取消'),
-              ),
-              TextButton(
-                onPressed: () => Navigator.of(context).pop(PlatformKind.xhs),
-                child: const Text('小红书登录'),
-              ),
-              TextButton(
-                onPressed: () =>
-                    Navigator.of(context).pop(PlatformKind.instagram),
-                child: const Text('IG 登录'),
-              ),
-            ],
-          ),
-        );
+        final link = _currentLink.isNotEmpty
+            ? _currentLink
+            : _linkController.text.trim();
+        // Prefer the platform we can read from the link; only fall back to a
+        // chooser when the URL is unknown (keeps the dialog future-proof as
+        // more platforms are added).
+        final platform = platformFromUrl(link) ?? await _chooseLoginPlatform();
         if (platform != null && mounted) {
           final loggedIn = await Navigator.of(context).push<bool>(
             MaterialPageRoute<bool>(
@@ -432,16 +432,58 @@ class _ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
           );
           // Re-run the failed parse as soon as the session is confirmed.
           if (loggedIn == true && mounted) {
-            _handleLinks(_linkController.text.trim());
+            _handleLinks(link);
           }
         }
       case ErrorAction.backHome:
         setState(() => _errorCode = null);
       case ErrorAction.retry:
-        _handleLinks(_linkController.text.trim());
+        _handleLinks(
+          _currentLink.isNotEmpty ? _currentLink : _linkController.text.trim(),
+        );
       case ErrorAction.repaste:
         _inputFocus.requestFocus();
     }
+  }
+
+  /// Fallback platform chooser (only shown when the link's platform is
+  /// unknown). A scrollable list scales to any number of platforms.
+  Future<PlatformKind?> _chooseLoginPlatform() {
+    return showModalBottomSheet<PlatformKind>(
+      context: context,
+      showDragHandle: true,
+      builder: (context) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            const Padding(
+              padding: EdgeInsets.fromLTRB(20, 0, 20, 8),
+              child: Text(
+                '选择要登录的平台',
+                style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+              ),
+            ),
+            ListTile(
+              leading: const Icon(Icons.login),
+              title: const Text('小红书'),
+              onTap: () => Navigator.of(context).pop(PlatformKind.xhs),
+            ),
+            ListTile(
+              leading: const Icon(Icons.login),
+              title: const Text('Instagram'),
+              onTap: () => Navigator.of(context).pop(PlatformKind.instagram),
+            ),
+            ListTile(
+              leading: const Icon(Icons.login),
+              title: const Text('X'),
+              onTap: () => Navigator.of(context).pop(PlatformKind.x),
+            ),
+            const SizedBox(height: 8),
+          ],
+        ),
+      ),
+    );
   }
 
   @override

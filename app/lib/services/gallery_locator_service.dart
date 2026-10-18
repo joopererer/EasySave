@@ -2,6 +2,8 @@
 // builds in-memory filename/postId index once per session, and locates
 // saved files for history records without repeated disk queries.
 
+import 'dart:convert';
+
 import 'package:flutter/foundation.dart';
 import 'package:photo_manager/photo_manager.dart';
 
@@ -86,6 +88,16 @@ class GalleryLocatorService extends ChangeNotifier {
       debugPrint('GalleryLocatorService.checkPermission error: $e');
     }
     return _permission;
+  }
+
+  /// Request album access up-front if the user has never been asked. Used at
+  /// cold start so the first history/open is instant instead of prompting
+  /// mid-flow.
+  Future<void> ensurePermission() async {
+    await checkPermission();
+    if (_permission == PermissionState.notDetermined) {
+      await requestPermission();
+    }
   }
 
   /// Request photo permission. If granted, automatically triggers album scan.
@@ -342,8 +354,13 @@ class GalleryLocatorService extends ChangeNotifier {
   }
 
   /// Return the set of item indices for [post] that are already saved locally.
-  Future<Set<int>> findDownloadedIndices(ParsedPost post) async {
-    final result = <int>{};
+  Future<Set<int>> findDownloadedIndices(ParsedPost post) async =>
+      (await matchPostItems(post)).keys.toSet();
+
+  /// Locate the album asset behind each item of [post] (index -> asset) using
+  /// the persisted history record first, then a postId + sequence scan.
+  Future<Map<int, AssetEntity>> matchPostItems(ParsedPost post) async {
+    final result = <int, AssetEntity>{};
     try {
       if (hasAccess && !_scanned) {
         await scanAlbum();
@@ -354,12 +371,12 @@ class GalleryLocatorService extends ChangeNotifier {
         for (final file in record.files) {
           final asset = locateAsset(file, post.id);
           if (asset != null) {
-            result.add(file.itemIndex);
+            result[file.itemIndex] = asset;
           }
         }
       }
 
-      // Check album assets for matches by postId and sequence
+      // Check album assets for matches by postId and sequence.
       final cleanPostId = post.id.trim().toLowerCase();
       if (cleanPostId.isNotEmpty) {
         final matches = _allAssets.where((a) {
@@ -369,27 +386,68 @@ class GalleryLocatorService extends ChangeNotifier {
 
         if (matches.isNotEmpty) {
           for (var i = 0; i < post.items.length; i++) {
-            if (result.contains(i)) continue;
+            if (result.containsKey(i)) continue;
             final it = post.items[i];
             final isImage = it.type != 'video';
             final seq = i + 1;
-            final matched = matches.any((a) {
-              final t = (a.title ?? '').toLowerCase();
+            final matched = matches.where((a) {
               if (isImage && a.type != AssetType.image) return false;
               if (!isImage && a.type != AssetType.video) return false;
               if (post.items.length == 1) return true;
-              return t.contains('_$seq.') || t.contains('-$seq.') || t.contains(' $seq.');
-            });
-            if (matched) {
-              result.add(i);
+              final t = (a.title ?? '').toLowerCase();
+              return t.contains('_$seq.') ||
+                  t.contains('-$seq.') ||
+                  t.contains(' $seq.');
+            }).toList();
+            if (matched.isNotEmpty) {
+              result[i] = matched.first;
             }
           }
         }
       }
     } catch (e) {
-      debugPrint('findDownloadedIndices error: $e');
+      debugPrint('matchPostItems error: $e');
     }
     return result;
+  }
+
+  /// Link already-saved local album files to [post] in the history database
+  /// without downloading them again. Returns the number of files associated.
+  Future<int> associateExisting(ParsedPost post, List<int> indices) async {
+    final matches = await matchPostItems(post);
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final files = <HistoryFile>[];
+    for (final i in indices) {
+      final asset = matches[i];
+      if (asset == null) continue;
+      files.add(
+        HistoryFile(
+          filename: asset.title ?? '',
+          savedAt: now,
+          mediaId: asset.id,
+          itemIndex: i,
+          isImage: asset.type == AssetType.image,
+          status: FileStatus.found,
+        ),
+      );
+    }
+    if (files.isEmpty) return 0;
+    final db = await HistoryDb.instance();
+    await db.upsert(
+      HistoryRecord(
+        platform: post.platform,
+        postId: post.id,
+        authorName: post.author.name,
+        title: post.title,
+        caption: post.caption,
+        postUrl: post.url,
+        fileCount: files.length,
+        createdAt: DateTime.now(),
+        itemsJson: jsonEncode([for (final it in post.items) it.toJson()]),
+        files: files,
+      ),
+    );
+    return files.length;
   }
 }
 

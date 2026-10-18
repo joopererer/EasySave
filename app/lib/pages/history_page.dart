@@ -59,6 +59,7 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
 
   bool _searchOpen = false;
   String _query = '';
+  final _searchController = TextEditingController();
   String _platform = 'all';
   String? _author;
 
@@ -78,6 +79,7 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     GalleryLocatorService.instance.removeListener(_onLocatorChanged);
+    _searchController.dispose();
     super.dispose();
   }
 
@@ -204,6 +206,7 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
       _author = null;
       _query = '';
       _searchOpen = false;
+      _searchController.clear();
     });
   }
 
@@ -742,17 +745,23 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: _selectionMode ? _selectionAppBar() : _appBar(),
-      body: Column(
-        children: [
-          _permissionBanners(),
-          if (!_selectionMode) _viewSwitcher(),
-          if (_searchOpen && !_selectionMode) _searchField(),
-          Expanded(child: _body()),
-        ],
+    return PopScope(
+      canPop: !_selectionMode,
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop && _selectionMode) _exitSelection();
+      },
+      child: Scaffold(
+        appBar: _selectionMode ? _selectionAppBar() : _appBar(),
+        body: Column(
+          children: [
+            _permissionBanners(),
+            if (!_selectionMode) _viewSwitcher(),
+            if (_searchOpen && !_selectionMode) _searchField(),
+            Expanded(child: _body()),
+          ],
+        ),
+        bottomNavigationBar: _selectionMode ? _selectionBottomBar() : null,
       ),
-      bottomNavigationBar: _selectionMode ? _selectionBottomBar() : null,
     );
   }
 
@@ -785,11 +794,14 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
           tooltip: '搜索',
           onTap: () => setState(() {
             _searchOpen = !_searchOpen;
-            if (!_searchOpen) _query = '';
+            if (!_searchOpen) {
+              _query = '';
+              _searchController.clear();
+            }
           }),
         ),
         _platformMenu(),
-        _sortMenu(),
+        if (_view != HistoryView.creators) _sortMenu(),
         if (_view == HistoryView.posts)
           _toolbarButton(
             icon: _layout == HistoryLayout.waterfall
@@ -845,6 +857,7 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
   }
 
   Widget _selectionBottomBar() {
+    final scheme = Theme.of(context).colorScheme;
     return SafeArea(
       child: Container(
         padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
@@ -858,8 +871,10 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
               child: OutlinedButton.icon(
                 style: OutlinedButton.styleFrom(
                   backgroundColor: SecondaryBg.beige(context),
-                  foregroundColor: AppTokens.textPrimary,
-                  side: BorderSide.none,
+                  foregroundColor: scheme.onSurface,
+                  side: BorderSide(
+                    color: scheme.outline.withValues(alpha: 0.6),
+                  ),
                   shape: const StadiumBorder(),
                   padding: const EdgeInsets.symmetric(vertical: 12),
                 ),
@@ -1048,6 +1063,7 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
       child: TextField(
+        controller: _searchController,
         autofocus: true,
         onChanged: (v) => setState(() => _query = v),
         decoration: InputDecoration(
@@ -1057,7 +1073,10 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
               ? null
               : IconButton(
                   icon: const Icon(Icons.close, size: 18),
-                  onPressed: () => setState(() => _query = ''),
+                  onPressed: () => setState(() {
+                    _query = '';
+                    _searchController.clear();
+                  }),
                 ),
           filled: true,
           fillColor: Theme.of(context).cardColor,
@@ -1255,6 +1274,7 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
     final groups = _groupPosts(_filtered);
     return _refreshWrapper(
       CustomScrollView(
+        cacheExtent: 1200,
         slivers: [
           const SliverToBoxAdapter(child: SizedBox(height: 8)),
           for (final group in groups) ...[
@@ -1282,7 +1302,7 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
               ),
             ),
           ],
-          const SliverToBoxAdapter(child: SizedBox(height: 24)),
+          const SliverToBoxAdapter(child: SizedBox(height: 96)),
         ],
       ),
     );
@@ -1519,7 +1539,7 @@ class _StickyHeaderDelegate extends SliverPersistentHeaderDelegate {
     return Container(
       color: background,
       alignment: Alignment.centerLeft,
-      padding: const EdgeInsets.only(top: 6, bottom: 4),
+      padding: const EdgeInsets.only(left: 16, top: 6, bottom: 4),
       child: Text(
         title,
         style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),

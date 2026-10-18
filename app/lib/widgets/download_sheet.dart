@@ -22,7 +22,9 @@ class DownloadSheet extends StatefulWidget {
 
   /// Create the batch (asks notification permission, enqueues tasks) and
   /// then open the panel. The batch keeps running when the panel closes.
-  static Future<void> show(
+  /// Returns the batch once the panel is dismissed (null if it could not be
+  /// started), so the caller can react to completion / failures.
+  static Future<DownloadBatch?> show(
     BuildContext context,
     ParsedPost post,
     List<int> selected,
@@ -37,12 +39,13 @@ class DownloadSheet extends StatefulWidget {
       nameFor: (label, seq, ext) =>
           settings.fileName(postId: post.id, seq: seq, author: author),
     );
-    if (!context.mounted) return;
+    if (!context.mounted) return batch;
     await showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
       builder: (_) => DownloadSheet(batchId: batch.batchId),
     );
+    return batch;
   }
 
   @override
