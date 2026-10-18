@@ -663,13 +663,16 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
           );
         return [_PostGroup('', sorted)];
       case HistorySort.author:
-        final sorted = [...posts]
-          ..sort(
-            (a, b) => (a.authorName ?? '').toLowerCase().compareTo(
-              (b.authorName ?? '').toLowerCase(),
-            ),
-          );
-        return [_PostGroup('', sorted)];
+        final byAuthor = <String, List<HistoryRecord>>{};
+        for (final r in posts) {
+          byAuthor.putIfAbsent(r.authorName ?? '未知作者', () => []).add(r);
+        }
+        final authors = byAuthor.keys.toList()
+          ..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
+        return [
+          for (final a in authors)
+            _PostGroup('$a · ${byAuthor[a]!.length}', byAuthor[a]!),
+        ];
     }
   }
 
@@ -723,12 +726,17 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
         });
         return [_MediaGroup('', all)];
       case HistorySort.author:
-        all.sort(
-          (a, b) => (a.record.authorName ?? '').toLowerCase().compareTo(
-            (b.record.authorName ?? '').toLowerCase(),
-          ),
-        );
-        return [_MediaGroup('', all)];
+        final byAuthor = <String, List<HistThumbRef>>{};
+        for (final ref in all) {
+          byAuthor.putIfAbsent(ref.record.authorName ?? '未知作者', () => [])
+              .add(ref);
+        }
+        final authors = byAuthor.keys.toList()
+          ..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
+        return [
+          for (final a in authors)
+            _MediaGroup('$a · ${byAuthor[a]!.length}', byAuthor[a]!),
+        ];
     }
   }
 
@@ -1270,36 +1278,54 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
     );
   }
 
+  /// A masonry block for one group: a shrink-wrapped grid inside a
+  /// SliverToBoxAdapter so the sliver reports an exact height (avoids the
+  /// sliver-masonry extent estimate that caused the scroll to jump back and
+  /// stop short of the bottom).
+  Widget _groupGrid({
+    required int count,
+    required Widget Function(BuildContext, int) itemBuilder,
+  }) {
+    return SliverToBoxAdapter(
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16),
+        child: MasonryGridView.count(
+          crossAxisCount: 2,
+          mainAxisSpacing: 12,
+          crossAxisSpacing: 8,
+          shrinkWrap: true,
+          physics: const NeverScrollableScrollPhysics(),
+          padding: EdgeInsets.zero,
+          itemCount: count,
+          itemBuilder: itemBuilder,
+        ),
+      ),
+    );
+  }
+
   Widget _postsWaterfall() {
     final groups = _groupPosts(_filtered);
     return _refreshWrapper(
       CustomScrollView(
-        cacheExtent: 1200,
         slivers: [
           const SliverToBoxAdapter(child: SizedBox(height: 8)),
           for (final group in groups) ...[
             _stickyHeader(group.title),
-            SliverPadding(
-              padding: const EdgeInsets.symmetric(horizontal: 16),
-              sliver: SliverMasonryGrid.count(
-                crossAxisCount: 2,
-                mainAxisSpacing: 12,
-                crossAxisSpacing: 8,
-                childCount: group.posts.length,
-                itemBuilder: (context, index) {
-                  final record = group.posts[index];
-                  final key = _postKey(record);
-                  return WaterfallPostCard(
-                    key: ValueKey('wf-${record.id}'),
-                    record: record,
-                    selectionMode: _selectionMode,
-                    selected: _selected.contains(key),
-                    onTap: () => _openRecord(record),
-                    onLongPress: () => _enterSelection(key),
-                    onToggleSelect: () => _toggleSelection(key),
-                  );
-                },
-              ),
+            _groupGrid(
+              count: group.posts.length,
+              itemBuilder: (context, index) {
+                final record = group.posts[index];
+                final key = _postKey(record);
+                return WaterfallPostCard(
+                  key: ValueKey('wf-${record.id}'),
+                  record: record,
+                  selectionMode: _selectionMode,
+                  selected: _selected.contains(key),
+                  onTap: () => _openRecord(record),
+                  onLongPress: () => _enterSelection(key),
+                  onToggleSelect: () => _toggleSelection(key),
+                );
+              },
             ),
           ],
           const SliverToBoxAdapter(child: SizedBox(height: 96)),
@@ -1384,32 +1410,26 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
           const SliverToBoxAdapter(child: SizedBox(height: 8)),
           for (final group in groups) ...[
             _stickyHeader(group.title),
-            SliverPadding(
-              padding: const EdgeInsets.symmetric(horizontal: 16),
-              sliver: SliverMasonryGrid.count(
-                crossAxisCount: 2,
-                mainAxisSpacing: 8,
-                crossAxisSpacing: 8,
-                childCount: group.media.length,
-                itemBuilder: (context, index) {
-                  final ref = group.media[index];
-                  final key = _mediaKey(ref.record, ref.itemIndex);
-                  return AllMediaCard(
-                    key: ValueKey('all-${ref.record.id}-${ref.itemIndex}'),
-                    record: ref.record,
-                    itemIndex: ref.itemIndex,
-                    selectionMode: _selectionMode,
-                    selected: _selected.contains(key),
-                    onTap: () =>
-                        _openRecord(ref.record, highlightItemIndex: ref.itemIndex),
-                    onLongPress: () => _enterSelection(key),
-                    onToggleSelect: () => _toggleSelection(key),
-                  );
-                },
-              ),
+            _groupGrid(
+              count: group.media.length,
+              itemBuilder: (context, index) {
+                final ref = group.media[index];
+                final key = _mediaKey(ref.record, ref.itemIndex);
+                return AllMediaCard(
+                  key: ValueKey('all-${ref.record.id}-${ref.itemIndex}'),
+                  record: ref.record,
+                  itemIndex: ref.itemIndex,
+                  selectionMode: _selectionMode,
+                  selected: _selected.contains(key),
+                  onTap: () =>
+                      _openRecord(ref.record, highlightItemIndex: ref.itemIndex),
+                  onLongPress: () => _enterSelection(key),
+                  onToggleSelect: () => _toggleSelection(key),
+                );
+              },
             ),
           ],
-          const SliverToBoxAdapter(child: SizedBox(height: 24)),
+          const SliverToBoxAdapter(child: SizedBox(height: 96)),
         ],
       ),
     );

@@ -46,8 +46,12 @@ PlatformKind? platformFromUrl(String url) {
   if (host.isEmpty) return null;
   if (host == 'xiaohongshu.com' ||
       host.endsWith('.xiaohongshu.com') ||
+      host == 'xhslink.com' ||
       host.endsWith('.xhslink.com') ||
-      host.endsWith('.xhslink.cn')) {
+      host == 'xhslink.cn' ||
+      host.endsWith('.xhslink.cn') ||
+      host == 'xhs.cn' ||
+      host.endsWith('.xhs.cn')) {
     return PlatformKind.xhs;
   }
   if (host == 'instagram.com' ||

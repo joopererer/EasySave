@@ -95,9 +95,9 @@ class _PreviewPageState extends State<PreviewPage> {
     });
   }
 
-  void _viewFullscreen(int index) {
-    Navigator.of(context).push(
-      MaterialPageRoute<void>(
+  void _viewFullscreen(int index) async {
+    final result = await Navigator.of(context).push<bool>(
+      MaterialPageRoute<bool>(
         builder: (_) => GalleryBrowserPage(
           items: [
             for (var i = 0; i < widget.post.items.length; i++)
@@ -117,6 +117,7 @@ class _PreviewPageState extends State<PreviewPage> {
           title: widget.post.title ?? widget.post.id,
           platform: widget.post.platform,
           postUrl: widget.post.url,
+          showSave: true,
           selectedIndices: _order.toSet(),
           onSelectionChanged: (set) {
             setState(() {
@@ -129,6 +130,10 @@ class _PreviewPageState extends State<PreviewPage> {
         ),
       ),
     );
+    // The viewer's 保存 button closes with true: start the save from here.
+    if (result == true && mounted) {
+      await _save();
+    }
   }
 
   Future<void> _save() async {
@@ -279,6 +284,7 @@ class _PreviewPageState extends State<PreviewPage> {
                 final selected = selectedIndex >= 0;
                 return GestureDetector(
                   onTap: () => _viewFullscreen(index),
+                  onLongPress: () => _toggle(index),
                   child: RepaintBoundary(
                     child: Stack(
                       fit: StackFit.expand,

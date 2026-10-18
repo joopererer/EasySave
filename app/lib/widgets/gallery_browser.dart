@@ -68,6 +68,7 @@ class GalleryBrowserPage extends StatefulWidget {
     this.onSelectionChanged,
     this.onRedownload,
     this.onReparse,
+    this.showSave = false,
   });
 
   final List<GalleryBrowserItem> items;
@@ -80,6 +81,10 @@ class GalleryBrowserPage extends StatefulWidget {
   final ValueChanged<Set<int>>? onSelectionChanged;
   final Future<void> Function(int index)? onRedownload;
   final VoidCallback? onReparse;
+
+  /// When opened from the parse-preview flow, shows a 保存 button that closes
+  /// the viewer with `true` so the caller can start the save.
+  final bool showSave;
 
   @override
   State<GalleryBrowserPage> createState() => _GalleryBrowserPageState();
@@ -260,6 +265,7 @@ class _GalleryBrowserPageState extends State<GalleryBrowserPage> {
                       onRedownload: widget.onRedownload != null
                           ? () => widget.onRedownload!(item.index)
                           : null,
+                      onToggleSelect: () => _toggleSelect(item.index),
                     );
                   },
                 ),
@@ -451,7 +457,7 @@ class _GalleryBrowserPageState extends State<GalleryBrowserPage> {
                               ),
                               const Spacer(),
                               // Actions
-                              if (widget.onReparse != null)
+                              if (!widget.showSave && widget.onReparse != null)
                                 Padding(
                                   padding: const EdgeInsets.only(right: 8),
                                   child: TextButton.icon(
@@ -469,30 +475,50 @@ class _GalleryBrowserPageState extends State<GalleryBrowserPage> {
                                     label: const Text('重新解析', style: TextStyle(fontSize: 12)),
                                   ),
                                 ),
-                              IconButton(
-                                style: IconButton.styleFrom(
-                                  backgroundColor: Colors.white12,
-                                  foregroundColor: Colors.white,
-                                ),
-                                icon: const Icon(Icons.open_in_new, size: 18),
-                                tooltip: '打开原帖',
-                                onPressed: _openOriginal,
-                              ),
-                              const SizedBox(width: 8),
-                              ElevatedButton.icon(
-                                style: ElevatedButton.styleFrom(
-                                  backgroundColor: const Color(0xFFFF2442),
-                                  foregroundColor: Colors.white,
-                                  shape: const StadiumBorder(),
-                                  padding: const EdgeInsets.symmetric(
-                                    horizontal: 14,
-                                    vertical: 8,
+                              if (!widget.showSave)
+                                IconButton(
+                                  style: IconButton.styleFrom(
+                                    backgroundColor: Colors.white12,
+                                    foregroundColor: Colors.white,
                                   ),
+                                  icon: const Icon(Icons.open_in_new, size: 18),
+                                  tooltip: '打开原帖',
+                                  onPressed: _openOriginal,
                                 ),
-                                onPressed: _shareCurrent,
-                                icon: const Icon(Icons.share, size: 16),
-                                label: const Text('分享', style: TextStyle(fontSize: 13)),
-                              ),
+                              const SizedBox(width: 8),
+                              if (widget.showSave)
+                                ElevatedButton.icon(
+                                  style: ElevatedButton.styleFrom(
+                                    backgroundColor: const Color(0xFFFF2442),
+                                    foregroundColor: Colors.white,
+                                    shape: const StadiumBorder(),
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 14,
+                                      vertical: 8,
+                                    ),
+                                  ),
+                                  // Close the viewer and let the preview page
+                                  // start the save with the synced selection.
+                                  onPressed: () =>
+                                      Navigator.of(context).pop(true),
+                                  icon: const Icon(Icons.download, size: 16),
+                                  label: const Text('保存', style: TextStyle(fontSize: 13)),
+                                )
+                              else
+                                ElevatedButton.icon(
+                                  style: ElevatedButton.styleFrom(
+                                    backgroundColor: const Color(0xFFFF2442),
+                                    foregroundColor: Colors.white,
+                                    shape: const StadiumBorder(),
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 14,
+                                      vertical: 8,
+                                    ),
+                                  ),
+                                  onPressed: _shareCurrent,
+                                  icon: const Icon(Icons.share, size: 16),
+                                  label: const Text('分享', style: TextStyle(fontSize: 13)),
+                                ),
                             ],
                           ),
                         ),
@@ -546,12 +572,14 @@ class _BrowserItemView extends StatefulWidget {
     required this.platform,
     this.onZoomChanged,
     this.onRedownload,
+    this.onToggleSelect,
   });
 
   final GalleryBrowserItem item;
   final String platform;
   final ValueChanged<bool>? onZoomChanged;
   final Future<void> Function()? onRedownload;
+  final VoidCallback? onToggleSelect;
 
   @override
   State<_BrowserItemView> createState() => _BrowserItemViewState();
@@ -798,6 +826,8 @@ class _BrowserItemViewState extends State<_BrowserItemView> {
       final c = _videoController;
       return GestureDetector(
         behavior: HitTestBehavior.opaque,
+        // Long-press toggles selection (tap still pauses/plays).
+        onLongPress: widget.onToggleSelect,
         onTap: () {
           if (c != null && c.value.isInitialized) {
             setState(() {
@@ -870,6 +900,8 @@ class _BrowserItemViewState extends State<_BrowserItemView> {
       final c = _videoController;
       return GestureDetector(
         behavior: HitTestBehavior.opaque,
+        // Long-press toggles selection; tap shows/hides the controls bar.
+        onLongPress: widget.onToggleSelect,
         // Tap the video itself toggles the controls bar, never playback.
         onTap: () => setState(() {
           _controlsVisible = !_controlsVisible;
@@ -1079,6 +1111,7 @@ class _BrowserItemViewState extends State<_BrowserItemView> {
       item: it,
       platform: widget.platform,
       onZoomChanged: widget.onZoomChanged,
+      onLongPress: widget.onToggleSelect,
     );
   }
 }
@@ -1088,11 +1121,13 @@ class _ZoomableImageView extends StatefulWidget {
     required this.item,
     required this.platform,
     this.onZoomChanged,
+    this.onLongPress,
   });
 
   final GalleryBrowserItem item;
   final String platform;
   final ValueChanged<bool>? onZoomChanged;
+  final VoidCallback? onLongPress;
 
   @override
   State<_ZoomableImageView> createState() => _ZoomableImageViewState();
@@ -1162,6 +1197,7 @@ class _ZoomableImageViewState extends State<_ZoomableImageView>
     return GestureDetector(
       onDoubleTapDown: (details) => _doubleTapDetails = details,
       onDoubleTap: _onDoubleTap,
+      onLongPress: widget.onLongPress,
       child: InteractiveViewer(
         transformationController: _transformationController,
         minScale: 1.0,

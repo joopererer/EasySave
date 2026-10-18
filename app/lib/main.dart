@@ -18,7 +18,11 @@ Future<void> main() async {
   runApp(const EasySaveApp());
   // Ask for album access up-front (first launch only) so the first history
   // view and "recent" thumbnails don't stall on a mid-flow permission prompt.
-  unawaited(GalleryLocatorService.instance.ensurePermission());
+  // Runs after the first frame so the activity is attached and the system
+  // dialog can actually appear.
+  WidgetsBinding.instance.addPostFrameCallback((_) {
+    GalleryLocatorService.instance.ensurePermission();
+  });
 }
 
 class EasySaveApp extends StatelessWidget {
