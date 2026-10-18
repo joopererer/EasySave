@@ -23,7 +23,7 @@ export function parsePage(): string {
               ? (note["noteId"] as string)
               : (wantedId ?? "");
           if (noteId) {
-            return JSON.stringify(buildNoteFromRecord(note, noteId));
+            return JSON.stringify(buildNoteFromRecord(note, noteId, url));
           }
         }
       } catch (_) {
