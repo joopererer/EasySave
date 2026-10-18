@@ -90,12 +90,14 @@ class GalleryLocatorService extends ChangeNotifier {
     return _permission;
   }
 
-  /// Request album access up-front if the user has never been asked. Used at
+  /// Request album access up-front if the user hasn't granted it yet. Used at
   /// cold start so the first history/open is instant instead of prompting
-  /// mid-flow.
+  /// mid-flow. Android reports the never-asked state inconsistently (sometimes
+  /// `denied`), so we request whenever access is missing; if the user has
+  /// permanently denied, the OS simply returns without showing a dialog.
   Future<void> ensurePermission() async {
     await checkPermission();
-    if (_permission == PermissionState.notDetermined) {
+    if (!_permission.hasAccess) {
       await requestPermission();
     }
   }

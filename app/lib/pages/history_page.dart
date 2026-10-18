@@ -131,9 +131,10 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
     await _reload();
     final locator = GalleryLocatorService.instance;
     await locator.checkPermission();
-    if (locator.permission == PermissionState.notDetermined) {
+    if (!locator.permission.hasAccess) {
       await locator.requestPermission();
-    } else if (locator.hasAccess) {
+    }
+    if (locator.hasAccess) {
       await locator.preloadMediaIds(_records);
       if (mounted) setState(() {});
       unawaited(_backgroundScanAndSync());
