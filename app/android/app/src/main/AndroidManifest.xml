@@ -18,6 +18,8 @@
     <uses-permission
         android:name="android.permission.READ_EXTERNAL_STORAGE"
         android:maxSdkVersion="32"/>
+    <!-- v1.6 validation: floating bubble overlay -->
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW"/>
     <application
         android:label="EasySave"
         android:name="${applicationName}"
@@ -50,6 +52,25 @@
                 <data android:mimeType="text/plain"/>
             </intent-filter>
         </activity>
+
+        <!-- v1.6 validation: standalone FlutterEngine background parser. -->
+        <service
+            android:name=".BgParseService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync"/>
+        <!-- v1.6 validation: floating bubble + native panel. -->
+        <service
+            android:name=".OverlayService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync"/>
+        <!-- v1.6 validation: transparent clipboard reader. -->
+        <activity
+            android:name=".ClipboardReaderActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:taskAffinity=""
+            android:theme="@android:style/Theme.Translucent.NoTitleBar"/>
         <!-- Don't delete the meta-data below.
              This is used by the Flutter tool to generate GeneratedPluginRegistrant.java -->
         <meta-data

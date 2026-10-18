@@ -3,6 +3,7 @@
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 
 import '../services/auth.dart';
@@ -351,8 +352,101 @@ class _MinePageState extends State<MinePage> {
               ],
             ),
           ),
+          const _GroupTitle('v1.6 技术验证（临时）'),
+          const Card(child: _V16ValidationCard()),
         ],
       ),
+    );
+  }
+}
+
+/// Temporary v1.6 validation controls (remove after the approach is chosen).
+class _V16ValidationCard extends StatefulWidget {
+  const _V16ValidationCard();
+
+  @override
+  State<_V16ValidationCard> createState() => _V16ValidationCardState();
+}
+
+class _V16ValidationCardState extends State<_V16ValidationCard> {
+  static const _channel = MethodChannel('easysave/v16test');
+  final _xhs = TextEditingController();
+  final _ig = TextEditingController();
+  final _x = TextEditingController();
+  bool _overlayOn = false;
+
+  @override
+  void dispose() {
+    _xhs.dispose();
+    _ig.dispose();
+    _x.dispose();
+    super.dispose();
+  }
+
+  void _toast(String m) {
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(m)));
+    }
+  }
+
+  Future<void> _startBgParse() async {
+    final urls = [_xhs.text.trim(), _ig.text.trim(), _x.text.trim()]
+        .where((u) => u.isNotEmpty)
+        .toList();
+    if (urls.isEmpty) {
+      _toast('请至少填写一个链接');
+      return;
+    }
+    await _channel.invokeMethod('startBgParse', {'urls': urls});
+    _toast('已启动后台解析，结果见 Logcat: V16VAL 或通知栏');
+  }
+
+  Future<void> _toggleOverlay() async {
+    if (_overlayOn) {
+      await _channel.invokeMethod('stopOverlay');
+      if (mounted) setState(() => _overlayOn = false);
+    } else {
+      final ok = await _channel.invokeMethod<bool>('startOverlay') ?? false;
+      if (mounted) setState(() => _overlayOn = ok);
+      if (!ok) _toast('请授予"显示在其他应用上层"权限后再次点击');
+    }
+  }
+
+  Widget _field(String label, TextEditingController c) => Padding(
+    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+    child: TextField(
+      controller: c,
+      decoration: InputDecoration(labelText: label, isDense: true),
+    ),
+  );
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      children: [
+        const Padding(
+          padding: EdgeInsets.fromLTRB(16, 12, 16, 4),
+          child: Text(
+            '仅用于技术验证，方法回调结果在 Logcat 过滤 V16VAL。',
+            style: TextStyle(fontSize: 12, color: Colors.grey),
+          ),
+        ),
+        _field('小红书链接', _xhs),
+        _field('Instagram 链接', _ig),
+        _field('X 链接', _x),
+        ListTile(
+          title: const Text('① 后台解析（独立引擎，无 Activity）'),
+          subtitle: const Text('同时验证 cookie 共享，结果见 Logcat/通知栏'),
+          trailing: const Icon(Icons.play_arrow),
+          onTap: _startBgParse,
+        ),
+        ListTile(
+          title: const Text('② 悬浮球 + 剪贴板 + 原生面板'),
+          subtitle: Text(_overlayOn ? '运行中，点击关闭' : '未运行'),
+          trailing: Icon(_overlayOn ? Icons.stop : Icons.play_arrow),
+          onTap: _toggleOverlay,
+        ),
+      ],
     );
   }
 }

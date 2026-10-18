@@ -2,11 +2,19 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import 'background/background_entry.dart' as bg;
 import 'pages/main_shell.dart';
 import 'services/download_manager.dart';
 import 'services/gallery_locator_service.dart';
 import 'services/update_service.dart';
 import 'theme/app_theme.dart';
+
+/// v1.6 validation: entry point run by the foreground service's standalone
+/// FlutterEngine (no Activity). Kept tiny on purpose.
+@pragma('vm:entry-point')
+void backgroundMain() {
+  bg.backgroundEntry();
+}
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
