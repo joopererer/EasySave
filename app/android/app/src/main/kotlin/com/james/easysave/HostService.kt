@@ -2,6 +2,7 @@ package com.james.easysave
 
 import android.app.NotificationChannel
 import android.app.NotificationManager
+import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
@@ -34,8 +35,10 @@ class HostService : Service() {
         const val CHANNEL_ID = "easysave_host"
         const val NOTIF_ID = 9010
         const val ACTION_SUBMIT = "com.james.easysave.action.SUBMIT"
+        const val ACTION_HISTORY_CHANGED = "com.james.easysave.action.HISTORY_CHANGED"
         const val EXTRA_URLS = "urls"
         const val EXTRA_URL = "url"
+        const val EXTRA_TEXT = "text"
         const val EXTRA_MODE = "mode"
         const val EXTRA_SOURCE = "source"
         private const val IDLE_TIMEOUT_MS = 60_000L
@@ -49,6 +52,17 @@ class HostService : Service() {
             val intent = Intent(context, HostService::class.java).apply {
                 action = ACTION_SUBMIT
                 putStringArrayListExtra(EXTRA_URLS, ArrayList(urls))
+                putExtra(EXTRA_MODE, mode)
+                putExtra(EXTRA_SOURCE, source)
+            }
+            ContextCompat.startForegroundService(context, intent)
+        }
+
+        /** Same as [submit] but passes free text (PROCESS_TEXT selection). */
+        fun submitText(context: Context, text: String, mode: String, source: String) {
+            val intent = Intent(context, HostService::class.java).apply {
+                action = ACTION_SUBMIT
+                putExtra(EXTRA_TEXT, text)
                 putExtra(EXTRA_MODE, mode)
                 putExtra(EXTRA_SOURCE, source)
             }
@@ -79,6 +93,7 @@ class HostService : Service() {
                 ?: arrayListOf()
             val task = mutableMapOf<String, Any?>(
                 "urls" to urls,
+                "text" to intent.getStringExtra(EXTRA_TEXT),
                 "mode" to (intent.getStringExtra(EXTRA_MODE) ?: "all"),
                 "source" to (intent.getStringExtra(EXTRA_SOURCE) ?: "background"),
             )
@@ -123,6 +138,21 @@ class HostService : Service() {
                     }
                     "log" -> {
                         Log.i(TAG, call.arguments as? String ?: "")
+                        result.success(null)
+                    }
+                    "notify" -> {
+                        updateNotification(call.arguments as? String ?: "")
+                        result.success(null)
+                    }
+                    "historyChanged" -> {
+                        // Tell the running main UI to refresh its history page.
+                        sendBroadcast(
+                            Intent(ACTION_HISTORY_CHANGED).setPackage(packageName)
+                        )
+                        result.success(null)
+                    }
+                    "openApp" -> {
+                        openApp()
                         result.success(null)
                     }
                     "keepAlive" -> {
@@ -175,6 +205,28 @@ class HostService : Service() {
         stopSelf()
     }
 
+    private fun contentIntent(): PendingIntent {
+        val intent = packageManager.getLaunchIntentForPackage(packageName)
+            ?: Intent(this, MainActivity::class.java)
+        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+        val flags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M)
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        else
+            PendingIntent.FLAG_UPDATE_CURRENT
+        return PendingIntent.getActivity(this, 0, intent, flags)
+    }
+
+    private fun openApp() {
+        try {
+            val intent = packageManager.getLaunchIntentForPackage(packageName)
+                ?: Intent(this, MainActivity::class.java)
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+            startActivity(intent)
+        } catch (e: Exception) {
+            Log.e(TAG, "openApp failed: $e")
+        }
+    }
+
     private fun startForegroundCompat() {
         val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -186,6 +238,7 @@ class HostService : Service() {
             .setContentTitle("EasySave 后台任务")
             .setContentText("准备中…")
             .setSmallIcon(android.R.drawable.stat_sys_download)
+            .setContentIntent(contentIntent())
             .setOngoing(true)
             .build()
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
@@ -204,6 +257,7 @@ class HostService : Service() {
             .setContentText(text)
             .setStyle(NotificationCompat.BigTextStyle().bigText(text))
             .setSmallIcon(android.R.drawable.stat_sys_download)
+            .setContentIntent(contentIntent())
             .setOngoing(true)
             .build()
         nm.notify(NOTIF_ID, notif)

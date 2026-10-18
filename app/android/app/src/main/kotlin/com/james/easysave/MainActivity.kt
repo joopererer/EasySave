@@ -1,10 +1,14 @@
 package com.james.easysave
 
+import android.content.BroadcastReceiver
 import android.content.ContentUris
+import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.net.Uri
 import android.os.Build
 import android.provider.MediaStore
+import androidx.core.content.ContextCompat
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodCall
@@ -15,6 +19,7 @@ class MainActivity : FlutterActivity() {
         private const val SEAL_CHANNEL = "easysave/seal"
         private const val SEAL_PACKAGE = "com.junkfood.seal"
         private const val MEDIA_CHANNEL = "easysave/media"
+        private const val HOST_CHANNEL = "easysave/host"
         private const val DELETE_REQUEST_CODE = 50021
     }
 
@@ -24,6 +29,39 @@ class MainActivity : FlutterActivity() {
      * a time; the Dart side never issues concurrent requests.
      */
     private var pendingDeleteResult: MethodChannel.Result? = null
+
+    private var hostChannel: MethodChannel? = null
+    private var receiverRegistered = false
+    private val historyReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            // The background engine wrote history; ask the main UI to reload.
+            hostChannel?.invokeMethod("historyChanged", null)
+        }
+    }
+
+    override fun onStart() {
+        super.onStart()
+        if (!receiverRegistered) {
+            ContextCompat.registerReceiver(
+                this,
+                historyReceiver,
+                IntentFilter(HostService.ACTION_HISTORY_CHANGED),
+                ContextCompat.RECEIVER_NOT_EXPORTED,
+            )
+            receiverRegistered = true
+        }
+    }
+
+    override fun onStop() {
+        if (receiverRegistered) {
+            try {
+                unregisterReceiver(historyReceiver)
+            } catch (_: Exception) {
+            }
+            receiverRegistered = false
+        }
+        super.onStop()
+    }
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
@@ -53,6 +91,10 @@ class MainActivity : FlutterActivity() {
                     else -> result.notImplemented()
                 }
             }
+
+        // Main UI <- background HostService bridge (Dart listens on the same
+        // channel name to refresh the history page).
+        hostChannel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, HOST_CHANNEL)
     }
 
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {

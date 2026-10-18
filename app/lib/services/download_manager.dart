@@ -365,6 +365,7 @@ class DownloadManager extends ChangeNotifier {
     List<int> selected, {
     required String album,
     required String Function(String label, int seq, String ext) nameFor,
+    bool requestGalleryAccess = true,
   }) async {
     await init();
     // Best effort: without the permission downloads still run, only the
@@ -375,6 +376,12 @@ class DownloadManager extends ChangeNotifier {
       // Ignore: proceed without notifications.
     }
     if (!await Gal.hasAccess()) {
+      // The background flow must never raise a system permission dialog;
+      // callers there pass requestGalleryAccess:false and surface the
+      // missing-permission error to the user instead.
+      if (!requestGalleryAccess) {
+        throw const FileSystemException('NO_GALLERY_ACCESS');
+      }
       final granted = await Gal.requestAccess();
       if (!granted) throw const FileSystemException('没有相册访问权限');
     }

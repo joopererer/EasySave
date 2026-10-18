@@ -18,6 +18,7 @@ import '../core/models.dart';
 import '../services/auth.dart';
 import '../services/gallery_locator_service.dart';
 import '../services/history_db.dart';
+import '../services/host_bridge.dart';
 import '../services/media_delete_service.dart';
 import '../services/parse_service.dart';
 import '../services/settings.dart';
@@ -72,6 +73,7 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     GalleryLocatorService.instance.addListener(_onLocatorChanged);
+    HostBridge.historyRevision.addListener(_onHostHistoryChanged);
     _init();
   }
 
@@ -79,8 +81,16 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     GalleryLocatorService.instance.removeListener(_onLocatorChanged);
+    HostBridge.historyRevision.removeListener(_onHostHistoryChanged);
     _searchController.dispose();
     super.dispose();
+  }
+
+  // The background engine finished a download and wrote history; reload so
+  // the new records show up without a manual refresh.
+  void _onHostHistoryChanged() {
+    if (!mounted) return;
+    unawaited(_reload());
   }
 
   @override

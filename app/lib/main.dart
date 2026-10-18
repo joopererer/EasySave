@@ -6,11 +6,13 @@ import 'background/background_entry.dart' as bg;
 import 'pages/main_shell.dart';
 import 'services/download_manager.dart';
 import 'services/gallery_locator_service.dart';
+import 'services/host_bridge.dart';
 import 'services/update_service.dart';
 import 'theme/app_theme.dart';
 
-/// v1.6 validation: entry point run by the foreground service's standalone
-/// FlutterEngine (no Activity). Kept tiny on purpose.
+/// Entry point run by HostService's standalone FlutterEngine (no Activity),
+/// for background parse + download triggered from the bubble / tile /
+/// PROCESS_TEXT entries.
 @pragma('vm:entry-point')
 void backgroundMain() {
   bg.backgroundEntry();
@@ -18,6 +20,9 @@ void backgroundMain() {
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  // Let the native HostService tell us when the background engine wrote
+  // history, so the history page can refresh.
+  HostBridge.init();
   // Register background-download callbacks and recover batches that
   // finished while the app was dead.
   await DownloadManager.instance.init();
