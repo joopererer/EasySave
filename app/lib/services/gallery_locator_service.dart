@@ -141,6 +141,12 @@ class GalleryLocatorService extends ChangeNotifier {
       final paths = await PhotoManager.getAssetPathList(
         type: RequestType.common,
         hasAll: true,
+        // Without `needTitle`, AssetEntity.title is null on Android, so every
+        // filename-based match fails and saved files look "deleted".
+        filterOption: FilterOptionGroup(
+          imageOption: const FilterOption(needTitle: true),
+          videoOption: const FilterOption(needTitle: true),
+        ),
       );
 
       AssetPathEntity? targetAlbum;

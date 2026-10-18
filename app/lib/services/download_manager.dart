@@ -51,6 +51,12 @@ class DownloadJob {
   String? error;
   int? lastStatusCode;
 
+  /// Real MediaStore id + actual on-disk title of the saved asset, captured
+  /// right after import so history can locate the file by id instead of
+  /// relying on a filename that the system may have changed.
+  String? mediaId;
+  String? savedTitle;
+
   Map<String, Object?> toJson() => {
     'key': key,
     'label': label,
@@ -64,6 +70,8 @@ class DownloadJob {
     'saved': saved,
     'error': error,
     'lastStatusCode': lastStatusCode,
+    'mediaId': mediaId,
+    'savedTitle': savedTitle,
   };
 
   static DownloadJob fromJson(Map<String, Object?> map) {
@@ -81,6 +89,8 @@ class DownloadJob {
     job.saved = map['saved'] as bool? ?? false;
     job.error = map['error'] as String?;
     job.lastStatusCode = (map['lastStatusCode'] as num?)?.toInt();
+    job.mediaId = map['mediaId'] as String?;
+    job.savedTitle = map['savedTitle'] as String?;
     return job;
   }
 }
@@ -516,7 +526,9 @@ class DownloadManager extends ChangeNotifier {
         job.error = '文件丢失，请重试';
         job.state = JobState.failed;
       } else {
-        await saveToGallery(path, job.isImage, batch.album);
+        final saved = await saveToGallery(path, job.isImage, batch.album);
+        job.mediaId = saved.mediaId;
+        job.savedTitle = saved.title;
         job.state = JobState.done;
         job.progress = 1;
         job.saved = true;
@@ -557,11 +569,18 @@ class DownloadManager extends ChangeNotifier {
         for (final job in batch.jobs)
           if (job.saved && job.state == JobState.done)
             HistoryFile(
-              filename: job.filename,
+              // Prefer the real on-disk title (system may rename on clash),
+              // and pin the MediaStore id so the file is found by id later.
+              filename: (job.savedTitle?.isNotEmpty == true)
+                  ? job.savedTitle!
+                  : job.filename,
               savedAt: DateTime.now().millisecondsSinceEpoch,
+              mediaId: job.mediaId,
               itemIndex: job.itemIndex,
               isImage: job.isImage,
-              status: FileStatus.unknown,
+              status: job.mediaId != null
+                  ? FileStatus.found
+                  : FileStatus.unknown,
             ),
       ];
       await HistoryDb.instance().then(

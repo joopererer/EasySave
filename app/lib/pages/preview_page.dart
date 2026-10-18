@@ -137,6 +137,8 @@ class _PreviewPageState extends State<PreviewPage> {
                 type: widget.post.items[i].type,
                 url: widget.post.items[i].url,
                 videoUrl: widget.post.items[i].videoUrl,
+                posterUrl: widget.post.items[i].posterUrl,
+                fallbacks: widget.post.items[i].fallbacks,
                 isGif: widget.post.items[i].isGif ?? false,
                 status: FileStatus.found,
               ),

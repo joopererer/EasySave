@@ -386,7 +386,8 @@ class _ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
         _errorMessage = e.message;
       });
       if (e.code == ParseErrorCode.loginRequired) {
-        LoginExpiredBus.notify(e.code);
+        final platform = platformFromUrl(link);
+        if (platform != null) LoginExpiredBus.markExpired(platform);
       }
     } catch (_) {
       if (!mounted || _cancelRequested) return;
@@ -424,11 +425,15 @@ class _ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
           ),
         );
         if (platform != null && mounted) {
-          await Navigator.of(context).push(
-            MaterialPageRoute<void>(
+          final loggedIn = await Navigator.of(context).push<bool>(
+            MaterialPageRoute<bool>(
               builder: (_) => LoginPage(platform: platform),
             ),
           );
+          // Re-run the failed parse as soon as the session is confirmed.
+          if (loggedIn == true && mounted) {
+            _handleLinks(_linkController.text.trim());
+          }
         }
       case ErrorAction.backHome:
         setState(() => _errorCode = null);
@@ -596,6 +601,120 @@ class _ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
 
   bool _openingRecord = false;
 
+  /// Re-parse a record from the recent list (mirrors HistoryPage._reparse).
+  Future<void> _reparseRecord(HistoryRecord record) async {
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Row(
+          children: [
+            SizedBox(
+              width: 16,
+              height: 16,
+              child: CircularProgressIndicator(
+                strokeWidth: 2,
+                color: Colors.white,
+              ),
+            ),
+            SizedBox(width: 12),
+            Text('正在重新解析...'),
+          ],
+        ),
+        duration: Duration(seconds: 10),
+      ),
+    );
+    try {
+      final outcome = await parsePostOutcome(record.postUrl);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).hideCurrentSnackBar();
+      Navigator.of(context).push(
+        MaterialPageRoute<void>(
+          builder: (_) => PreviewPage(
+            post: outcome.data,
+            rawImages: outcome.rawImages,
+          ),
+        ),
+      );
+      _reloadRecent();
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).hideCurrentSnackBar();
+
+      final isLoginRequired =
+          e is ParseFailure && e.code == ParseErrorCode.loginRequired;
+      final isUnavailable =
+          e is ParseFailure && e.code == ParseErrorCode.privateOrUnavailable;
+
+      // Try to show cached data with a warning snackbar.
+      final cachedPost = PreviewPage.postFromRecord(record);
+      final platform = platformFromKey(record.platform);
+      if (cachedPost.items.isNotEmpty) {
+        Navigator.of(context).push(
+          MaterialPageRoute<void>(
+            builder: (_) => PreviewPage(post: cachedPost),
+          ),
+        );
+        if (isLoginRequired) {
+          LoginExpiredBus.markExpired(platform);
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: const Text('已使用本地记录打开预览（重新解析需登录）'),
+              action: SnackBarAction(
+                label: '去登录',
+                onPressed: () async {
+                  final loggedIn = await Navigator.of(context).push<bool>(
+                    MaterialPageRoute<bool>(
+                      builder: (_) => LoginPage(platform: platform),
+                    ),
+                  );
+                  if (loggedIn == true && mounted) {
+                    await _reparseRecord(record);
+                  }
+                },
+              ),
+            ),
+          );
+        } else if (isUnavailable) {
+          // Not a login problem: the share link lost its `xsec_token` (or it
+          // expired), so XHS can't serve the note again.
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('已使用本地记录打开预览（重新解析需重新粘贴分享链接）'),
+            ),
+          );
+        }
+        return;
+      }
+
+      if (isLoginRequired) {
+        LoginExpiredBus.markExpired(platform);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: const Text('该内容需要登录后查看，请先登录'),
+            action: SnackBarAction(
+              label: '去登录',
+              onPressed: () async {
+                final loggedIn = await Navigator.of(context).push<bool>(
+                  MaterialPageRoute<bool>(
+                    builder: (_) => LoginPage(platform: platform),
+                  ),
+                );
+                if (loggedIn == true && mounted) {
+                  await _reparseRecord(record);
+                }
+              },
+            ),
+          ),
+        );
+        return;
+      }
+
+      final msg = e is ParseFailure ? e.message : '$e';
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('解析失败：$msg')),
+      );
+    }
+  }
+
   void _openRecord(HistoryRecord record) {
     // Guard against tap storms: a second push while the transition is
     // still running stacks identical routes and makes "back" look dead.
@@ -634,6 +753,8 @@ class _ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
           type: postItem.type,
           url: postItem.url,
           videoUrl: postItem.videoUrl,
+          posterUrl: postItem.posterUrl,
+          fallbacks: postItem.fallbacks,
           isGif: postItem.isGif ?? false,
           asset: asset,
           status: status,
@@ -653,7 +774,11 @@ class _ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
                   : record.postId,
               platform: record.platform,
               postUrl: record.postUrl,
-              onReparse: () => _resolve(record.postUrl),
+              onReparse: () {
+                // Pop GalleryBrowser first, then reparse with feedback.
+                Navigator.of(context).pop();
+                _reparseRecord(record);
+              },
               onRedownload: (index) async {
                 await DownloadSheet.show(context, post, [index]);
                 await locator.scanAlbum(force: true);

@@ -69,8 +69,10 @@ class _BatchPageState extends State<BatchPage> {
       }
       setState(() => item.state = BatchItemState.active);
       try {
-        final resolved = await resolveShortLink(item.link);
-        final outcome = await parsePostOutcome(resolved);
+        // parsePostOutcome resolves short links itself (and, for XHS, does so
+        // in a real WebView so the share token survives). Resolving here with
+        // plain HTTP first would drop Xiaohongshu's token and land on /login.
+        final outcome = await parsePostOutcome(item.link);
         if (!mounted || _cancelRequested) break;
         setState(() {
           item.state = BatchItemState.done;

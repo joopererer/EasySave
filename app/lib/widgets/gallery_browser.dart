@@ -22,6 +22,8 @@ class GalleryBrowserItem {
     required this.type,
     required this.url,
     this.videoUrl,
+    this.posterUrl,
+    this.fallbacks = const [],
     this.isGif = false,
     this.asset,
     this.status = FileStatus.found,
@@ -32,10 +34,25 @@ class GalleryBrowserItem {
   final String type; // 'image', 'video', 'live'
   final String url;
   final String? videoUrl;
+  final String? posterUrl;
+
+  /// Alternative image URLs (mirrors [MediaItem.fallbacks]); without these the
+  /// fullscreen viewer and bottom strip fall back to a single URL and show a
+  /// broken image whenever the primary CDN host drops the request.
+  final List<String> fallbacks;
   final bool isGif;
   final AssetEntity? asset;
   final FileStatus status;
   final String? filename;
+
+  /// Build the [MediaItem] that drives [CoverImage] with the full URL set.
+  MediaItem toMediaItem() => MediaItem(
+    type: type,
+    url: url,
+    videoUrl: videoUrl,
+    posterUrl: posterUrl,
+    fallbacks: fallbacks,
+  );
 }
 
 class GalleryBrowserPage extends StatefulWidget {
@@ -515,7 +532,7 @@ class _ThumbnailImage extends StatelessWidget {
       );
     }
     return CoverImage(
-      item: MediaItem(type: item.type, url: item.url),
+      item: item.toMediaItem(),
       referer: refererFor(platform),
       fit: BoxFit.cover,
       cacheWidth: 400,
@@ -543,6 +560,8 @@ class _BrowserItemView extends StatefulWidget {
 class _BrowserItemViewState extends State<_BrowserItemView> {
   VideoPlayerController? _videoController;
   bool _isPlaying = false;
+  bool _controlsVisible = true;
+  Timer? _hideTimer;
   bool _isLiveHolding = false;
   bool _redownloading = false;
   bool _isNotFound = false;
@@ -578,8 +597,39 @@ class _BrowserItemViewState extends State<_BrowserItemView> {
 
   @override
   void dispose() {
+    _hideTimer?.cancel();
     _videoController?.dispose();
     super.dispose();
+  }
+
+  /// Keep the play/pause icons and the controls bar in sync with the player,
+  /// whatever triggered the change (tap, video end, app pause...).
+  void _attachVideoListener(VideoPlayerController controller) {
+    controller.addListener(_onVideoValue);
+  }
+
+  void _onVideoValue() {
+    final c = _videoController;
+    if (c == null || !mounted) return;
+    final playing = c.value.isPlaying;
+    if (playing == _isPlaying && (playing || _controlsVisible)) return;
+    if (!playing) _hideTimer?.cancel();
+    setState(() {
+      _isPlaying = playing;
+      if (!playing) _controlsVisible = true;
+    });
+    if (playing) _scheduleHide();
+  }
+
+  void _scheduleHide() {
+    _hideTimer?.cancel();
+    _hideTimer = Timer(const Duration(seconds: 3), () {
+      if (!mounted) return;
+      final c = _videoController;
+      if (c != null && c.value.isPlaying) {
+        setState(() => _controlsVisible = false);
+      }
+    });
   }
 
   Future<void> _initVideo() async {
@@ -617,11 +667,15 @@ class _BrowserItemViewState extends State<_BrowserItemView> {
         await controller.play();
         _isPlaying = true;
       } else {
-        await controller.play();
-        _isPlaying = true;
+        // Don't autoplay: leave the first frame up with a play button so the
+        // user starts playback (and audio) on purpose.
+        await controller.pause();
+        _isPlaying = false;
+        _controlsVisible = true;
       }
 
       setState(() => _videoController = controller);
+      _attachVideoListener(controller);
     } catch (e) {
       if (mounted) setState(() => _error = '$e');
     }
@@ -811,84 +865,113 @@ class _BrowserItemViewState extends State<_BrowserItemView> {
       );
     }
 
-    // 3. Regular Video playback: with controls, auto-play
+    // 3. Regular Video playback: starts paused, tap the play button to start
     if (it.type == 'video') {
       final c = _videoController;
-      return Stack(
-        alignment: Alignment.center,
-        children: [
-          if (c != null && c.value.isInitialized)
-            Center(
-              child: AspectRatio(
-                aspectRatio: c.value.aspectRatio == 0 ? 16 / 9 : c.value.aspectRatio,
-                child: VideoPlayer(c),
-              ),
-            )
-          else if (_error != null)
-            Center(
-              child: Text('播放失败：$_error', style: const TextStyle(color: Colors.white)),
-            )
-          else
-            const Center(child: CircularProgressIndicator(color: Colors.white)),
-
-          // Video control overlay
-          if (c != null && c.value.isInitialized)
-            Positioned(
-              bottom: 100,
-              left: 16,
-              right: 16,
-              child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                decoration: BoxDecoration(
-                  color: Colors.black54,
-                  borderRadius: BorderRadius.circular(20),
+      return GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        // Tap the video itself toggles the controls bar, never playback.
+        onTap: () => setState(() {
+          _controlsVisible = !_controlsVisible;
+          if (_controlsVisible) {
+            _scheduleHide();
+          } else {
+            _hideTimer?.cancel();
+          }
+        }),
+        child: Stack(
+          alignment: Alignment.center,
+          children: [
+            if (c != null && c.value.isInitialized)
+              Center(
+                child: AspectRatio(
+                  aspectRatio: c.value.aspectRatio == 0 ? 16 / 9 : c.value.aspectRatio,
+                  child: VideoPlayer(c),
                 ),
-                child: Row(
-                  children: [
-                    IconButton(
-                      icon: Icon(
-                        c.value.isPlaying ? Icons.pause : Icons.play_arrow,
-                        color: Colors.white,
-                      ),
-                      onPressed: () {
-                        setState(() {
+              )
+            else if (_error != null)
+              Center(
+                child: Text('播放失败：$_error', style: const TextStyle(color: Colors.white)),
+              )
+            else
+              const Center(child: CircularProgressIndicator(color: Colors.white)),
+
+            // Tap-to-play overlay: videos don't autoplay.
+            if (c != null && c.value.isInitialized && !_isPlaying)
+              GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onTap: () => c.play(),
+                child: Container(
+                  width: 72,
+                  height: 72,
+                  decoration: BoxDecoration(
+                    color: Colors.black.withValues(alpha: 0.45),
+                    shape: BoxShape.circle,
+                  ),
+                  child: const Icon(
+                    Icons.play_arrow,
+                    color: Colors.white,
+                    size: 44,
+                  ),
+                ),
+              ),
+
+            // Video control overlay: auto-hides a few seconds after playback
+            // starts so it doesn't cover the picture.
+            if (c != null && c.value.isInitialized && _controlsVisible)
+              Positioned(
+                bottom: 100,
+                left: 16,
+                right: 16,
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                  decoration: BoxDecoration(
+                    color: Colors.black54,
+                    borderRadius: BorderRadius.circular(20),
+                  ),
+                  child: Row(
+                    children: [
+                      IconButton(
+                        icon: Icon(
+                          c.value.isPlaying ? Icons.pause : Icons.play_arrow,
+                          color: Colors.white,
+                        ),
+                        onPressed: () {
                           if (c.value.isPlaying) {
                             c.pause();
                           } else {
                             c.play();
                           }
-                        });
-                      },
-                    ),
-                    Expanded(
-                      child: VideoProgressIndicator(
-                        c,
-                        allowScrubbing: true,
-                        colors: const VideoProgressColors(
-                          playedColor: Color(0xFFFF2442),
-                          bufferedColor: Colors.white24,
-                          backgroundColor: Colors.white12,
+                        },
+                      ),
+                      Expanded(
+                        child: VideoProgressIndicator(
+                          c,
+                          allowScrubbing: true,
+                          colors: const VideoProgressColors(
+                            playedColor: Color(0xFFFF2442),
+                            bufferedColor: Colors.white24,
+                            backgroundColor: Colors.white12,
+                          ),
                         ),
                       ),
-                    ),
-                    const SizedBox(width: 8),
-                    IconButton(
-                      icon: Icon(
-                        c.value.volume == 0 ? Icons.volume_off : Icons.volume_up,
-                        color: Colors.white,
-                        size: 20,
-                      ),
-                      onPressed: () {
-                        setState(() {
+                      const SizedBox(width: 8),
+                      IconButton(
+                        icon: Icon(
+                          c.value.volume == 0 ? Icons.volume_off : Icons.volume_up,
+                          color: Colors.white,
+                          size: 20,
+                        ),
+                        onPressed: () {
                           c.setVolume(c.value.volume == 0 ? 1.0 : 0.0);
-                        });
-                      },
-                    ),
-                  ],
+                        },
+                      ),
+                    ],
+                  ),
                 ),
               ),
-            ),
-        ],
+          ],
+        ),
       );
     }
 
@@ -927,13 +1010,13 @@ class _BrowserItemViewState extends State<_BrowserItemView> {
                           alignment: Alignment.center,
                           children: [
                             CoverImage(
-                              item: MediaItem(type: it.type, url: it.url),
+                              item: it.toMediaItem(),
                               referer: refererFor(widget.platform),
                               fit: BoxFit.contain,
                               cacheWidth: 400,
                             ),
                             CoverImage(
-                              item: MediaItem(type: it.type, url: it.url),
+                              item: it.toMediaItem(),
                               referer: refererFor(widget.platform),
                               fit: BoxFit.contain,
                               cacheWidth: 1080,
@@ -1091,19 +1174,13 @@ class _ZoomableImageViewState extends State<_ZoomableImageView>
                   alignment: Alignment.center,
                   children: [
                     CoverImage(
-                      item: MediaItem(
-                        type: widget.item.type,
-                        url: widget.item.url,
-                      ),
+                      item: widget.item.toMediaItem(),
                       referer: refererFor(widget.platform),
                       fit: BoxFit.contain,
                       cacheWidth: 400,
                     ),
                     CoverImage(
-                      item: MediaItem(
-                        type: widget.item.type,
-                        url: widget.item.url,
-                      ),
+                      item: widget.item.toMediaItem(),
                       referer: refererFor(widget.platform),
                       fit: BoxFit.contain,
                       cacheWidth: 1080,

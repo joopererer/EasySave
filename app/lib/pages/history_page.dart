@@ -233,6 +233,8 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
 
       final isLoginRequired =
           e is ParseFailure && e.code == ParseErrorCode.loginRequired;
+      final isUnavailable =
+          e is ParseFailure && e.code == ParseErrorCode.privateOrUnavailable;
 
       final cachedPost = PreviewPage.postFromRecord(record);
       if (cachedPost.items.isNotEmpty) {
@@ -244,25 +246,33 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
           ),
         );
         if (isLoginRequired) {
-          LoginExpiredBus.notify(ParseErrorCode.loginRequired);
+          final platform = platformFromKey(record.platform);
+          LoginExpiredBus.markExpired(platform);
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
               content: const Text('已使用本地记录打开预览（重新解析需登录）'),
               action: SnackBarAction(
                 label: '去登录',
-                onPressed: () {
-                  final platform = record.platform == 'xhs'
-                      ? PlatformKind.xhs
-                      : (record.platform == 'instagram'
-                          ? PlatformKind.instagram
-                          : PlatformKind.x);
-                  Navigator.of(context).push(
-                    MaterialPageRoute<void>(
+                onPressed: () async {
+                  final loggedIn = await Navigator.of(context).push<bool>(
+                    MaterialPageRoute<bool>(
                       builder: (_) => LoginPage(platform: platform),
                     ),
                   );
+                  if (loggedIn == true && mounted) {
+                    await _reparse(record);
+                  }
                 },
               ),
+            ),
+          );
+        } else if (isUnavailable) {
+          // Not a login problem: the share link lost its `xsec_token` (or it
+          // expired), so XHS can't serve the note again.
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('已使用本地记录打开预览（重新解析需重新粘贴分享链接）'),
+              action: null,
             ),
           );
         }
@@ -270,23 +280,22 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
       }
 
       if (isLoginRequired) {
-        LoginExpiredBus.notify(ParseErrorCode.loginRequired);
+        final platform = platformFromKey(record.platform);
+        LoginExpiredBus.markExpired(platform);
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: const Text('该内容需要登录后查看，请先登录'),
             action: SnackBarAction(
               label: '去登录',
-              onPressed: () {
-                final platform = record.platform == 'xhs'
-                    ? PlatformKind.xhs
-                    : (record.platform == 'instagram'
-                        ? PlatformKind.instagram
-                        : PlatformKind.x);
-                Navigator.of(context).push(
-                  MaterialPageRoute<void>(
+              onPressed: () async {
+                final loggedIn = await Navigator.of(context).push<bool>(
+                  MaterialPageRoute<bool>(
                     builder: (_) => LoginPage(platform: platform),
                   ),
                 );
+                if (loggedIn == true && mounted) {
+                  await _reparse(record);
+                }
               },
             ),
           ),
@@ -344,6 +353,8 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
           type: postItem.type,
           url: postItem.url,
           videoUrl: postItem.videoUrl,
+          posterUrl: postItem.posterUrl,
+          fallbacks: postItem.fallbacks,
           isGif: postItem.isGif ?? false,
           asset: asset,
           status: status,
@@ -363,7 +374,10 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
                   : record.postId,
               platform: record.platform,
               postUrl: record.postUrl,
-              onReparse: () => _reparse(record),
+              onReparse: () {
+                Navigator.of(context).pop();
+                _reparse(record);
+              },
               onRedownload: (index) async {
                 await DownloadSheet.show(context, post, [index]);
                 await locator.scanAlbum(force: true);
@@ -653,3 +667,4 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
     );
   }
 }
+

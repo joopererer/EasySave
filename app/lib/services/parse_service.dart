@@ -1,5 +1,6 @@
-// Headless parsing: load a post URL (short links follow redirects
-// automatically), inject parser.js and execute EasySaveParser.
+// Headless parsing: load a post URL in a real (headless) WebView — which
+// follows short links and clears Xiaohongshu's anti-bot the same way a user's
+// browser does — inject parser.js and execute EasySaveParser.
 // Throws [ParseFailure] so callers can distinguish login walls.
 
 import 'dart:async';
@@ -87,9 +88,7 @@ String calculateXToken(String id) {
 Future<ParsedPost> parsePostUrl(String url) {
   _checkPlatform(url);
   return _withTimeout(() async {
-    final resolved = await resolveShortLink(
-      url,
-    ).timeout(const Duration(seconds: 10), onTimeout: () => url);
+    final resolved = await _resolveForParse(url);
     return (await _parseInner(resolved)).data;
   }, '加载页面');
 }
@@ -98,11 +97,27 @@ Future<ParsedPost> parsePostUrl(String url) {
 Future<ParseOutcome> parsePostOutcome(String url) {
   _checkPlatform(url);
   return _withTimeout(() async {
-    final resolved = await resolveShortLink(
-      url,
-    ).timeout(const Duration(seconds: 10), onTimeout: () => url);
+    final resolved = await _resolveForParse(url);
     return _parseInner(resolved);
   }, '加载页面');
+}
+
+/// Resolve short links to their final URL, except for Xiaohongshu.
+///
+/// XHS's anti-bot bounces plain-HTTP clients (even with a mobile UA) to
+/// /login, so HTTP resolution throws away the real note URL and its
+/// `xsec_token`. For XHS we hand the short link to the WebView untouched —
+/// a real browser engine follows the redirect to the actual note page.
+Future<String> _resolveForParse(String url) async {
+  final host = Uri.tryParse(url)?.host.toLowerCase() ?? '';
+  if (isXhsHost(host)) return url;
+  try {
+    return await resolveShortLink(
+      url,
+    ).timeout(const Duration(seconds: 10), onTimeout: () => url);
+  } catch (_) {
+    return url;
+  }
 }
 
 class ParseOutcome {
@@ -110,6 +125,47 @@ class ParseOutcome {
 
   final ParsedPost data;
   final List<RawImageEntry> rawImages;
+}
+
+
+
+/// Poll the page until `__INITIAL_STATE__` carries this note, instead of
+/// guessing with a fixed delay. Gives up quietly so the parser can still
+/// produce a proper error afterwards.
+Future<void> _waitForNoteState(
+  InAppWebViewController controller,
+  String targetUrl, {
+  Duration timeout = const Duration(seconds: 6),
+}) async {
+  final noteId = RegExp(
+    r'/([a-f0-9]{24})',
+    caseSensitive: false,
+  ).firstMatch(targetUrl)?.group(1);
+  final deadline = DateTime.now().add(timeout);
+  while (DateTime.now().isBefore(deadline)) {
+    try {
+      final ready = await controller.evaluateJavascript(
+        source: '''
+(() => {
+  try {
+    const state = window.__INITIAL_STATE__;
+    if (!state || !state.note || !state.note.noteDetailMap) return false;
+    const wanted = ${jsonEncode(noteId)};
+    const map = state.note.noteDetailMap;
+    if (!wanted) return Object.keys(map).length > 0;
+    return Object.prototype.hasOwnProperty.call(map, wanted);
+  } catch (_) {
+    return false;
+  }
+})()
+''',
+      );
+      if (ready == true) return;
+    } catch (_) {
+      // Controller may not be ready yet; keep polling until the deadline.
+    }
+    await Future<void>.delayed(const Duration(milliseconds: 400));
+  }
 }
 
 Future<ParseOutcome> _runParserJs(String input, String pageUrl) async {
@@ -227,16 +283,54 @@ Future<ParseOutcome> _parseInner(String url) async {
   var targetUrl = url;
   final isXhs = isXhsHost(host);
   if (isXhs) {
-    final match = RegExp(
-      r'/(?:explore|discovery/item)/([a-f0-9]{24})',
-      caseSensitive: false,
-    ).firstMatch(url);
-    if (match != null) {
-      final noteId = match.group(1);
-      targetUrl = 'https://www.xiaohongshu.com/explore/$noteId';
+    if (targetUrl.startsWith('http://')) {
+      targetUrl = targetUrl.replaceFirst('http://', 'https://');
     }
+    // Do NOT rewrite the URL: `xsec_token` is bound to the exact path the
+    // share link points at (usually /discovery/item/...), and a short link
+    // (xhslink) must be followed by a real browser engine. Rewriting to
+    // /explore/<id>, decoding %3D, or HTTP-resolving all break the token.
+    //
+    // XHS always goes through the WebView: its anti-bot 302s *any* plain
+    // HTTP client (valid token or not) to /login or a captcha wall, so the
+    // HTTP fast path can never succeed here and only adds latency. A real
+    // browser engine follows short links and keeps the token, exactly like
+    // the user's own browser (verified: xhslink -> /explore/<id>?xsec_token=...).
+    return _parseXhsViaWebView(targetUrl);
   }
 
+  return _headlessParse(targetUrl, isXhs: false);
+}
+
+/// Loads the note in a real WebView and reads `__INITIAL_STATE__`. This is
+/// what XHS_Downloader_Android does, and it mirrors exactly what the user sees
+/// in their own browser, so `xsec_token` handling and anti-bot behave the same.
+Future<ParseOutcome> _parseXhsViaWebView(String targetUrl) async {
+  try {
+    return await _headlessParse(targetUrl, isXhs: true);
+  } on ParseFailure catch (e) {
+    if (e.code != ParseErrorCode.loginRequired &&
+        e.code != ParseErrorCode.invalidPage) {
+      rethrow;
+    }
+    // The generic parser failed. Ask the page itself why: a guest session and
+    // a dead share link look identical in the parser output but need very
+    // different messages and actions. `_headlessParse` already ran
+    // `_waitForNoteState`, so a stale `loginRequired` here means the note
+    // genuinely wasn't served.
+    final loggedIn = await checkLogin(PlatformKind.xhs);
+    throw ParseFailure(
+      loggedIn
+          ? ParseErrorCode.privateOrUnavailable
+          : ParseErrorCode.loginRequired,
+      loggedIn
+          ? '未能读取笔记内容（分享链接可能已过期，请重新粘贴原分享链接再试）'
+          : '需要先登录小红书才能解析该笔记',
+    );
+  }
+}
+
+Future<ParseOutcome> _headlessParse(String targetUrl, {required bool isXhs}) async {
   final loaded = Completer<void>();
   InAppWebViewController? readyController;
   HeadlessInAppWebView? headless;
@@ -250,14 +344,32 @@ Future<ParseOutcome> _parseInner(String url) async {
         thirdPartyCookiesEnabled: true,
         sharedCookiesEnabled: true,
         cacheEnabled: true,
+        mixedContentMode: MixedContentMode.MIXED_CONTENT_ALWAYS_ALLOW,
         userAgent: isXhs ? loginUserAgent(PlatformKind.xhs) : null,
       ),
       // XHS pages auto-navigate to xhsdiscover:// (app-open scheme) after
-      // load. Cancel every non-http(s) navigation so the WebView stays on
-      // the note page, whose DOM/state holds the data we parse.
+      // load, and probe 127.0.0.1 to detect its desktop client. Cancel every
+      // non-http(s) navigation and every loopback target (main frame and
+      // subframes) so the WebView stays on the note page, whose DOM/state
+      // holds the data we parse.
       shouldOverrideUrlLoading: (controller, navigationAction) async {
-        final scheme = navigationAction.request.url?.scheme.toLowerCase() ?? '';
-        if (scheme == 'http' || scheme == 'https') {
+        final uri = navigationAction.request.url;
+        if (uri != null && isLoopbackHost(uri.host)) {
+          return NavigationActionPolicy.CANCEL;
+        }
+        final scheme = uri?.scheme.toLowerCase() ?? '';
+        if (scheme == 'http') {
+          // Only upgrade main-frame navigations; rewriting subframe URLs can
+          // send the WebView into a reload loop.
+          if (navigationAction.isForMainFrame == true) {
+            final httpsUri = uri!.replace(scheme: 'https');
+            controller.loadUrl(
+              urlRequest: URLRequest(url: WebUri.uri(httpsUri)),
+            );
+          }
+          return NavigationActionPolicy.CANCEL;
+        }
+        if (scheme == 'https') {
           return NavigationActionPolicy.ALLOW;
         }
         return NavigationActionPolicy.CANCEL;
@@ -267,24 +379,36 @@ Future<ParseOutcome> _parseInner(String url) async {
         if (!loaded.isCompleted) loaded.complete();
       },
       onReceivedError: (controller, request, error) {
+        // Subresource failures (e.g. the 127.0.0.1 desktop-client probe)
+        // say nothing about the main document.
+        if (request.isForMainFrame != true) return;
         readyController ??= controller;
         if (!loaded.isCompleted) loaded.complete();
       },
     );
     await headless.run();
-    await loaded.future.timeout(const Duration(seconds: 18));
-    // Let SPA frameworks settle after the load event.
-    await Future<void>.delayed(const Duration(seconds: 2));
+    await loaded.future.timeout(const Duration(seconds: 12));
     final controller = readyController ?? headless.webViewController;
     if (controller == null) {
       throw ParseFailure('INVALID_PAGE', '页面未能加载');
     }
+    // The note data lives in `__INITIAL_STATE__`, which the SPA fills in after
+    // fetch. A fixed sleep is a coin flip on slow networks, so poll instead.
+    // Resolve the *real* URL first: a short link has no note id, and following
+    // it in the WebView lands us on the tokenized note page.
+    String currentUrl = targetUrl;
+    try {
+      final live = await controller.getUrl();
+      final liveStr = live?.toString();
+      if (liveStr != null && liveStr.isNotEmpty) currentUrl = liveStr;
+    } catch (_) {}
+    await _waitForNoteState(controller, currentUrl);
 
     final parserJs = await ParserManager.instance.getActiveScript();
     dynamic jsResult;
     try {
       await controller.evaluateJavascript(source: parserJs);
-      final pageUrlJson = jsonEncode(targetUrl);
+      final pageUrlJson = jsonEncode(currentUrl);
       jsResult = await controller.evaluateJavascript(
         source: '''
 (() => {

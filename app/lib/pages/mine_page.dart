@@ -24,53 +24,108 @@ class _MinePageState extends State<MinePage> {
   bool _checkingLogin = true;
   AppSettings _settings = AppSettings();
   String _version = '';
+  String _nickname = '';
+  Set<PlatformKind> _lastExpired = const {};
 
   @override
   void initState() {
     super.initState();
+    _lastExpired = LoginExpiredBus.expired.value;
     _load();
-    LoginExpiredBus.code.addListener(_onExpired);
+    LoginExpiredBus.expired.addListener(_onExpired);
   }
 
   @override
   void dispose() {
-    LoginExpiredBus.code.removeListener(_onExpired);
+    LoginExpiredBus.expired.removeListener(_onExpired);
     super.dispose();
   }
 
   void _onExpired() {
-    if (mounted) setState(() {});
+    if (!mounted) return;
+    final now = LoginExpiredBus.expired.value;
+    final newlyExpired = now.difference(_lastExpired);
+    final recovered = _lastExpired.difference(now);
+    _lastExpired = now;
+    if (newlyExpired.isNotEmpty || recovered.isNotEmpty) {
+      setState(() {
+        // A parse just proved these stored sessions are dead: show it now.
+        for (final p in newlyExpired) {
+          _loggedIn[p] = false;
+        }
+      });
+    }
+    // "Recovered" means a login succeeded elsewhere (e.g. from the history
+    // tab); refresh those rows so the tab isn't stuck on "未登录".
+    for (final p in recovered) {
+      _refreshPlatform(p);
+    }
+  }
+
+  Future<void> _refreshPlatform(PlatformKind platform) async {
+    final ok = await checkLogin(platform);
+    if (!mounted) return;
+    if (ok) LoginExpiredBus.clear(platform);
+    final account = platform == PlatformKind.xhs
+        ? XhsAccountCache.value ?? await XhsAccountCache.load()
+        : null;
+    setState(() {
+      _loggedIn[platform] = ok;
+      if (account != null) _nickname = account.nickname ?? '';
+    });
   }
 
   Future<void> _load() async {
     final settings = await AppSettings.load();
-    final xhs = await isLoggedIn(PlatformKind.xhs);
+    // Cached page-state answer first: instant, and it survives app restarts.
+    final cachedXhs = await XhsAccountCache.load();
     final ig = await isLoggedIn(PlatformKind.instagram);
     final x = await isLoggedIn(PlatformKind.x);
     final info = await PackageInfo.fromPlatform();
     if (!mounted) return;
     setState(() {
       _settings = settings;
-      _loggedIn[PlatformKind.xhs] = xhs;
+      _loggedIn[PlatformKind.xhs] = cachedXhs?.loggedIn ?? false;
       _loggedIn[PlatformKind.instagram] = ig;
       _loggedIn[PlatformKind.x] = x;
+      _nickname = cachedXhs?.nickname ?? '';
       _checkingLogin = false;
       _version = '${info.version}+${info.buildNumber}';
     });
+    // No cached answer (never logged in through the login page, or the cache
+    // was cleared): fall back to the cookie jar plus a network probe. This
+    // runs after the first paint, so the tab still renders instantly.
+    if (cachedXhs == null) {
+      final cookieLogin = await checkLogin(PlatformKind.xhs);
+      if (!mounted) return;
+      setState(() => _loggedIn[PlatformKind.xhs] = cookieLogin);
+    }
   }
 
 
   Future<void> _saveSettings() => _settings.save();
 
   Future<void> _openLogin(PlatformKind platform) async {
-    await Navigator.of(context).push(
-      MaterialPageRoute<void>(builder: (_) => LoginPage(platform: platform)),
+    final ok = await Navigator.of(context).push<bool>(
+      MaterialPageRoute<bool>(builder: (_) => LoginPage(platform: platform)),
     );
-    setState(() => _checkingLogin = true);
-    final loggedIn = await isLoggedIn(platform);
     if (!mounted) return;
+    setState(() => _checkingLogin = true);
+    // Trust the login page result after a successful flow (it verified the
+    // session end-to-end); otherwise re-check the cookie store.
+    final loggedIn = ok == true ? true : await checkLogin(platform);
+    if (!mounted) return;
+    if (loggedIn) {
+      LoginExpiredBus.clear(platform);
+    } else {
+      LoginExpiredBus.markExpired(platform);
+    }
+    final account = platform == PlatformKind.xhs
+        ? XhsAccountCache.value ?? await XhsAccountCache.load()
+        : null;
     setState(() {
       _loggedIn[platform] = loggedIn;
+      if (account != null) _nickname = account.nickname ?? '';
       _checkingLogin = false;
     });
   }
@@ -96,7 +151,10 @@ class _MinePageState extends State<MinePage> {
     if (confirmed == true) {
       await logout(platform);
       if (!mounted) return;
-      setState(() => _loggedIn[platform] = false);
+      setState(() {
+        _loggedIn[platform] = false;
+        if (platform == PlatformKind.xhs) _nickname = '';
+      });
     }
   }
 
@@ -153,9 +211,33 @@ class _MinePageState extends State<MinePage> {
     ).showSnackBar(SnackBar(content: Text('已清理缓存（$removed 个临时文件）')));
   }
 
+  /// Subtitle for a platform row: "已登录" / "未登录", plus a hint when a
+  /// parse recently proved the stored session is dead.
+  Widget _loginSubtitle(PlatformKind platform) {
+    final loggedIn = _loggedIn[platform]!;
+    final expired = LoginExpiredBus.expired.value.contains(platform);
+    if (expired) {
+      return const Text(
+        '登录已失效，请重新登录',
+        style: TextStyle(color: Colors.orange),
+      );
+    }
+    if (loggedIn &&
+        platform == PlatformKind.xhs &&
+        _nickname.trim().isNotEmpty) {
+      return Text(
+        '已登录（${_nickname.trim()}）',
+        style: const TextStyle(color: Colors.green),
+      );
+    }
+    return Text(
+      loggedIn ? '已登录' : '未登录',
+      style: TextStyle(color: loggedIn ? Colors.green : Colors.grey),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
-    final expired = LoginExpiredBus.code.value;
     return Scaffold(
       appBar: AppBar(title: const Text('我的')),
       body: ListView(
@@ -166,42 +248,30 @@ class _MinePageState extends State<MinePage> {
             child: Column(
               children: [
                 for (final platform in PlatformKind.values)
-                  ListTile(
-                    title: Text(platformLabel(platform)),
-                    subtitle: _checkingLogin
-                        ? const Text('检查中…')
-                        : Text(
-                            _loggedIn[platform]! ? '已登录' : '未登录',
-                            style: TextStyle(
-                              color: _loggedIn[platform]!
-                                  ? Colors.green
-                                  : Colors.grey,
+                  if (_checkingLogin)
+                    ListTile(
+                      title: Text(platformLabel(platform)),
+                      subtitle: const Text('检查中…'),
+                      trailing: const SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      ),
+                    )
+                  else
+                    ListTile(
+                      title: Text(platformLabel(platform)),
+                      subtitle: _loginSubtitle(platform),
+                      trailing: _loggedIn[platform]!
+                          ? TextButton(
+                              onPressed: () => _logout(platform),
+                              child: const Text('退出登录'),
+                            )
+                          : TextButton(
+                              onPressed: () => _openLogin(platform),
+                              child: const Text('去登录'),
                             ),
-                          ),
-                    trailing: _checkingLogin
-                        ? const SizedBox(
-                            width: 16,
-                            height: 16,
-                            child: CircularProgressIndicator(strokeWidth: 2),
-                          )
-                        : _loggedIn[platform]!
-                        ? TextButton(
-                            onPressed: () => _logout(platform),
-                            child: const Text('退出登录'),
-                          )
-                        : TextButton(
-                            onPressed: () => _openLogin(platform),
-                            child: const Text('去登录'),
-                          ),
-                  ),
-                if (expired == 'LOGIN_REQUIRED')
-                  const Padding(
-                    padding: EdgeInsets.fromLTRB(16, 0, 16, 12),
-                    child: Text(
-                      '登录已过期，请重新登录',
-                      style: TextStyle(color: Colors.orange),
                     ),
-                  ),
               ],
             ),
           ),
