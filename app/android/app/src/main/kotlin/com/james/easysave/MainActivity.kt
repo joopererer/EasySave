@@ -5,7 +5,6 @@ import android.content.Intent
 import android.net.Uri
 import android.os.Build
 import android.provider.MediaStore
-import android.provider.Settings
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodCall
@@ -16,7 +15,6 @@ class MainActivity : FlutterActivity() {
         private const val SEAL_CHANNEL = "easysave/seal"
         private const val SEAL_PACKAGE = "com.junkfood.seal"
         private const val MEDIA_CHANNEL = "easysave/media"
-        private const val V16_CHANNEL = "easysave/v16test"
         private const val DELETE_REQUEST_CODE = 50021
     }
 
@@ -52,50 +50,6 @@ class MainActivity : FlutterActivity() {
             .setMethodCallHandler { call, result ->
                 when (call.method) {
                     "deleteMedia" -> deleteMedia(call, result)
-                    else -> result.notImplemented()
-                }
-            }
-
-        // v1.6 validation triggers (temporary).
-        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, V16_CHANNEL)
-            .setMethodCallHandler { call, result ->
-                when (call.method) {
-                    "startBgParse" -> {
-                        val urls = call.argument<List<String>>("urls") ?: emptyList()
-                        val intent = Intent(this, BgParseService::class.java)
-                            .putStringArrayListExtra(BgParseService.EXTRA_URLS, ArrayList(urls))
-                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                            startForegroundService(intent)
-                        } else {
-                            startService(intent)
-                        }
-                        result.success(true)
-                    }
-                    "startOverlay" -> {
-                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M &&
-                            !Settings.canDrawOverlays(this)
-                        ) {
-                            startActivity(
-                                Intent(
-                                    Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-                                    Uri.parse("package:$packageName")
-                                ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                            )
-                            result.success(false)
-                        } else {
-                            val intent = Intent(this, OverlayService::class.java)
-                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                                startForegroundService(intent)
-                            } else {
-                                startService(intent)
-                            }
-                            result.success(true)
-                        }
-                    }
-                    "stopOverlay" -> {
-                        stopService(Intent(this, OverlayService::class.java))
-                        result.success(true)
-                    }
                     else -> result.notImplemented()
                 }
             }

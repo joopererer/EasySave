@@ -53,17 +53,12 @@
             </intent-filter>
         </activity>
 
-        <!-- v1.6 validation: standalone FlutterEngine background parser. -->
+        <!-- v1.6: single background FlutterEngine host (parse + download). -->
         <service
-            android:name=".BgParseService"
+            android:name=".HostService"
             android:exported="false"
             android:foregroundServiceType="dataSync"/>
-        <!-- v1.6 validation: floating bubble + native panel. -->
-        <service
-            android:name=".OverlayService"
-            android:exported="false"
-            android:foregroundServiceType="dataSync"/>
-        <!-- v1.6 validation: transparent clipboard reader. -->
+        <!-- v1.6: transparent clipboard reader used by the bubble / tile. -->
         <activity
             android:name=".ClipboardReaderActivity"
             android:exported="false"
