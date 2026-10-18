@@ -35,6 +35,7 @@ class HostService : Service() {
         const val NOTIF_ID = 9010
         const val ACTION_SUBMIT = "com.james.easysave.action.SUBMIT"
         const val EXTRA_URLS = "urls"
+        const val EXTRA_URL = "url"
         const val EXTRA_MODE = "mode"
         const val EXTRA_SOURCE = "source"
         private const val IDLE_TIMEOUT_MS = 60_000L
@@ -73,8 +74,11 @@ class HostService : Service() {
         resetIdleTimer()
 
         if (intent?.action == ACTION_SUBMIT) {
+            val urls = intent.getStringArrayListExtra(EXTRA_URLS)
+                ?: intent.getStringExtra(EXTRA_URL)?.let { arrayListOf(it) }
+                ?: arrayListOf()
             val task = mutableMapOf<String, Any?>(
-                "urls" to (intent.getStringArrayListExtra(EXTRA_URLS) ?: arrayListOf<String>()),
+                "urls" to urls,
                 "mode" to (intent.getStringExtra(EXTRA_MODE) ?: "all"),
                 "source" to (intent.getStringExtra(EXTRA_SOURCE) ?: "background"),
             )
