@@ -66,16 +66,18 @@
             android:noHistory="true"
             android:taskAffinity=""
             android:theme="@android:style/Theme.Translucent.NoTitleBar"/>
-        <!-- v1.6: text-selection menu entry (PROCESS_TEXT). -->
+        <!-- v1.6: share-sheet entry that downloads in the background. Coexists
+             with the MainActivity ACTION_SEND entry (which opens the app). -->
         <activity
-            android:name=".ProcessTextActivity"
+            android:name=".ShareToBackgroundActivity"
             android:exported="true"
             android:excludeFromRecents="true"
             android:noHistory="true"
             android:taskAffinity=""
+            android:label="EasySave 后台下载"
             android:theme="@android:style/Theme.Translucent.NoTitleBar">
             <intent-filter>
-                <action android:name="android.intent.action.PROCESS_TEXT"/>
+                <action android:name="android.intent.action.SEND"/>
                 <category android:name="android.intent.category.DEFAULT"/>
                 <data android:mimeType="text/plain"/>
             </intent-filter>

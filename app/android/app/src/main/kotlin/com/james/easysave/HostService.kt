@@ -46,7 +46,7 @@ class HostService : Service() {
         /**
          * Start the host and enqueue a task. Must be called while the caller is
          * in the foreground (the bubble entry has the overlay permission; the
-         * tile / PROCESS_TEXT entries call this from a transparent Activity).
+         * tile call this from a transparent Activity).
          */
         fun submit(context: Context, urls: List<String>, mode: String, source: String) {
             val intent = Intent(context, HostService::class.java).apply {
@@ -58,7 +58,7 @@ class HostService : Service() {
             ContextCompat.startForegroundService(context, intent)
         }
 
-        /** Same as [submit] but passes free text (PROCESS_TEXT selection). */
+        /** Same as [submit] but passes free text (share sheet / selected text). */
         fun submitText(context: Context, text: String, mode: String, source: String) {
             val intent = Intent(context, HostService::class.java).apply {
                 action = ACTION_SUBMIT
@@ -153,6 +153,15 @@ class HostService : Service() {
                     }
                     "openApp" -> {
                         openApp()
+                        result.success(null)
+                    }
+                    "toast" -> {
+                        val msg = call.arguments as? String ?: ""
+                        handler.post {
+                            android.widget.Toast.makeText(
+                                applicationContext, msg, android.widget.Toast.LENGTH_SHORT
+                            ).show()
+                        }
                         result.success(null)
                     }
                     "keepAlive" -> {

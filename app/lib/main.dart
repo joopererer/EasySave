@@ -11,8 +11,8 @@ import 'services/update_service.dart';
 import 'theme/app_theme.dart';
 
 /// Entry point run by HostService's standalone FlutterEngine (no Activity),
-/// for background parse + download triggered from the bubble / tile /
-/// PROCESS_TEXT entries.
+/// for background parse + download triggered from the share / tile / bubble
+/// entries.
 @pragma('vm:entry-point')
 void backgroundMain() {
   bg.backgroundEntry();

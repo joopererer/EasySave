@@ -60,8 +60,8 @@ Future<void> _handleSubmit(MethodChannel channel, Map<dynamic, dynamic> args) as
 
   if (urls.isEmpty) {
     await _log(channel, 'no supported link in input');
-    await _notify(channel, '未找到可下载的链接');
-    await _invoke(channel, 'idle');
+    await _invoke(channel, 'toast', '没有可解析的链接');
+    await _invoke(channel, 'stop');
     return;
   }
 
