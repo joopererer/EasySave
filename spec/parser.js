@@ -21,8 +21,13 @@ var EasySaveParser = (() => {
   // src/_parse_page.ts
   var parse_page_exports = {};
   __export(parse_page_exports, {
+    calculateToken: () => calculateToken,
+    extractTweetId: () => extractTweetId,
     parse: () => parse,
-    parsePage: () => parsePage
+    parseInstagram: () => parseInstagram,
+    parsePage: () => parsePage,
+    parseX: () => parseX,
+    parseXhs: () => parseXhs
   });
 
   // src/xhs.ts
@@ -404,6 +409,24 @@ var EasySaveParser = (() => {
     }
     return buildNoteFromRecord(note, noteId, pageUrl);
   }
+  function canonicalXhsNoteUrl(noteId, pageUrl) {
+    const base = `https://www.xiaohongshu.com/explore/${noteId}`;
+    if (typeof pageUrl !== "string" || pageUrl.length === 0) return base;
+    if (pageUrl.indexOf(noteId) >= 0) return pageUrl;
+    const query = pageUrl.indexOf("?") >= 0 ? pageUrl.slice(pageUrl.indexOf("?")) : "";
+    if (!query) return base;
+    try {
+      const params = new URLSearchParams(query);
+      const kept = [];
+      for (const key of ["xsec_token", "xsec_source"]) {
+        const value = params.get(key);
+        if (value) kept.push(`${key}=${encodeURIComponent(value)}`);
+      }
+      return kept.length > 0 ? `${base}?${kept.join("&")}` : base;
+    } catch (_) {
+      return base;
+    }
+  }
   function findNoteInStates(states, wantedId) {
     for (const state of states) {
       if (!isRecord(state)) continue;
@@ -707,6 +730,190 @@ var EasySaveParser = (() => {
     return { ok: true, data };
   }
 
+  // src/x.ts
+  var TWEET_ID_PATTERN = /(?:x|twitter)\.com\/(?:[^/]+)\/status\/(\d+)/i;
+  function isRecord3(value) {
+    return typeof value === "object" && value !== null && !Array.isArray(value);
+  }
+  function normalizeImageUrl(url) {
+    try {
+      const u = new URL(url);
+      u.searchParams.set("name", "orig");
+      return u.toString();
+    } catch {
+      if (url.includes("?")) {
+        return url.replace(/([?&])name=[^&]+/, "$1name=orig") + (url.includes("name=") ? "" : "&name=orig");
+      }
+      return `${url}?name=orig`;
+    }
+  }
+  function formatUtc(dateStr) {
+    try {
+      const d = new Date(dateStr);
+      if (isNaN(d.getTime())) return void 0;
+      return d.toISOString().replace(/\.\d{3}Z$/, "Z");
+    } catch {
+      return void 0;
+    }
+  }
+  function extractTweetId(url) {
+    const m = TWEET_ID_PATTERN.exec(url);
+    return m ? m[1] : void 0;
+  }
+  function calculateToken(id) {
+    return (Number(id) / 1e15 * Math.PI).toString(36).replace(/(0+|\.)/g, "");
+  }
+  function parseX(input, pageUrl) {
+    let root;
+    if (typeof input === "string") {
+      const trimmed = input.trim();
+      if (trimmed.length === 0) {
+        return {
+          ok: false,
+          error: {
+            code: "PRIVATE_OR_UNAVAILABLE",
+            message: "This post is private, deleted, or unavailable."
+          }
+        };
+      }
+      try {
+        root = JSON.parse(trimmed);
+      } catch {
+        return {
+          ok: false,
+          error: {
+            code: "PRIVATE_OR_UNAVAILABLE",
+            message: "This post is private, deleted, or unavailable."
+          }
+        };
+      }
+    } else {
+      root = input;
+    }
+    if (!isRecord3(root) || Object.keys(root).length === 0) {
+      return {
+        ok: false,
+        error: {
+          code: "PRIVATE_OR_UNAVAILABLE",
+          message: "This post is private, deleted, or unavailable."
+        }
+      };
+    }
+    if (root["__typename"] === "TweetTombstone") {
+      const tombstone = root["tombstone"];
+      const textObj = isRecord3(tombstone) ? tombstone["text"] : void 0;
+      const tombstoneText = isRecord3(textObj) && typeof textObj["text"] === "string" ? textObj["text"].toLowerCase() : "";
+      if (tombstoneText.includes("limit") || tombstoneText.includes("view") || tombstoneText.includes("age") || tombstoneText.includes("sensitive") || tombstoneText.includes("login")) {
+        return {
+          ok: false,
+          error: {
+            code: "LOGIN_REQUIRED",
+            message: "This post requires authentication or has viewer restrictions."
+          }
+        };
+      }
+      return {
+        ok: false,
+        error: {
+          code: "PRIVATE_OR_UNAVAILABLE",
+          message: "This post is private, deleted, or unavailable."
+        }
+      };
+    }
+    if (Array.isArray(root["errors"]) && root["errors"].length > 0) {
+      return {
+        ok: false,
+        error: {
+          code: "PRIVATE_OR_UNAVAILABLE",
+          message: "This post is private, deleted, or unavailable."
+        }
+      };
+    }
+    const idStr = typeof root["id_str"] === "string" ? root["id_str"] : typeof root["id"] === "number" || typeof root["id"] === "string" ? String(root["id"]) : extractTweetId(pageUrl);
+    if (!idStr) {
+      return {
+        ok: false,
+        error: {
+          code: "INVALID_PAGE",
+          message: "Unable to extract tweet ID."
+        }
+      };
+    }
+    const user = isRecord3(root["user"]) ? root["user"] : void 0;
+    const screenName = typeof user?.["screen_name"] === "string" ? user["screen_name"] : "";
+    const name = typeof user?.["name"] === "string" ? user["name"] : void 0;
+    const canonicalUrl = screenName ? `https://x.com/${screenName}/status/${idStr}` : `https://x.com/i/status/${idStr}`;
+    const caption = typeof root["text"] === "string" ? root["text"] : "";
+    const publishedAt = typeof root["created_at"] === "string" ? formatUtc(root["created_at"]) : void 0;
+    const items = [];
+    const mediaDetails = Array.isArray(root["mediaDetails"]) ? root["mediaDetails"] : [];
+    for (const media of mediaDetails) {
+      if (!isRecord3(media)) continue;
+      const mediaType = media["type"];
+      const originalInfo = isRecord3(media["original_info"]) ? media["original_info"] : void 0;
+      const width = typeof originalInfo?.["width"] === "number" ? originalInfo["width"] : void 0;
+      const height = typeof originalInfo?.["height"] === "number" ? originalInfo["height"] : void 0;
+      const mediaUrlHttps = typeof media["media_url_https"] === "string" ? media["media_url_https"] : "";
+      if (mediaType === "photo") {
+        if (mediaUrlHttps) {
+          items.push({
+            type: "image",
+            url: normalizeImageUrl(mediaUrlHttps),
+            width,
+            height
+          });
+        }
+      } else if (mediaType === "video") {
+        const videoInfo = isRecord3(media["video_info"]) ? media["video_info"] : void 0;
+        const variants = Array.isArray(videoInfo?.["variants"]) ? videoInfo["variants"] : [];
+        const mp4Variants = variants.filter((v) => isRecord3(v) && v["content_type"] === "video/mp4" && typeof v["url"] === "string").sort((a, b) => (Number(b["bitrate"]) || 0) - (Number(a["bitrate"]) || 0));
+        const best = mp4Variants[0];
+        if (best && typeof best["url"] === "string") {
+          const item = {
+            type: "video",
+            url: best["url"],
+            posterUrl: mediaUrlHttps ? normalizeImageUrl(mediaUrlHttps) : void 0,
+            width,
+            height
+          };
+          const durationMillis = typeof videoInfo?.["duration_millis"] === "number" ? videoInfo["duration_millis"] : 0;
+          if (durationMillis > 0) {
+            item.duration = Math.round(durationMillis / 1e3 * 1e3) / 1e3;
+          }
+          items.push(item);
+        }
+      } else if (mediaType === "animated_gif") {
+        const videoInfo = isRecord3(media["video_info"]) ? media["video_info"] : void 0;
+        const variants = Array.isArray(videoInfo?.["variants"]) ? videoInfo["variants"] : [];
+        const mp4Variants = variants.filter((v) => isRecord3(v) && v["content_type"] === "video/mp4" && typeof v["url"] === "string").sort((a, b) => (Number(b["bitrate"]) || 0) - (Number(a["bitrate"]) || 0));
+        const best = mp4Variants[0];
+        if (best && typeof best["url"] === "string") {
+          items.push({
+            type: "video",
+            isGif: true,
+            url: best["url"],
+            posterUrl: mediaUrlHttps ? normalizeImageUrl(mediaUrlHttps) : void 0,
+            width,
+            height
+          });
+        }
+      }
+    }
+    const post = {
+      platform: "x",
+      id: idStr,
+      url: canonicalUrl,
+      author: {
+        name,
+        id: screenName || void 0
+      },
+      caption,
+      publishedAt,
+      items
+    };
+    return { ok: true, data: post };
+  }
+
   // src/_utils.ts
   function hostnameOf(url) {
     try {
@@ -722,32 +929,14 @@ var EasySaveParser = (() => {
   function isInstagramHost(host) {
     return /instagram\.com|instagr\.am/.test(host);
   }
+  function isXHost(host) {
+    return /x\.com|twitter\.com/.test(host);
+  }
 
   // src/_parse_page.ts
   function noteIdFromUrl(url) {
     const m = /\/(?:explore|discovery\/item|user\/profile\/[^/]+)\/([a-f0-9]{24})/i.exec(url);
     return m ? m[1].toLowerCase() : void 0;
-  }
-  // Keep the share URL byte-for-byte whenever possible: `xsec_token` is bound
-  // to the exact path it was issued for, and re-encoding its value can break
-  // the signature. Only rebuild when the page URL is not already the note URL.
-  function canonicalXhsNoteUrl(noteId, pageUrl) {
-    const base = `https://www.xiaohongshu.com/explore/${noteId}`;
-    if (typeof pageUrl !== "string" || pageUrl.length === 0) return base;
-    if (pageUrl.indexOf(noteId) >= 0) return pageUrl;
-    const query = pageUrl.indexOf("?") >= 0 ? pageUrl.slice(pageUrl.indexOf("?")) : "";
-    if (!query) return base;
-    try {
-      const params = new URLSearchParams(query);
-      const kept = [];
-      for (const key of ["xsec_token", "xsec_source"]) {
-        const value = params.get(key);
-        if (value) kept.push(`${key}=${encodeURIComponent(value)}`);
-      }
-      return kept.length > 0 ? `${base}?${kept.join("&")}` : base;
-    } catch (_) {
-      return base;
-    }
   }
   function parsePage() {
     const url = window.location.href;
@@ -772,18 +961,27 @@ var EasySaveParser = (() => {
     if (isInstagramHost(url)) {
       return JSON.stringify(parseInstagram(html, url));
     }
+    if (isXHost(url)) {
+      return JSON.stringify({
+        ok: false,
+        error: { code: "UNSUPPORTED_URL", message: "X posts require syndication JSON input to parse(input, pageUrl)" }
+      });
+    }
     return JSON.stringify({ ok: false, error: { code: "UNSUPPORTED_URL", message: `Unsupported host: ${url}` } });
   }
-  function parse(html, pageUrl) {
+  function parse(input, pageUrl) {
     const host = hostnameOf(pageUrl);
     if (!host) {
       return JSON.stringify({ ok: false, error: { code: "UNSUPPORTED_URL", message: `Cannot parse URL: ${pageUrl}` } });
     }
     if (isXhsHost(host)) {
-      return JSON.stringify(parseXhs(html, pageUrl));
+      return JSON.stringify(parseXhs(input, pageUrl));
     }
     if (isInstagramHost(host)) {
-      return JSON.stringify(parseInstagram(html, pageUrl));
+      return JSON.stringify(parseInstagram(input, pageUrl));
+    }
+    if (isXHost(host)) {
+      return JSON.stringify(parseX(input, pageUrl));
     }
     return JSON.stringify({ ok: false, error: { code: "UNSUPPORTED_URL", message: `Unsupported host: ${host}` } });
   }

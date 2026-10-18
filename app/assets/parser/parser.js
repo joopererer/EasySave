@@ -409,6 +409,24 @@ var EasySaveParser = (() => {
     }
     return buildNoteFromRecord(note, noteId, pageUrl);
   }
+  function canonicalXhsNoteUrl(noteId, pageUrl) {
+    const base = `https://www.xiaohongshu.com/explore/${noteId}`;
+    if (typeof pageUrl !== "string" || pageUrl.length === 0) return base;
+    if (pageUrl.indexOf(noteId) >= 0) return pageUrl;
+    const query = pageUrl.indexOf("?") >= 0 ? pageUrl.slice(pageUrl.indexOf("?")) : "";
+    if (!query) return base;
+    try {
+      const params = new URLSearchParams(query);
+      const kept = [];
+      for (const key of ["xsec_token", "xsec_source"]) {
+        const value = params.get(key);
+        if (value) kept.push(`${key}=${encodeURIComponent(value)}`);
+      }
+      return kept.length > 0 ? `${base}?${kept.join("&")}` : base;
+    } catch (_) {
+      return base;
+    }
+  }
   function findNoteInStates(states, wantedId) {
     for (const state of states) {
       if (!isRecord(state)) continue;
@@ -919,27 +937,6 @@ var EasySaveParser = (() => {
   function noteIdFromUrl(url) {
     const m = /\/(?:explore|discovery\/item|user\/profile\/[^/]+)\/([a-f0-9]{24})/i.exec(url);
     return m ? m[1].toLowerCase() : void 0;
-  }
-  // Keep the share URL byte-for-byte whenever possible: `xsec_token` is bound
-  // to the exact path it was issued for, and re-encoding its value can break
-  // the signature. Only rebuild when the page URL is not already the note URL.
-  function canonicalXhsNoteUrl(noteId, pageUrl) {
-    const base = `https://www.xiaohongshu.com/explore/${noteId}`;
-    if (typeof pageUrl !== "string" || pageUrl.length === 0) return base;
-    if (pageUrl.indexOf(noteId) >= 0) return pageUrl;
-    const query = pageUrl.indexOf("?") >= 0 ? pageUrl.slice(pageUrl.indexOf("?")) : "";
-    if (!query) return base;
-    try {
-      const params = new URLSearchParams(query);
-      const kept = [];
-      for (const key of ["xsec_token", "xsec_source"]) {
-        const value = params.get(key);
-        if (value) kept.push(`${key}=${encodeURIComponent(value)}`);
-      }
-      return kept.length > 0 ? `${base}?${kept.join("&")}` : base;
-    } catch (_) {
-      return base;
-    }
   }
   function parsePage() {
     const url = window.location.href;
