@@ -271,7 +271,7 @@
 分三组（`ListView` + 分组头）：
 
 1. **账号**：平台行（小红书 / Instagram）显示登录状态（已登录 + 昵称 / 未登录）；[退出登录]（二次确认）；**登录过期提示**（解析报 LOGIN_REQUIRED 时对应行显示 warning 色"登录已过期，请重新登录"）。
-2. **下载设置**：相册名称、文件名格式、同时保存文案为 txt、自动检测剪贴板开关（roadmap v1.1a）。
+2. **下载设置**：相册名称、文件名格式、同时保存文案为 txt、自动检测剪贴板开关（roadmap v1.1a）、**悬浮球快捷入口开关**（roadmap v1.6，默认关闭；开启时引导授予"显示在其他应用上层"权限，权限被撤销时开关自动关闭）。
 3. **其他**：清除缓存、版本号、（可选）意见反馈、开源许可。
 
 ### 2.6 统一全屏浏览器组件（预览页与历史页共用）
@@ -334,6 +334,57 @@
   2. **[打开原帖]**：深色小按钮（带外部跳转图标 `Icons.open_in_new`），调用系统外部浏览器或对应 App 打开原帖。
   3. **[分享]**：红橙渐变主胶囊按钮（带分享图标 + 文字），唤起系统原生分享当前或选中的媒体文件。
 
+### 2.7 悬浮球快捷入口（v1.6）
+
+（交互细节以 [docs/design/bubble-prototype/](file:///d:/workspace/IdeaProjects/EasySave/docs/design/bubble-prototype/) 中的截图为准）
+
+参考原型：[外观.png](file:///d:/workspace/IdeaProjects/EasySave/docs/design/bubble-prototype/外观.png)、[点击.png](file:///d:/workspace/IdeaProjects/EasySave/docs/design/bubble-prototype/点击.png)、[全部下载.png](file:///d:/workspace/IdeaProjects/EasySave/docs/design/bubble-prototype/全部下载.png)、[选择下载.png](file:///d:/workspace/IdeaProjects/EasySave/docs/design/bubble-prototype/选择下载.png)、[下载完成.png](file:///d:/workspace/IdeaProjects/EasySave/docs/design/bubble-prototype/下载完成.png)
+
+![悬浮球外观](bubble-prototype/外观.png)
+![点击展开圆形菜单](bubble-prototype/点击.png)
+![全部下载进度](bubble-prototype/全部下载.png)
+![选择下载面板](bubble-prototype/选择下载.png)
+![下载完成](bubble-prototype/下载完成.png)
+
+- 定位：一个覆盖在**所有其它 App 之上**的系统级悬浮窗（可选功能，默认关闭，在"我的 → 设置"中开启；开启时引导用户授予"显示在其他应用上层"权限）。悬浮球与前台服务由**原生 Kotlin** 实现，解析/下载复用 App 内同一套解析器与 `DownloadManager`。
+
+#### 2.7.1 悬浮球外观与拖动
+
+- 外形：**渐变色圆形按钮**（复用主按钮渐变 `LinearGradient([#FC494C, #FA662E])`），直径约 56px，中心放 EasySave 图标或"↓"符号，带柔和投影（`cardShadow`）。
+- 拖动与吸附：可直接拖动；**松手后吸附到最近的左/右屏幕边缘**，并保留上下位置。
+- 闲置态：无操作时**略微透明**（约 80% 不透明度），交互或有内容时恢复不透明。
+- 链接提示：当剪贴板中出现可解析链接时，悬浮球右上角显示**绿点**（`success` `#43A047`）并**轻微晃动一次**。
+
+#### 2.7.2 点击与圆形菜单
+
+- 点击行为：先读取剪贴板（通过**短暂打开一个透明页面**读取，读取完成**立即关闭**）。
+  - 剪贴板无支持链接：轻提示"先在 App 里复制链接"。
+  - 有链接：悬浮球**向屏幕内侧**展开**圆形菜单**（以悬浮球为圆心的扇形/环状布局，逐项带图标 + 文字），同时铺一层**半透明遮罩**（`overlayScrim` `Black54`）；点击菜单外的空白处收起菜单。
+- 菜单四项（以当前悬浮球所在边为基准向屏幕内展开）：
+  1. **全部下载**：后台解析并下载，**不打开 App 界面**。
+  2. **选择下载**：在当前 App 之上弹出选择面板（见 §2.7.3）。
+  3. **复制文案**：后台解析后把"标题 + 正文"写入剪贴板，完成后提示。
+  4. **打开 EasySave**：唯一启动完整 App 的选项，直接进入该帖子的预览页。
+
+#### 2.7.3 选择下载面板
+
+- 形态：半透明/浅底圆角面板（`radiusCard` 24 + `elevationSheet`），覆盖在当前 App 之上（不出 App，故用系统悬浮窗而非 App 内 BottomSheet）。
+- 内容：帖子封面头图（可选）+ **九宫格媒体缩略图**（3 列，圆角 `radiusThumb` 16），每格右上角圆形勾选框（选中红底白勾 `✓`）。
+- 顶部/底部：**全选 / 取消全选**入口；底部主按钮"**下载选中（N）**"（红橙渐变胶囊），次按钮"取消"。
+- 确认后：关闭面板，转入后台下载，流程同"全部下载"（悬浮球显示进度环 + 通知栏进度）。
+
+#### 2.7.4 进度、完成与错误状态
+
+- 下载进行中：悬浮球显示"**已完成 / 总数**"文字与**环形进度**；同时**通知栏同步进度**。下载中再次点击悬浮球只**提示当前进度，不重复发起**。
+- 完成：悬浮球短暂显示 ✓，并提示**保存到哪个相册**（跟随"我的 → 设置"里的相册名）；点击通知进入**历史页**。
+- 解析失败（需要登录、链接失效等）：悬浮球呈**错误状态**（如红底感叹号），点击后**打开 App 的对应错误页**（见 §4 错误码）。
+- 一致性：以上所有下载都**写入历史记录**，与在 App 内下载完全一致。
+
+#### 2.7.5 关闭区域
+
+- 交互：将悬浮球**拖到屏幕底部的关闭区域**时，关闭区域高亮（红色圆形"✕"）；松手即**关闭悬浮球**，并提示"可在设置中重新开启"。
+- 权限联动：用户在系统设置中撤销"显示在其他应用上层"权限后，悬浮球**自动关闭**，"我的 → 设置"里的开关**同步变为关闭**；下次开启时**重新引导授权**。
+
 ## 3. 全局状态清单
 
 | 页面 / 组件 | 加载中 | 空状态 | 错误 / 异常状态 |
@@ -343,6 +394,7 @@
 | 下载面板 | 每行进度条 | —（有任务才打开） | 部分失败（失败行标红 + 重试） |
 | 历史页 | 本地数据读取中（转圈） | 1. 全局无记录：插图 + 引导 + [去解析]<br>2. 搜索/筛选无结果："没有找到匹配的记录" + [清除筛选] | 本地文件找不到："已从相册删除"占位 + [重新下载] |
 | 统一全屏浏览器 | 媒体文件载入中（居中转圈） | — | 媒体已从相册删除："已从相册删除"占位 + [重新下载] |
+| 悬浮球（v1.6） | 下载中（环形进度 + "已完成 / 总数"，通知栏同步） | 剪贴板无支持链接（提示"先在 App 里复制链接"） | 解析失败（错误态，点击进入对应错误页）；"显示在其他应用上层"权限被撤销（自动关闭 + 设置开关同步关闭 + 下次重新引导授权） |
 | 我的页 | 登录状态检查中（行内小转圈） | — | 登录过期（warning 行内提示） |
 
 ## 4. 错误码 → 文案与操作
@@ -363,7 +415,7 @@
 
 ## 5. 附录：原型截图与规范索引对照表
 
-交互细节与原型截图严格对应，原型文件均位于 [`docs/design/gallery-prototype/`](file:///d:/workspace/IdeaProjects/EasySave/docs/design/gallery-prototype/)。
+交互细节与原型截图严格对应，原型文件均位于 [`docs/design/gallery-prototype/`](file:///d:/workspace/IdeaProjects/EasySave/docs/design/gallery-prototype/) 与 [`docs/design/bubble-prototype/`](file:///d:/workspace/IdeaProjects/EasySave/docs/design/bubble-prototype/)。
 
 | 序号 | 截图文件 | 对应组件 / 场景 | 关键规范要点 |
 |---|---|---|---|
@@ -380,4 +432,9 @@
 | 11 | [删除确认面板.png](file:///d:/workspace/IdeaProjects/EasySave/docs/design/gallery-prototype/删除确认面板.png) | 删除确认面板（Modal Bottom Sheet） | 默认仅删除记录（支持 SnackBar 撤销）；可勾选"同时删除相册中的 N 个文件"（默认不勾选，不支持撤销，通过 `MediaStore.createDeleteRequest` 走系统确认） |
 | 12 | [排序_类型.png](file:///d:/workspace/IdeaProjects/EasySave/docs/design/gallery-prototype/排序_类型.png) | 排序与分组 | 工具栏图标高亮；按类型分组展示（视频 / Live 图 / GIF / 图片），组标题带数量统计且吸顶 |
 | 13 | [搜索.png](file:///d:/workspace/IdeaProjects/EasySave/docs/design/gallery-prototype/搜索.png) | 搜索与筛选 | 展开搜索输入框；按标题和作者实时过滤；页面副文案实时更新统计；生效筛选显示为可清除的小标签 Chip |
+| 14 | [外观.png](file:///d:/workspace/IdeaProjects/EasySave/docs/design/bubble-prototype/外观.png) | 悬浮球 - 外观 | 渐变圆形按钮，可拖动，松手吸附最近左/右边缘；闲置略微透明；剪贴板有可解析链接时显示绿点并晃动一次 |
+| 15 | [点击.png](file:///d:/workspace/IdeaProjects/EasySave/docs/design/bubble-prototype/点击.png) | 悬浮球 - 圆形菜单 | 点击读取剪贴板后向屏幕内侧展开四项圆形菜单（全部下载 / 选择下载 / 复制文案 / 打开 EasySave），带半透明遮罩，点空白收起 |
+| 16 | [全部下载.png](file:///d:/workspace/IdeaProjects/EasySave/docs/design/bubble-prototype/全部下载.png) | 悬浮球 - 全部下载 | 后台解析下载、不打开 App 界面；悬浮球显示"已完成 / 总数"与进度环；通知栏同步进度 |
+| 17 | [选择下载.png](file:///d:/workspace/IdeaProjects/EasySave/docs/design/bubble-prototype/选择下载.png) | 悬浮球 - 选择下载面板 | 当前 App 上层弹出九宫格缩略图（可勾选 + 全选），确认后转入后台下载 |
+| 18 | [下载完成.png](file:///d:/workspace/IdeaProjects/EasySave/docs/design/bubble-prototype/下载完成.png) | 悬浮球 - 下载完成 | 悬浮球显示 ✓ 并提示保存到哪个相册；点击通知进入历史页 |
 
