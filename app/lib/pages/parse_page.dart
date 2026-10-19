@@ -15,6 +15,7 @@ import '../core/models.dart';
 import '../services/auth.dart';
 import '../services/gallery_locator_service.dart';
 import '../services/history_db.dart';
+import '../services/host_bridge.dart';
 import '../services/links.dart';
 import '../services/parse_service.dart';
 import '../services/seal.dart';
@@ -66,6 +67,19 @@ class ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
       _loadVersion();
     });
     _initShareIntent();
+    // A download that finishes while we are on this tab must show up in
+    // "最近保存" right away: the album scan (in-app download) and the host
+    // bridge (background engine) are the two signals that a new history
+    // record exists. Switching tabs does not trigger a lifecycle change, so
+    // without these listeners the list would stay stale.
+    GalleryLocatorService.instance.addListener(_onHistoryChanged);
+    HostBridge.historyRevision.addListener(_onHistoryChanged);
+  }
+
+  /// New history record available (in-app download or background engine).
+  void _onHistoryChanged() {
+    if (!mounted) return;
+    unawaited(_refreshRecentList());
   }
 
   Future<void> _loadVersion() async {
@@ -86,28 +100,36 @@ class ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    GalleryLocatorService.instance.removeListener(_onHistoryChanged);
+    HostBridge.historyRevision.removeListener(_onHistoryChanged);
     _shareSub?.cancel();
     _linkController.dispose();
     _inputFocus.dispose();
     super.dispose();
   }
 
-  Future<void> _reloadRecent() async {
-    final records = await HistoryDb.instance().then(
-      (db) => db.recent(limit: 3),
-    );
-    final all = await HistoryDb.instance().then((db) => db.recent(limit: 30));
+  /// Light refresh of the "最近保存" list: only the database is read. Safe to
+  /// call from a listener — the heavy [_reloadRecent] touches the album
+  /// service, which notifies its own listeners and would loop back here.
+  Future<void> _refreshRecentList() async {
+    final db = await HistoryDb.instance();
+    final records = await db.recent(limit: 3);
+    final all = await db.recent(limit: 30);
     if (!mounted) return;
     setState(() {
       _recent = records;
       _recentAll = all;
     });
+  }
+
+  Future<void> _reloadRecent() async {
+    await _refreshRecentList();
     final locator = GalleryLocatorService.instance;
     await locator.checkPermission();
     if (locator.hasAccess) {
-      await locator.preloadMediaIds(records);
+      await locator.preloadMediaIds(_recent);
       if (mounted) setState(() {});
-      await locator.syncAll(records);
+      await locator.syncAll(_recent);
       if (mounted) setState(() {});
     }
   }
