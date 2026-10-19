@@ -33,6 +33,7 @@ class HostService : Service() {
     companion object {
         const val TAG = "V16HOST"
         const val CHANNEL_ID = "easysave_host"
+        const val ERROR_CHANNEL_ID = "easysave_errors"
         const val NOTIF_ID = 9010
         const val ACTION_SUBMIT = "com.james.easysave.action.SUBMIT"
         const val ACTION_HISTORY_CHANGED = "com.james.easysave.action.HISTORY_CHANGED"
@@ -286,9 +287,19 @@ class HostService : Service() {
     }
 
     /// Error notification whose tap opens the app on the same error page as a
-    /// manual parse (carries url + code + message).
+    /// manual parse (carries url + code + message). Uses a dedicated
+    /// high-importance channel so it is not folded behind the ongoing
+    /// foreground notification, and also refreshes the foreground
+    /// notification so it no longer reads "准备中…".
     private fun showErrorNotification(url: String?, code: String, message: String?) {
         val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            nm.createNotificationChannel(
+                NotificationChannel(
+                    ERROR_CHANNEL_ID, "EasySave 解析失败", NotificationManager.IMPORTANCE_HIGH
+                )
+            )
+        }
         val intent = Intent(this, MainActivity::class.java).apply {
             addFlags(
                 Intent.FLAG_ACTIVITY_NEW_TASK or
@@ -310,15 +321,28 @@ class HostService : Service() {
             message?.takeIf { it.isNotBlank() } ?: "解析失败，请重试"
         }
         val big = if (url.isNullOrBlank()) body else "$body\n$url"
-        val notif = NotificationCompat.Builder(this, CHANNEL_ID)
+        val err = NotificationCompat.Builder(this, ERROR_CHANNEL_ID)
             .setContentTitle("EasySave 解析失败")
             .setContentText(body)
             .setStyle(NotificationCompat.BigTextStyle().bigText(big))
             .setSmallIcon(android.R.drawable.stat_notify_error)
             .setContentIntent(pi)
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setAutoCancel(true)
             .build()
-        nm.notify(ERROR_NOTIF_ID, notif)
+        nm.notify(ERROR_NOTIF_ID, err)
+
+        // Replace the "准备中…" foreground notification so the visible one is
+        // accurate until the service stops.
+        val fg = NotificationCompat.Builder(this, CHANNEL_ID)
+            .setContentTitle("EasySave 解析失败")
+            .setContentText(body)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(big))
+            .setSmallIcon(android.R.drawable.stat_notify_error)
+            .setContentIntent(pi)
+            .setOngoing(true)
+            .build()
+        nm.notify(NOTIF_ID, fg)
     }
 
     override fun onDestroy() {

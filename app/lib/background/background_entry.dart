@@ -62,6 +62,7 @@ Future<void> _handleSubmit(MethodChannel channel, Map<dynamic, dynamic> args) as
   }
   await _log(channel, 'submit: mode=$mode urls=${urls.length} source=$source');
   await _invoke(channel, 'keepAlive');
+  await _notify(channel, '正在解析…');
 
   if (urls.isEmpty) {
     await _log(channel, 'no supported link in input');
