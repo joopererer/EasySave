@@ -13,6 +13,7 @@ import 'package:gal/gal.dart';
 import 'package:photo_manager/photo_manager.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../core/dev_log.dart';
 import '../core/models.dart';
 import 'gallery_locator_service.dart';
 import 'history_db.dart';
@@ -310,9 +311,11 @@ class DownloadManager extends ChangeNotifier {
   /// Log tag for the dual-engine verification (adb logcat -s V16DL).
   static const String logTag = 'V16DL';
 
-  /// Structured log used by the dual-engine verification.
+  /// Structured log used by the dual-engine verification. It is written to
+  /// logcat (tag "flutter") and to the app's external files dir (v16dl.log)
+  /// so it can be pulled with adb.
   static void _log(String message) {
-    debugPrint('[$logTag][$owner] $message');
+    DevLog.write(logTag, '[$owner] $message');
   }
 
   final Map<String, DownloadBatch> _batches = {};

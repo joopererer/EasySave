@@ -4,6 +4,7 @@ import 'dart:convert';
 
 import 'package:sqflite/sqflite.dart';
 
+import '../core/dev_log.dart';
 import '../core/models.dart';
 
 enum FileStatus {
@@ -307,11 +308,8 @@ class HistoryDb {
       // connection to the same file. WAL lets readers work while a writer is
       // active, and busy_timeout makes a writer wait for the lock instead of
       // failing with SQLITE_BUSY.
-      onConfigure: (db) async {
-        await db.execute('PRAGMA journal_mode=WAL');
-        await db.execute('PRAGMA busy_timeout=5000');
-        await db.execute('PRAGMA synchronous=NORMAL');
-      },
+      onConfigure: (db) => _applyPragmas(db),
+      onOpen: (db) => _applyPragmas(db),
       onCreate: (db, version) => db.execute(
         'CREATE TABLE history_records('
         'id INTEGER PRIMARY KEY AUTOINCREMENT,'
@@ -365,6 +363,38 @@ class HistoryDb {
   /// Insert or merge a history record. The whole read-merge-write runs in one
   /// transaction so two engines writing at the same time cannot lose files
   /// (the second writer waits for the lock thanks to busy_timeout).
+  /// Apply the concurrency pragmas. Every `PRAGMA` that returns a value must
+  /// go through [Database.rawQuery] — sqflite's `execute` rejects statements
+  /// with a result set ("Queries can be performed using ... rawQuery only").
+  /// The result set is consumed so the statement really runs.
+  static Future<void> _applyPragmas(Database db) async {
+    try {
+      final rows = await db.rawQuery('PRAGMA journal_mode=WAL');
+      final mode = rows.isEmpty ? '' : '${rows.first.values.first}';
+      if (mode.toLowerCase() != 'wal') {
+        DevLog.write('V16DB', 'journal_mode is "$mode" (expected wal)');
+      }
+    } catch (e) {
+      DevLog.write('V16DB', 'WAL not enabled ($e)');
+    }
+    try {
+      final rows = await db.rawQuery('PRAGMA busy_timeout=5000');
+      final value = rows.isEmpty ? '' : '${rows.first.values.first}';
+      if (value != '5000') {
+        DevLog.write('V16DB', 'busy_timeout is "$value" (expected 5000)');
+      }
+    } catch (e) {
+      DevLog.write('V16DB', 'busy_timeout not set ($e)');
+    }
+    try {
+      final rows = await db.rawQuery('PRAGMA synchronous=NORMAL');
+      // Touch the cursor so the statement is actually executed.
+      if (rows.isNotEmpty) rows.first.values.first;
+    } catch (e) {
+      DevLog.write('V16DB', 'synchronous not set ($e)');
+    }
+  }
+
   Future<void> upsert(HistoryRecord record) async {
     await _db.transaction((txn) async {
       final existing = await _getByPostUrl(txn, record.postUrl) ??
