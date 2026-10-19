@@ -14,6 +14,7 @@ import '../services/links.dart';
 import '../services/parse_service.dart';
 import '../services/settings.dart';
 import '../services/update_service.dart';
+import 'select_panel.dart';
 
 const String _channelName = 'easysave/bgtask';
 
@@ -150,6 +151,48 @@ Future<void> _handleSubmit(MethodChannel channel, Map<dynamic, dynamic> args) as
         await _notify(channel, '文案已复制到剪贴板');
         await _invoke(channel, 'idle');
         continue;
+      }
+      if (mode == 'select') {
+        if (post.items.isEmpty) {
+          await _notify(channel, '该帖子没有可保存的内容');
+          break;
+        }
+        final completer = Completer<List<int>?>();
+        selectPanelRequest.value = SelectPanelRequest(
+          post: post,
+          author: post.author.name ?? '',
+          onConfirm: (sel) {
+            if (!completer.isCompleted) completer.complete(sel);
+          },
+          onCancel: () {
+            if (!completer.isCompleted) completer.complete(null);
+          },
+        );
+        await _invoke(channel, 'mountPanel');
+        final selected = await completer.future;
+        selectPanelRequest.value = null;
+        await _invoke(channel, 'unmountPanel');
+        if (selected == null || selected.isEmpty) {
+          await _log(channel, 'SELECT cancelled :: $url');
+          await _tile(channel, false, null);
+          await _bubble(channel, false, 0, 0, null, false);
+          await _invoke(channel, 'idle');
+          break;
+        }
+        final author = post.author.name ?? '';
+        final batch = await manager.startBatch(
+          post,
+          selected,
+          album: settings.albumName,
+          nameFor: (label, seq, ext) =>
+              settings.fileName(postId: post.id, seq: seq, author: author),
+          requestGalleryAccess: false,
+        );
+        anyStarted = true;
+        await _log(channel, 'DOWNLOAD started ${batch.jobs.length} files (selected) :: $url');
+        if (toasts) await _toast(channel, '开始下载 ${batch.jobs.length} 个文件');
+        unawaited(_awaitBatchAndNotify(channel, batch, started, url, toasts));
+        break;
       }
       if (post.items.isEmpty) {
         await _log(channel, 'PARSE OK but no items (${sw.elapsedMilliseconds}ms) :: $url');

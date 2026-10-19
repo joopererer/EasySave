@@ -204,6 +204,18 @@ class MainActivity : FlutterActivity() {
                         result.success(null)
                     }
                     "isRunning" -> result.success(OverlayService.isRunning)
+                    "openAppSettings" -> {
+                        try {
+                            startActivity(
+                                Intent(
+                                    Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                                    Uri.parse("package:$packageName")
+                                ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                            )
+                        } catch (_: Exception) {
+                        }
+                        result.success(null)
+                    }
                     else -> result.notImplemented()
                 }
             }

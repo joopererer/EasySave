@@ -7,15 +7,20 @@ import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
+import android.graphics.PixelFormat
 import android.os.Build
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
 import android.util.Log
+import android.view.Gravity
+import android.view.WindowManager
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
 import androidx.core.content.ContextCompat
 import io.flutter.FlutterInjector
+import io.flutter.embedding.android.FlutterSurfaceView
+import io.flutter.embedding.android.FlutterView
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.embedding.engine.dart.DartExecutor
 import io.flutter.plugin.common.MethodChannel
@@ -86,6 +91,7 @@ class HostService : Service() {
     private var engine: FlutterEngine? = null
     private var channel: MethodChannel? = null
     private var ready = false
+    private var panelView: FlutterView? = null
     private val pending = ArrayDeque<Map<String, Any?>>()
     private val handler = Handler(Looper.getMainLooper())
     private val idleRunnable = Runnable {
@@ -211,8 +217,6 @@ class HostService : Service() {
                         result.success(null)
                     }
                     "clipboard" -> {
-                        // Headless engine has no PlatformPlugin: set the
-                        // clipboard natively.
                         val text = call.arguments as? String ?: ""
                         handler.post {
                             try {
@@ -225,6 +229,14 @@ class HostService : Service() {
                                 Log.e(TAG, "setClipboard failed: $e")
                             }
                         }
+                        result.success(null)
+                    }
+                    "mountPanel" -> {
+                        mountPanel()
+                        result.success(null)
+                    }
+                    "unmountPanel" -> {
+                        unmountPanel()
                         result.success(null)
                     }
                     "keepAlive" -> {
@@ -258,8 +270,47 @@ class HostService : Service() {
         handler.postDelayed(idleRunnable, IDLE_TIMEOUT_MS)
     }
 
+    /// Mount a FlutterTextureView attached to the SAME background engine and add
+    /// it as an overlay — used for the "选择下载" panel (no third engine).
+    private fun mountPanel() {
+        if (panelView != null) return
+        val eng = engine ?: return
+        try {
+            val surfaceView = FlutterSurfaceView(this, true)
+            val fv = FlutterView(this, surfaceView)
+            fv.attachToFlutterEngine(eng)
+            val params = WindowManager.LayoutParams(
+                WindowManager.LayoutParams.MATCH_PARENT,
+                WindowManager.LayoutParams.MATCH_PARENT,
+                WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+                    or WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+                PixelFormat.TRANSLUCENT
+            ).apply { gravity = Gravity.TOP or Gravity.START }
+            val wmS = getSystemService(WINDOW_SERVICE) as WindowManager
+            wmS.addView(fv, params)
+            panelView = fv
+        } catch (e: Exception) {
+            Log.e(TAG, "mountPanel failed: $e")
+        }
+    }
+
+    private fun unmountPanel() {
+        val fv = panelView ?: return
+        panelView = null
+        try {
+            (getSystemService(WINDOW_SERVICE) as WindowManager).removeView(fv)
+        } catch (_: Exception) {
+        }
+        try {
+            fv.detachFromFlutterEngine()
+        } catch (_: Exception) {
+        }
+    }
+
     private fun releaseEngine() {
         handler.removeCallbacks(idleRunnable)
+        unmountPanel()
         try {
             channel?.setMethodCallHandler(null)
             engine?.destroy()

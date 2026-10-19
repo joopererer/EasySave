@@ -392,9 +392,7 @@ class OverlayService : Service() {
         if (text.isNullOrBlank()) return
         when (key) {
             "all" -> HostService.submitText(this, text, "all", "bubble")
-            "select" -> android.widget.Toast.makeText(
-                this, "选择下载即将上线", android.widget.Toast.LENGTH_SHORT
-            ).show()
+            "select" -> HostService.submitText(this, text, "select", "bubble")
             "caption" -> HostService.submitText(this, text, "caption", "bubble")
             "open" -> openAppToPreview(text)
         }

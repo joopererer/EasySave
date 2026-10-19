@@ -28,6 +28,10 @@ class AppSettings {
   /// Floating bubble (roadmap v1.6), default off.
   bool bubbleEnabled = false;
 
+  /// Whether the one-time "allow autostart so the bubble survives swipe"
+  /// hint has been shown.
+  bool bubbleAutoStartHintShown = false;
+
   // Persisted history page preferences.
   HistoryView historyView = HistoryView.posts;
   HistoryLayout historyLayout = HistoryLayout.waterfall;
@@ -42,6 +46,7 @@ class AppSettings {
       ..autoClipboard = prefs.getBool('autoClipboard') ?? true
       ..backgroundToast = prefs.getBool('backgroundToast') ?? true
       ..bubbleEnabled = prefs.getBool('bubbleEnabled') ?? false
+      ..bubbleAutoStartHintShown = prefs.getBool('bubbleAutoStartHintShown') ?? false
       ..historyView = _enumFromName(
         HistoryView.values,
         prefs.getString('historyView'),
@@ -67,6 +72,7 @@ class AppSettings {
     await prefs.setBool('autoClipboard', autoClipboard);
     await prefs.setBool('backgroundToast', backgroundToast);
     await prefs.setBool('bubbleEnabled', bubbleEnabled);
+    await prefs.setBool('bubbleAutoStartHintShown', bubbleAutoStartHintShown);
     await prefs.setString('historyView', historyView.name);
     await prefs.setString('historyLayout', historyLayout.name);
     await prefs.setString('historySort', historySort.name);

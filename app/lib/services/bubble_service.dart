@@ -48,6 +48,13 @@ abstract final class BubbleService {
     }
   }
 
+  /// Open the app's system settings page (for enabling autostart / background).
+  static Future<void> openAppSettings() async {
+    try {
+      await _channel.invokeMethod<void>('openAppSettings');
+    } catch (_) {}
+  }
+
   /// At app start: ensure the bubble is running when it's enabled and granted.
   static Future<void> ensureStarted() async {
     final settings = await AppSettings.load();

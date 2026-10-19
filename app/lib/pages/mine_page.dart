@@ -64,6 +64,13 @@ class _MinePageState extends State<MinePage> with WidgetsBindingObserver {
         if (!mounted) return;
         setState(() => _settings.bubbleEnabled = started);
         await _saveSettings();
+        if (started) await _maybeShowAutostartHint();
+      } else {
+        // User came back without granting the overlay permission.
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('未授予"显示在其他应用上层"权限，悬浮球未开启')),
+        );
       }
       return;
     }
@@ -78,6 +85,42 @@ class _MinePageState extends State<MinePage> with WidgetsBindingObserver {
     }
   }
 
+  /// One-time hint to allow autostart so the bubble survives a swipe-away.
+  Future<void> _maybeShowAutostartHint() async {
+    if (_settings.bubbleAutoStartHintShown) return;
+    if (!mounted) return;
+    setState(() => _settings.bubbleAutoStartHintShown = true);
+    await _saveSettings();
+    if (!mounted) return;
+    await showDialog<void>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('让悬浮球常驻（建议）'),
+        content: const Text(
+          '悬浮窗权限已就绪。\n\n'
+          '为了让悬浮球在「划掉 App」后仍然显示，请在系统设置里为 EasySave 打开'
+          '「自启动 / 后台运行」权限。不同机型路径不同，例如：\n'
+          '· 小米：应用设置 → 权限管理 → 自启动\n'
+          '· 华为：应用启动管理 → 允许后台活动\n'
+          '· OPPO / vivo：自启动管理 / 后台高耗电允许',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () {
+              Navigator.of(context).pop();
+              BubbleService.openAppSettings();
+            },
+            child: const Text('去设置'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('知道了'),
+          ),
+        ],
+      ),
+    );
+  }
+
   Future<void> _toggleBubble(bool v) async {
     if (v) {
       if (!await BubbleService.hasPermission()) {
@@ -89,6 +132,7 @@ class _MinePageState extends State<MinePage> with WidgetsBindingObserver {
       if (!mounted) return;
       setState(() => _settings.bubbleEnabled = started);
       await _saveSettings();
+      if (started) await _maybeShowAutostartHint();
     } else {
       await BubbleService.stop();
       if (!mounted) return;
