@@ -19,8 +19,6 @@ import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
 import androidx.core.content.ContextCompat
 import io.flutter.FlutterInjector
-import io.flutter.embedding.android.FlutterSurfaceView
-import io.flutter.embedding.android.FlutterView
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.embedding.engine.dart.DartExecutor
 import io.flutter.plugin.common.MethodChannel
@@ -91,7 +89,7 @@ class HostService : Service() {
     private var engine: FlutterEngine? = null
     private var channel: MethodChannel? = null
     private var ready = false
-    private var panelView: FlutterView? = null
+    private var panelView: SelectPanelView? = null
     private val pending = ArrayDeque<Map<String, Any?>>()
     private val handler = Handler(Looper.getMainLooper())
     private val idleRunnable = Runnable {
@@ -231,12 +229,14 @@ class HostService : Service() {
                         }
                         result.success(null)
                     }
-                    "mountPanel" -> {
-                        mountPanel()
+                    "showSelectPanel" -> {
+                        val args = call.arguments as? Map<*, *>
+                        val items = args?.get("items") as? List<Any?> ?: emptyList()
+                        showSelectPanel(items)
                         result.success(null)
                     }
-                    "unmountPanel" -> {
-                        unmountPanel()
+                    "unmountSelectPanel" -> {
+                        unmountSelectPanel()
                         result.success(null)
                     }
                     "keepAlive" -> {
@@ -270,47 +270,54 @@ class HostService : Service() {
         handler.postDelayed(idleRunnable, IDLE_TIMEOUT_MS)
     }
 
-    /// Mount a FlutterTextureView attached to the SAME background engine and add
-    /// it as an overlay — used for the "选择下载" panel (no third engine).
-    private fun mountPanel() {
-        if (panelView != null) return
-        val eng = engine ?: return
-        try {
-            val surfaceView = FlutterSurfaceView(this, true)
-            val fv = FlutterView(this, surfaceView)
-            fv.attachToFlutterEngine(eng)
-            val params = WindowManager.LayoutParams(
-                WindowManager.LayoutParams.MATCH_PARENT,
-                WindowManager.LayoutParams.MATCH_PARENT,
-                WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
-                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
-                    or WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
-                PixelFormat.TRANSLUCENT
-            ).apply { gravity = Gravity.TOP or Gravity.START }
-            val wmS = getSystemService(WINDOW_SERVICE) as WindowManager
-            wmS.addView(fv, params)
-            panelView = fv
-        } catch (e: Exception) {
-            Log.e(TAG, "mountPanel failed: $e")
+    /// Show the native "选择下载" panel as an overlay window. A FlutterView in
+    /// an overlay proved unreliable, so this is a plain Android view tree.
+    private fun showSelectPanel(items: List<Any?>) {
+        handler.post {
+            unmountSelectPanel()
+            try {
+                val overlayType = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
+                } else {
+                    @Suppress("DEPRECATION")
+                    WindowManager.LayoutParams.TYPE_PHONE
+                }
+                val panel = SelectPanelView(this) { picked ->
+                    unmountSelectPanel()
+                    val payload: Any? = picked?.let { mapOf("indices" to it.map { i -> i as Any }) }
+                    channel?.invokeMethod("selectResult", payload)
+                }
+                val params = WindowManager.LayoutParams(
+                    WindowManager.LayoutParams.MATCH_PARENT,
+                    WindowManager.LayoutParams.MATCH_PARENT,
+                    overlayType,
+                    WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                        WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+                    PixelFormat.TRANSLUCENT
+                ).apply { gravity = Gravity.TOP or Gravity.START }
+                (getSystemService(WINDOW_SERVICE) as WindowManager).addView(panel, params)
+                panelView = panel
+                panel.setItems(items)
+            } catch (e: Exception) {
+                Log.e(TAG, "showSelectPanel failed: $e")
+                channel?.invokeMethod("selectResult", null)
+            }
         }
     }
 
-    private fun unmountPanel() {
-        val fv = panelView ?: return
+    private fun unmountSelectPanel() {
+        val p = panelView ?: return
         panelView = null
         try {
-            (getSystemService(WINDOW_SERVICE) as WindowManager).removeView(fv)
+            (getSystemService(WINDOW_SERVICE) as WindowManager).removeView(p)
         } catch (_: Exception) {
         }
-        try {
-            fv.detachFromFlutterEngine()
-        } catch (_: Exception) {
-        }
+        p.release()
     }
 
     private fun releaseEngine() {
         handler.removeCallbacks(idleRunnable)
-        unmountPanel()
+        unmountSelectPanel()
         try {
             channel?.setMethodCallHandler(null)
             engine?.destroy()

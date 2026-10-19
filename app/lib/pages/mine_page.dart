@@ -56,6 +56,11 @@ class _MinePageState extends State<MinePage> with WidgetsBindingObserver {
   /// Keep the bubble in sync with the toggle and the overlay permission
   /// (handles granting after the settings round-trip and permission revoke).
   Future<void> _syncBubbleState() async {
+    // Re-read persisted settings: the bubble can be closed natively (drag to
+    // the close target), which writes bubbleEnabled=false outside Dart.
+    final fresh = await AppSettings.load();
+    if (!mounted) return;
+    setState(() => _settings = fresh);
     final granted = await BubbleService.hasPermission();
     if (_pendingBubbleEnable) {
       _pendingBubbleEnable = false;

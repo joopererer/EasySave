@@ -473,6 +473,15 @@ class OverlayService : Service() {
         android.widget.Toast.makeText(
             this, "已关闭悬浮球，可在设置中重新开启", android.widget.Toast.LENGTH_SHORT
         ).show()
+        // Mirror the Dart setting so 我的 → 设置 shows the toggle as off.
+        try {
+            getSharedPreferences("FlutterSharedPreferences", MODE_PRIVATE)
+                .edit()
+                .putBoolean("flutter.bubbleEnabled", false)
+                .apply()
+        } catch (e: Exception) {
+            Log.e(TAG, "persist bubbleEnabled failed: $e")
+        }
         try {
             bubble?.let { wm?.removeView(it) }
         } catch (_: Exception) {

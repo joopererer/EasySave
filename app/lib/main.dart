@@ -3,7 +3,6 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import 'background/background_entry.dart' as bg;
-import 'background/select_panel.dart';
 import 'pages/main_shell.dart';
 import 'services/bubble_service.dart';
 import 'services/download_manager.dart';
@@ -18,9 +17,6 @@ import 'theme/app_theme.dart';
 @pragma('vm:entry-point')
 void backgroundMain() {
   bg.backgroundEntry();
-  // Run a widget tree so HostService can attach a FlutterSurfaceView overlay
-  // (the "选择下载" panel) to this same engine — no third engine.
-  runApp(const BackgroundRoot());
 }
 
 Future<void> main() async {

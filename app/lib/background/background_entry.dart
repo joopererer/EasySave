@@ -14,9 +14,11 @@ import '../services/links.dart';
 import '../services/parse_service.dart';
 import '../services/settings.dart';
 import '../services/update_service.dart';
-import 'select_panel.dart';
 
 const String _channelName = 'easysave/bgtask';
+
+/// Pending "选择下载" panel: completed by the native panel's result callback.
+Completer<List<int>?>? _selectCompleter;
 
 /// Entry point executed by [HostService]'s FlutterEngine (see `backgroundMain`
 /// in `main.dart`).
@@ -27,6 +29,16 @@ void backgroundEntry() {
     switch (call.method) {
       case 'submit':
         await _handleSubmit(channel, (call.arguments as Map?) ?? const {});
+        break;
+      case 'selectResult':
+        final args = (call.arguments as Map?) ?? const {};
+        final raw = args['indices'] as List?;
+        final picked = raw == null
+            ? null
+            : [for (final e in raw) (e as num).toInt()];
+        final c = _selectCompleter;
+        _selectCompleter = null;
+        if (c != null && !c.isCompleted) c.complete(picked);
         break;
     }
     return null;
@@ -158,20 +170,22 @@ Future<void> _handleSubmit(MethodChannel channel, Map<dynamic, dynamic> args) as
           break;
         }
         final completer = Completer<List<int>?>();
-        selectPanelRequest.value = SelectPanelRequest(
-          post: post,
-          author: post.author.name ?? '',
-          onConfirm: (sel) {
-            if (!completer.isCompleted) completer.complete(sel);
-          },
-          onCancel: () {
-            if (!completer.isCompleted) completer.complete(null);
-          },
+        _selectCompleter = completer;
+        await _invoke(channel, 'showSelectPanel', {
+          'items': [
+            for (final it in post.items)
+              {'thumb': it.posterUrl ?? it.url, 'video': it.type == 'video'},
+          ],
+        });
+        // Keep the engine alive while the user picks.
+        final picker = Timer.periodic(
+          const Duration(seconds: 20),
+          (_) => _invoke(channel, 'keepAlive'),
         );
-        await _invoke(channel, 'mountPanel');
         final selected = await completer.future;
-        selectPanelRequest.value = null;
-        await _invoke(channel, 'unmountPanel');
+        picker.cancel();
+        _selectCompleter = null;
+        await _invoke(channel, 'unmountSelectPanel');
         if (selected == null || selected.isEmpty) {
           await _log(channel, 'SELECT cancelled :: $url');
           await _tile(channel, false, null);
