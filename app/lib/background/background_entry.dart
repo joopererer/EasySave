@@ -10,6 +10,7 @@ import 'package:flutter/widgets.dart';
 
 import '../core/models.dart';
 import '../services/download_manager.dart';
+import '../services/history_db.dart';
 import '../services/links.dart';
 import '../services/parse_service.dart';
 import '../services/settings.dart';
@@ -171,10 +172,28 @@ Future<void> _handleSubmit(MethodChannel channel, Map<dynamic, dynamic> args) as
         }
         final completer = Completer<List<int>?>();
         _selectCompleter = completer;
+        // Which items of this post were already downloaded (so the panel can
+        // mark them and the user can just fetch what is missing).
+        final savedIdx = <int>{};
+        try {
+          final db = await HistoryDb.instance();
+          final existing = await db.getByPostId(post.id);
+          if (existing != null) {
+            for (final f in existing.files) {
+              savedIdx.add(f.itemIndex);
+            }
+          }
+        } catch (e) {
+          await _log(channel, 'SELECT history lookup failed: $e');
+        }
         await _invoke(channel, 'showSelectPanel', {
           'items': [
-            for (final it in post.items)
-              {'thumb': it.posterUrl ?? it.url, 'video': it.type == 'video'},
+            for (var i = 0; i < post.items.length; i++)
+              {
+                'thumb': post.items[i].posterUrl ?? post.items[i].url,
+                'video': post.items[i].type == 'video',
+                'saved': savedIdx.contains(i),
+              },
           ],
         });
         // Keep the engine alive while the user picks.

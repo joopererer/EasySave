@@ -48,6 +48,9 @@ class ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
   String _currentLink = '';
   String _appVersion = '';
   List<HistoryRecord> _recent = [];
+
+  /// Wider window used only for the "already downloaded" clipboard dedupe.
+  List<HistoryRecord> _recentAll = const [];
   StreamSubscription<List<SharedMediaFile>>? _shareSub;
   bool _handlingShare = false;
 
@@ -93,8 +96,12 @@ class ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
     final records = await HistoryDb.instance().then(
       (db) => db.recent(limit: 3),
     );
+    final all = await HistoryDb.instance().then((db) => db.recent(limit: 30));
     if (!mounted) return;
-    setState(() => _recent = records);
+    setState(() {
+      _recent = records;
+      _recentAll = all;
+    });
     final locator = GalleryLocatorService.instance;
     await locator.checkPermission();
     if (locator.hasAccess) {
@@ -251,6 +258,54 @@ class ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
     );
   }
 
+  /// Best-effort post identity for a link: the XHS 24-hex note id, an
+  /// Instagram shortcode or an X status id.
+  String? _postIdOf(String url) {
+    final uri = Uri.tryParse(url.trim());
+    if (uri == null) return null;
+    final hex = RegExp(r'[0-9a-fA-F]{24}').firstMatch(uri.path)?.group(0);
+    if (hex != null) return hex.toLowerCase();
+    final segs = uri.pathSegments;
+    for (var i = 0; i + 1 < segs.length; i++) {
+      final s = segs[i];
+      if (s == 'p' || s == 'reel' || s == 'tv' || s == 'status') {
+        return segs[i + 1].toLowerCase();
+      }
+    }
+    return null;
+  }
+
+  /// True when this link was already downloaded (e.g. through the floating
+  /// bubble). Matching is done by post id, so a short link (xhslink) still
+  /// matches the record stored under its canonical url.
+  Future<bool> _alreadyDownloaded(String link) async {
+    String norm(String u) {
+      try {
+        final uri = Uri.parse(u.trim());
+        final host = uri.host.replaceFirst('www.', '');
+        return '$host${uri.path}'.replaceAll(RegExp(r'/+$'), '');
+      } catch (_) {
+        return u.trim();
+      }
+    }
+
+    final normLink = norm(link);
+    if (_recentAll.any((r) => norm(r.postUrl) == normLink)) return true;
+    var id = _postIdOf(link);
+    if (id == null) {
+      // Short link: resolve it once so the note id can be extracted.
+      try {
+        id = _postIdOf(await resolveShortLink(link));
+      } catch (_) {
+        id = null;
+      }
+    }
+    if (id == null) return false;
+    return _recentAll.any(
+      (r) => r.postId.toLowerCase() == id || _postIdOf(r.postUrl) == id,
+    );
+  }
+
   Future<void> _checkClipboard() async {
     final settings = await AppSettings.load();
     if (!settings.autoClipboard || !mounted) return;
@@ -318,21 +373,10 @@ class ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
     _lastLink = link;
     // Same URL as the input box or any recent history entry: already
     // parsed (including via the floating bubble) or one tap away, don't
-    // nag again. Ignore scheme/query/fragment so share links with tracking
-    // parameters still match the stored post url.
-    String norm(String u) {
-      try {
-        final uri = Uri.parse(u.trim());
-        final host = uri.host.replaceFirst('www.', '');
-        return '$host${uri.path}'.replaceAll(RegExp(r'/+$'), '');
-      } catch (_) {
-        return u.trim();
-      }
-    }
-
-    final normLink = norm(link);
+    // nag again.
     if (link == _linkController.text.trim()) return;
-    if (_recent.any((r) => norm(r.postUrl) == normLink)) return;
+    if (await _alreadyDownloaded(link)) return;
+    if (!mounted) return;
     final go = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(

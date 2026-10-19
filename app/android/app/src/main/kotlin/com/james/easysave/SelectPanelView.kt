@@ -1,6 +1,7 @@
 package com.james.easysave
 
 import android.content.Context
+import android.animation.ValueAnimator
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Color
@@ -37,18 +38,22 @@ class SelectPanelView(
         private const val TARGET_PX = 300
     }
 
-    private class Cell(val thumb: String, val video: Boolean)
+    private class Cell(val thumb: String, val video: Boolean, val saved: Boolean)
 
     private val main = Handler(Looper.getMainLooper())
     private val pool = Executors.newFixedThreadPool(6)
     private val cells = ArrayList<Cell>()
     private val selected = LinkedHashSet<Int>()
+    private val shimmers = ArrayList<View>()
+    private val syncers = ArrayList<() -> Unit>()
+    private var shimmerAnim: ValueAnimator? = null
     private var finished = false
 
     private lateinit var countLabel: TextView
     private lateinit var allBtn: TextView
     private lateinit var downloadBtn: TextView
     private lateinit var grid: GridLayout
+    private lateinit var savedBanner: TextView
 
     init {
         setBackgroundColor(0x99000000.toInt())
@@ -64,7 +69,13 @@ class SelectPanelView(
         cells.clear()
         for (raw in items) {
             val m = raw as? Map<*, *> ?: continue
-            cells.add(Cell(m["thumb"] as? String ?: "", m["video"] as? Boolean ?: false))
+            cells.add(
+                Cell(
+                    m["thumb"] as? String ?: "",
+                    m["video"] as? Boolean ?: false,
+                    m["saved"] as? Boolean ?: false,
+                )
+            )
         }
         selected.clear()
         selected.addAll(cells.indices)
@@ -102,6 +113,15 @@ class SelectPanelView(
                 bottomMargin = dp(8)
             }
         )
+
+        savedBanner = TextView(context).apply {
+            text = "此帖子已下载过，可勾选补下缺失的"
+            setTextColor(0xFFFFB26A.toInt())
+            textSize = 12f
+            setPadding(0, 0, 0, dp(6))
+            visibility = View.GONE
+        }
+        sheet.addView(savedBanner)
 
         val header = LinearLayout(context).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -173,6 +193,10 @@ class SelectPanelView(
 
     private fun render() {
         grid.removeAllViews()
+        syncers.clear()
+        shimmers.clear()
+        val anySaved = cells.any { it.saved }
+        savedBanner.visibility = if (anySaved) View.VISIBLE else View.GONE
         val cell = (resources.displayMetrics.widthPixels - dp(28) - dp(8) * (COLS - 1)) / COLS
         for (i in cells.indices) {
             val box = FrameLayout(context)
@@ -193,6 +217,19 @@ class SelectPanelView(
                 scaleType = ImageView.ScaleType.CENTER_CROP
             }
             box.addView(iv, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT))
+
+            // Shimmer placeholder while the thumbnail is still downloading.
+            val shimmer = View(context).apply {
+                background = GradientDrawable(
+                    GradientDrawable.Orientation.TL_BR,
+                    intArrayOf(0xFF3A3937.toInt(), 0xFF4A4846.toInt(), 0xFF3A3937.toInt()),
+                ).apply { cornerRadius = dp(10).toFloat() }
+                alpha = 0.6f
+            }
+            box.addView(shimmer, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT))
+            shimmers.add(shimmer)
+            startShimmer()
+
             if (cells[i].video) {
                 box.addView(
                     TextView(context).apply {
@@ -201,6 +238,23 @@ class SelectPanelView(
                         textSize = 14f
                     },
                     LayoutParams(dp(26), dp(26), Gravity.BOTTOM or Gravity.START)
+                )
+            }
+            if (cells[i].saved) {
+                val tag = TextView(context).apply {
+                    text = "已存"
+                    setTextColor(Color.WHITE)
+                    textSize = 10f
+                    gravity = Gravity.CENTER
+                    background = GradientDrawable().apply {
+                        cornerRadius = dp(4).toFloat()
+                        setColor(0xCC2E7D32.toInt())
+                    }
+                }
+                box.addView(
+                    tag,
+                    LayoutParams(dp(34), dp(18), Gravity.TOP or Gravity.START)
+                        .apply { setMargins(dp(6), dp(6), 0, 0) }
                 )
             }
             val tick = TextView(context).apply {
@@ -228,15 +282,31 @@ class SelectPanelView(
                 dim.visibility = if (on) View.GONE else View.VISIBLE
             }
             sync()
+            syncers.add(::sync)
             box.setOnClickListener {
                 if (!selected.remove(i)) selected.add(i)
                 sync()
                 updateFooter()
             }
             grid.addView(box)
-            loadThumb(cells[i].thumb, iv)
+            loadThumb(cells[i].thumb, iv, shimmer)
         }
         updateFooter()
+    }
+
+    /// Pulsing placeholder animation shared by every pending thumbnail.
+    private fun startShimmer() {
+        if (shimmerAnim != null) return
+        shimmerAnim = ValueAnimator.ofFloat(0.35f, 0.95f).apply {
+            duration = 850
+            repeatCount = ValueAnimator.INFINITE
+            repeatMode = ValueAnimator.REVERSE
+            addUpdateListener { anim ->
+                val v = anim.animatedValue as Float
+                for (s in shimmers) s.alpha = v
+            }
+            start()
+        }
     }
 
     private fun updateFooter() {
@@ -248,13 +318,23 @@ class SelectPanelView(
     }
 
     private fun toggleAll() {
-        selected.clear()
-        if (selected.size != cells.size) selected.addAll(cells.indices)
-        render()
+        if (selected.size == cells.size) {
+            selected.clear()
+        } else {
+            selected.clear()
+            selected.addAll(cells.indices)
+        }
+        // Refresh the cells in place — a full re-render would refetch every
+        // thumbnail and restart the shimmer.
+        for (s in syncers) s()
+        updateFooter()
     }
 
-    private fun loadThumb(url: String, target: ImageView) {
-        if (url.isEmpty()) return
+    private fun loadThumb(url: String, target: ImageView, shimmer: View) {
+        if (url.isEmpty()) {
+            shimmer.visibility = View.GONE
+            return
+        }
         pool.execute {
             var bitmap: Bitmap? = null
             try {
@@ -279,8 +359,12 @@ class SelectPanelView(
                 Log.w(TAG, "thumb failed: ${e.message}")
             }
             val bmp = bitmap
-            if (bmp != null) {
-                main.post { if (target.isAttachedToWindow) target.setImageBitmap(bmp) }
+            main.post {
+                if (bmp != null && target.isAttachedToWindow) {
+                    target.setImageBitmap(bmp)
+                    shimmer.visibility = View.GONE
+                    shimmers.remove(shimmer)
+                }
             }
         }
     }
@@ -310,6 +394,8 @@ class SelectPanelView(
     }
 
     fun release() {
+        shimmerAnim?.cancel()
+        shimmerAnim = null
         pool.shutdownNow()
     }
 }
