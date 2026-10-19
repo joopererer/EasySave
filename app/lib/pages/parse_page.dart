@@ -55,9 +55,11 @@ class ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      _checkClipboard();
-      _reloadRecent();
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      // Refresh history first: the clipboard dedupe compares against the
+      // latest records (e.g. a link just downloaded through the bubble).
+      await _reloadRecent();
+      await _checkClipboard();
       _loadVersion();
     });
     _initShareIntent();
@@ -72,8 +74,9 @@ class ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
-      _checkClipboard();
-      _reloadRecent();
+      // Reload history first so the clipboard dedupe sees records that were
+      // downloaded in the background (tile / bubble) while we were away.
+      _reloadRecent().then((_) => _checkClipboard());
     }
   }
 
@@ -313,14 +316,30 @@ class ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
     final link = links.single;
     if (link == _lastLink) return;
     _lastLink = link;
-    // Same URL as the input box or the latest history entry: already
-    // parsed or one tap away, don't nag again.
+    // Same URL as the input box or any recent history entry: already
+    // parsed (including via the floating bubble) or one tap away, don't
+    // nag again. Ignore scheme/query/fragment so share links with tracking
+    // parameters still match the stored post url.
+    String norm(String u) {
+      try {
+        final uri = Uri.parse(u.trim());
+        final host = uri.host.replaceFirst('www.', '');
+        return '$host${uri.path}'.replaceAll(RegExp(r'/+$'), '');
+      } catch (_) {
+        return u.trim();
+      }
+    }
+
+    final normLink = norm(link);
     if (link == _linkController.text.trim()) return;
-    if (_recent.isNotEmpty && link == _recent.first.postUrl) return;
+    if (_recent.any((r) => norm(r.postUrl) == normLink)) return;
     final go = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('检测到剪贴板链接'),
+        title: const Text(
+          '检测到剪贴板链接',
+          style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+        ),
         content: Text(link, maxLines: 3, overflow: TextOverflow.ellipsis),
         actions: [
           TextButton(

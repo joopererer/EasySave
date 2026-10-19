@@ -54,6 +54,10 @@ class OverlayService : Service() {
         private const val NOTIF_ID = 9012
         private const val SIZE_DP = 54
 
+        /// Broadcast when the bubble is closed/shown; MainActivity forwards it
+        /// to Dart so the settings toggle stays correct while the app is open.
+        const val ACTION_BUBBLE_STATE = "com.james.easysave.action.BUBBLE_STATE"
+
         @Volatile var isRunning = false
             private set
 
@@ -487,6 +491,11 @@ class OverlayService : Service() {
         } catch (_: Exception) {
         }
         bubble = null
+        try {
+            sendBroadcast(Intent(ACTION_BUBBLE_STATE))
+        } catch (e: Exception) {
+            Log.e(TAG, "broadcast bubble state failed: $e")
+        }
         stopSelf()
     }
 

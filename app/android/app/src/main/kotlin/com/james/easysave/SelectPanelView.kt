@@ -34,12 +34,13 @@ class SelectPanelView(
     companion object {
         const val TAG = "V16SEL"
         private const val COLS = 3
+        private const val TARGET_PX = 300
     }
 
     private class Cell(val thumb: String, val video: Boolean)
 
     private val main = Handler(Looper.getMainLooper())
-    private val pool = Executors.newFixedThreadPool(4)
+    private val pool = Executors.newFixedThreadPool(6)
     private val cells = ArrayList<Cell>()
     private val selected = LinkedHashSet<Int>()
     private var finished = false
@@ -259,14 +260,19 @@ class SelectPanelView(
             try {
                 val conn = URL(url).openConnection() as HttpURLConnection
                 conn.connectTimeout = 8000
-                conn.readTimeout = 8000
+                conn.readTimeout = 10000
                 conn.instanceFollowRedirects = true
                 runCatching { android.webkit.CookieManager.getInstance().getCookie(url) }
                     .getOrNull()?.takeIf { it.isNotEmpty() }
                     ?.let { conn.setRequestProperty("Cookie", it) }
+                conn.setRequestProperty(
+                    "Accept",
+                    "image/webp,image/apng,image/*,*/*;q=0.8"
+                )
                 conn.connect()
                 if (conn.responseCode in 200..299) {
-                    conn.inputStream.use { bitmap = BitmapFactory.decodeStream(it) }
+                    val bytes = conn.inputStream.use { it.readBytes() }
+                    bitmap = decodeSampled(bytes, dp(TARGET_PX))
                 }
                 conn.disconnect()
             } catch (e: Exception) {
@@ -277,6 +283,24 @@ class SelectPanelView(
                 main.post { if (target.isAttachedToWindow) target.setImageBitmap(bmp) }
             }
         }
+    }
+
+    /// Decode JPEG/PNG/WebP bytes downsampled to roughly [target] px — decoding
+    /// a multi-MB original at full size was the main cause of slow thumbnails.
+    private fun decodeSampled(bytes: ByteArray, target: Int): Bitmap? {
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
+        val w = bounds.outWidth
+        val h = bounds.outHeight
+        var sample = 1
+        while (w / (sample * 2) >= target && h / (sample * 2) >= target) {
+            sample *= 2
+        }
+        val opts = BitmapFactory.Options().apply {
+            inSampleSize = sample
+            inPreferredConfig = Bitmap.Config.RGB_565
+        }
+        return BitmapFactory.decodeByteArray(bytes, 0, bytes.size, opts)
     }
 
     private fun finish(result: List<Int>?) {

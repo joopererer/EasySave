@@ -2,12 +2,30 @@
 // (OverlayService); here we only start/stop it and query the overlay
 // permission.
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 
 import 'settings.dart';
 
 abstract final class BubbleService {
   static const MethodChannel _channel = MethodChannel('easysave/bubble');
+
+  /// Bumped whenever native reports a bubble state change (e.g. the bubble was
+  /// dragged to the close zone). Mine page listens and reconciles the toggle.
+  static final ValueNotifier<int> stateTick = ValueNotifier<int>(0);
+  static bool _listening = false;
+
+  /// Receive native -> Dart state pushes on the shared bubble channel.
+  static void startListening() {
+    if (_listening) return;
+    _listening = true;
+    _channel.setMethodCallHandler((call) async {
+      if (call.method == 'bubbleStateChanged') {
+        stateTick.value = stateTick.value + 1;
+      }
+      return null;
+    });
+  }
 
   /// Whether the "display over other apps" permission is granted.
   static Future<bool> hasPermission() async {

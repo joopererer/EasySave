@@ -40,14 +40,22 @@ class _MinePageState extends State<MinePage> with WidgetsBindingObserver {
     // Reconcile the bubble toggle with the actual service state on first frame
     // (covers a cold start where the bubble was closed via drag elsewhere).
     WidgetsBinding.instance.addPostFrameCallback((_) => _syncBubbleState());
+    // Reconcile while the app stays in the foreground: dragging the bubble to
+    // the close zone sends a native push (no lifecycle transition happens).
+    BubbleService.startListening();
+    BubbleService.stateTick.addListener(_onBubbleTick);
   }
 
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    BubbleService.stateTick.removeListener(_onBubbleTick);
     LoginExpiredBus.expired.removeListener(_onExpired);
     super.dispose();
   }
+
+  /// Native pushed a bubble state change: reconcile the toggle right away.
+  void _onBubbleTick() => _syncBubbleState();
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {

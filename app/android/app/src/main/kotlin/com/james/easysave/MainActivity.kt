@@ -48,10 +48,20 @@ class MainActivity : FlutterActivity() {
     // Url to open on the parse/preview page (from the bubble's "打开 EasySave").
     private var pendingOpen: String? = null
 
+    private var bubbleChannel: MethodChannel? = null
+
     private val historyReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             // The background engine wrote history; ask the main UI to reload.
             hostChannel?.invokeMethod("historyChanged", null)
+        }
+    }
+
+    // The bubble was closed/shown (e.g. dragged to the close zone) while the
+    // app is in the foreground; ask Dart to reconcile the settings toggle.
+    private val bubbleReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            bubbleChannel?.invokeMethod("bubbleStateChanged", null)
         }
     }
 
@@ -103,6 +113,12 @@ class MainActivity : FlutterActivity() {
                 IntentFilter(HostService.ACTION_HISTORY_CHANGED),
                 ContextCompat.RECEIVER_NOT_EXPORTED,
             )
+            ContextCompat.registerReceiver(
+                this,
+                bubbleReceiver,
+                IntentFilter(OverlayService.ACTION_BUBBLE_STATE),
+                ContextCompat.RECEIVER_NOT_EXPORTED,
+            )
             receiverRegistered = true
         }
     }
@@ -111,6 +127,10 @@ class MainActivity : FlutterActivity() {
         if (receiverRegistered) {
             try {
                 unregisterReceiver(historyReceiver)
+            } catch (_: Exception) {
+            }
+            try {
+                unregisterReceiver(bubbleReceiver)
             } catch (_: Exception) {
             }
             receiverRegistered = false
@@ -175,8 +195,8 @@ class MainActivity : FlutterActivity() {
                 }
             }
 
-        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, BUBBLE_CHANNEL)
-            .setMethodCallHandler { call, result ->
+        bubbleChannel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, BUBBLE_CHANNEL)
+        bubbleChannel?.setMethodCallHandler { call, result ->
                 when (call.method) {
                     "hasPermission" -> result.success(Settings.canDrawOverlays(this))
                     "requestPermission" -> {
