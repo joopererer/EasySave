@@ -4,7 +4,6 @@ import 'package:flutter/material.dart';
 
 import 'background/background_entry.dart' as bg;
 import 'pages/main_shell.dart';
-import 'services/bubble_service.dart';
 import 'services/download_manager.dart';
 import 'services/gallery_locator_service.dart';
 import 'services/host_bridge.dart';
@@ -31,8 +30,6 @@ Future<void> main() async {
   await DownloadManager.instance.init();
   await ParserManager.instance.init();
   unawaited(ParserManager.instance.checkForUpdates());
-  // Make sure the bubble overlay is running if the user enabled it.
-  unawaited(BubbleService.ensureStarted());
   runApp(const EasySaveApp());
   // Ask for album access up-front (first launch only) so the first history
   // view and "recent" thumbnails don't stall on a mid-flow permission prompt.

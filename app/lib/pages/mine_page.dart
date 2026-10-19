@@ -37,6 +37,9 @@ class _MinePageState extends State<MinePage> with WidgetsBindingObserver {
     _lastExpired = LoginExpiredBus.expired.value;
     _load();
     LoginExpiredBus.expired.addListener(_onExpired);
+    // Reconcile the bubble toggle with the actual service state on first frame
+    // (covers a cold start where the bubble was closed via drag elsewhere).
+    WidgetsBinding.instance.addPostFrameCallback((_) => _syncBubbleState());
   }
 
   @override
@@ -53,14 +56,11 @@ class _MinePageState extends State<MinePage> with WidgetsBindingObserver {
     }
   }
 
-  /// Keep the bubble in sync with the toggle and the overlay permission
-  /// (handles granting after the settings round-trip and permission revoke).
+  /// Keep the bubble toggle in sync with the ACTUAL bubble service. The service
+  /// is the source of truth: closing the bubble by dragging it to the close
+  /// zone stops the service, and starting/undoing it starts the service, so the
+  /// switch always reflects reality regardless of how/where it was changed.
   Future<void> _syncBubbleState() async {
-    // Re-read persisted settings: the bubble can be closed natively (drag to
-    // the close target), which writes bubbleEnabled=false outside Dart.
-    final fresh = await AppSettings.load();
-    if (!mounted) return;
-    setState(() => _settings = fresh);
     final granted = await BubbleService.hasPermission();
     if (_pendingBubbleEnable) {
       _pendingBubbleEnable = false;
@@ -79,14 +79,11 @@ class _MinePageState extends State<MinePage> with WidgetsBindingObserver {
       }
       return;
     }
-    if (_settings.bubbleEnabled && !granted) {
-      // Permission was revoked from system settings: turn the bubble off.
-      await BubbleService.stop();
-      if (!mounted) return;
-      setState(() => _settings.bubbleEnabled = false);
+    final running = granted && await BubbleService.isRunning();
+    if (!mounted) return;
+    if (_settings.bubbleEnabled != running) {
+      setState(() => _settings.bubbleEnabled = running);
       await _saveSettings();
-    } else if (_settings.bubbleEnabled && granted) {
-      if (!await BubbleService.isRunning()) await BubbleService.start();
     }
   }
 

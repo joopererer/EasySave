@@ -63,9 +63,12 @@ Future<({String? mediaId, String? title})> _locateJustSaved(
   bool isImage,
   String album,
 ) async {
-  for (var attempt = 0; attempt < 3; attempt++) {
+  // MediaStore can lag a beat behind the write, and the title match may only
+  // appear once indexing catches up. Retry a few times before giving up so a
+  // rapid multi-file import doesn't grab the wrong (previous) asset.
+  for (var attempt = 0; attempt < 5; attempt++) {
     if (attempt > 0) {
-      await Future<void>.delayed(const Duration(milliseconds: 250));
+      await Future<void>.delayed(const Duration(milliseconds: 300));
     }
     final found = await _locateJustSavedOnce(expectedName, isImage, album);
     if (found.mediaId != null) return found;
@@ -124,7 +127,6 @@ Future<({String? mediaId, String? title})> _matchNewestIn(
   final want = expectedName.toLowerCase();
   AssetEntity? exact;
   AssetEntity? renamed;
-  AssetEntity? freshOfType;
   // The file was written seconds ago; only accept a fallback that is at
   // least plausibly ours, never someone else's old photo.
   final cutoff = DateTime.now().subtract(const Duration(minutes: 2));
@@ -139,7 +141,6 @@ Future<({String? mediaId, String? title})> _matchNewestIn(
       continue;
     }
     if (created.isBefore(cutoff)) continue;
-    freshOfType ??= a;
     final title = (a.title ?? '').trim().toLowerCase();
     if (title == want || _stripExtension(title) == want) {
       exact = a;
@@ -150,7 +151,13 @@ Future<({String? mediaId, String? title})> _matchNewestIn(
     final stem = _stripExtension(title);
     if (stem.startsWith('$want (')) renamed ??= a;
   }
-  final chosen = exact ?? renamed ?? freshOfType;
+  // Only trust a title match. Accepting "the newest asset of this type" was
+  // the source of a nasty bug: when several files are imported in quick
+  // succession, MediaStore indexing lags and the newest item is still the
+  // PREVIOUS file, so multiple items ended up sharing one media id (history
+  // showed the same thumbnail for several distinct photos). Returning null
+  // instead lets the caller retry until the right file is indexed.
+  final chosen = exact ?? renamed;
   if (chosen == null) return (mediaId: null, title: null);
   return (mediaId: chosen.id, title: chosen.title);
 }
