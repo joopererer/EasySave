@@ -228,6 +228,16 @@ class GalleryLocatorService extends ChangeNotifier {
     }
   }
 
+  /// Exact album lookup by a file's base name (no extension). Unlike
+  /// [locateAsset] this never fuzzy-matches, so it is safe to use as an
+  /// idempotency guard: "is a file with this name already in the album?"
+  AssetEntity? assetByBaseName(String baseName) {
+    if (!hasAccess) return null;
+    final key = baseName.trim().toLowerCase();
+    if (key.isEmpty) return null;
+    return _exactMap[key];
+  }
+
   /// Locate asset for a HistoryFile.
   /// 1. Try mediaId
   /// 2. Try exact filename match (case-insensitive, handling double extension variants)

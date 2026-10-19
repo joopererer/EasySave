@@ -10,6 +10,7 @@ import 'package:background_downloader/background_downloader.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:gal/gal.dart';
+import 'package:photo_manager/photo_manager.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../core/models.dart';
@@ -23,6 +24,31 @@ import 'update_service.dart';
 /// Max download attempts per file, first try included. The plugin's native
 /// retries stay at 0 so this counter is the single source of truth.
 const int kMaxAttempts = 3;
+
+/// How long a batch snapshot may stay untouched before the other engine may
+/// consider its owner dead and adopt the batch. The owner refreshes the
+/// snapshot every 15s (heartbeat), so 90s is a safe margin.
+const int kStalledBatchAgeMs = 90 * 1000;
+
+/// Pure decision helper for the dual-engine ownership rules: may this engine
+/// adopt a batch that was started by the other engine?
+///
+/// - a batch of the own source is never "foreign";
+/// - a foreign batch may only be adopted when its snapshot went stale (the
+///   owner stopped heart-beating) **and** all of its tasks already reached a
+///   terminal state — otherwise the owner is still working on it.
+bool canAdoptForeignBatch({
+  required String owner,
+  required String batchSource,
+  required int updatedAt,
+  required int now,
+  required bool allTasksTerminal,
+}) {
+  if (batchSource == owner) return false;
+  if (updatedAt <= 0) return false;
+  if (now - updatedAt < kStalledBatchAgeMs) return false;
+  return allTasksTerminal;
+}
 
 enum JobState { queued, active, done, failed, canceled }
 
@@ -106,8 +132,18 @@ class DownloadBatch {
     this.title,
     this.caption,
     this.itemsJson,
+    this.source = sourceMain,
+    this.updatedAt = 0,
     required this.jobs,
   });
+
+  /// Which engine owns this batch. The main UI isolate and the background
+  /// isolate each keep their own [DownloadManager] instance but share the
+  /// batch snapshots (SharedPreferences) and the plugin's task database, so
+  /// every batch must state its owner: only the owner may save to the album
+  /// and write history.
+  static const String sourceMain = 'main';
+  static const String sourceBackground = 'background';
 
   final String batchId;
   final String album;
@@ -118,8 +154,16 @@ class DownloadBatch {
   final String? title;
   final String? caption;
   final String? itemsJson;
+
+  /// Owner engine: [sourceMain] or [sourceBackground].
+  final String source;
   final List<DownloadJob> jobs;
   bool historyWritten = false;
+
+  /// Last time the owner wrote this snapshot. The owner refreshes it with a
+  /// heartbeat, so a stale value means "the owning engine is gone" and lets
+  /// the other engine adopt the batch instead of dropping it.
+  int updatedAt;
 
   bool get isTerminal => jobs.every(
     (j) =>
@@ -140,6 +184,8 @@ class DownloadBatch {
     'title': title,
     'caption': caption,
     'itemsJson': itemsJson,
+    'source': source,
+    'updatedAt': updatedAt,
     'jobs': [for (final j in jobs) j.toJson()],
     'historyWritten': historyWritten,
   };
@@ -154,6 +200,10 @@ class DownloadBatch {
     title: map['title'] as String?,
     caption: map['caption'] as String?,
     itemsJson: map['itemsJson'] as String?,
+    // Batches written before this field existed were created by the main
+    // engine, so they default to it.
+    source: map['source'] as String? ?? sourceMain,
+    updatedAt: (map['updatedAt'] as num?)?.toInt() ?? 0,
     jobs: (map['jobs'] as List)
         .map((e) => DownloadJob.fromJson((e as Map).cast<String, Object?>()))
         .toList(),
@@ -251,8 +301,23 @@ class DownloadManager extends ChangeNotifier {
 
   static final DownloadManager instance = DownloadManager._();
 
+  /// Which engine this instance belongs to. Statics are isolate-local, so the
+  /// main UI isolate stays [DownloadBatch.sourceMain] while the background
+  /// isolate sets [DownloadBatch.sourceBackground] before touching the
+  /// manager.
+  static String owner = DownloadBatch.sourceMain;
+
+  /// Log tag for the dual-engine verification (adb logcat -s V16DL).
+  static const String logTag = 'V16DL';
+
+  /// Structured log used by the dual-engine verification.
+  static void _log(String message) {
+    debugPrint('[$logTag][$owner] $message');
+  }
+
   final Map<String, DownloadBatch> _batches = {};
   StreamSubscription<TaskUpdate>? _updatesSub;
+  Timer? _heartbeat;
   bool _ready = false;
 
   final _notifications = FlutterLocalNotificationsPlugin();
@@ -261,6 +326,8 @@ class DownloadManager extends ChangeNotifier {
 
   // Retained: dropping the broadcast subscription would stop updates.
   Future<void> close() async {
+    _heartbeat?.cancel();
+    _heartbeat = null;
     await _updatesSub?.cancel();
     _updatesSub = null;
   }
@@ -298,7 +365,23 @@ class DownloadManager extends ChangeNotifier {
       // Notifications are best effort; downloads run regardless.
     }
     _updatesSub = FileDownloader().updates.listen(_onUpdate);
+    // Heartbeat: refresh the snapshot of running batches so the other engine
+    // can tell "the owner is alive" from "the owner died mid-batch".
+    _heartbeat?.cancel();
+    _heartbeat = Timer.periodic(
+      const Duration(seconds: 15),
+      (_) => _heartbeatTick(),
+    );
     await _loadAndReconcile();
+  }
+
+  /// Persist the running batches so their `updatedAt` stays fresh while the
+  /// owning engine is alive.
+  Future<void> _heartbeatTick() async {
+    for (final batch in _batches.values.toList()) {
+      if (batch.isTerminal) continue;
+      await _persist(batch);
+    }
   }
 
   int _notificationId(DownloadBatch batch) =>
@@ -385,7 +468,10 @@ class DownloadManager extends ChangeNotifier {
       final granted = await Gal.requestAccess();
       if (!granted) throw const FileSystemException('没有相册访问权限');
     }
-    final batchId = DateTime.now().millisecondsSinceEpoch.toString();
+    // The batch id carries the owner so ownership is visible in the shared
+    // snapshot store (SharedPreferences) and in the plugin's task groups.
+    final batchId =
+        '${DownloadManager.owner}-${DateTime.now().millisecondsSinceEpoch}';
     final planned = planFiles(post, selected, nameFor);
     final batch = DownloadBatch(
       batchId: batchId,
@@ -397,6 +483,7 @@ class DownloadManager extends ChangeNotifier {
       title: post.title,
       caption: post.caption,
       itemsJson: jsonEncode([for (final item in post.items) item.toJson()]),
+      source: DownloadManager.owner,
       jobs: [
         for (var i = 0; i < planned.length; i++)
           DownloadJob(
@@ -410,6 +497,7 @@ class DownloadManager extends ChangeNotifier {
       ],
     );
     _batches[batchId] = batch;
+    _log('batch start id=$batchId source=${batch.source} post=${batch.postId}');
     unawaited(_refreshNotification(batch));
     await _persist(batch);
     for (final job in batch.jobs) {
@@ -470,7 +558,17 @@ class DownloadManager extends ChangeNotifier {
   void _onUpdate(TaskUpdate update) {
     final task = update.task;
     final batch = _batches[task.group];
-    if (batch == null) return;
+    if (batch == null) {
+      // A task of another engine's batch (the plugin can route an update to
+      // the wrong engine when its per-task channel is gone). It is NOT ours:
+      // ignore it so the file is never saved twice.
+      _log('ignore foreign task update group=${task.group} id=${task.taskId}');
+      return;
+    }
+    if (batch.source != DownloadManager.owner) {
+      _log('ignore update of foreign batch ${batch.batchId}');
+      return;
+    }
     DownloadJob? job;
     for (final j in batch.jobs) {
       if (j.currentTaskId == task.taskId) {
@@ -510,6 +608,32 @@ class DownloadManager extends ChangeNotifier {
     }
   }
 
+  /// Batches whose album was already indexed for the idempotency guard.
+  final Set<String> _albumIndexed = <String>{};
+
+  /// Look for an already-imported file with the planned name. The album is
+  /// indexed once per batch (it is needed to see files saved by an earlier
+  /// run), and only when the user granted album read access — without it we
+  /// simply proceed and save the file.
+  Future<AssetEntity?> _findExistingAlbumAsset(
+    DownloadBatch batch,
+    DownloadJob job,
+  ) async {
+    final locator = GalleryLocatorService.instance;
+    if (!locator.hasAccess) return null;
+    if (_albumIndexed.add(batch.batchId)) {
+      try {
+        await locator.scanAlbum(force: true);
+      } catch (_) {
+        // Indexing is best effort.
+      }
+    }
+    final name = job.filename;
+    final dot = name.lastIndexOf('.');
+    final base = dot > 0 ? name.substring(0, dot) : name;
+    return locator.assetByBaseName(base);
+  }
+
   /// Gallery import for a finished file, then temp cleanup.
   Future<void> _finishFile(
     DownloadBatch batch,
@@ -533,12 +657,32 @@ class DownloadManager extends ChangeNotifier {
         job.error = '文件丢失，请重试';
         job.state = JobState.failed;
       } else {
-        final saved = await saveToGallery(path, job.isImage, batch.album);
-        job.mediaId = saved.mediaId;
-        job.savedTitle = saved.title;
-        job.state = JobState.done;
-        job.progress = 1;
-        job.saved = true;
+        // Idempotency guard: if a file with the same name is already in the
+        // album, the import already happened (e.g. the process died between
+        // the copy and the snapshot write) — reuse it instead of saving a
+        // second copy.
+        final existing = await _findExistingAlbumAsset(batch, job);
+        if (existing != null) {
+          _log('gallery import skipped, already saved: ${job.filename}');
+          job.mediaId = existing.id;
+          job.savedTitle = existing.title;
+          job.state = JobState.done;
+          job.progress = 1;
+          job.saved = true;
+          try {
+            await file.delete();
+          } catch (_) {
+            // Temp file cleanup is best effort.
+          }
+        } else {
+          final saved = await saveToGallery(path, job.isImage, batch.album);
+          _log('gallery import done: ${job.filename} -> ${saved.mediaId}');
+          job.mediaId = saved.mediaId;
+          job.savedTitle = saved.title;
+          job.state = JobState.done;
+          job.progress = 1;
+          job.saved = true;
+        }
       }
     } catch (e) {
       job.error = '$e';
@@ -711,12 +855,63 @@ class DownloadManager extends ChangeNotifier {
         final batch = DownloadBatch.fromJson(
           (jsonDecode(raw) as Map).cast<String, Object?>(),
         );
+        // Ownership: the batch snapshots live in a SharedPreferences file
+        // that BOTH engines can read. Only the engine that started the batch
+        // may reconcile it, otherwise the album file would be saved twice.
+        if (batch.source != DownloadManager.owner) {
+          if (await _isStalledForeignBatch(batch)) {
+            // The owner is gone (its engine was killed) and every task of the
+            // batch already finished: adopt it so the album import and the
+            // history record still happen exactly once.
+            _log('adopt stalled foreign batch ${batch.batchId}');
+            _batches[batchId] = batch;
+            if (await _reconcileBatch(batch)) changed = true;
+          } else {
+            _log('skip foreign batch ${batch.batchId} (${batch.source})');
+          }
+          continue;
+        }
         _batches[batchId] = batch;
         if (await _reconcileBatch(batch)) changed = true;
       }
       if (changed) notifyListeners();
     } catch (_) {
       // Recovery is best effort; live updates still drive the UI.
+    }
+  }
+
+  /// A foreign batch can be adopted when its owner stopped refreshing the
+  /// snapshot (heartbeat) and all of its tasks already reached a terminal
+  /// state — i.e. nobody is going to finish it any more.
+  Future<bool> _isStalledForeignBatch(DownloadBatch batch) async {
+    final allTerminal = await _allTasksTerminal(batch);
+    return canAdoptForeignBatch(
+      owner: DownloadManager.owner,
+      batchSource: batch.source,
+      updatedAt: batch.updatedAt,
+      now: DateTime.now().millisecondsSinceEpoch,
+      allTasksTerminal: allTerminal,
+    );
+  }
+
+  Future<bool> _allTasksTerminal(DownloadBatch batch) async {
+    try {
+      final records = await FileDownloader().database.allRecords(
+        group: batch.batchId,
+      );
+      if (records.isEmpty) return false;
+      for (final r in records) {
+        final s = r.status;
+        if (s != TaskStatus.complete &&
+            s != TaskStatus.failed &&
+            s != TaskStatus.notFound &&
+            s != TaskStatus.canceled) {
+          return false;
+        }
+      }
+      return true;
+    } catch (_) {
+      return false;
     }
   }
 
@@ -770,6 +965,7 @@ class DownloadManager extends ChangeNotifier {
 
   Future<void> _persist(DownloadBatch batch) async {
     try {
+      batch.updatedAt = DateTime.now().millisecondsSinceEpoch;
       final prefs = await SharedPreferences.getInstance();
       await prefs.setString(
         _batchKey(batch.batchId),

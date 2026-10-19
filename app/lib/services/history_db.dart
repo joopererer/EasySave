@@ -303,6 +303,15 @@ class HistoryDb {
     final db = await openDatabase(
       path,
       version: 2,
+      // Two engines (main UI isolate + background isolate) can hold a
+      // connection to the same file. WAL lets readers work while a writer is
+      // active, and busy_timeout makes a writer wait for the lock instead of
+      // failing with SQLITE_BUSY.
+      onConfigure: (db) async {
+        await db.execute('PRAGMA journal_mode=WAL');
+        await db.execute('PRAGMA busy_timeout=5000');
+        await db.execute('PRAGMA synchronous=NORMAL');
+      },
       onCreate: (db, version) => db.execute(
         'CREATE TABLE history_records('
         'id INTEGER PRIMARY KEY AUTOINCREMENT,'
@@ -353,29 +362,33 @@ class HistoryDb {
     return historyDb;
   }
 
+  /// Insert or merge a history record. The whole read-merge-write runs in one
+  /// transaction so two engines writing at the same time cannot lose files
+  /// (the second writer waits for the lock thanks to busy_timeout).
   Future<void> upsert(HistoryRecord record) async {
-    final existing = await getByPostUrl(record.postUrl) ??
-        await getByPostId(record.postId);
-    if (existing != null) {
-      final fileMap = <String, HistoryFile>{};
-      for (final f in existing.files) {
-        fileMap['${f.itemIndex}_${f.isImage}'] = f;
-      }
-      for (final f in record.files) {
-        fileMap['${f.itemIndex}_${f.isImage}'] = f;
-      }
-      final mergedFiles = fileMap.values.toList()
-        ..sort((a, b) {
-          final cmp = a.itemIndex.compareTo(b.itemIndex);
-          if (cmp != 0) return cmp;
-          return (a.isImage ? 0 : 1).compareTo(b.isImage ? 0 : 1);
-        });
+    await _db.transaction((txn) async {
+      final existing = await _getByPostUrl(txn, record.postUrl) ??
+          await _getByPostId(txn, record.postId);
+      if (existing != null) {
+        final fileMap = <String, HistoryFile>{};
+        for (final f in existing.files) {
+          fileMap['${f.itemIndex}_${f.isImage}'] = f;
+        }
+        for (final f in record.files) {
+          fileMap['${f.itemIndex}_${f.isImage}'] = f;
+        }
+        final mergedFiles = fileMap.values.toList()
+          ..sort((a, b) {
+            final cmp = a.itemIndex.compareTo(b.itemIndex);
+            if (cmp != 0) return cmp;
+            return (a.isImage ? 0 : 1).compareTo(b.isImage ? 0 : 1);
+          });
 
-      final mergedRecord = HistoryRecord(
-        id: existing.id,
-        platform: record.platform,
-        postId: record.postId,
-        authorName: record.authorName ?? existing.authorName,
+        final mergedRecord = HistoryRecord(
+          id: existing.id,
+          platform: record.platform,
+          postId: record.postId,
+          authorName: record.authorName ?? existing.authorName,
         title: (record.title?.isNotEmpty == true) ? record.title : existing.title,
         caption: (record.caption?.isNotEmpty == true) ? record.caption : existing.caption,
         thumbnailUrl: record.thumbnailUrl ?? existing.thumbnailUrl,
@@ -385,20 +398,21 @@ class HistoryDb {
         itemsJson: record.itemsJson ?? existing.itemsJson,
         files: mergedFiles,
       );
-      await _db.update(
-        'history_records',
-        mergedRecord.toMap(),
-        where: 'id = ?',
-        whereArgs: [existing.id],
-      );
-      return;
-    }
+        await txn.update(
+          'history_records',
+          mergedRecord.toMap(),
+          where: 'id = ?',
+          whereArgs: [existing.id],
+        );
+        return;
+      }
 
-    await _db.insert(
-      'history_records',
-      record.toMap(),
-      conflictAlgorithm: ConflictAlgorithm.replace,
-    );
+      await txn.insert(
+        'history_records',
+        record.toMap(),
+        conflictAlgorithm: ConflictAlgorithm.replace,
+      );
+    });
   }
 
   Future<void> updateFiles(int id, List<HistoryFile> files) async {
@@ -412,8 +426,17 @@ class HistoryDb {
     );
   }
 
-  Future<HistoryRecord?> getByPostUrl(String postUrl) async {
-    final rows = await _db.query(
+  Future<HistoryRecord?> getByPostUrl(String postUrl) async =>
+      _getByPostUrl(_db, postUrl);
+
+  Future<HistoryRecord?> getByPostId(String postId) async =>
+      _getByPostId(_db, postId);
+
+  static Future<HistoryRecord?> _getByPostUrl(
+    DatabaseExecutor db,
+    String postUrl,
+  ) async {
+    final rows = await db.query(
       'history_records',
       where: 'post_url = ?',
       whereArgs: [postUrl],
@@ -423,8 +446,11 @@ class HistoryDb {
     return HistoryRecord.fromMap(rows.first);
   }
 
-  Future<HistoryRecord?> getByPostId(String postId) async {
-    final rows = await _db.query(
+  static Future<HistoryRecord?> _getByPostId(
+    DatabaseExecutor db,
+    String postId,
+  ) async {
+    final rows = await db.query(
       'history_records',
       where: 'post_id = ?',
       whereArgs: [postId],

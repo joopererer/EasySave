@@ -298,7 +298,7 @@ class SelectPanelView(
     private fun startShimmer() {
         if (shimmerAnim != null) return
         shimmerAnim = ValueAnimator.ofFloat(0.35f, 0.95f).apply {
-            duration = 850
+            duration = 550
             repeatCount = ValueAnimator.INFINITE
             repeatMode = ValueAnimator.REVERSE
             addUpdateListener { anim ->

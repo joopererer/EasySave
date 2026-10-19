@@ -25,6 +25,10 @@ Completer<List<int>?>? _selectCompleter;
 /// in `main.dart`).
 void backgroundEntry() {
   WidgetsFlutterBinding.ensureInitialized();
+  // This isolate owns the batches it starts: it is the only one allowed to
+  // save them to the album and write their history record (the main isolate
+  // reads the same SharedPreferences snapshots and must ignore them).
+  DownloadManager.owner = DownloadBatch.sourceBackground;
   final channel = MethodChannel(_channelName);
   channel.setMethodCallHandler((call) async {
     switch (call.method) {
