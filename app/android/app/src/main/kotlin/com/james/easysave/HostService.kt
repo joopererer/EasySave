@@ -42,6 +42,7 @@ class HostService : Service() {
         const val EXTRA_TEXT = "text"
         const val EXTRA_MODE = "mode"
         const val EXTRA_SOURCE = "source"
+        const val EXTRA_HINT = "hint"
         const val EXTRA_ERROR_URL = "easy_err_url"
         const val EXTRA_ERROR_CODE = "easy_err_code"
         const val EXTRA_ERROR_MESSAGE = "easy_err_message"
@@ -64,12 +65,19 @@ class HostService : Service() {
         }
 
         /** Same as [submit] but passes free text (share sheet / selected text). */
-        fun submitText(context: Context, text: String, mode: String, source: String) {
+        fun submitText(
+            context: Context,
+            text: String,
+            mode: String,
+            source: String,
+            emptyHint: String? = null,
+        ) {
             val intent = Intent(context, HostService::class.java).apply {
                 action = ACTION_SUBMIT
                 putExtra(EXTRA_TEXT, text)
                 putExtra(EXTRA_MODE, mode)
                 putExtra(EXTRA_SOURCE, source)
+                if (emptyHint != null) putExtra(EXTRA_HINT, emptyHint)
             }
             ContextCompat.startForegroundService(context, intent)
         }
@@ -99,6 +107,7 @@ class HostService : Service() {
             val task = mutableMapOf<String, Any?>(
                 "urls" to urls,
                 "text" to intent.getStringExtra(EXTRA_TEXT),
+                "hint" to intent.getStringExtra(EXTRA_HINT),
                 "mode" to (intent.getStringExtra(EXTRA_MODE) ?: "all"),
                 "source" to (intent.getStringExtra(EXTRA_SOURCE) ?: "background"),
             )
@@ -178,6 +187,15 @@ class HostService : Service() {
                         }
                         result.success(null)
                     }
+                    "tile" -> {
+                        val args = call.arguments as? Map<*, *>
+                        EasySaveTileService.pushState(
+                            this,
+                            args?.get("active") as? Boolean ?: false,
+                            args?.get("subtitle") as? String,
+                        )
+                        result.success(null)
+                    }
                     "keepAlive" -> {
                         resetIdleTimer()
                         result.success(null)
@@ -220,6 +238,8 @@ class HostService : Service() {
         channel = null
         ready = false
         pending.clear()
+        // Never leave the tile stuck in an active state after teardown.
+        EasySaveTileService.pushState(this, false, null)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
             stopForeground(STOP_FOREGROUND_REMOVE)
         } else {

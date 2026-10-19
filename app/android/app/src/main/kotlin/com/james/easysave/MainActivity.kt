@@ -1,10 +1,13 @@
 package com.james.easysave
 
+import android.app.StatusBarManager
 import android.content.BroadcastReceiver
+import android.content.ComponentName
 import android.content.ContentUris
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.graphics.drawable.Icon
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -21,6 +24,7 @@ class MainActivity : FlutterActivity() {
         private const val SEAL_PACKAGE = "com.junkfood.seal"
         private const val MEDIA_CHANNEL = "easysave/media"
         private const val HOST_CHANNEL = "easysave/host"
+        private const val TILE_CHANNEL = "easysave/tile"
         private const val DELETE_REQUEST_CODE = 50021
     }
 
@@ -139,6 +143,41 @@ class MainActivity : FlutterActivity() {
                 }
                 else -> result.notImplemented()
             }
+        }
+
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, TILE_CHANNEL)
+            .setMethodCallHandler { call, result ->
+                when (call.method) {
+                    "addTile" -> addTile(result)
+                    else -> result.notImplemented()
+                }
+            }
+    }
+
+    /// Ask the system to add the Quick Settings tile (Android 13+ shows a
+    /// confirmation dialog). Returns true when the tile was added or already
+    /// present; false on older versions so Dart can show manual instructions.
+    private fun addTile(result: MethodChannel.Result) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
+            result.success(false)
+            return
+        }
+        try {
+            val sbm = getSystemService(StatusBarManager::class.java)
+            val icon = Icon.createWithResource(this, R.drawable.ic_tile_easysave)
+            sbm?.requestAddTileService(
+                ComponentName(this, EasySaveTileService::class.java),
+                "EasySave 下载",
+                icon,
+                mainExecutor,
+            ) { code ->
+                result.success(
+                    code == StatusBarManager.TILE_ADD_REQUEST_RESULT_TILE_ADDED ||
+                        code == StatusBarManager.TILE_ADD_REQUEST_RESULT_TILE_ALREADY_ADDED
+                )
+            } ?: result.success(false)
+        } catch (e: Exception) {
+            result.success(false)
         }
     }
 

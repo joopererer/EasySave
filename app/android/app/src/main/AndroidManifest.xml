@@ -58,6 +58,17 @@
             android:name=".HostService"
             android:exported="false"
             android:foregroundServiceType="dataSync"/>
+        <!-- v1.6: Quick Settings tile. -->
+        <service
+            android:name=".EasySaveTileService"
+            android:exported="true"
+            android:icon="@drawable/ic_tile_easysave"
+            android:label="EasySave 下载"
+            android:permission="android.permission.BIND_QUICK_SETTINGS_TILE">
+            <intent-filter>
+                <action android:name="android.service.quicksettings.action.QS_TILE"/>
+            </intent-filter>
+        </service>
         <!-- v1.6: transparent clipboard reader used by the bubble / tile. -->
         <activity
             android:name=".ClipboardReaderActivity"

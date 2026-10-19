@@ -7,6 +7,7 @@ import 'package:package_info_plus/package_info_plus.dart';
 
 import '../services/auth.dart';
 import '../services/settings.dart';
+import '../services/tile_service.dart';
 import '../services/update_service.dart';
 import 'login_page.dart';
 
@@ -104,6 +105,36 @@ class _MinePageState extends State<MinePage> {
 
 
   Future<void> _saveSettings() => _settings.save();
+
+  Future<void> _addTileToControlCenter() async {
+    final added = await TileService.addTile();
+    if (!mounted) return;
+    if (added) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('已添加到控制中心')),
+      );
+      return;
+    }
+    // Android 12 and below (or a cancelled dialog): show manual steps.
+    await showDialog<void>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('添加到控制中心'),
+        content: const Text(
+          '1. 从屏幕顶部下拉，展开控制中心\n'
+          '2. 点击右上角「编辑」（铅笔图标）\n'
+          '3. 找到「EasySave 下载」磁贴，拖到上方控制区\n\n'
+          '添加后，复制帖子链接再点磁贴即可后台下载。',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('知道了'),
+          ),
+        ],
+      ),
+    );
+  }
 
   Future<void> _openLogin(PlatformKind platform) async {
     final ok = await Navigator.of(context).push<bool>(
@@ -312,6 +343,18 @@ class _MinePageState extends State<MinePage> {
                     setState(() => _settings.autoClipboard = v);
                     await _saveSettings();
                   },
+                ),
+              ],
+            ),
+          ),
+          const _GroupTitle('快捷入口'),
+          Card(
+            child: Column(
+              children: [
+                ListTile(
+                  title: const Text('添加到控制中心'),
+                  subtitle: const Text('复制链接后点磁贴即可后台下载'),
+                  onTap: _addTileToControlCenter,
                 ),
               ],
             ),

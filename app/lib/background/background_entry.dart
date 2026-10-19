@@ -52,6 +52,10 @@ Future<void> _notify(MethodChannel channel, String msg) =>
 Future<void> _error(MethodChannel channel, String url, String code, String message) =>
     _invoke(channel, 'error', {'url': url, 'code': code, 'message': message});
 
+/// Drive the Quick Settings tile state (active + subtitle).
+Future<void> _tile(MethodChannel channel, bool active, String? subtitle) =>
+    _invoke(channel, 'tile', {'active': active, 'subtitle': subtitle});
+
 Future<void> _handleSubmit(MethodChannel channel, Map<dynamic, dynamic> args) async {
   final mode = args['mode']?.toString() ?? 'all';
   final source = args['source']?.toString() ?? 'background';
@@ -63,13 +67,15 @@ Future<void> _handleSubmit(MethodChannel channel, Map<dynamic, dynamic> args) as
   await _log(channel, 'submit: mode=$mode urls=${urls.length} source=$source');
   await _invoke(channel, 'keepAlive');
   await _notify(channel, '正在解析…');
+  final emptyHint = args['hint']?.toString() ?? '没有可解析的链接';
 
   if (urls.isEmpty) {
     await _log(channel, 'no supported link in input');
-    await _invoke(channel, 'toast', '没有可解析的链接');
+    await _invoke(channel, 'toast', emptyHint);
     await _invoke(channel, 'stop');
     return;
   }
+  await _tile(channel, true, '解析中…');
 
   try {
     await ParserManager.instance.init();
@@ -117,6 +123,7 @@ Future<void> _handleSubmit(MethodChannel channel, Map<dynamic, dynamic> args) as
   }
 
   if (!anyStarted) {
+    await _tile(channel, false, null);
     await _invoke(channel, 'idle');
   }
 }
@@ -133,13 +140,19 @@ Future<void> _awaitBatchAndNotify(
     const Duration(seconds: 20),
     (_) => _invoke(channel, 'keepAlive'),
   );
+  final total = batch.jobs.length;
+  var lastDone = -1;
   try {
     while (!batch.isTerminal) {
+      final done = batch.succeeded;
+      if (done != lastDone) {
+        lastDone = done;
+        await _tile(channel, true, '$done/$total');
+      }
       await Future<void>.delayed(const Duration(milliseconds: 500));
     }
     // Give _afterTerminal() (gallery link + history write) time to run.
     await Future<void>.delayed(const Duration(milliseconds: 1000));
-    final total = batch.jobs.length;
     final ok = batch.succeeded;
     final failed = batch.jobs.where((j) => j.state == JobState.failed).length;
     final secs = DateTime.now().difference(started).inSeconds;
@@ -155,6 +168,7 @@ Future<void> _awaitBatchAndNotify(
     await _invoke(channel, 'historyChanged');
   } finally {
     keepAlive.cancel();
+    await _tile(channel, false, null);
     await _invoke(channel, 'idle');
   }
 }

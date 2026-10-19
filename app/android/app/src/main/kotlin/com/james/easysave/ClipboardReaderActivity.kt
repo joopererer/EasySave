@@ -27,6 +27,9 @@ class ClipboardReaderActivity : Activity() {
         private const val TAG = "V16CLIP"
         private const val TIMEOUT_MS = 500L
 
+        /** Optional extra: toast to show when there is no link in the clipboard. */
+        const val EXTRA_EMPTY_MESSAGE = "empty_msg"
+
         /** Set by the caller right before startActivity; invoked exactly once. */
         var listener: ((String?) -> Unit)? = null
 
@@ -71,9 +74,14 @@ class ClipboardReaderActivity : Activity() {
         val text: String? =
             if (clip != null && clip.itemCount > 0) clip.getItemAt(0).coerceToText(this)?.toString() else null
         Log.i(TAG, "CLIPBOARD=${text ?: "<null>"}")
-        // The bubble/tile runs headless; a toast is only shown in debug builds
-        // to confirm the read without a visible window.
-        Toast.makeText(this, "剪贴板: " + (text?.take(60) ?: "空"), Toast.LENGTH_SHORT).show()
+        // Shown from this (foreground) activity so it isn't suppressed the way a
+        // background toast would be. The authoritative supported-host check
+        // runs in Dart; this only guards the obvious "no URL" case.
+        val emptyMsg = intent?.getStringExtra(EXTRA_EMPTY_MESSAGE)
+        val hasHttp = !text.isNullOrBlank() && text.contains("http", ignoreCase = true)
+        if (!hasHttp && !emptyMsg.isNullOrBlank()) {
+            Toast.makeText(this, emptyMsg, Toast.LENGTH_SHORT).show()
+        }
         deliver(text)
         finish()
         @Suppress("DEPRECATION")
