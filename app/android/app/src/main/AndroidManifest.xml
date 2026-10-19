@@ -20,6 +20,7 @@
         android:maxSdkVersion="32"/>
     <!-- v1.6 validation: floating bubble overlay -->
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW"/>
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE"/>
     <application
         android:label="EasySave"
         android:name="${applicationName}"
@@ -68,6 +69,15 @@
             <intent-filter>
                 <action android:name="android.service.quicksettings.action.QS_TILE"/>
             </intent-filter>
+        </service>
+        <!-- v1.6: optional floating bubble (default off). -->
+        <service
+            android:name=".OverlayService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="floating_bubble"/>
         </service>
         <!-- v1.6: transparent clipboard reader used by the bubble / tile. -->
         <activity

@@ -47,6 +47,11 @@ Future<void> _log(MethodChannel channel, String msg) =>
 Future<void> _notify(MethodChannel channel, String msg) =>
     _invoke(channel, 'notify', msg);
 
+/// Quick, glanceable feedback for a background download (share / tile /
+/// bubble). Gated by the user's "后台下载结果提示" setting.
+Future<void> _toast(MethodChannel channel, String msg) =>
+    _invoke(channel, 'toast', msg);
+
 /// Error notification that carries the link + code + message so tapping it can
 /// open the app on the same error page as a manual parse.
 Future<void> _error(MethodChannel channel, String url, String code, String message) =>
@@ -56,8 +61,34 @@ Future<void> _error(MethodChannel channel, String url, String code, String messa
 Future<void> _tile(MethodChannel channel, bool active, String? subtitle) =>
     _invoke(channel, 'tile', {'active': active, 'subtitle': subtitle});
 
-Future<void> _handleSubmit(MethodChannel channel, Map<dynamic, dynamic> args) async {
-  final mode = args['mode']?.toString() ?? 'all';
+/// Drive the floating bubble state.
+Future<void> _bubble(
+  MethodChannel channel,
+  bool active,
+  int done,
+  int total,
+  String? label,
+  bool error,
+) =>
+    _invoke(channel, 'bubble', {
+      'active': active,
+      'done': done,
+      'total': total,
+      'label': label,
+      'error': error,
+    });
+
+/// Build the caption text (title + body) for the bubble's "复制文案".
+String _captionText(ParsedPost post) {
+  final parts = <String>[];
+  final t = post.title?.trim() ?? '';
+  if (t.isNotEmpty) parts.add(t);
+  final c = post.caption?.trim() ?? '';
+  if (c.isNotEmpty) parts.add(c);
+  return parts.join('\n\n');
+}
+
+Future<void> _handleSubmit(MethodChannel channel, Map<dynamic, dynamic> args) async {  final mode = args['mode']?.toString() ?? 'all';
   final source = args['source']?.toString() ?? 'background';
   final text = args['text']?.toString();
   var urls = (args['urls'] as List?)?.map((e) => '$e').toList() ?? <String>[];
@@ -67,6 +98,8 @@ Future<void> _handleSubmit(MethodChannel channel, Map<dynamic, dynamic> args) as
   await _log(channel, 'submit: mode=$mode urls=${urls.length} source=$source');
   await _invoke(channel, 'keepAlive');
   await _notify(channel, '正在解析…');
+  final settings = await AppSettings.load();
+  final toasts = settings.backgroundToast;
   final emptyHint = args['hint']?.toString() ?? '没有可解析的链接';
 
   if (urls.isEmpty) {
@@ -75,7 +108,9 @@ Future<void> _handleSubmit(MethodChannel channel, Map<dynamic, dynamic> args) as
     await _invoke(channel, 'stop');
     return;
   }
+  if (toasts) await _toast(channel, '下载准备中…');
   await _tile(channel, true, '解析中…');
+  await _bubble(channel, true, 0, 0, '解析中…', false);
 
   try {
     await ParserManager.instance.init();
@@ -83,7 +118,6 @@ Future<void> _handleSubmit(MethodChannel channel, Map<dynamic, dynamic> args) as
     await _log(channel, 'ParserManager init FAILED: $e');
   }
 
-  final settings = await AppSettings.load();
   final manager = DownloadManager.instance;
   await manager.init();
 
@@ -96,6 +130,18 @@ Future<void> _handleSubmit(MethodChannel channel, Map<dynamic, dynamic> args) as
     try {
       final outcome = await parsePostOutcome(url);
       final post = outcome.data;
+      if (mode == 'caption') {
+        final cap = _captionText(post);
+        await Clipboard.setData(ClipboardData(text: cap));
+        await _log(channel, 'CAPTION copied ${cap.length} chars :: $url');
+        anyStarted = true;
+        await _tile(channel, false, null);
+        await _bubble(channel, false, 1, 1, null, false);
+        if (toasts) await _toast(channel, '文案已复制');
+        await _notify(channel, '文案已复制到剪贴板');
+        await _invoke(channel, 'idle');
+        continue;
+      }
       if (post.items.isEmpty) {
         await _log(channel, 'PARSE OK but no items (${sw.elapsedMilliseconds}ms) :: $url');
         await _notify(channel, '该帖子没有可保存的内容');
@@ -112,18 +158,26 @@ Future<void> _handleSubmit(MethodChannel channel, Map<dynamic, dynamic> args) as
       );
       anyStarted = true;
       await _log(channel, 'DOWNLOAD started ${batch.jobs.length} files :: $url');
-      unawaited(_awaitBatchAndNotify(channel, batch, started, url));
+      if (toasts) await _toast(channel, '开始下载 ${batch.jobs.length} 个文件');
+      unawaited(_awaitBatchAndNotify(channel, batch, started, url, toasts));
     } on ParseFailure catch (e) {
       await _log(channel, 'PARSE FAIL[${e.code}] (${sw.elapsedMilliseconds}ms) ${e.message} :: $url');
+      if (toasts) await _toast(channel, '解析失败：${e.message}');
+      await _tile(channel, false, null);
+      await _bubble(channel, false, 0, 0, null, true);
       await _error(channel, url, e.code, e.message);
     } catch (e) {
       await _log(channel, 'ERROR (${sw.elapsedMilliseconds}ms) $e :: $url');
+      if (toasts) await _toast(channel, '处理失败');
+      await _tile(channel, false, null);
+      await _bubble(channel, false, 0, 0, null, true);
       await _error(channel, url, ParseErrorCode.invalidPage, '$e');
     }
   }
 
   if (!anyStarted) {
     await _tile(channel, false, null);
+    await _bubble(channel, false, 0, 0, null, true);
     await _invoke(channel, 'idle');
   }
 }
@@ -135,6 +189,7 @@ Future<void> _awaitBatchAndNotify(
   DownloadBatch batch,
   DateTime started,
   String url,
+  bool toasts,
 ) async {
   final keepAlive = Timer.periodic(
     const Duration(seconds: 20),
@@ -142,33 +197,38 @@ Future<void> _awaitBatchAndNotify(
   );
   final total = batch.jobs.length;
   var lastDone = -1;
+  var failed = 0;
   try {
     while (!batch.isTerminal) {
       final done = batch.succeeded;
       if (done != lastDone) {
         lastDone = done;
         await _tile(channel, true, '$done/$total');
+        await _bubble(channel, true, done, total, null, false);
       }
       await Future<void>.delayed(const Duration(milliseconds: 500));
     }
     // Give _afterTerminal() (gallery link + history write) time to run.
     await Future<void>.delayed(const Duration(milliseconds: 1000));
     final ok = batch.succeeded;
-    final failed = batch.jobs.where((j) => j.state == JobState.failed).length;
+    failed = batch.jobs.where((j) => j.state == JobState.failed).length;
     final secs = DateTime.now().difference(started).inSeconds;
     if (failed > 0) {
       final firstError =
           batch.jobs.firstWhere((j) => j.state == JobState.failed).error ?? '下载失败';
       await _log(channel, 'DOWNLOAD failed: $ok/$total ok, $failed failed, ${secs}s :: $url');
+      if (toasts) await _toast(channel, '下载失败：成功 $ok/$total');
       await _notify(channel, '下载失败：成功 $ok/$total —— $firstError');
     } else {
       await _log(channel, 'DOWNLOAD done: $ok/$total in ${secs}s :: $url');
+      if (toasts) await _toast(channel, '下载完成：$ok/$total 个文件');
       await _notify(channel, '下载完成：$ok/$total 个文件');
     }
     await _invoke(channel, 'historyChanged');
   } finally {
     keepAlive.cancel();
     await _tile(channel, false, null);
+    await _bubble(channel, false, batch.succeeded, total, null, failed > 0);
     await _invoke(channel, 'idle');
   }
 }

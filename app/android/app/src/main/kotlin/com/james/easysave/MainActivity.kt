@@ -12,6 +12,7 @@ import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.provider.MediaStore
+import android.provider.Settings
 import androidx.core.content.ContextCompat
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
@@ -25,7 +26,9 @@ class MainActivity : FlutterActivity() {
         private const val MEDIA_CHANNEL = "easysave/media"
         private const val HOST_CHANNEL = "easysave/host"
         private const val TILE_CHANNEL = "easysave/tile"
+        private const val BUBBLE_CHANNEL = "easysave/bubble"
         private const val DELETE_REQUEST_CODE = 50021
+        const val EXTRA_OPEN_URL = "easy_open_url"
     }
 
     /**
@@ -42,6 +45,9 @@ class MainActivity : FlutterActivity() {
     // (cold start) or pushed to Dart immediately (warm start). Cleared once.
     private var pendingError: Map<String, String?>? = null
 
+    // Url to open on the parse/preview page (from the bubble's "打开 EasySave").
+    private var pendingOpen: String? = null
+
     private val historyReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             // The background engine wrote history; ask the main UI to reload.
@@ -52,12 +58,14 @@ class MainActivity : FlutterActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         handleErrorIntent(intent)
+        handleOpenIntent(intent)
     }
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
         handleErrorIntent(intent)
+        handleOpenIntent(intent)
     }
 
     /// Read the error extras from a tapped error notification and hand them to
@@ -75,6 +83,15 @@ class MainActivity : FlutterActivity() {
         i.removeExtra(HostService.EXTRA_ERROR_MESSAGE)
         pendingError = payload
         hostChannel?.invokeMethod("openParseError", payload)
+    }
+
+    /// Read the "open this url to preview" extra (bubble → 打开 EasySave).
+    private fun handleOpenIntent(intent: Intent?) {
+        val i = intent ?: return
+        val url = i.getStringExtra(EXTRA_OPEN_URL) ?: return
+        i.removeExtra(EXTRA_OPEN_URL)
+        pendingOpen = url
+        hostChannel?.invokeMethod("openParse", url)
     }
 
     override fun onStart() {
@@ -141,6 +158,11 @@ class MainActivity : FlutterActivity() {
                     pendingError = null
                     result.success(null)
                 }
+                "getPendingOpen" -> result.success(pendingOpen)
+                "clearPendingOpen" -> {
+                    pendingOpen = null
+                    result.success(null)
+                }
                 else -> result.notImplemented()
             }
         }
@@ -149,6 +171,39 @@ class MainActivity : FlutterActivity() {
             .setMethodCallHandler { call, result ->
                 when (call.method) {
                     "addTile" -> addTile(result)
+                    else -> result.notImplemented()
+                }
+            }
+
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, BUBBLE_CHANNEL)
+            .setMethodCallHandler { call, result ->
+                when (call.method) {
+                    "hasPermission" -> result.success(Settings.canDrawOverlays(this))
+                    "requestPermission" -> {
+                        try {
+                            startActivity(
+                                Intent(
+                                    Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                                    Uri.parse("package:$packageName")
+                                )
+                            )
+                        } catch (_: Exception) {
+                        }
+                        result.success(null)
+                    }
+                    "start" -> {
+                        if (Settings.canDrawOverlays(this)) {
+                            OverlayService.start(this)
+                            result.success(true)
+                        } else {
+                            result.success(false)
+                        }
+                    }
+                    "stop" -> {
+                        OverlayService.stop(this)
+                        result.success(null)
+                    }
+                    "isRunning" -> result.success(OverlayService.isRunning)
                     else -> result.notImplemented()
                 }
             }

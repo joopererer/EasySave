@@ -26,14 +26,19 @@ class _MainShellState extends State<MainShell> with WidgetsBindingObserver {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     HostBridge.parseError.addListener(_consumeHostError);
+    HostBridge.openRequest.addListener(_consumeHostOpen);
     // A cold-start error may already be present before the first frame.
-    WidgetsBinding.instance.addPostFrameCallback((_) => _consumeHostError());
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _consumeHostError();
+      _consumeHostOpen();
+    });
   }
 
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     HostBridge.parseError.removeListener(_consumeHostError);
+    HostBridge.openRequest.removeListener(_consumeHostOpen);
     super.dispose();
   }
 
@@ -45,6 +50,15 @@ class _MainShellState extends State<MainShell> with WidgetsBindingObserver {
     HostBridge.parseError.value = null;
     _select(0);
     _parseKey.currentState?.showExternalError(err.url, err.code, err.message);
+  }
+
+  /// Open a url (e.g. the bubble's "打开 EasySave") on the parse tab.
+  void _consumeHostOpen() {
+    final url = HostBridge.openRequest.value;
+    if (url == null || url.isEmpty) return;
+    HostBridge.openRequest.value = null;
+    _select(0);
+    _parseKey.currentState?.showExternalUrl(url);
   }
 
   @override

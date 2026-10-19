@@ -40,6 +40,10 @@ abstract final class HostBridge {
   static final ValueNotifier<HostError?> parseError =
       ValueNotifier<HostError?>(null);
 
+  /// Set when the app should open a url on the parse/preview page (e.g. the
+  /// bubble's "打开 EasySave"). Consumed once by the shell.
+  static final ValueNotifier<String?> openRequest = ValueNotifier<String?>(null);
+
   /// Register the handler once, from main().
   static void init() {
     _channel.setMethodCallHandler((call) async {
@@ -50,6 +54,10 @@ abstract final class HostBridge {
         case 'openParseError':
           parseError.value = HostError.fromMap(call.arguments);
           unawaited(_channel.invokeMethod<void>('clearPendingError'));
+          break;
+        case 'openParse':
+          openRequest.value = call.arguments as String?;
+          unawaited(_channel.invokeMethod<void>('clearPendingOpen'));
           break;
       }
       return null;
@@ -68,6 +76,20 @@ abstract final class HostBridge {
       }
     } catch (_) {
       // No pending error / channel unavailable.
+    }
+  }
+
+  /// Pull a "open this url" request delivered before the handler existed.
+  static Future<void> pullPendingOpen() async {
+    try {
+      final raw = await _channel.invokeMethod<Object?>('getPendingOpen');
+      final url = raw as String?;
+      if (url != null && url.isNotEmpty) {
+        openRequest.value = url;
+        await _channel.invokeMethod<void>('clearPendingOpen');
+      }
+    } catch (_) {
+      // No pending open / channel unavailable.
     }
   }
 }

@@ -196,6 +196,17 @@ class HostService : Service() {
                         )
                         result.success(null)
                     }
+                    "bubble" -> {
+                        val a = call.arguments as? Map<*, *>
+                        OverlayService.updateState(
+                            a?.get("active") as? Boolean ?: false,
+                            (a?.get("done") as? Number)?.toInt() ?: 0,
+                            (a?.get("total") as? Number)?.toInt() ?: 0,
+                            a?.get("label") as? String,
+                            a?.get("error") as? Boolean ?: false,
+                        )
+                        result.success(null)
+                    }
                     "keepAlive" -> {
                         resetIdleTimer()
                         result.success(null)

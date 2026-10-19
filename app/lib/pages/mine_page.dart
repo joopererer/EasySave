@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 
 import '../services/auth.dart';
+import '../services/bubble_service.dart';
 import '../services/settings.dart';
 import '../services/tile_service.dart';
 import '../services/update_service.dart';
@@ -18,7 +19,7 @@ class MinePage extends StatefulWidget {
   State<MinePage> createState() => _MinePageState();
 }
 
-class _MinePageState extends State<MinePage> {
+class _MinePageState extends State<MinePage> with WidgetsBindingObserver {
   final Map<PlatformKind, bool> _loggedIn = {
     for (final p in PlatformKind.values) p: false,
   };
@@ -27,10 +28,12 @@ class _MinePageState extends State<MinePage> {
   String _version = '';
   String _nickname = '';
   Set<PlatformKind> _lastExpired = const {};
+  bool _pendingBubbleEnable = false;
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _lastExpired = LoginExpiredBus.expired.value;
     _load();
     LoginExpiredBus.expired.addListener(_onExpired);
@@ -38,8 +41,60 @@ class _MinePageState extends State<MinePage> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     LoginExpiredBus.expired.removeListener(_onExpired);
     super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _syncBubbleState();
+    }
+  }
+
+  /// Keep the bubble in sync with the toggle and the overlay permission
+  /// (handles granting after the settings round-trip and permission revoke).
+  Future<void> _syncBubbleState() async {
+    final granted = await BubbleService.hasPermission();
+    if (_pendingBubbleEnable) {
+      _pendingBubbleEnable = false;
+      if (granted) {
+        final started = await BubbleService.start();
+        if (!mounted) return;
+        setState(() => _settings.bubbleEnabled = started);
+        await _saveSettings();
+      }
+      return;
+    }
+    if (_settings.bubbleEnabled && !granted) {
+      // Permission was revoked from system settings: turn the bubble off.
+      await BubbleService.stop();
+      if (!mounted) return;
+      setState(() => _settings.bubbleEnabled = false);
+      await _saveSettings();
+    } else if (_settings.bubbleEnabled && granted) {
+      if (!await BubbleService.isRunning()) await BubbleService.start();
+    }
+  }
+
+  Future<void> _toggleBubble(bool v) async {
+    if (v) {
+      if (!await BubbleService.hasPermission()) {
+        _pendingBubbleEnable = true;
+        await BubbleService.requestPermission();
+        return;
+      }
+      final started = await BubbleService.start();
+      if (!mounted) return;
+      setState(() => _settings.bubbleEnabled = started);
+      await _saveSettings();
+    } else {
+      await BubbleService.stop();
+      if (!mounted) return;
+      setState(() => _settings.bubbleEnabled = false);
+      await _saveSettings();
+    }
   }
 
   void _onExpired() {
@@ -351,6 +406,25 @@ class _MinePageState extends State<MinePage> {
           Card(
             child: Column(
               children: [
+                SwitchListTile(
+                  title: const Text('悬浮球'),
+                  subtitle: Text(
+                    _settings.bubbleEnabled
+                        ? '已开启，可拖动吸附到屏幕边缘'
+                        : '复制链接后点气泡即可后台下载',
+                  ),
+                  value: _settings.bubbleEnabled,
+                  onChanged: _toggleBubble,
+                ),
+                SwitchListTile(
+                  title: const Text('后台下载结果提示'),
+                  subtitle: const Text('用 Toast 显示准备、开始、结果'),
+                  value: _settings.backgroundToast,
+                  onChanged: (v) async {
+                    setState(() => _settings.backgroundToast = v);
+                    await _saveSettings();
+                  },
+                ),
                 ListTile(
                   title: const Text('添加到控制中心'),
                   subtitle: const Text('复制链接后点磁贴即可后台下载'),

@@ -383,6 +383,12 @@ class ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
     }
   }
 
+  /// Parse + open the given url (e.g. the bubble's "打开 EasySave").
+  void showExternalUrl(String url) {
+    if (url.trim().isEmpty) return;
+    _handleLinks(url);
+  }
+
   Future<void> _resolve(String link) async {
     if (_busy) return;
     _currentLink = link;

@@ -20,6 +20,14 @@ class AppSettings {
   bool saveCaptionTxt = false;
   bool autoClipboard = true;
 
+  /// Show a Toast for background (share / tile / bubble) download progress:
+  /// "下载准备中…", start, error and completion. Some users prefer the
+  /// notification instead.
+  bool backgroundToast = true;
+
+  /// Floating bubble (roadmap v1.6), default off.
+  bool bubbleEnabled = false;
+
   // Persisted history page preferences.
   HistoryView historyView = HistoryView.posts;
   HistoryLayout historyLayout = HistoryLayout.waterfall;
@@ -32,6 +40,8 @@ class AppSettings {
       ..namePattern = prefs.getString('namePattern') ?? defaultNamePattern
       ..saveCaptionTxt = prefs.getBool('saveCaptionTxt') ?? false
       ..autoClipboard = prefs.getBool('autoClipboard') ?? true
+      ..backgroundToast = prefs.getBool('backgroundToast') ?? true
+      ..bubbleEnabled = prefs.getBool('bubbleEnabled') ?? false
       ..historyView = _enumFromName(
         HistoryView.values,
         prefs.getString('historyView'),
@@ -55,6 +65,8 @@ class AppSettings {
     await prefs.setString('namePattern', namePattern);
     await prefs.setBool('saveCaptionTxt', saveCaptionTxt);
     await prefs.setBool('autoClipboard', autoClipboard);
+    await prefs.setBool('backgroundToast', backgroundToast);
+    await prefs.setBool('bubbleEnabled', bubbleEnabled);
     await prefs.setString('historyView', historyView.name);
     await prefs.setString('historyLayout', historyLayout.name);
     await prefs.setString('historySort', historySort.name);
