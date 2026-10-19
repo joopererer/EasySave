@@ -1,7 +1,9 @@
 package com.james.easysave
 
+import android.app.AlarmManager
 import android.app.NotificationChannel
 import android.app.NotificationManager
+import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
@@ -21,16 +23,23 @@ import android.util.Log
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
+import android.view.ViewGroup
 import android.view.WindowManager
+import android.widget.FrameLayout
+import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.TextView
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import kotlin.math.abs
+import kotlin.math.cos
 import kotlin.math.min
 import kotlin.math.roundToInt
+import kotlin.math.sin
 
 enum class BubbleState { IDLE, MENU, BUSY, DONE, ERROR }
+
+private data class BubbleError(val url: String?, val code: String?, val message: String?)
 
 /**
  * v1.6 floating bubble (optional, default off). Native Kotlin overlay that reads
@@ -61,8 +70,20 @@ class OverlayService : Service() {
         }
 
         /** Push a state update from HostService. */
-        fun updateState(active: Boolean, done: Int, total: Int, label: String?, error: Boolean) {
-            instance?.applyState(active, done, total, label, error)
+        fun updateState(
+            active: Boolean,
+            done: Int,
+            total: Int,
+            label: String?,
+            error: Boolean,
+            url: String? = null,
+            code: String? = null,
+            message: String? = null,
+        ) {
+            instance?.applyState(
+                active, done, total, label, error,
+                if (url != null || code != null) BubbleError(url, code, message) else null,
+            )
         }
     }
 
@@ -71,7 +92,13 @@ class OverlayService : Service() {
     private var bubbleParams: WindowManager.LayoutParams? = null
     private var menu: View? = null
     private var pendingText: String? = null
+    private var lastError: BubbleError? = null
     private var doneResetRunnable: Runnable? = null
+
+    // Drag-to-close target.
+    private var closeView: View? = null
+    private var closeParams: WindowManager.LayoutParams? = null
+    private var overClose = false
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -84,11 +111,44 @@ class OverlayService : Service() {
         addBubble()
     }
 
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        // If the process was restarted (START_STICKY), rebuild the bubble.
+        if (bubble == null) {
+            try {
+                startForegroundCompat()
+                addBubble()
+            } catch (e: Exception) {
+                Log.e(TAG, "restart addBubble failed: $e")
+            }
+        }
+        return START_STICKY
+    }
+
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        // Best effort: re-arm shortly after the app is swiped away. (On MIUI
+        // this may still require the user to allow background autostart.)
+        try {
+            val restart = Intent(applicationContext, OverlayService::class.java)
+            val pi = PendingIntent.getService(
+                applicationContext,
+                7,
+                restart,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+            )
+            val am = getSystemService(ALARM_SERVICE) as AlarmManager
+            am.set(AlarmManager.RTC, System.currentTimeMillis() + 1000, pi)
+        } catch (e: Exception) {
+            Log.e(TAG, "onTaskRemoved restart failed: $e")
+        }
+        super.onTaskRemoved(rootIntent)
+    }
+
     override fun onDestroy() {
         isRunning = false
         instance = null
         doneResetRunnable?.let { bubble?.removeCallbacks(it) }
         removeMenu()
+        removeClose()
         bubble?.let { try { wm?.removeView(it) } catch (_: Exception) {} }
         bubble = null
         super.onDestroy()
@@ -102,6 +162,10 @@ class OverlayService : Service() {
         @Suppress("DEPRECATION")
         WindowManager.LayoutParams.TYPE_PHONE
     }
+
+    private fun baseFlags(): Int =
+        WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+            WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS
 
     private fun startForegroundCompat() {
         val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
@@ -119,12 +183,11 @@ class OverlayService : Service() {
         startForeground(NOTIF_ID, notif)
     }
 
+    // ---------------------------------------------------------------- bubble
+
     private fun addBubble() {
         val params = WindowManager.LayoutParams(
-            dp(SIZE_DP), dp(SIZE_DP), overlayType(),
-            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
-                or WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
-            PixelFormat.TRANSLUCENT
+            dp(SIZE_DP), dp(SIZE_DP), overlayType(), baseFlags(), PixelFormat.TRANSLUCENT
         ).apply {
             gravity = Gravity.TOP or Gravity.START
             x = resources.displayMetrics.widthPixels - dp(SIZE_DP + 6)
@@ -164,6 +227,7 @@ class OverlayService : Service() {
                     if (abs(dx) > dp(6) || abs(dy) > dp(6)) dragging = true
                     if (dragging) {
                         removeMenu()
+                        if (closeView == null) showClose()
                         params.x = startX + dx
                         params.y = startY + dy
                         clamp(params)
@@ -171,12 +235,17 @@ class OverlayService : Service() {
                             wm?.updateViewLayout(view, params)
                         } catch (_: Exception) {
                         }
+                        overClose = inCloseZone(
+                            params.x + dp(SIZE_DP) / 2, params.y + dp(SIZE_DP) / 2
+                        )
+                        closeView?.alpha = if (overClose) 1f else 0.6f
                     }
                     true
                 }
                 MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
                     if (dragging) {
-                        snap(params, view)
+                        if (overClose) closeBubble() else snap(params, view)
+                        removeClose()
                     } else {
                         onClickBubble()
                     }
@@ -208,6 +277,10 @@ class OverlayService : Service() {
             removeMenu()
             return
         }
+        // Error state: tap opens the same error page as a manual parse.
+        if (bubble?.state == BubbleState.ERROR) {
+            lastError?.let { openErrorPage(it); return }
+        }
         ClipboardReaderActivity.listener = { text ->
             val t = text?.trim().orEmpty()
             if (t.contains("http", ignoreCase = true)) {
@@ -227,65 +300,90 @@ class OverlayService : Service() {
         }
     }
 
+    // ---------------------------------------------------------------- menu
+
     private fun showMenu() {
         removeMenu()
-        val m = buildMenu()
-        val params = WindowManager.LayoutParams(
-            dp(150), WindowManager.LayoutParams.WRAP_CONTENT, overlayType(),
-            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
-                or WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
-            PixelFormat.TRANSLUCENT
-        ).apply { gravity = Gravity.TOP or Gravity.START }
+        val root = FrameLayout(this)
+        root.setBackgroundColor(0x66000000)
+        root.setOnClickListener { removeMenu() }
+
         val bp = bubbleParams
         val screenW = resources.displayMetrics.widthPixels
-        val onRight = (bp?.x ?: 0) + dp(SIZE_DP) / 2 > screenW / 2
-        val bx = bp?.x ?: 0
-        val by = bp?.y ?: 0
-        params.x = if (onRight) (bx - dp(150 + 6)).coerceAtLeast(0) else (bx + dp(SIZE_DP + 6))
-        params.y = by.coerceAtLeast(dp(24))
-        menu = m
+        val screenH = resources.displayMetrics.heightPixels
+        val bcx = (bp?.x ?: 0).toFloat() + dp(SIZE_DP) / 2f
+        val bcy = (bp?.y ?: 0).toFloat() + dp(SIZE_DP) / 2f
+        val onRight = bcx > screenW / 2f
+        val baseDeg = if (onRight) 180.0 else 0.0
+        val spread = 52.0
+        val radius = dp(120).toFloat()
+
+        val items = listOf(
+            Triple("all", "全部下载", R.drawable.ic_bubble_all),
+            Triple("select", "选择下载", R.drawable.ic_bubble_select),
+            Triple("caption", "复制文案", R.drawable.ic_bubble_caption),
+            Triple("open", "打开 EasySave", R.drawable.ic_bubble_open),
+        )
+        for (i in items.indices) {
+            val t = (i - 1.5) / 1.5
+            val deg = Math.toRadians(baseDeg + t * spread)
+            val cx = bcx + radius * cos(deg).toFloat()
+            val cy = bcy + radius * sin(deg).toFloat()
+            val item = makeItem(items[i].second, items[i].third) { onMenuAction(items[i].first) }
+            val lp = FrameLayout.LayoutParams(dp(72), dp(78)).apply {
+                leftMargin = (cx - dp(36)).roundToInt().coerceIn(0, screenW - dp(72))
+                topMargin = (cy - dp(39)).roundToInt().coerceIn(dp(24), screenH - dp(78))
+            }
+            root.addView(item, lp)
+        }
+
+        menu = root
+        val params = WindowManager.LayoutParams(
+            WindowManager.LayoutParams.MATCH_PARENT,
+            WindowManager.LayoutParams.MATCH_PARENT,
+            overlayType(), baseFlags(), PixelFormat.TRANSLUCENT
+        )
         try {
-            wm?.addView(m, params)
+            wm?.addView(root, params)
         } catch (e: Exception) {
             Log.e(TAG, "menu addView failed: $e")
         }
     }
 
-    private fun buildMenu(): View {
-        val items = listOf(
-            "all" to "全部下载",
-            "select" to "选择下载",
-            "caption" to "复制文案",
-            "open" to "打开 EasySave",
-        )
-        val container = LinearLayout(this).apply {
+    private fun makeItem(label: String, iconRes: Int, onTap: () -> Unit): View {
+        val column = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER_HORIZONTAL
+            setOnClickListener { onTap() }
+        }
+        val circle = FrameLayout(this).apply {
             background = GradientDrawable().apply {
-                cornerRadius = dp(16).toFloat()
-                setColor(0xF2201F1E.toInt())
-                setStroke(dp(1), 0x33FFFFFF)
+                shape = GradientDrawable.OVAL
+                setColor(0xF2262524.toInt())
+                setStroke(dp(1), 0x40FFFFFF)
             }
-            setPadding(dp(6), dp(6), dp(6), dp(6))
         }
-        for ((key, label) in items) {
-            val row = TextView(this).apply {
-                text = label
-                setTextColor(Color.WHITE)
-                textSize = 14f
-                setPadding(dp(14), dp(11), dp(14), dp(11))
-                setOnClickListener {
-                    onMenuAction(key)
-                }
-            }
-            container.addView(row)
+        val icon = ImageView(this).apply {
+            setImageResource(iconRes)
+            layoutParams = FrameLayout.LayoutParams(dp(24), dp(24), Gravity.CENTER)
         }
-        return container
+        circle.addView(icon)
+        column.addView(circle, LinearLayout.LayoutParams(dp(48), dp(48)))
+        val tv = TextView(this).apply {
+            text = label
+            setTextColor(Color.WHITE)
+            textSize = 11f
+            gravity = Gravity.CENTER
+            setPadding(0, dp(4), 0, 0)
+        }
+        column.addView(tv)
+        return column
     }
 
     private fun removeMenu() {
         menu?.let { try { wm?.removeView(it) } catch (_: Exception) {} }
         menu = null
-        bubble?.state = if (bubble?.state == BubbleState.MENU) BubbleState.IDLE else bubble?.state ?: BubbleState.IDLE
+        if (bubble?.state == BubbleState.MENU) bubble?.state = BubbleState.IDLE
     }
 
     private fun onMenuAction(key: String) {
@@ -318,7 +416,83 @@ class OverlayService : Service() {
         }
     }
 
-    private fun applyState(active: Boolean, done: Int, total: Int, label: String?, error: Boolean) {
+    private fun openErrorPage(err: BubbleError) {
+        try {
+            val i = Intent(this, MainActivity::class.java).apply {
+                addFlags(
+                    Intent.FLAG_ACTIVITY_NEW_TASK or
+                        Intent.FLAG_ACTIVITY_SINGLE_TOP or
+                        Intent.FLAG_ACTIVITY_CLEAR_TOP
+                )
+                putExtra(HostService.EXTRA_ERROR_URL, err.url)
+                putExtra(HostService.EXTRA_ERROR_CODE, err.code)
+                putExtra(HostService.EXTRA_ERROR_MESSAGE, err.message)
+            }
+            startActivity(i)
+        } catch (e: Exception) {
+            Log.e(TAG, "openErrorPage failed: $e")
+        }
+    }
+
+    // ---------------------------------------------------------------- close
+
+    private fun closeCenterX(): Int = resources.displayMetrics.widthPixels / 2
+    private fun closeCenterY(): Int = resources.displayMetrics.heightPixels - dp(120)
+
+    private fun inCloseZone(x: Int, y: Int): Boolean {
+        val dx = (x - closeCenterX()).toFloat()
+        val dy = (y - closeCenterY()).toFloat()
+        return dx * dx + dy * dy < (dp(72) * dp(72)).toFloat()
+    }
+
+    private fun showClose() {
+        if (closeView != null) return
+        val cv = CloseTargetView(this)
+        val params = WindowManager.LayoutParams(
+            dp(60), dp(60), overlayType(), baseFlags(), PixelFormat.TRANSLUCENT
+        ).apply {
+            gravity = Gravity.TOP or Gravity.START
+            x = closeCenterX() - dp(30)
+            y = closeCenterY() - dp(30)
+        }
+        closeView = cv
+        closeParams = params
+        cv.alpha = 0.6f
+        try {
+            wm?.addView(cv, params)
+        } catch (e: Exception) {
+            Log.e(TAG, "close addView failed: $e")
+        }
+    }
+
+    private fun removeClose() {
+        closeView?.let { try { wm?.removeView(it) } catch (_: Exception) {} }
+        closeView = null
+        overClose = false
+    }
+
+    private fun closeBubble() {
+        android.widget.Toast.makeText(
+            this, "已关闭悬浮球，可在设置中重新开启", android.widget.Toast.LENGTH_SHORT
+        ).show()
+        try {
+            bubble?.let { wm?.removeView(it) }
+        } catch (_: Exception) {
+        }
+        bubble = null
+        stopSelf()
+    }
+
+    // ---------------------------------------------------------------- state
+
+    private fun applyState(
+        active: Boolean,
+        done: Int,
+        total: Int,
+        label: String?,
+        error: Boolean,
+        err: BubbleError?,
+    ) {
         val v = bubble ?: return
         doneResetRunnable?.let { v.removeCallbacks(it) }
         when {
@@ -329,10 +503,12 @@ class OverlayService : Service() {
                 v.label = label
             }
             error -> {
+                lastError = err
                 v.state = BubbleState.ERROR
                 resetLater()
             }
             else -> {
+                lastError = null
                 v.state = BubbleState.DONE
                 resetLater()
             }
@@ -394,7 +570,7 @@ private class BubbleView(context: Context) : View(context) {
                 val frac = if (total > 0) done.toFloat() / total else 0f
                 arc.set(cx - r + 3, cy - r + 3, cx + r - 3, cy + r - 3)
                 canvas.drawArc(arc, -90f, 360f * frac.coerceIn(0f, 1f), false, fg)
-                val s = if (total > 0) "$done/$total" else (label ?: "…")
+                val s = if (total > 0) "$done/$total" else "…"
                 canvas.drawText(s, cx, cy + text.textSize / 3f, text)
             }
             BubbleState.DONE -> {
@@ -410,7 +586,6 @@ private class BubbleView(context: Context) : View(context) {
                 canvas.drawPoint(cx, cy + r * 0.42f, fg)
             }
             else -> {
-                // Download arrow (line icon).
                 canvas.drawLine(cx, cy - r * 0.44f, cx, cy + r * 0.16f, fg)
                 val p = Path().apply {
                     moveTo(cx - r * 0.26f, cy - r * 0.06f)
@@ -421,5 +596,28 @@ private class BubbleView(context: Context) : View(context) {
                 canvas.drawLine(cx - r * 0.34f, cy + r * 0.42f, cx + r * 0.34f, cy + r * 0.42f, fg)
             }
         }
+    }
+}
+
+/** The red ✕ drop target shown while dragging the bubble. */
+private class CloseTargetView(context: Context) : View(context) {
+    private val bg = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xE6E53935.toInt() }
+    private val fg = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.WHITE
+        style = Paint.Style.STROKE
+        strokeWidth = 3f * resources.displayMetrics.density
+        strokeCap = Paint.Cap.ROUND
+    }
+
+    override fun onDraw(canvas: Canvas) {
+        val w = width.toFloat()
+        val h = height.toFloat()
+        val r = min(w, h) / 2f
+        val cx = w / 2f
+        val cy = h / 2f
+        canvas.drawCircle(cx, cy, r, bg)
+        val d = r * 0.32f
+        canvas.drawLine(cx - d, cy - d, cx + d, cy + d, fg)
+        canvas.drawLine(cx + d, cy - d, cx - d, cy + d, fg)
     }
 }

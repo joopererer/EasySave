@@ -204,7 +204,27 @@ class HostService : Service() {
                             (a?.get("total") as? Number)?.toInt() ?: 0,
                             a?.get("label") as? String,
                             a?.get("error") as? Boolean ?: false,
+                            a?.get("url") as? String,
+                            a?.get("code") as? String,
+                            a?.get("message") as? String,
                         )
+                        result.success(null)
+                    }
+                    "clipboard" -> {
+                        // Headless engine has no PlatformPlugin: set the
+                        // clipboard natively.
+                        val text = call.arguments as? String ?: ""
+                        handler.post {
+                            try {
+                                val cm = getSystemService(Context.CLIPBOARD_SERVICE)
+                                    as android.content.ClipboardManager
+                                cm.setPrimaryClip(
+                                    android.content.ClipData.newPlainText("EasySave", text)
+                                )
+                            } catch (e: Exception) {
+                                Log.e(TAG, "setClipboard failed: $e")
+                            }
+                        }
                         result.success(null)
                     }
                     "keepAlive" -> {

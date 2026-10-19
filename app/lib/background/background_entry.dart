@@ -61,21 +61,28 @@ Future<void> _error(MethodChannel channel, String url, String code, String messa
 Future<void> _tile(MethodChannel channel, bool active, String? subtitle) =>
     _invoke(channel, 'tile', {'active': active, 'subtitle': subtitle});
 
-/// Drive the floating bubble state.
+/// Drive the floating bubble state (with optional error details so tapping the
+/// error bubble can open the same error page as a manual parse).
 Future<void> _bubble(
   MethodChannel channel,
   bool active,
   int done,
   int total,
   String? label,
-  bool error,
-) =>
+  bool error, [
+  String? url,
+  String? code,
+  String? message,
+]) =>
     _invoke(channel, 'bubble', {
       'active': active,
       'done': done,
       'total': total,
       'label': label,
       'error': error,
+      'url': url,
+      'code': code,
+      'message': message,
     });
 
 /// Build the caption text (title + body) for the bubble's "复制文案".
@@ -132,7 +139,9 @@ Future<void> _handleSubmit(MethodChannel channel, Map<dynamic, dynamic> args) as
       final post = outcome.data;
       if (mode == 'caption') {
         final cap = _captionText(post);
-        await Clipboard.setData(ClipboardData(text: cap));
+        // The headless engine has no PlatformPlugin, so Clipboard.setData would
+        // hang; set it natively via HostService instead.
+        await _invoke(channel, 'clipboard', cap);
         await _log(channel, 'CAPTION copied ${cap.length} chars :: $url');
         anyStarted = true;
         await _tile(channel, false, null);
@@ -164,13 +173,13 @@ Future<void> _handleSubmit(MethodChannel channel, Map<dynamic, dynamic> args) as
       await _log(channel, 'PARSE FAIL[${e.code}] (${sw.elapsedMilliseconds}ms) ${e.message} :: $url');
       if (toasts) await _toast(channel, '解析失败：${e.message}');
       await _tile(channel, false, null);
-      await _bubble(channel, false, 0, 0, null, true);
+      await _bubble(channel, false, 0, 0, null, true, url, e.code, e.message);
       await _error(channel, url, e.code, e.message);
     } catch (e) {
       await _log(channel, 'ERROR (${sw.elapsedMilliseconds}ms) $e :: $url');
       if (toasts) await _toast(channel, '处理失败');
       await _tile(channel, false, null);
-      await _bubble(channel, false, 0, 0, null, true);
+      await _bubble(channel, false, 0, 0, null, true, url, ParseErrorCode.invalidPage, '$e');
       await _error(channel, url, ParseErrorCode.invalidPage, '$e');
     }
   }
@@ -228,7 +237,17 @@ Future<void> _awaitBatchAndNotify(
   } finally {
     keepAlive.cancel();
     await _tile(channel, false, null);
-    await _bubble(channel, false, batch.succeeded, total, null, failed > 0);
+    await _bubble(
+      channel,
+      false,
+      batch.succeeded,
+      total,
+      null,
+      failed > 0,
+      failed > 0 ? url : null,
+      failed > 0 ? ParseErrorCode.invalidPage : null,
+      failed > 0 ? '下载失败' : null,
+    );
     await _invoke(channel, 'idle');
   }
 }
