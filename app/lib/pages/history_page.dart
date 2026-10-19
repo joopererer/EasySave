@@ -96,6 +96,9 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
+      // Reload from the DB so records written by the background engine while
+      // we were away (e.g. a share-to-background download) show up right away.
+      unawaited(_reload());
       _checkPermissionAndRefresh();
     }
   }
@@ -948,6 +951,19 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
         text: '未获得相册权限，无法定位本地文件',
         actionLabel: '去设置',
         onAction: () => locator.openSettings(),
+      );
+    }
+    // Not yet granted (never asked / dismissed): offer to grant. Android 14
+    // partial authorization is handled by the limited branch below.
+    if (!locator.hasAccess) {
+      return _banner(
+        color: Colors.blue.shade50,
+        border: Colors.blue.shade200,
+        textColor: Colors.blue.shade900,
+        icon: Icons.photo_outlined,
+        text: '授权相册访问后可显示缩略图',
+        actionLabel: '授权',
+        onAction: () => locator.requestPermission(),
       );
     }
     if (locator.isLimited) {

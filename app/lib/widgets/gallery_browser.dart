@@ -12,6 +12,7 @@ import 'package:url_launcher/url_launcher.dart';
 import 'package:video_player/video_player.dart';
 
 import '../core/models.dart';
+import '../services/gallery_locator_service.dart';
 import '../services/history_db.dart';
 import '../services/saver.dart';
 import 'shared.dart';
@@ -354,6 +355,14 @@ class _GalleryBrowserPageState extends State<GalleryBrowserPage> {
                   ),
                 ),
 
+                // Permission hint (self-hides once album access is granted).
+                const Positioned(
+                  top: 56,
+                  left: 16,
+                  right: 16,
+                  child: _GalleryPermissionHint(),
+                ),
+
                 // 3. Bottom Strip + Action Bar
                 Positioned(
                   bottom: 0,
@@ -535,9 +544,48 @@ class _GalleryBrowserPageState extends State<GalleryBrowserPage> {
   }
 }
 
+/// Top hint shown when the album has no read permission: local originals
+/// can't be shown until access is granted. Self-hides when access is granted.
+class _GalleryPermissionHint extends StatelessWidget {
+  const _GalleryPermissionHint();
+
+  @override
+  Widget build(BuildContext context) {
+    final locator = GalleryLocatorService.instance;
+    return ListenableBuilder(
+      listenable: locator,
+      builder: (context, _) {
+        if (locator.hasAccess) return const SizedBox.shrink();
+        return Container(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+          decoration: BoxDecoration(
+            color: Colors.white.withValues(alpha: 0.92),
+            borderRadius: BorderRadius.circular(12),
+          ),
+          child: Row(
+            children: [
+              const Icon(Icons.photo_outlined, size: 20, color: Colors.black87),
+              const SizedBox(width: 8),
+              const Expanded(
+                child: Text(
+                  '授权相册访问后可显示本地原图',
+                  style: TextStyle(color: Colors.black87, fontSize: 13),
+                ),
+              ),
+              TextButton(
+                onPressed: () => locator.requestPermission(),
+                child: const Text('授权'),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+}
+
 class _ThumbnailImage extends StatelessWidget {
   const _ThumbnailImage({required this.item, required this.platform});
-
   final GalleryBrowserItem item;
   final String platform;
 

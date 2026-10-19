@@ -21,8 +21,9 @@ void backgroundMain() {
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   // Let the native HostService tell us when the background engine wrote
-  // history, so the history page can refresh.
+  // history, and pick up an error notification tapped at cold start.
   HostBridge.init();
+  unawaited(HostBridge.pullPendingError());
   // Register background-download callbacks and recover batches that
   // finished while the app was dead.
   await DownloadManager.instance.init();

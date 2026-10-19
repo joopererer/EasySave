@@ -34,10 +34,10 @@ class ParsePage extends StatefulWidget {
   final VoidCallback? onSeeAll;
 
   @override
-  State<ParsePage> createState() => _ParsePageState();
+  State<ParsePage> createState() => ParsePageState();
 }
 
-class _ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
+class ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
   final _linkController = TextEditingController();
   final _inputFocus = FocusNode();
   bool _busy = false;
@@ -357,6 +357,29 @@ class _ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
       await _handleLinks(text);
     } finally {
       _handlingShare = false;
+    }
+  }
+
+  /// Show an error reported by the background engine / an error notification,
+  /// using the same error page as a manual parse.
+  void showExternalError(String url, String code, String? message) {
+    setState(() {
+      _busy = false;
+      _errorCode = code;
+      _errorMessage = message;
+      if (url.isNotEmpty) {
+        _currentLink = url;
+        if (_linkController.text != url) {
+          _linkController.value = TextEditingValue(
+            text: url,
+            selection: TextSelection.collapsed(offset: url.length),
+          );
+        }
+      }
+    });
+    if (code == ParseErrorCode.loginRequired && url.isNotEmpty) {
+      final platform = platformFromUrl(url);
+      if (platform != null) LoginExpiredBus.markExpired(platform);
     }
   }
 

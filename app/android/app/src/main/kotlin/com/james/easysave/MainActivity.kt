@@ -7,6 +7,7 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.net.Uri
 import android.os.Build
+import android.os.Bundle
 import android.provider.MediaStore
 import androidx.core.content.ContextCompat
 import io.flutter.embedding.android.FlutterActivity
@@ -32,11 +33,44 @@ class MainActivity : FlutterActivity() {
 
     private var hostChannel: MethodChannel? = null
     private var receiverRegistered = false
+
+    // Error carried by a tapped error notification, waiting for Dart to pull it
+    // (cold start) or pushed to Dart immediately (warm start). Cleared once.
+    private var pendingError: Map<String, String?>? = null
+
     private val historyReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             // The background engine wrote history; ask the main UI to reload.
             hostChannel?.invokeMethod("historyChanged", null)
         }
+    }
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        handleErrorIntent(intent)
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        handleErrorIntent(intent)
+    }
+
+    /// Read the error extras from a tapped error notification and hand them to
+    /// Dart; the extras are cleared so re-entering the app doesn't re-trigger.
+    private fun handleErrorIntent(intent: Intent?) {
+        val i = intent ?: return
+        val code = i.getStringExtra(HostService.EXTRA_ERROR_CODE) ?: return
+        val payload = mapOf(
+            "url" to i.getStringExtra(HostService.EXTRA_ERROR_URL),
+            "code" to code,
+            "message" to i.getStringExtra(HostService.EXTRA_ERROR_MESSAGE),
+        )
+        i.removeExtra(HostService.EXTRA_ERROR_URL)
+        i.removeExtra(HostService.EXTRA_ERROR_CODE)
+        i.removeExtra(HostService.EXTRA_ERROR_MESSAGE)
+        pendingError = payload
+        hostChannel?.invokeMethod("openParseError", payload)
     }
 
     override fun onStart() {
@@ -93,8 +127,19 @@ class MainActivity : FlutterActivity() {
             }
 
         // Main UI <- background HostService bridge (Dart listens on the same
-        // channel name to refresh the history page).
+        // channel name to refresh the history page; Dart can also pull a
+        // pending error from a tapped error notification).
         hostChannel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, HOST_CHANNEL)
+        hostChannel?.setMethodCallHandler { call, result ->
+            when (call.method) {
+                "getPendingError" -> result.success(pendingError)
+                "clearPendingError" -> {
+                    pendingError = null
+                    result.success(null)
+                }
+                else -> result.notImplemented()
+            }
+        }
     }
 
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {

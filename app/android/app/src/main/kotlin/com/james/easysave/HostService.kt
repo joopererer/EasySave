@@ -41,7 +41,11 @@ class HostService : Service() {
         const val EXTRA_TEXT = "text"
         const val EXTRA_MODE = "mode"
         const val EXTRA_SOURCE = "source"
+        const val EXTRA_ERROR_URL = "easy_err_url"
+        const val EXTRA_ERROR_CODE = "easy_err_code"
+        const val EXTRA_ERROR_MESSAGE = "easy_err_message"
         private const val IDLE_TIMEOUT_MS = 60_000L
+        private const val ERROR_NOTIF_ID = 9011
 
         /**
          * Start the host and enqueue a task. Must be called while the caller is
@@ -142,6 +146,15 @@ class HostService : Service() {
                     }
                     "notify" -> {
                         updateNotification(call.arguments as? String ?: "")
+                        result.success(null)
+                    }
+                    "error" -> {
+                        val args = call.arguments as? Map<*, *>
+                        showErrorNotification(
+                            args?.get("url") as? String,
+                            (args?.get("code") as? String) ?: "INVALID_PAGE",
+                            args?.get("message") as? String,
+                        )
                         result.success(null)
                     }
                     "historyChanged" -> {
@@ -270,6 +283,42 @@ class HostService : Service() {
             .setOngoing(true)
             .build()
         nm.notify(NOTIF_ID, notif)
+    }
+
+    /// Error notification whose tap opens the app on the same error page as a
+    /// manual parse (carries url + code + message).
+    private fun showErrorNotification(url: String?, code: String, message: String?) {
+        val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        val intent = Intent(this, MainActivity::class.java).apply {
+            addFlags(
+                Intent.FLAG_ACTIVITY_NEW_TASK or
+                    Intent.FLAG_ACTIVITY_SINGLE_TOP or
+                    Intent.FLAG_ACTIVITY_CLEAR_TOP
+            )
+            putExtra(EXTRA_ERROR_URL, url)
+            putExtra(EXTRA_ERROR_CODE, code)
+            putExtra(EXTRA_ERROR_MESSAGE, message)
+        }
+        val flags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M)
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        else
+            PendingIntent.FLAG_UPDATE_CURRENT
+        val pi = PendingIntent.getActivity(this, 7001, intent, flags)
+        val body = if (code == "LOGIN_REQUIRED") {
+            message?.takeIf { it.isNotBlank() } ?: "可能需要登录后重试"
+        } else {
+            message?.takeIf { it.isNotBlank() } ?: "解析失败，请重试"
+        }
+        val big = if (url.isNullOrBlank()) body else "$body\n$url"
+        val notif = NotificationCompat.Builder(this, CHANNEL_ID)
+            .setContentTitle("EasySave 解析失败")
+            .setContentText(body)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(big))
+            .setSmallIcon(android.R.drawable.stat_notify_error)
+            .setContentIntent(pi)
+            .setAutoCancel(true)
+            .build()
+        nm.notify(ERROR_NOTIF_ID, notif)
     }
 
     override fun onDestroy() {

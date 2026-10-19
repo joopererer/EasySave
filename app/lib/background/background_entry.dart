@@ -1,14 +1,14 @@
 // v1.6 background task host. Runs in the FlutterEngine started by HostService
 // (no Activity). Handles a submitted task end-to-end: extract link → parse →
 // download → save to album → write history, then asks the native side to
-// refresh the main UI and to update the notification.
+// refresh the main UI / show an error notification.
 
 import 'dart:async';
 
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
-import 'package:gal/gal.dart';
 
+import '../core/models.dart';
 import '../services/download_manager.dart';
 import '../services/links.dart';
 import '../services/parse_service.dart';
@@ -47,6 +47,11 @@ Future<void> _log(MethodChannel channel, String msg) =>
 Future<void> _notify(MethodChannel channel, String msg) =>
     _invoke(channel, 'notify', msg);
 
+/// Error notification that carries the link + code + message so tapping it can
+/// open the app on the same error page as a manual parse.
+Future<void> _error(MethodChannel channel, String url, String code, String message) =>
+    _invoke(channel, 'error', {'url': url, 'code': code, 'message': message});
+
 Future<void> _handleSubmit(MethodChannel channel, Map<dynamic, dynamic> args) async {
   final mode = args['mode']?.toString() ?? 'all';
   final source = args['source']?.toString() ?? 'background';
@@ -71,14 +76,6 @@ Future<void> _handleSubmit(MethodChannel channel, Map<dynamic, dynamic> args) as
     await _log(channel, 'ParserManager init FAILED: $e');
   }
 
-  // The background flow must never raise a system permission dialog.
-  if (!await Gal.hasAccess()) {
-    await _log(channel, 'NO_GALLERY_ACCESS');
-    await _notify(channel, '请先打开 EasySave 授权相册');
-    await _invoke(channel, 'idle');
-    return;
-  }
-
   final settings = await AppSettings.load();
   final manager = DownloadManager.instance;
   await manager.init();
@@ -87,6 +84,7 @@ Future<void> _handleSubmit(MethodChannel channel, Map<dynamic, dynamic> args) as
   for (final raw in urls) {
     final url = raw.trim();
     if (url.isEmpty) continue;
+    final started = DateTime.now();
     final sw = Stopwatch()..start();
     try {
       final outcome = await parsePostOutcome(url);
@@ -106,17 +104,14 @@ Future<void> _handleSubmit(MethodChannel channel, Map<dynamic, dynamic> args) as
         requestGalleryAccess: false,
       );
       anyStarted = true;
-      await _log(
-        channel,
-        'DOWNLOAD started ${batch.jobs.length} files (${sw.elapsedMilliseconds}ms) :: $url',
-      );
-      unawaited(_awaitBatchAndNotify(channel, batch));
+      await _log(channel, 'DOWNLOAD started ${batch.jobs.length} files :: $url');
+      unawaited(_awaitBatchAndNotify(channel, batch, started, url));
     } on ParseFailure catch (e) {
-      await _log(channel, 'PARSE FAIL[${e.code}] ${e.message} :: $url');
-      await _notify(channel, '解析失败：${e.message}');
+      await _log(channel, 'PARSE FAIL[${e.code}] (${sw.elapsedMilliseconds}ms) ${e.message} :: $url');
+      await _error(channel, url, e.code, e.message);
     } catch (e) {
-      await _log(channel, 'ERROR $e :: $url');
-      await _notify(channel, '处理失败：$e');
+      await _log(channel, 'ERROR (${sw.elapsedMilliseconds}ms) $e :: $url');
+      await _error(channel, url, ParseErrorCode.invalidPage, '$e');
     }
   }
 
@@ -125,9 +120,14 @@ Future<void> _handleSubmit(MethodChannel channel, Map<dynamic, dynamic> args) as
   }
 }
 
-/// Keep the engine alive while the batch downloads, then ask the UI to
-/// refresh and go idle.
-Future<void> _awaitBatchAndNotify(MethodChannel channel, DownloadBatch batch) async {
+/// Keep the engine alive while the batch downloads, then report the outcome
+/// (log + notification), ask the UI to refresh, and go idle.
+Future<void> _awaitBatchAndNotify(
+  MethodChannel channel,
+  DownloadBatch batch,
+  DateTime started,
+  String url,
+) async {
   final keepAlive = Timer.periodic(
     const Duration(seconds: 20),
     (_) => _invoke(channel, 'keepAlive'),
@@ -138,8 +138,20 @@ Future<void> _awaitBatchAndNotify(MethodChannel channel, DownloadBatch batch) as
     }
     // Give _afterTerminal() (gallery link + history write) time to run.
     await Future<void>.delayed(const Duration(milliseconds: 1000));
+    final total = batch.jobs.length;
+    final ok = batch.succeeded;
+    final failed = batch.jobs.where((j) => j.state == JobState.failed).length;
+    final secs = DateTime.now().difference(started).inSeconds;
+    if (failed > 0) {
+      final firstError =
+          batch.jobs.firstWhere((j) => j.state == JobState.failed).error ?? '下载失败';
+      await _log(channel, 'DOWNLOAD failed: $ok/$total ok, $failed failed, ${secs}s :: $url');
+      await _notify(channel, '下载失败：成功 $ok/$total —— $firstError');
+    } else {
+      await _log(channel, 'DOWNLOAD done: $ok/$total in ${secs}s :: $url');
+      await _notify(channel, '下载完成：$ok/$total 个文件');
+    }
     await _invoke(channel, 'historyChanged');
-    await _notify(channel, '下载完成：${batch.succeeded}/${batch.jobs.length} 个文件');
   } finally {
     keepAlive.cancel();
     await _invoke(channel, 'idle');

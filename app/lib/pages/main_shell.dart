@@ -3,6 +3,7 @@
 import 'package:flutter/material.dart';
 
 import '../services/download_manager.dart';
+import '../services/host_bridge.dart';
 import 'history_page.dart';
 import 'mine_page.dart';
 import 'parse_page.dart';
@@ -18,17 +19,32 @@ class _MainShellState extends State<MainShell> with WidgetsBindingObserver {
   int _index = 0;
   bool _historySelectionMode = false;
   final _historyKey = GlobalKey<HistoryPageState>();
+  final _parseKey = GlobalKey<ParsePageState>();
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    HostBridge.parseError.addListener(_consumeHostError);
+    // A cold-start error may already be present before the first frame.
+    WidgetsBinding.instance.addPostFrameCallback((_) => _consumeHostError());
   }
 
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    HostBridge.parseError.removeListener(_consumeHostError);
     super.dispose();
+  }
+
+  /// Show a background error on the parse tab, using the same error page as a
+  /// manual parse. Consumed once.
+  void _consumeHostError() {
+    final err = HostBridge.parseError.value;
+    if (err == null) return;
+    HostBridge.parseError.value = null;
+    _select(0);
+    _parseKey.currentState?.showExternalError(err.url, err.code, err.message);
   }
 
   @override
@@ -50,7 +66,7 @@ class _MainShellState extends State<MainShell> with WidgetsBindingObserver {
       body: IndexedStack(
         index: _index,
         children: [
-          ParsePage(onSeeAll: () => _select(1)),
+          ParsePage(key: _parseKey, onSeeAll: () => _select(1)),
           HistoryPage(
             key: _historyKey,
             onGoParse: () => _select(0),

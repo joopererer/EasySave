@@ -89,7 +89,11 @@ Future<ParsedPost> parsePostUrl(String url) {
   _checkPlatform(url);
   return _withTimeout(() async {
     final resolved = await _resolveForParse(url);
-    return (await _parseInner(resolved)).data;
+    try {
+      return (await _parseInner(resolved)).data;
+    } on ParseFailure catch (e) {
+      throw await _reclassifyFailure(resolved, e);
+    }
   }, '加载页面');
 }
 
@@ -98,8 +102,34 @@ Future<ParseOutcome> parsePostOutcome(String url) {
   _checkPlatform(url);
   return _withTimeout(() async {
     final resolved = await _resolveForParse(url);
-    return _parseInner(resolved);
+    try {
+      return await _parseInner(resolved);
+    } on ParseFailure catch (e) {
+      throw await _reclassifyFailure(resolved, e);
+    }
   }, '加载页面');
+}
+
+/// App-side reclassification: when a platform we are NOT logged into reports
+/// PRIVATE_OR_UNAVAILABLE, the real cause is usually "needs login" (e.g. XHS
+/// serves a login-gated note as unavailable). The parser and spec/fixtures are
+/// untouched — this only re-labels the error for the user. Applies to every
+/// parse path, including the background engine.
+Future<ParseFailure> _reclassifyFailure(String url, ParseFailure e) async {
+  if (e.code != ParseErrorCode.privateOrUnavailable) return e;
+  final platform = platformFromUrl(url);
+  if (platform == null) return e;
+  try {
+    if (!await isLoggedIn(platform)) {
+      return ParseFailure(
+        ParseErrorCode.loginRequired,
+        '可能需要登录${platformLabel(platform)}',
+      );
+    }
+  } catch (_) {
+    // Fall through to the original failure.
+  }
+  return e;
 }
 
 /// Resolve short links to their final URL, except for Xiaohongshu.
