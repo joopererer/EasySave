@@ -166,18 +166,41 @@ XmpProvenance _parseXmpXml(String xml) {
 
   final json = <String, dynamic>{};
 
+  // Parse attributes
   for (final attr in rdf.attributes) {
-    json[attr.name.qualified] = attr.value;
+    final key = attr.name.qualified;
+    // Skip xmlns:* and rdf:about - these are XML metadata, not data fields
+    if (key.startsWith('xmlns:') || key == 'rdf:about') {
+      continue;
+    }
+    json[key] = attr.value;
   }
 
+  // Parse child elements
   for (final child in rdf.children.whereType<XmlElement>()) {
     final tagName = child.name.qualified;
-    if (child.children.length == 1 && child.children.first is XmlText) {
-      json[tagName] = (child.children.first as XmlText).value;
-    } else if (child.findElements('rdf:Seq').isNotEmpty) {
-      // Array
+    
+    // Check for rdf:Alt (single localized text)
+    if (child.findElements('rdf:Alt').isNotEmpty) {
+      final alt = child.findElements('rdf:Alt').first;
+      final li = alt.findElements('rdf:li').firstOrNull;
+      if (li != null) {
+        json[tagName] = li.innerText;
+      }
+    }
+    // Check for rdf:Seq (ordered array)
+    else if (child.findElements('rdf:Seq').isNotEmpty) {
       final seq = child.findElements('rdf:Seq').first;
       json[tagName] = seq.findElements('rdf:li').map((e) => e.innerText).toList();
+    }
+    // Check for rdf:Bag (unordered set, treat as array)
+    else if (child.findElements('rdf:Bag').isNotEmpty) {
+      final bag = child.findElements('rdf:Bag').first;
+      json[tagName] = bag.findElements('rdf:li').map((e) => e.innerText).toList();
+    }
+    // Simple text node
+    else if (child.children.length == 1 && child.children.first is XmlText) {
+      json[tagName] = (child.children.first as XmlText).value;
     }
   }
 
@@ -199,14 +222,26 @@ String _buildXmpXml(XmpProvenance xmp) {
       builder.element('rdf:Description', nest: () {
         builder.attribute('rdf:about', '');
 
-        final json = xmp.toJson();
+        final json = xmp.toXmpJson();
         json.forEach((key, value) {
           if (value is List) {
             builder.element(key, nest: () {
-              builder.element('rdf:Seq', nest: () {
+              // Use rdf:Seq for dc:creator (ordered), rdf:Bag for dc:subject (unordered set)
+              final containerType = key == 'dc:subject' ? 'rdf:Bag' : 'rdf:Seq';
+              builder.element(containerType, nest: () {
                 for (final item in value) {
                   builder.element('rdf:li', nest: item);
                 }
+              });
+            });
+          } else if (key == 'dc:title' || key == 'dc:description') {
+            // Use rdf:Alt for localized text fields
+            builder.element(key, nest: () {
+              builder.element('rdf:Alt', nest: () {
+                builder.element('rdf:li', nest: () {
+                  builder.attribute('xml:lang', 'x-default');
+                  builder.text(value.toString());
+                });
               });
             });
           } else {
@@ -258,6 +293,8 @@ XmpProvenance _mergeXmp(XmpProvenance? existing, XmpProvenance newXmp) {
     title: newXmp.title,
     creators: newXmp.creators,
     description: newXmp.description,
+    subject: newXmp.subject,
+    rating: newXmp.rating,
     credit: newXmp.credit,
     otherFields: mergedOtherFields,
   );

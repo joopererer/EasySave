@@ -12,6 +12,7 @@ import 'package:path/path.dart' as p;
 import 'package:easysave/metadata/xmp_jpeg.dart';
 import 'package:easysave/metadata/xmp_png.dart';
 import 'package:easysave/metadata/xmp_webp.dart';
+import 'package:easysave/metadata/xmp_sidecar.dart';
 import 'package:easysave/metadata/xmp_model.dart';
 
 void main() {
@@ -97,6 +98,22 @@ void main() {
       
       expect(xmp, isNull, reason: 'no-metadata.jpg should have no XMP');
     });
+
+    test('local-video.mp4.xmp → sidecar XMP matches expected', () async {
+      final xmpFile = File(p.join(testVectorsPath, 'local-video.mp4.xmp'));
+      final expectedFile = File(p.join(testVectorsPath, 'local-video.mp4.expected.json'));
+      
+      expect(xmpFile.existsSync(), isTrue, reason: 'local-video.mp4.xmp not found');
+      expect(expectedFile.existsSync(), isTrue, reason: 'local-video.mp4.expected.json not found');
+
+      final xmp = readSidecarXmp(xmpFile);
+      expect(xmp, isNotNull, reason: 'Failed to read XMP from local-video.mp4.xmp');
+      
+      final actual = xmp!.toJson();
+      final expected = jsonDecode(await expectedFile.readAsString()) as Map<String, dynamic>;
+
+      _validateJsonMatch(actual, expected, 'local-video.mp4.xmp');
+    });
   });
 
   group('Conformance - Round-trip write tests', () {
@@ -151,16 +168,16 @@ void main() {
       
       final originalXmp = readJpegXmp(bytes)!;
       // Check if original has dc:subject and xmp:Rating
-      expect(originalXmp.toJson().containsKey('dc:subject'), isTrue);
-      expect(originalXmp.toJson().containsKey('xmp:Rating'), isTrue);
+      expect(originalXmp.subject, isNotNull);
+      expect(originalXmp.rating, isNotNull);
 
       // Write modified version
       final modifiedBytes = writeJpegXmp(bytes, originalXmp);
       final readBack = readJpegXmp(modifiedBytes)!;
 
       // Foreign fields must be preserved
-      expect(readBack.toJson()['dc:subject'], equals(originalXmp.toJson()['dc:subject']));
-      expect(readBack.toJson()['xmp:Rating'], equals(originalXmp.toJson()['xmp:Rating']));
+      expect(readBack.subject, equals(originalXmp.subject));
+      expect(readBack.rating, equals(originalXmp.rating));
     });
 
     test('xhs-item3.jpg: byte identity (sha256 unchanged after write)', () async {
@@ -172,36 +189,15 @@ void main() {
       // Read existing XMP
       final xmp = readJpegXmp(bytes)!;
       
-      // Write back without changes (only update metadataDate)
-      final updatedXmp = XmpProvenance(
-        schema: xmp.schema,
-        assetId: xmp.assetId,
-        capturedAt: xmp.capturedAt,
-        capturedBy: xmp.capturedBy,
-        metadataDate: DateTime.now(),
-        sourceUrl: xmp.sourceUrl,
-        platform: xmp.platform,
-        sourceId: xmp.sourceId,
-        itemIndex: xmp.itemIndex,
-        itemCount: xmp.itemCount,
-        authorId: xmp.authorId,
-        publishedAt: xmp.publishedAt,
-        title: xmp.title,
-        creators: xmp.creators,
-        description: xmp.description,
-        subject: xmp.subject,
-        rating: xmp.rating,
-        credit: xmp.credit,
-        otherFields: xmp.otherFields,
-      );
-
-      final modifiedBytes = writeJpegXmp(bytes, updatedXmp);
+      // Write back unchanged (metadataDate will still update, causing size change)
+      final modifiedBytes = writeJpegXmp(bytes, xmp);
       final modifiedSha256 = sha256.convert(modifiedBytes).toString();
 
-      // SHA256 will differ because metadataDate changed, but pixel data must be identical
-      // Decode both and compare pixel data (simplified: just check file size is reasonable)
+      // SHA256 will differ because metadataDate changed
+      // Just check that the file is still valid and reasonable in size
       expect(modifiedBytes.length, greaterThan(0));
-      expect((modifiedBytes.length - bytes.length).abs(), lessThan(1000), 
+      // Allow larger size change due to improved XML structure (rdf:Alt, rdf:Bag, etc.)
+      expect((modifiedBytes.length - bytes.length).abs(), lessThan(2000), 
           reason: 'File size should not change dramatically');
     });
 
@@ -246,15 +242,14 @@ void main() {
       final bytes = await file.readAsBytes();
       
       final originalXmp = readPngXmp(bytes)!;
-      final originalJson = originalXmp.toJson();
+      final originalSubject = originalXmp.subject;
 
       final modifiedBytes = writePngXmp(bytes, originalXmp);
       final readBack = readPngXmp(modifiedBytes)!;
-      final readBackJson = readBack.toJson();
 
       // Check dc:subject preserved
-      if (originalJson.containsKey('dc:subject')) {
-        expect(readBackJson['dc:subject'], equals(originalJson['dc:subject']));
+      if (originalSubject != null) {
+        expect(readBack.subject, equals(originalSubject));
       }
     });
   });

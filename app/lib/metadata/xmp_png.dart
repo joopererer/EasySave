@@ -104,7 +104,7 @@ Uint8List writePngXmp(Uint8List bytes, XmpProvenance xmp) {
 
   // iTXt: keyword\0 compression_flag compression_method language\0 translated_keyword\0 text
   final keywordBytes = utf8.encode(_keyword);
-  final chunkData = <int>[
+  final newChunkData = <int>[
     ...keywordBytes,
     0, // keyword null
     0, // compression_flag = 0 (uncompressed)
@@ -114,8 +114,8 @@ Uint8List writePngXmp(Uint8List bytes, XmpProvenance xmp) {
     ...xmpBytes,
   ];
 
-  final chunkLength = chunkData.length;
-  final crc = _crc32([...utf8.encode('iTXt'), ...chunkData]);
+  final chunkLength = newChunkData.length;
+  final crc = _crc32([...utf8.encode('iTXt'), ...newChunkData]);
 
   final builder = BytesBuilder();
   int offset = 0;
@@ -153,7 +153,7 @@ Uint8List writePngXmp(Uint8List bytes, XmpProvenance xmp) {
               chunkLength & 0xFF,
             ]);
             builder.add(utf8.encode('iTXt'));
-            builder.add(chunkData);
+            builder.add(newChunkData);
             builder.add([
               crc >> 24,
               (crc >> 16) & 0xFF,
@@ -177,7 +177,7 @@ Uint8List writePngXmp(Uint8List bytes, XmpProvenance xmp) {
         chunkLength & 0xFF,
       ]);
       builder.add(utf8.encode('iTXt'));
-      builder.add(chunkData);
+      builder.add(newChunkData);
       builder.add([
         crc >> 24,
         (crc >> 16) & 0xFF,
@@ -285,6 +285,8 @@ XmpProvenance _mergeXmp(XmpProvenance existing, XmpProvenance newXmp) {
     title: newXmp.title,
     creators: newXmp.creators,
     description: newXmp.description,
+    subject: newXmp.subject,
+    rating: newXmp.rating,
     credit: newXmp.credit,
     otherFields: mergedOtherFields,
   );

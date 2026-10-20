@@ -9,9 +9,9 @@ class XmpProvenance {
   final DateTime capturedAt;
   final String capturedBy;
   final DateTime metadataDate;
-  final String sourceUrl;
-  final String platform;
-  final String sourceId;
+  final String? sourceUrl;
+  final String? platform;
+  final String? sourceId;
   final int? itemIndex;
   final int? itemCount;
   final String? authorId;
@@ -33,9 +33,9 @@ class XmpProvenance {
     required this.capturedAt,
     required this.capturedBy,
     required this.metadataDate,
-    required this.sourceUrl,
-    required this.platform,
-    required this.sourceId,
+    this.sourceUrl,
+    this.platform,
+    this.sourceId,
     this.itemIndex,
     this.itemCount,
     this.authorId,
@@ -49,7 +49,34 @@ class XmpProvenance {
     this.otherFields = const {},
   });
 
+  /// Converts to SPEC §7 JSON format (flattened keys, source nested).
   Map<String, dynamic> toJson() => {
+        'schema': schema,
+        'assetId': assetId,
+        'capturedAt': capturedAt.toIso8601String(),
+        'capturedBy': capturedBy,
+        'metadataDate': metadataDate.toIso8601String(),
+        'source': {
+          'url': sourceUrl,
+          'platform': platform,
+          'id': sourceId,
+          if (itemIndex != null) 'itemIndex': itemIndex,
+          if (itemCount != null) 'itemCount': itemCount,
+          if (authorId != null) 'authorId': authorId,
+          if (publishedAt != null) 'publishedAt': publishedAt!.toIso8601String(),
+        },
+        if (title != null) 'title': title,
+        if (creators != null) 'creator': creators,
+        if (description != null) 'description': description,
+        if (subject != null) 'subject': subject,
+        if (rating != null) 'rating': rating,
+        if (credit != null) 'credit': credit,
+        // Keep other fields with original qualified names for preservation
+        ...otherFields,
+      };
+  
+  /// Converts to XMP namespace-qualified format for XML building.
+  Map<String, dynamic> toXmpJson() => {
         'prov:schema': schema,
         'prov:assetId': assetId,
         'prov:capturedAt': capturedAt.toIso8601String(),
@@ -85,9 +112,9 @@ class XmpProvenance {
       capturedAt: DateTime.parse(json['prov:capturedAt'] as String),
       capturedBy: json['prov:capturedBy'] as String,
       metadataDate: DateTime.parse(json['xmp:MetadataDate'] as String),
-      sourceUrl: json['prov:sourceUrl'] as String,
-      platform: json['prov:platform'] as String,
-      sourceId: json['prov:sourceId'] as String,
+      sourceUrl: json['prov:sourceUrl'] as String?,
+      platform: json['prov:platform'] as String?,
+      sourceId: json['prov:sourceId'] as String?,
       itemIndex: json['prov:itemIndex'] != null
           ? (json['prov:itemIndex'] is int ? json['prov:itemIndex'] as int : int.tryParse(json['prov:itemIndex'].toString()))
           : null,
