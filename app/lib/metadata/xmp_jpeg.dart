@@ -64,12 +64,17 @@ XmpProvenance? readJpegXmp(Uint8List bytes) {
 /// Writes XMP into JPEG APP1 segment.
 /// Returns new JPEG bytes with XMP written.
 /// Replaces existing XMP APP1 if present, otherwise inserts after SOI.
+/// Preserves existing assetId and foreign fields when replacing.
 Uint8List writeJpegXmp(Uint8List bytes, XmpProvenance xmp) {
   if (bytes.length < 2 || bytes[0] != 0xFF || bytes[1] != 0xD8) {
     throw FormatException('Not a JPEG file');
   }
 
-  final xmpPayload = _buildXmpXml(xmp);
+  // Check if existing XMP exists and merge with it
+  final existing = readJpegXmp(bytes);
+  final merged = _mergeXmp(existing, xmp);
+
+  final xmpPayload = buildXmpXml(merged);
   final xmpBytes = utf8.encode(_xmpHeader + xmpPayload);
   final newSegmentLength = 2 + xmpBytes.length;
 
@@ -221,3 +226,39 @@ XmpProvenance parseXmpXml(String xml) => _parseXmpXml(xml);
 
 /// Exported for PNG/WebP writers
 String buildXmpXml(XmpProvenance xmp) => _buildXmpXml(xmp);
+
+/// Merge new XMP with existing, preserving assetId and foreign fields.
+XmpProvenance _mergeXmp(XmpProvenance? existing, XmpProvenance newXmp) {
+  if (existing == null) return newXmp;
+  
+  // Preserve existing assetId
+  final assetId = existing.assetId;
+  
+  // Merge otherFields: keep existing foreign fields, don't overwrite
+  final mergedOtherFields = Map<String, String>.from(existing.otherFields);
+  newXmp.otherFields.forEach((key, value) {
+    if (!mergedOtherFields.containsKey(key)) {
+      mergedOtherFields[key] = value;
+    }
+  });
+  
+  return XmpProvenance(
+    schema: newXmp.schema,
+    assetId: assetId, // Always use existing
+    capturedAt: newXmp.capturedAt,
+    capturedBy: newXmp.capturedBy,
+    metadataDate: newXmp.metadataDate,
+    sourceUrl: newXmp.sourceUrl,
+    platform: newXmp.platform,
+    sourceId: newXmp.sourceId,
+    itemIndex: newXmp.itemIndex,
+    itemCount: newXmp.itemCount,
+    authorId: newXmp.authorId,
+    publishedAt: newXmp.publishedAt,
+    title: newXmp.title,
+    creators: newXmp.creators,
+    description: newXmp.description,
+    credit: newXmp.credit,
+    otherFields: mergedOtherFields,
+  );
+}

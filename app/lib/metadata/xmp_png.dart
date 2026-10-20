@@ -81,6 +81,7 @@ XmpProvenance? readPngXmp(Uint8List bytes) {
 /// Writes XMP into PNG iTXt chunk.
 /// Returns new PNG bytes with XMP written.
 /// Replaces existing XMP iTXt if present, otherwise inserts before IEND.
+/// Preserves existing assetId and foreign fields when replacing.
 Uint8List writePngXmp(Uint8List bytes, XmpProvenance xmp) {
   if (bytes.length < 8 ||
       bytes[0] != 0x89 ||
@@ -94,7 +95,11 @@ Uint8List writePngXmp(Uint8List bytes, XmpProvenance xmp) {
     throw FormatException('Not a PNG file');
   }
 
-  final xmpPayload = buildXmpXml(xmp);
+  // Check if existing XMP exists and merge with it
+  final existing = readPngXmp(bytes);
+  final merged = existing != null ? _mergeXmp(existing, xmp) : xmp;
+
+  final xmpPayload = buildXmpXml(merged);
   final xmpBytes = utf8.encode(xmpPayload);
 
   // iTXt: keyword\0 compression_flag compression_method language\0 translated_keyword\0 text
@@ -250,3 +255,37 @@ const _crc32Table = [
   0x54DE5729, 0x23D967BF, 0xB3667A2E, 0xC4614AB8, 0x5D681B02, 0x2A6F2B94,
   0xB40BBE37, 0xC30C8EA1, 0x5A05DF1B, 0x2D02EF8D,
 ];
+
+/// Merge new XMP with existing, preserving assetId and foreign fields.
+XmpProvenance _mergeXmp(XmpProvenance existing, XmpProvenance newXmp) {
+  // Preserve existing assetId
+  final assetId = existing.assetId;
+  
+  // Merge otherFields: keep existing foreign fields
+  final mergedOtherFields = Map<String, String>.from(existing.otherFields);
+  newXmp.otherFields.forEach((key, value) {
+    if (!mergedOtherFields.containsKey(key)) {
+      mergedOtherFields[key] = value;
+    }
+  });
+  
+  return XmpProvenance(
+    schema: newXmp.schema,
+    assetId: assetId,
+    capturedAt: newXmp.capturedAt,
+    capturedBy: newXmp.capturedBy,
+    metadataDate: newXmp.metadataDate,
+    sourceUrl: newXmp.sourceUrl,
+    platform: newXmp.platform,
+    sourceId: newXmp.sourceId,
+    itemIndex: newXmp.itemIndex,
+    itemCount: newXmp.itemCount,
+    authorId: newXmp.authorId,
+    publishedAt: newXmp.publishedAt,
+    title: newXmp.title,
+    creators: newXmp.creators,
+    description: newXmp.description,
+    credit: newXmp.credit,
+    otherFields: mergedOtherFields,
+  );
+}
