@@ -380,6 +380,25 @@ void main() {
 
       _validateJsonMatch(actual, expected, 'local-video.mp4.xmp');
     });
+
+    // §4.7: Multiple rdf:Description blocks, mixed attribute/element syntax
+    test('multiblock-elements.jpg → JSON matches expected (§4.7)', () async {
+      final file = File(p.join(testVectorsPath, 'multiblock-elements.jpg'));
+      final expectedFile = File(p.join(testVectorsPath, 'multiblock-elements.jpg.expected.json'));
+      
+      expect(file.existsSync(), isTrue, reason: 'multiblock-elements.jpg not found');
+      expect(expectedFile.existsSync(), isTrue, reason: 'multiblock-elements.jpg.expected.json not found');
+
+      final bytes = await file.readAsBytes();
+      final xmp = readJpegXmp(bytes);
+      
+      expect(xmp, isNotNull, reason: 'Failed to read XMP from multiblock-elements.jpg');
+      
+      final actual = xmp!.toJson();
+      final expected = jsonDecode(await expectedFile.readAsString()) as Map<String, dynamic>;
+
+      _validateJsonMatch(actual, expected, 'multiblock-elements.jpg');
+    });
   });
 
   // =========================================================================
@@ -903,6 +922,104 @@ void main() {
       
       expect(readBack.title, equals(originalTitle));
       expect(readBack.description, equals(originalDescription));
+    });
+
+    // §4.7: Multiple rdf:Description blocks tests
+    test('JPEG: multiblock-elements.jpg write → read → verify (§4.7)', () async {
+      final file = File(p.join(testVectorsPath, 'multiblock-elements.jpg'));
+      final bytes = await file.readAsBytes();
+      
+      final originalXmp = readJpegXmp(bytes)!;
+      final originalAssetId = originalXmp.assetId;
+
+      // Write with updated metadataDate
+      final updatedXmp = XmpProvenance(
+        schema: originalXmp.schema,
+        assetId: originalXmp.assetId,
+        capturedAt: originalXmp.capturedAt,
+        capturedBy: originalXmp.capturedBy,
+        metadataDate: DateTime.now(),
+        sourceUrl: originalXmp.sourceUrl,
+        platform: originalXmp.platform,
+        sourceId: originalXmp.sourceId,
+        itemIndex: originalXmp.itemIndex,
+        itemCount: originalXmp.itemCount,
+        authorId: originalXmp.authorId,
+        publishedAt: originalXmp.publishedAt,
+        title: originalXmp.title,
+        creators: originalXmp.creators,
+        description: originalXmp.description,
+        subject: originalXmp.subject,
+        rating: originalXmp.rating,
+        credit: originalXmp.credit,
+        otherFields: originalXmp.otherFields,
+      );
+
+      final modifiedBytes = writeJpegXmp(bytes, updatedXmp);
+      final readBack = readJpegXmp(modifiedBytes)!;
+
+      // assetId must not change
+      expect(readBack.assetId, equals(originalAssetId), 
+          reason: 'assetId must remain unchanged after write');
+
+      // Other required fields preserved
+      expect(readBack.schema, equals(originalXmp.schema));
+      expect(readBack.platform, equals(originalXmp.platform));
+      expect(readBack.sourceId, equals(originalXmp.sourceId));
+      expect(readBack.creators, equals(originalXmp.creators));
+    });
+
+    test('JPEG: multiblock-elements.jpg foreign field xmp:CreatorTool preserved (§4.7)', () async {
+      final file = File(p.join(testVectorsPath, 'multiblock-elements.jpg'));
+      final bytes = await file.readAsBytes();
+      
+      final originalXmp = readJpegXmp(bytes)!;
+      expect(originalXmp.creators, isNotNull);
+
+      // Write back unchanged
+      final modifiedBytes = writeJpegXmp(bytes, originalXmp);
+      final readBack = readJpegXmp(modifiedBytes)!;
+
+      // Foreign field xmp:CreatorTool must be preserved
+      expect(readBack.creators, equals(originalXmp.creators));
+    });
+
+    test('JPEG: multiblock-elements.jpg non-metadata bytes unchanged (§4.7)', () async {
+      final file = File(p.join(testVectorsPath, 'multiblock-elements.jpg'));
+      final bytes = await file.readAsBytes();
+      
+      final xmp = readJpegXmp(bytes)!;
+      final originalMetadataDate = xmp.metadataDate;
+
+      final updatedXmp = XmpProvenance(
+        schema: xmp.schema,
+        assetId: xmp.assetId,
+        capturedAt: xmp.capturedAt,
+        capturedBy: xmp.capturedBy,
+        metadataDate: DateTime.now(),
+        sourceUrl: xmp.sourceUrl,
+        platform: xmp.platform,
+        sourceId: xmp.sourceId,
+        itemIndex: xmp.itemIndex,
+        itemCount: xmp.itemCount,
+        authorId: xmp.authorId,
+        publishedAt: xmp.publishedAt,
+        title: xmp.title,
+        creators: xmp.creators,
+        description: xmp.description,
+        subject: xmp.subject,
+        rating: xmp.rating,
+        credit: xmp.credit,
+        otherFields: xmp.otherFields,
+      );
+      final modifiedBytes = writeJpegXmp(bytes, updatedXmp);
+
+      final nonMetadataDiff = _compareNonMetadataBytes(bytes, modifiedBytes, 'JPEG');
+      expect(nonMetadataDiff, isNull, reason: nonMetadataDiff);
+
+      final readBack = readJpegXmp(modifiedBytes)!;
+      expect(readBack.metadataDate, isNot(equals(originalMetadataDate)),
+          reason: 'metadataDate should be updated');
     });
   });
 }

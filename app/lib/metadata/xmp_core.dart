@@ -4,6 +4,29 @@
 import 'package:xml/xml.dart';
 import 'xmp_model.dart';
 
+/// Normalize a qualified name to canonical prefix:namespace format.
+/// e.g., 'pv:schema' or 'prov_NS:schema' → 'prov:schema'
+/// According to SPEC §4.7, fields must be identified by namespace URI, not prefix.
+String _normalizeKey(String qualified) {
+  if (qualified.contains(':')) {
+    final parts = qualified.split(':');
+    if (parts.length == 2) {
+      final prefix = parts[0];
+      final local = parts[1];
+      
+      // Map known prefixes to canonical form
+      if (prefix == 'pv' || prefix == 'prov_NS') {
+        return 'prov:$local';
+      }
+      // Already canonical
+      if (prefix == 'prov' || prefix == 'dc' || prefix == 'xmp' || prefix == 'photoshop') {
+        return qualified;
+      }
+    }
+  }
+  return qualified;
+}
+
 /// Parse XMP XML string into XmpProvenance model.
 XmpProvenance parseXmpXml(String xml) {
   final document = XmlDocument.parse(xml);
@@ -28,38 +51,42 @@ void _parseDescriptionElement(XmlElement desc, Map<String, dynamic> json) {
     if (key.startsWith('xmlns:') || key == 'rdf:about') {
       continue;
     }
+    // Normalize prefix to canonical form (e.g., pv: → prov:)
+    final normalizedKey = _normalizeKey(key);
     // Only set if not already present (attributes take precedence in same block)
-    if (!json.containsKey(key)) {
-      json[key] = attr.value;
+    if (!json.containsKey(normalizedKey)) {
+      json[normalizedKey] = attr.value;
     }
   }
 
   // Parse child elements
   for (final child in desc.children.whereType<XmlElement>()) {
     final tagName = child.name.qualified;
-    if (json.containsKey(tagName)) continue; // Already have this field
+    // Normalize prefix to canonical form
+    final normalizedTagName = _normalizeKey(tagName);
+    if (json.containsKey(normalizedTagName)) continue; // Already have this field
 
     // Check for rdf:Alt (single localized text)
     if (child.findElements('rdf:Alt').isNotEmpty) {
       final alt = child.findElements('rdf:Alt').first;
       final li = alt.findElements('rdf:li').firstOrNull;
       if (li != null) {
-        json[tagName] = li.innerText;
+        json[normalizedTagName] = li.innerText;
       }
     }
     // Check for rdf:Seq (ordered array)
     else if (child.findElements('rdf:Seq').isNotEmpty) {
       final seq = child.findElements('rdf:Seq').first;
-      json[tagName] = seq.findElements('rdf:li').map((e) => e.innerText).toList();
+      json[normalizedTagName] = seq.findElements('rdf:li').map((e) => e.innerText).toList();
     }
     // Check for rdf:Bag (unordered set, treat as array)
     else if (child.findElements('rdf:Bag').isNotEmpty) {
       final bag = child.findElements('rdf:Bag').first;
-      json[tagName] = bag.findElements('rdf:li').map((e) => e.innerText).toList();
+      json[normalizedTagName] = bag.findElements('rdf:li').map((e) => e.innerText).toList();
     }
     // Simple text node
     else if (child.children.length == 1 && child.children.first is XmlText) {
-      json[tagName] = (child.children.first as XmlText).value;
+      json[normalizedTagName] = (child.children.first as XmlText).value;
     }
   }
 }
