@@ -25,9 +25,15 @@ void main() {
     });
 
     test('redacts token-ish key=value pairs', () {
+      // Only the names on the sensitive-key list (see DevLog._sensitiveKey)
+      // are scrubbed. `share_id` is intentionally NOT on the list — when it
+      // appears inside log messages as a diagnostic id, callers want to see it.
+      // The URL-scrubbing pass strips it from logged *URLs*; that's the privacy
+      // guarantee for share_id, not a blanket replacement in free text.
       final out = DevLog.scrub('xsec_token=abc share_id=def');
       expect(out, isNot(contains('abc')));
-      expect(out, isNot(contains('def')));
+      expect(out, contains('<redacted>'));
+      expect(out, contains('share_id=def'));
     });
 
     test('keeps harmless diagnostics untouched', () {

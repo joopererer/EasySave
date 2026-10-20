@@ -148,22 +148,26 @@ abstract final class DevLog {
   ///   * `https://host/path?a=b` -> `host/path`
   static String scrub(String message) {
     var out = message;
-    // 1. sensitive key=value / key: value pairs
-    out = out.replaceAll(
+    // 1. sensitive key=value / key: value pairs.
+    //    The value side allows an optional "Bearer "/"Basic " prefix and
+    //    non-separator characters so we grab the whole token-shaped token in
+    //    one go (e.g. "authorization: Bearer eyJhbGciOi.J9.sig"). Also
+    //    supports quoted values.
+    out = out.replaceAllMapped(
       RegExp(
-        r'''([A-Za-z0-9_.-]*(?:cookie|authorization|auth|token|password|passwd|secret|session|api[_-]?key|sig|signature)[A-Za-z0-9_.-]*)\s*[=:]\s*("[^"]*"|'[^']*'|[^\s,;)]+)''',
+        r'''([A-Za-z0-9_.-]*(?:cookie|authorization|auth|token|password|passwd|secret|session|api[_-]?key|sig|signature)[A-Za-z0-9_.-]*)\s*[=:]\s*(?:(?:Bearer|Basic)\s+)?("[^"]*"|'[^']*'|[^\s,;)]+)''',
         caseSensitive: false,
       ),
-      '\$1=$_redacted',
+      (m) => '${m.group(1)}=$_redacted',
     );
-    // 2. headers like "Cookie: abc" are covered above; drop a bare
-    //    "Authorization: Bearer x" remainder as well
-    out = out.replaceAll(
+    // 2. fallback for a stray "Bearer xxx" that didn't follow a sensitive
+    //    key (e.g. an exception message saying "missing Bearer abc").
+    out = out.replaceAllMapped(
       RegExp(
         r'''\b(Bearer|Basic)\s+[A-Za-z0-9._\-]+''',
         caseSensitive: false,
       ),
-      _redacted,
+      (m) => _redacted,
     );
     // 3. URLs -> host + path (no query, no fragment)
     out = out.replaceAllMapped(_urlPattern, (m) => _hostPath(m.group(0)!));
