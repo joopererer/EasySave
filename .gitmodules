@@ -1,0 +1,3 @@
+[submodule "docs/provenance-spec"]
+	path = docs/provenance-spec
+	url = https://github.com/joopererer/provenance-spec.git
