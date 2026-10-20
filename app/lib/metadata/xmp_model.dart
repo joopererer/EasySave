@@ -106,34 +106,162 @@ class XmpProvenance {
       }
     });
 
+    // Handle both SPEC format (flat keys) and XMP format (namespace-prefixed keys)
+    String schema;
+    if (json.containsKey('prov:schema')) {
+      schema = json['prov:schema'] as String? ?? '0.1';
+    } else {
+      schema = json['schema'] as String? ?? '0.1';
+    }
+
+    String? assetId;
+    DateTime capturedAt;
+    String capturedBy;
+    DateTime metadataDate;
+    String? sourceUrl;
+    String? platform;
+    String? sourceId;
+    int? itemIndex;
+    int? itemCount;
+    String? authorId;
+    DateTime? publishedAt;
+    String? title;
+    List<String>? creators;
+    String? description;
+    List<String>? subject;
+    int? rating;
+    String? credit;
+
+    // Try XMP format first, fall back to SPEC format
+    if (json.containsKey('prov:assetId')) {
+      assetId = json['prov:assetId'] as String?;
+    } else {
+      assetId = json['assetId'] as String?;
+    }
+
+    if (json.containsKey('prov:capturedAt')) {
+      capturedAt = DateTime.parse(json['prov:capturedAt'] as String);
+    } else {
+      capturedAt = DateTime.parse(json['capturedAt'] as String);
+    }
+
+    if (json.containsKey('prov:capturedBy')) {
+      capturedBy = json['prov:capturedBy'] as String;
+    } else {
+      capturedBy = json['capturedBy'] as String;
+    }
+
+    if (json.containsKey('xmp:MetadataDate')) {
+      metadataDate = DateTime.parse(json['xmp:MetadataDate'] as String);
+    } else if (json.containsKey('metadataDate')) {
+      metadataDate = DateTime.parse(json['metadataDate'] as String);
+    } else {
+      // Use capturedAt as fallback
+      metadataDate = capturedAt;
+    }
+
+    // Source fields
+    if (json.containsKey('prov:sourceUrl')) {
+      sourceUrl = json['prov:sourceUrl'] as String?;
+    } else if (json.containsKey('source')) {
+      final source = json['source'] as Map<String, dynamic>?;
+      sourceUrl = source?['url'] as String?;
+      platform = source?['platform'] as String?;
+      sourceId = source?['id'] as String?;
+      itemIndex = source?['itemIndex'] as int?;
+      itemCount = source?['itemCount'] as int?;
+      authorId = source?['authorId'] as String?;
+      if (source?['publishedAt'] != null) {
+        publishedAt = DateTime.parse(source!['publishedAt'] as String);
+      }
+    } else {
+      sourceUrl = json['sourceUrl'] as String?;
+    }
+
+    if (json.containsKey('prov:platform') && platform == null) {
+      platform = json['prov:platform'] as String?;
+    }
+    if (json.containsKey('prov:sourceId') && sourceId == null) {
+      sourceId = json['prov:sourceId'] as String?;
+    }
+    if (json.containsKey('prov:itemIndex') && itemIndex == null) {
+      itemIndex = _parseInt(json['prov:itemIndex']);
+    }
+    if (json.containsKey('prov:itemCount') && itemCount == null) {
+      itemCount = _parseInt(json['prov:itemCount']);
+    }
+    if (json.containsKey('prov:authorId') && authorId == null) {
+      authorId = json['prov:authorId'] as String?;
+    }
+    if (json.containsKey('prov:publishedAt') && publishedAt == null) {
+      publishedAt = DateTime.parse(json['prov:publishedAt'] as String);
+    }
+
+    // Dublin Core fields
+    if (json.containsKey('dc:title')) {
+      title = json['dc:title'] as String?;
+    } else {
+      title = json['title'] as String?;
+    }
+
+    if (json.containsKey('dc:creator')) {
+      creators = json['dc:creator'] != null ? List<String>.from(json['dc:creator'] as List) : null;
+    } else if (json.containsKey('creator')) {
+      creators = json['creator'] != null ? List<String>.from(json['creator'] as List) : null;
+    }
+
+    if (json.containsKey('dc:description')) {
+      description = json['dc:description'] as String?;
+    } else {
+      description = json['description'] as String?;
+    }
+
+    if (json.containsKey('dc:subject')) {
+      subject = json['dc:subject'] != null ? List<String>.from(json['dc:subject'] as List) : null;
+    } else if (json.containsKey('subject')) {
+      subject = json['subject'] != null ? List<String>.from(json['subject'] as List) : null;
+    }
+
+    if (json.containsKey('xmp:Rating')) {
+      rating = _parseInt(json['xmp:Rating']);
+    } else if (json.containsKey('rating')) {
+      rating = _parseInt(json['rating']);
+    }
+
+    if (json.containsKey('photoshop:Credit')) {
+      credit = json['photoshop:Credit'] as String?;
+    } else {
+      credit = json['credit'] as String?;
+    }
+
     return XmpProvenance(
-      schema: json['prov:schema'] as String? ?? '0.1',
-      assetId: json['prov:assetId'] as String,
-      capturedAt: DateTime.parse(json['prov:capturedAt'] as String),
-      capturedBy: json['prov:capturedBy'] as String,
-      metadataDate: DateTime.parse(json['xmp:MetadataDate'] as String),
-      sourceUrl: json['prov:sourceUrl'] as String?,
-      platform: json['prov:platform'] as String?,
-      sourceId: json['prov:sourceId'] as String?,
-      itemIndex: json['prov:itemIndex'] != null
-          ? (json['prov:itemIndex'] is int ? json['prov:itemIndex'] as int : int.tryParse(json['prov:itemIndex'].toString()))
-          : null,
-      itemCount: json['prov:itemCount'] != null
-          ? (json['prov:itemCount'] is int ? json['prov:itemCount'] as int : int.tryParse(json['prov:itemCount'].toString()))
-          : null,
-      authorId: json['prov:authorId'] as String?,
-      publishedAt:
-          json['prov:publishedAt'] != null ? DateTime.parse(json['prov:publishedAt'] as String) : null,
-      title: json['dc:title'] as String?,
-      creators: json['dc:creator'] != null ? List<String>.from(json['dc:creator'] as List) : null,
-      description: json['dc:description'] as String?,
-      subject: json['dc:subject'] != null ? List<String>.from(json['dc:subject'] as List) : null,
-      rating: json['xmp:Rating'] != null 
-          ? (json['xmp:Rating'] is int ? json['xmp:Rating'] as int : int.tryParse(json['xmp:Rating'].toString()))
-          : null,
-      credit: json['photoshop:Credit'] as String?,
+      schema: schema,
+      assetId: assetId ?? 'unknown',
+      capturedAt: capturedAt,
+      capturedBy: capturedBy,
+      metadataDate: metadataDate,
+      sourceUrl: sourceUrl,
+      platform: platform,
+      sourceId: sourceId,
+      itemIndex: itemIndex,
+      itemCount: itemCount,
+      authorId: authorId,
+      publishedAt: publishedAt,
+      title: title,
+      creators: creators,
+      description: description,
+      subject: subject,
+      rating: rating,
+      credit: credit,
       otherFields: otherFields,
     );
+  }
+
+  static int? _parseInt(dynamic value) {
+    if (value == null) return null;
+    if (value is int) return value;
+    if (value is String) return int.tryParse(value);
+    return null;
   }
 
   static const _knownFields = {
@@ -156,5 +284,25 @@ class XmpProvenance {
     'xmp:Rating',
     'dc:source',
     'photoshop:Credit',
+    // Flat SPEC format keys
+    'schema',
+    'assetId',
+    'capturedAt',
+    'capturedBy',
+    'metadataDate',
+    'sourceUrl',
+    'platform',
+    'sourceId',
+    'itemIndex',
+    'itemCount',
+    'authorId',
+    'publishedAt',
+    'title',
+    'creator',
+    'description',
+    'subject',
+    'rating',
+    'credit',
+    'source',
   };
 }

@@ -2,7 +2,7 @@
 // XMP sidecar file (.xmp) reading and writing for video/audio files.
 
 import 'dart:io';
-import 'package:easysave/metadata/xmp_jpeg.dart';
+import 'package:easysave/metadata/xmp_core.dart';
 import 'package:easysave/metadata/xmp_model.dart';
 
 /// Reads XMP provenance from a sidecar .xmp file.

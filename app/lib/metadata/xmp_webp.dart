@@ -6,7 +6,7 @@ import 'dart:convert';
 import 'dart:typed_data';
 
 import 'xmp_model.dart';
-import 'xmp_jpeg.dart' show parseXmpXml, buildXmpXml;
+import 'xmp_core.dart' show parseXmpXml, buildXmpXml, mergeXmp;
 
 /// Reads XMP from WebP RIFF XMP chunk.
 /// Returns null if no XMP found.
@@ -19,7 +19,7 @@ XmpProvenance? readWebpXmp(Uint8List bytes) {
       bytes[8] != 0x57 || // 'W'
       bytes[9] != 0x45 || // 'E'
       bytes[10] != 0x42 || // 'B'
-      bytes[11] != 0x50) {
+      bytes[11] != 0x50) { // 'P'
     throw FormatException('Not a WebP file');
   }
 
@@ -65,7 +65,7 @@ Uint8List writeWebpXmp(Uint8List bytes, XmpProvenance xmp) {
 
   // Check if existing XMP exists and merge with it
   final existing = readWebpXmp(bytes);
-  final merged = existing != null ? _mergeXmp(existing, xmp) : xmp;
+  final merged = mergeXmp(existing, xmp);
 
   final xmpPayload = buildXmpXml(merged);
   final xmpBytes = utf8.encode(xmpPayload);
@@ -157,7 +157,7 @@ Uint8List _upgradeToExtended(Uint8List bytes, List<int> xmpBytes, String format)
   // RIFF header (will update size at end)
   builder.add(bytes.sublist(0, 8));
   builder.add(utf8.encode('WEBP'));
-
+  
   // VP8X chunk
   builder.add(utf8.encode('VP8X'));
   builder.add(_u32Bytes(10)); // VP8X data size is always 10
@@ -289,38 +289,4 @@ class _Dimensions {
   final int height;
   
   _Dimensions(this.width, this.height);
-}
-
-/// Merge new XMP with existing, preserving assetId and foreign fields.
-XmpProvenance _mergeXmp(XmpProvenance existing, XmpProvenance newXmp) {
-  // Preserve existing assetId
-  final assetId = existing.assetId;
-  
-  // Merge otherFields: keep existing foreign fields
-  final mergedOtherFields = Map<String, String>.from(existing.otherFields);
-  newXmp.otherFields.forEach((key, value) {
-    if (!mergedOtherFields.containsKey(key)) {
-      mergedOtherFields[key] = value;
-    }
-  });
-  
-  return XmpProvenance(
-    schema: newXmp.schema,
-    assetId: assetId,
-    capturedAt: newXmp.capturedAt,
-    capturedBy: newXmp.capturedBy,
-    metadataDate: newXmp.metadataDate,
-    sourceUrl: newXmp.sourceUrl,
-    platform: newXmp.platform,
-    sourceId: newXmp.sourceId,
-    itemIndex: newXmp.itemIndex,
-    itemCount: newXmp.itemCount,
-    authorId: newXmp.authorId,
-    publishedAt: newXmp.publishedAt,
-    title: newXmp.title,
-    creators: newXmp.creators,
-    description: newXmp.description,
-    credit: newXmp.credit,
-    otherFields: mergedOtherFields,
-  );
 }

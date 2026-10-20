@@ -5,8 +5,8 @@
 import 'dart:convert';
 import 'dart:typed_data';
 
-import 'package:xml/xml.dart';
 import 'xmp_model.dart';
+import 'xmp_core.dart' show parseXmpXml, buildXmpXml, mergeXmp;
 
 const _xmpHeader = 'http://ns.adobe.com/xap/1.0/\x00';
 const _xmpHeaderBytes = _xmpHeader.length; // 29
@@ -72,12 +72,12 @@ Uint8List writeJpegXmp(Uint8List bytes, XmpProvenance xmp) {
 
   // Check if existing XMP exists and merge with it
   final existing = readJpegXmp(bytes);
-  final merged = _mergeXmp(existing, xmp);
+  final merged = mergeXmp(existing, xmp);
 
   final xmpPayload = buildXmpXml(merged);
   final xmpBytes = utf8.encode(_xmpHeader + xmpPayload);
   final newSegmentLength = 2 + xmpBytes.length;
-
+  
   if (newSegmentLength > 65535) {
     throw ArgumentError('XMP payload too large for single APP1 segment');
   }
@@ -158,144 +158,4 @@ Uint8List writeJpegXmp(Uint8List bytes, XmpProvenance xmp) {
   }
 
   return builder.toBytes();
-}
-
-XmpProvenance _parseXmpXml(String xml) {
-  final document = XmlDocument.parse(xml);
-  final rdf = document.findAllElements('rdf:Description').first;
-
-  final json = <String, dynamic>{};
-
-  // Parse attributes
-  for (final attr in rdf.attributes) {
-    final key = attr.name.qualified;
-    // Skip xmlns:* and rdf:about - these are XML metadata, not data fields
-    if (key.startsWith('xmlns:') || key == 'rdf:about') {
-      continue;
-    }
-    json[key] = attr.value;
-  }
-
-  // Parse child elements
-  for (final child in rdf.children.whereType<XmlElement>()) {
-    final tagName = child.name.qualified;
-    
-    // Check for rdf:Alt (single localized text)
-    if (child.findElements('rdf:Alt').isNotEmpty) {
-      final alt = child.findElements('rdf:Alt').first;
-      final li = alt.findElements('rdf:li').firstOrNull;
-      if (li != null) {
-        json[tagName] = li.innerText;
-      }
-    }
-    // Check for rdf:Seq (ordered array)
-    else if (child.findElements('rdf:Seq').isNotEmpty) {
-      final seq = child.findElements('rdf:Seq').first;
-      json[tagName] = seq.findElements('rdf:li').map((e) => e.innerText).toList();
-    }
-    // Check for rdf:Bag (unordered set, treat as array)
-    else if (child.findElements('rdf:Bag').isNotEmpty) {
-      final bag = child.findElements('rdf:Bag').first;
-      json[tagName] = bag.findElements('rdf:li').map((e) => e.innerText).toList();
-    }
-    // Simple text node
-    else if (child.children.length == 1 && child.children.first is XmlText) {
-      json[tagName] = (child.children.first as XmlText).value;
-    }
-  }
-
-  return XmpProvenance.fromJson(json);
-}
-
-String _buildXmpXml(XmpProvenance xmp) {
-  final builder = XmlBuilder();
-  builder.processing('xpacket', 'begin="" id="W5M0MpCehiHzreSzNTczkc9d"');
-  builder.element('x:xmpmeta', nest: () {
-    builder.attribute('xmlns:x', 'adobe:ns:meta/');
-    builder.element('rdf:RDF', nest: () {
-      builder.attribute('xmlns:rdf', 'http://www.w3.org/1999/02/22-rdf-syntax-ns#');
-      builder.attribute('xmlns:prov', 'https://joopererer.github.io/provenance-spec/ns/');
-      builder.attribute('xmlns:dc', 'http://purl.org/dc/elements/1.1/');
-      builder.attribute('xmlns:xmp', 'http://ns.adobe.com/xap/1.0/');
-      builder.attribute('xmlns:photoshop', 'http://ns.adobe.com/photoshop/1.0/');
-
-      builder.element('rdf:Description', nest: () {
-        builder.attribute('rdf:about', '');
-
-        final json = xmp.toXmpJson();
-        json.forEach((key, value) {
-          if (value is List) {
-            builder.element(key, nest: () {
-              // Use rdf:Seq for dc:creator (ordered), rdf:Bag for dc:subject (unordered set)
-              final containerType = key == 'dc:subject' ? 'rdf:Bag' : 'rdf:Seq';
-              builder.element(containerType, nest: () {
-                for (final item in value) {
-                  builder.element('rdf:li', nest: item);
-                }
-              });
-            });
-          } else if (key == 'dc:title' || key == 'dc:description') {
-            // Use rdf:Alt for localized text fields
-            builder.element(key, nest: () {
-              builder.element('rdf:Alt', nest: () {
-                builder.element('rdf:li', nest: () {
-                  builder.attribute('xml:lang', 'x-default');
-                  builder.text(value.toString());
-                });
-              });
-            });
-          } else {
-            builder.attribute(key, value.toString());
-          }
-        });
-      });
-    });
-  });
-  builder.processing('xpacket', 'end="w"');
-
-  return builder.buildDocument().toXmlString(pretty: false);
-}
-
-/// Exported for PNG/WebP readers
-XmpProvenance parseXmpXml(String xml) => _parseXmpXml(xml);
-
-/// Exported for PNG/WebP writers
-String buildXmpXml(XmpProvenance xmp) => _buildXmpXml(xmp);
-
-/// Merge new XMP with existing, preserving assetId and foreign fields.
-XmpProvenance _mergeXmp(XmpProvenance? existing, XmpProvenance newXmp) {
-  if (existing == null) return newXmp;
-  
-  // Preserve existing assetId
-  final assetId = existing.assetId;
-  
-  // Merge otherFields: keep existing foreign fields, don't overwrite
-  final mergedOtherFields = Map<String, String>.from(existing.otherFields);
-  newXmp.otherFields.forEach((key, value) {
-    if (!mergedOtherFields.containsKey(key)) {
-      mergedOtherFields[key] = value;
-    }
-  });
-  
-  return XmpProvenance(
-    schema: newXmp.schema,
-    assetId: assetId, // Always use existing
-    capturedAt: newXmp.capturedAt,
-    capturedBy: newXmp.capturedBy,
-    metadataDate: newXmp.metadataDate,
-    sourceUrl: newXmp.sourceUrl,
-    platform: newXmp.platform,
-    sourceId: newXmp.sourceId,
-    itemIndex: newXmp.itemIndex,
-    itemCount: newXmp.itemCount,
-    authorId: newXmp.authorId,
-    publishedAt: newXmp.publishedAt,
-    title: newXmp.title,
-    creators: newXmp.creators,
-    description: newXmp.description,
-    subject: newXmp.subject,
-    rating: newXmp.rating,
-    credit: newXmp.credit,
-    otherFields: mergedOtherFields,
-  );
 }

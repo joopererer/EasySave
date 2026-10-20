@@ -6,7 +6,7 @@ import 'dart:convert';
 import 'dart:typed_data';
 
 import 'xmp_model.dart';
-import 'xmp_jpeg.dart' show parseXmpXml, buildXmpXml;
+import 'xmp_core.dart' show parseXmpXml, buildXmpXml, mergeXmp;
 
 const _keyword = 'XML:com.adobe.xmp';
 
@@ -97,7 +97,7 @@ Uint8List writePngXmp(Uint8List bytes, XmpProvenance xmp) {
 
   // Check if existing XMP exists and merge with it
   final existing = readPngXmp(bytes);
-  final merged = existing != null ? _mergeXmp(existing, xmp) : xmp;
+  final merged = mergeXmp(existing, xmp);
 
   final xmpPayload = buildXmpXml(merged);
   final xmpBytes = utf8.encode(xmpPayload);
@@ -255,39 +255,3 @@ const _crc32Table = [
   0x54DE5729, 0x23D967BF, 0xB3667A2E, 0xC4614AB8, 0x5D681B02, 0x2A6F2B94,
   0xB40BBE37, 0xC30C8EA1, 0x5A05DF1B, 0x2D02EF8D,
 ];
-
-/// Merge new XMP with existing, preserving assetId and foreign fields.
-XmpProvenance _mergeXmp(XmpProvenance existing, XmpProvenance newXmp) {
-  // Preserve existing assetId
-  final assetId = existing.assetId;
-  
-  // Merge otherFields: keep existing foreign fields
-  final mergedOtherFields = Map<String, String>.from(existing.otherFields);
-  newXmp.otherFields.forEach((key, value) {
-    if (!mergedOtherFields.containsKey(key)) {
-      mergedOtherFields[key] = value;
-    }
-  });
-  
-  return XmpProvenance(
-    schema: newXmp.schema,
-    assetId: assetId,
-    capturedAt: newXmp.capturedAt,
-    capturedBy: newXmp.capturedBy,
-    metadataDate: newXmp.metadataDate,
-    sourceUrl: newXmp.sourceUrl,
-    platform: newXmp.platform,
-    sourceId: newXmp.sourceId,
-    itemIndex: newXmp.itemIndex,
-    itemCount: newXmp.itemCount,
-    authorId: newXmp.authorId,
-    publishedAt: newXmp.publishedAt,
-    title: newXmp.title,
-    creators: newXmp.creators,
-    description: newXmp.description,
-    subject: newXmp.subject,
-    rating: newXmp.rating,
-    credit: newXmp.credit,
-    otherFields: mergedOtherFields,
-  );
-}
