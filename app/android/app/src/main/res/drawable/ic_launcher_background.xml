@@ -22,9 +22,9 @@
         <aapt:attr name="android:fillColor">
             <gradient
                 android:type="linear"
-                android:startX="92.18"
+                android:startX="15.82"
                 android:startY="15.82"
-                android:endX="15.82"
+                android:endX="92.18"
                 android:endY="92.18">
                 <item android:offset="0"   android:color="#FC494C" />
                 <item android:offset="1"   android:color="#FA662E" />

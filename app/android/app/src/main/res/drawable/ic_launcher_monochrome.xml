@@ -9,30 +9,28 @@
         Android 13+ monochrome adaptive icon layer.
         White circle silhouette with the arrow+baseline cut out (transparent).
         EvenOdd fill-rule punches the arrow hole through the white circle.
-        Arrow geometry matches the filled arrow in ic_launcher_foreground.xml.
+        White circle: radius 33dp, center at (54, 33.5) → top of circle at y=0.5.
+        Arrow path matches the stroked arrow in ic_launcher_foreground.xml.
     -->
     <path
         android:fillColor="#FFFFFF"
         android:fillType="evenOdd"
         android:pathData="
-            M54,26
-            A28,28 0 1,0 54,82
-            A28,28 0 1,0 54,26
+            M54,0.5
+            A33,33 0 1,0 54,66.5
+            A33,33 0 1,0 54,0.5
             Z
 
-            M54,27
-            L33.75,49.5
-            L47.25,49.5
-            L47.25,67.5
-            L60.75,67.5
-            L60.75,49.5
-            L74.25,49.5
+            M54,21
+            L54,58
+            L36,40
+            L72,40
             Z
 
-            M28,75
-            L80,75
-            L80,81
-            L28,81
+            M27,72.5
+            L81,72.5
+            L81,79
+            L27,79
             Z
         " />
 
