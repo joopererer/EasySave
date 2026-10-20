@@ -35,14 +35,14 @@ Metadata is written **before** saving to the device gallery. Videos are not writ
 
 | Field | Unified Model | Required | Notes |
 |---|---|---|---|
-| `prov:sourceUrl` | `post.url` (pre-normalized) | Yes | Normalized at parse time |
+| `prov:sourceUrl` | Normalized post URL (see §3) | Yes | Normalized **at metadata write time**, not at parse time |
 | `prov:platform` | `post.platform` | Yes | `xiaohongshu`, `instagram`, `x` |
 | `prov:sourceId` | `post.id` | Yes | Post/tweet native ID |
 | `prov:itemIndex` | 1-based position in `post.items` | Multi-item only | Must reflect position in the original post (not the user's selection order) |
 | `prov:itemCount` | `post.items.length` | When available | |
 | `prov:authorId` | `post.author.id` | When available | |
-| `prov:publishedAt` | `post.publishedAt` | When available | |
-| `prov:pairId` | `"{sourceId}#{itemIndex}"` | Live Photos only | Image + video share the same value |
+| `prov:publishedAt` | `post.publishedAt` | When available | Converted to ISO 8601 with timezone; use UTC (Z suffix) if original has no timezone |
+| `prov:pairId` | — | **No** | Deferred; not written in v1.7 |
 
 **Note on `itemIndex`**: If the user selects items 2 and 5 from a 9-image post, the written `itemIndex` values are **2** and **5** (original positions), not **1** and **2**.
 
@@ -55,7 +55,7 @@ Metadata is written **before** saving to the device gallery. Videos are not writ
 | `dc:description` | `post.caption` | Yes | Truncate at **2000 chars** with `…` |
 | `dc:subject` | — | **No** | User's own tag field; EasySave v1.7 reads and preserves it but never writes |
 | `xmp:Rating` | — | **No** | Reserved for future user feature |
-| `dc:source` | `post.url` | Yes | Mirror of `prov:sourceUrl` |
+| `dc:source` | Normalized `post.url` (see §3) | Yes | Mirror of `prov:sourceUrl`; normalized at write time |
 | `photoshop:Credit` | `"{author.name} / {platformDisplayName}"` | Yes | e.g. `"某作者 / 小红书"` |
 
 **Platform display names for `photoshop:Credit`**: `小红书` for xiaohongshu, `Instagram` for instagram, `X` for x.
@@ -74,6 +74,8 @@ Implemented in Dart (`app/lib/metadata/url_normalizer.dart`). Must pass all case
 
 ### 3.2 Platform-Specific Patterns
 
+**Note**: Link normalization happens **at metadata write time**. `post.url` in HistoryDb and the unified model remains the original URL (preserving `xsec_token` and other parameters needed for re-parsing and opening in browser).
+
 | Platform | Normalized Format |
 |---|---|
 | xiaohongshu | `https://www.xiaohongshu.com/explore/{noteId}` |
@@ -88,9 +90,9 @@ Implemented in Dart (`app/lib/metadata/url_normalizer.dart`). Must pass all case
 
 | Format | Storage Method | Implementation |
 |---|---|---|
-| JPEG | APP1 segment (`0xFFE1`) with XMP header `http://ns.adobe.com/xap/1.0/\0` | Dart byte scan + insert/replace |
-| PNG | `iTXt` chunk, keyword `XML:com.adobe.xmp`, no compression | Dart chunk manipulation |
-| WebP | RIFF `XMP ` chunk (requires VP8X extended header + XMP flag bit) | Dart RIFF traversal; simple format upgraded to VP8X with XMP flag |
+| JPEG | APP1 segment (`0xFFE1`) with XMP header `http://ns.adobe.com/xap/1.0/\0` | Dart byte scan + insert/replace; use ContentResolver with content URI (mode "wt") for gallery files |
+| PNG | `iTXt` chunk, keyword `XML:com.adobe.xmp`, no compression | Dart chunk manipulation; XMP may be at file end, must read complete file |
+| WebP | RIFF `XMP ` chunk (requires VP8X extended header + XMP flag bit) | Dart RIFF traversal; XMP may be at file end, must read complete file; simple format upgraded to VP8X with XMP flag |
 | GIF | Sidecar file `*.xmp` | Deferred (v1.7 writes JPEG/PNG/WebP only) |
 | MP4 | Sidecar file `*.xmp` | Deferred |
 | HEIC/AVIF/RAW | Sidecar file `*.xmp` | Deferred |
@@ -146,11 +148,11 @@ All metadata fields come from the unified `ParsedPost` model. **No platform raw 
 |---|---|---|
 | `prov:platform` | `post.platform` | String: `xiaohongshu`, `instagram`, `x` |
 | `prov:sourceId` | `post.id` | Post/tweet ID string |
-| `prov:sourceUrl` | `post.url` | Pre-normalized at parse time |
-| `prov:itemIndex` | `post.items.indexOf(item) + 1` | 1-based |
+| `prov:sourceUrl` | Normalized `post.url` | Normalized at **write time** (§3); stored URL in HistoryDb/model is original |
+| `prov:itemIndex` | `post.items.indexOf(item) + 1` | 1-based; position in **original post**, not download selection order |
 | `prov:itemCount` | `post.items.length` | Total media count |
 | `prov:authorId` | `post.author.id` | Stable user ID (may be null) |
-| `prov:publishedAt` | `post.publishedAt` | ISO 8601 string (may be null) |
+| `prov:publishedAt` | `post.publishedAt` | Converted to ISO 8601 with timezone; use UTC (Z suffix) if original lacks timezone |
 | `dc:title` | `post.title` | Written only if non-null and non-empty |
 | `dc:creator` | `[post.author.name]` | Written only if non-null; single-element list |
 | `dc:description` | `post.caption` | Truncated at 2000 chars; may be null |
@@ -222,9 +224,12 @@ New boolean setting `saveProvenanceInImages` (key: `saveProvenanceInImages`, def
 2. For each record with a linked `mediaId`:
    - Try to open the file for writing via `photo_manager` asset path
    - If **writable**:
-     - Extract provenance from HistoryDb record
-     - Check for existing `assetId` in file XMP → use it if present, otherwise generate new
+     - Read existing XMP from file
+     - Extract `assetId` priority: **file XMP → HistoryDb files_json → newly generated**
+     - Build provenance metadata from `HistoryRecord`
+     - Use `capturedAt` from `files_json[i].savedAt` (original download time), not current time
      - Write XMP using the same logic as §4
+     - If `assetId` was newly generated, write it back to `HistoryDb.files_json`
      - Log success
    - If **not writable** (scoped storage restriction):
      - Use `MediaStore.createWriteRequest` (same pattern as `MediaDeleteService` for `MediaStore.createDeleteRequest`) to batch-request write permission for all failed files
@@ -273,7 +278,7 @@ These files are small (under 1KB), valid at the binary level, and contain the C2
 1. Download a multi-image Xiaohongshu post
 2. `adb pull` one file from the gallery
 3. `exiftool -xmp:all` to verify all provenance fields
-4. Windows Explorer → Properties → Details: verify Title, Authors, Tags readable
+3. Windows Explorer → Properties → Details: verify **Title** and **Authors** readable (JPEG format)
 
 ### 8.4 AI Metadata Verification
 
