@@ -7,5 +7,6 @@ extension/.output/
 extension/dist/
 .idea/
 generate_notification_icon.py
+node_modules/
 
 spec/fixtures/_raw/
