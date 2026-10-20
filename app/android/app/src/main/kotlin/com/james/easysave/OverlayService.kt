@@ -9,12 +9,10 @@ import android.content.Context
 import android.content.Intent
 import android.graphics.Canvas
 import android.graphics.Color
-import android.graphics.LinearGradient
 import android.graphics.Paint
 import android.graphics.Path
 import android.graphics.PixelFormat
 import android.graphics.RectF
-import android.graphics.Shader
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.os.Build
@@ -198,7 +196,6 @@ class OverlayService : Service() {
             y = resources.displayMetrics.heightPixels / 3
         }
         val v = BubbleView(this)
-        v.alpha = 0.82f
         attachTouch(v, params)
         bubble = v
         bubbleParams = params
@@ -545,14 +542,17 @@ class OverlayService : Service() {
     }
 }
 
-/** The circular bubble: gradient fill + state indicator (progress / ✓ / !). */
-private class BubbleView(context: Context) : View(context) {
+/** The circular bubble: bg_bubble drawable + overlay state indicator. */
+private class BubbleView(context: Context) : FrameLayout(context) {
     var state: BubbleState = BubbleState.IDLE
+        set(value) {
+            field = value
+            updateIndicator()
+        }
     var done = 0
     var total = 0
     var label: String? = null
 
-    private val bg = Paint(Paint.ANTI_ALIAS_FLAG)
     private val fg = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = Color.WHITE
         style = Paint.Style.STROKE
@@ -567,51 +567,58 @@ private class BubbleView(context: Context) : View(context) {
         typeface = Typeface.DEFAULT_BOLD
     }
     private val arc = RectF()
+    private lateinit var indicatorView: View
 
-    override fun onDraw(canvas: Canvas) {
-        val w = width.toFloat()
-        val h = height.toFloat()
-        val r = min(w, h) / 2f - fg.strokeWidth
-        val cx = w / 2f
-        val cy = h / 2f
-        bg.shader = LinearGradient(
-            0f, 0f, w, h,
-            intArrayOf(0xFFFC494C.toInt(), 0xFFFA662E.toInt()),
-            null, Shader.TileMode.CLAMP
-        )
-        canvas.drawCircle(cx, cy, r, bg)
+    init {
+        background = ContextCompat.getDrawable(context, R.drawable.bg_bubble)
+        
+        // Center indicator View that draws state (progress/checkmark/error/arrow)
+        indicatorView = object : View(context) {
+            override fun onDraw(canvas: Canvas) {
+                val w = width.toFloat()
+                val h = height.toFloat()
+                val r = min(w, h) / 2f - fg.strokeWidth
+                val cx = w / 2f
+                val cy = h / 2f
 
-        when (state) {
-            BubbleState.BUSY -> {
-                val frac = if (total > 0) done.toFloat() / total else 0f
-                arc.set(cx - r + 3, cy - r + 3, cx + r - 3, cy + r - 3)
-                canvas.drawArc(arc, -90f, 360f * frac.coerceIn(0f, 1f), false, fg)
-                val s = if (total > 0) "$done/$total" else "…"
-                canvas.drawText(s, cx, cy + text.textSize / 3f, text)
-            }
-            BubbleState.DONE -> {
-                val p = Path().apply {
-                    moveTo(cx - r * 0.42f, cy)
-                    lineTo(cx - r * 0.08f, cy + r * 0.34f)
-                    lineTo(cx + r * 0.46f, cy - r * 0.34f)
+                when (state) {
+                    BubbleState.BUSY -> {
+                        val frac = if (total > 0) done.toFloat() / total else 0f
+                        arc.set(cx - r + 3, cy - r + 3, cx + r - 3, cy + r - 3)
+                        canvas.drawArc(arc, -90f, 360f * frac.coerceIn(0f, 1f), false, fg)
+                        val s = if (total > 0) "$done/$total" else "…"
+                        canvas.drawText(s, cx, cy + text.textSize / 3f, text)
+                    }
+                    BubbleState.DONE -> {
+                        val p = Path().apply {
+                            moveTo(cx - r * 0.42f, cy)
+                            lineTo(cx - r * 0.08f, cy + r * 0.34f)
+                            lineTo(cx + r * 0.46f, cy - r * 0.34f)
+                        }
+                        canvas.drawPath(p, fg)
+                    }
+                    BubbleState.ERROR -> {
+                        canvas.drawLine(cx, cy - r * 0.42f, cx, cy + r * 0.12f, fg)
+                        canvas.drawPoint(cx, cy + r * 0.42f, fg)
+                    }
+                    else -> {
+                        canvas.drawLine(cx, cy - r * 0.44f, cx, cy + r * 0.16f, fg)
+                        val p = Path().apply {
+                            moveTo(cx - r * 0.26f, cy - r * 0.06f)
+                            lineTo(cx, cy + r * 0.2f)
+                            lineTo(cx + r * 0.26f, cy - r * 0.06f)
+                        }
+                        canvas.drawPath(p, fg)
+                        canvas.drawLine(cx - r * 0.34f, cy + r * 0.42f, cx + r * 0.34f, cy + r * 0.42f, fg)
+                    }
                 }
-                canvas.drawPath(p, fg)
-            }
-            BubbleState.ERROR -> {
-                canvas.drawLine(cx, cy - r * 0.42f, cx, cy + r * 0.12f, fg)
-                canvas.drawPoint(cx, cy + r * 0.42f, fg)
-            }
-            else -> {
-                canvas.drawLine(cx, cy - r * 0.44f, cx, cy + r * 0.16f, fg)
-                val p = Path().apply {
-                    moveTo(cx - r * 0.26f, cy - r * 0.06f)
-                    lineTo(cx, cy + r * 0.2f)
-                    lineTo(cx + r * 0.26f, cy - r * 0.06f)
-                }
-                canvas.drawPath(p, fg)
-                canvas.drawLine(cx - r * 0.34f, cy + r * 0.42f, cx + r * 0.34f, cy + r * 0.42f, fg)
             }
         }
+        addView(indicatorView, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT))
+    }
+
+    private fun updateIndicator() {
+        indicatorView.invalidate()
     }
 }
 

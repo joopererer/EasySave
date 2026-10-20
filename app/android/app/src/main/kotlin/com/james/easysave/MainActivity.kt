@@ -251,7 +251,7 @@ class MainActivity : FlutterActivity() {
         }
         try {
             val sbm = getSystemService(StatusBarManager::class.java)
-            val icon = Icon.createWithResource(this, R.drawable.ic_tile_easysave)
+            val icon = Icon.createWithResource(this, R.drawable.ic_qs_easysave)
             sbm?.requestAddTileService(
                 ComponentName(this, EasySaveTileService::class.java),
                 "EasySave 下载",

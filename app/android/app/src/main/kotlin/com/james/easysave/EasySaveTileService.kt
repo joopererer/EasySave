@@ -4,6 +4,7 @@ import android.app.PendingIntent
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
+import android.graphics.drawable.Icon
 import android.os.Build
 import android.service.quicksettings.Tile
 import android.service.quicksettings.TileService
@@ -74,6 +75,7 @@ class EasySaveTileService : TileService() {
     private fun updateTile() {
         val tile = qsTile ?: return
         tile.state = if (active) Tile.STATE_ACTIVE else Tile.STATE_INACTIVE
+        tile.icon = Icon.createWithResource(this, R.drawable.ic_qs_easysave)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             tile.subtitle = subtitle
         }
