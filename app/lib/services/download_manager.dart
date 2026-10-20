@@ -350,7 +350,7 @@ class DownloadManager extends ChangeNotifier {
     try {
       await _notifications.initialize(
         settings: const InitializationSettings(
-          android: AndroidInitializationSettings('@mipmap/ic_launcher'),
+          android: AndroidInitializationSettings('@drawable/ic_stat_easysave'),
         ),
       );
       await _notifications
@@ -429,6 +429,7 @@ class DownloadManager extends ChangeNotifier {
             ongoing: true,
             autoCancel: false,
             onlyAlertOnce: true,
+            icon: '@drawable/ic_stat_easysave',
           ),
         ),
       );

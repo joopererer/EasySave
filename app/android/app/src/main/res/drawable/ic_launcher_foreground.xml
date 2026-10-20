@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!--
+        Adaptive icon foreground layer.
+        White circle (52% of 108dp ≈ 56dp) centered at (54,54), radius 28dp.
+        Inside the circle: solid red (#F0443F) filled arrow + baseline.
+        All arrow geometry is filled paths, not stroked lines.
+    -->
+
+    <!-- White filled circle -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M54,26 A28,28 0 1,1 54,82 A28,28 0 1,1 54,26 Z" />
+
+    <!--
+        Arrow geometry scaled from 24dp reference to 108dp canvas (factor 4.5).
+        Reference (24dp): tip=(12,4), left_wing=(7.5,10.5), right_wing=(16.5,10.5),
+                          shaft=(10.5,10.5)→(13.5,15), baseline=(5,19.5)→(19,19.5)
+        Scaled ×4.5:     tip=(54,18), left_wing=(33.75,47.25), right_wing=(74.25,47.25),
+                          shaft=(47.25,47.25)→(60.75,67.5), baseline=(22.5,87.75)→(85.5,87.75)
+        We adjust baseline to y=75 to keep proportions matching the reference.
+    -->
+    <path
+        android:fillColor="#F0443F"
+        android:pathData="M54,27 L33.75,49.5 L47.25,49.5 L47.25,67.5 L60.75,67.5 L60.75,49.5 L74.25,49.5 Z" />
+
+    <!-- Baseline (bottom bar of the "A" glyph / underline) -->
+    <path
+        android:fillColor="#F0443F"
+        android:pathData="M28,75 L80,75 L80,81 L28,81 Z" />
+
+</vector>

@@ -3,12 +3,44 @@
     android:height="24dp"
     android:viewportWidth="24"
     android:viewportHeight="24">
-    <!-- Mono line icon; the system tints it for the Quick Settings theme. -->
+
+    <!--
+        Quick Settings / floating bubble silhouette icon.
+        White filled circle with arrow+baseline cut out (transparent).
+        Mirrors the ic_stat_easysave silhouette at 24dp scale.
+    -->
     <path
-        android:fillColor="#00000000"
-        android:strokeColor="#FFFFFF"
-        android:strokeWidth="2"
-        android:strokeLineCap="round"
-        android:strokeLineJoin="round"
-        android:pathData="M12,4 L12,15 M12,15 L7.5,10.5 M12,15 L16.5,10.5 M5,19.5 L19,19.5" />
+        android:fillColor="#FFFFFF"
+        android:fillType="evenOdd"
+        android:pathData="
+            M12,2.2
+            A9.8,9.8 0 1,0 12,21.8
+            A9.8,9.8 0 1,0 12,2.2
+            Z
+
+            M10,3.5
+            L10,13
+            L14,13
+            L14,3.5
+            Z
+
+            M7,10
+            L10,13
+            L10,15.5
+            L7,15.5
+            Z
+
+            M14,10
+            L14,15.5
+            L17,15.5
+            L17,13
+            Z
+
+            M4,17
+            L20,17
+            L20,20
+            L4,20
+            Z
+        " />
+
 </vector>

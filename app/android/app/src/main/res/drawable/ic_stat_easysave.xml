@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+
+    <!--
+        Notification small icon: white silhouette with arrow cut out.
+        Android notification icons must be flat white-on-transparent (drawn into
+        a grey box by the system).  All non-transparent pixels render white.
+
+        Same silhouette as ic_launcher_foreground: white circle with arrow+baseline,
+        rendered as white fill with the arrow path punched out (transparent).
+    -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:fillType="evenOdd"
+        android:pathData="
+            M12,2.2
+            A9.8,9.8 0 1,0 12,21.8
+            A9.8,9.8 0 1,0 12,2.2
+            Z
+
+            M10,3.5
+            L10,13
+            L14,13
+            L14,3.5
+            Z
+
+            M7,10
+            L10,13
+            L10,15.5
+            L7,15.5
+            Z
+
+            M14,10
+            L14,15.5
+            L17,15.5
+            L17,13
+            Z
+
+            M4,17
+            L20,17
+            L20,20
+            L4,20
+            Z
+        " />
+
+</vector>

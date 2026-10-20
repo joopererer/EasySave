@@ -1,12 +1,16 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Modify this file to customize your launch splash screen -->
+<!-- Launch splash: shows the gradient background icon immediately while Flutter loads. -->
 <layer-list xmlns:android="http://schemas.android.com/apk/res/android">
-    <item android:drawable="?android:colorBackground" />
-
-    <!-- You can insert your own image assets here -->
-    <!-- <item>
-        <bitmap
-            android:gravity="center"
-            android:src="@mipmap/launch_image" />
-    </item> -->
+    <item android:drawable="@drawable/ic_launcher_background" />
+    <!-- Centered foreground circle + arrow -->
+    <item android:gravity="center">
+        <inset android:inset="21dp">
+            <vector
+                android:width="66dp"
+                android:height="66dp"
+                android:viewportWidth="108"
+                android:viewportHeight="108"
+                android:drawable="@drawable/ic_launcher_foreground" />
+        </inset>
+    </item>
 </layer-list>
