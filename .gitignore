@@ -6,5 +6,6 @@ app/build/
 extension/.output/
 extension/dist/
 .idea/
+generate_notification_icon.py
 
 spec/fixtures/_raw/

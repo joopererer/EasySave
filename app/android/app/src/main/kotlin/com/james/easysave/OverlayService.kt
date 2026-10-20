@@ -321,10 +321,10 @@ class OverlayService : Service() {
         val radius = dp(120).toFloat()
 
         val items = listOf(
-            Triple("all", "全部下载", R.drawable.ic_stat_easysave),
-            Triple("select", "选择下载", R.drawable.ic_stat_easysave),
-            Triple("caption", "复制文案", R.drawable.ic_stat_easysave),
-            Triple("open", "打开 EasySave", R.drawable.ic_stat_easysave),
+            Triple("all", "全部下载", R.drawable.ic_menu_download_all),
+            Triple("select", "选择下载", R.drawable.ic_menu_select),
+            Triple("caption", "复制文案", R.drawable.ic_menu_caption),
+            Triple("open", "打开 EasySave", R.drawable.ic_menu_open),
         )
         for (i in items.indices) {
             val t = (i - 1.5) / 1.5
@@ -569,12 +569,12 @@ private class BubbleView(context: Context) : FrameLayout(context) {
     }
     private val arc = RectF()
     private lateinit var indicatorView: View
+    private lateinit var arrowView: ImageView
 
     init {
         background = ContextCompat.getDrawable(context, R.drawable.bg_bubble)
-        
-        // Center indicator View: show ic_bubble_arrow (62% of diameter) when IDLE,
-        // overlay state indicators (progress/checkmark/error) for other states
+
+        // Draws the busy / done / error glyphs on top of bg_bubble.
         indicatorView = object : View(context) {
             override fun onDraw(canvas: Canvas) {
                 val w = width.toFloat()
@@ -604,24 +604,27 @@ private class BubbleView(context: Context) : FrameLayout(context) {
                         canvas.drawPoint(cx, cy + r * 0.42f, fg)
                     }
                     else -> {
-                        // IDLE: draw arrow downward (already handled by bg_bubble + ic_bubble_arrow drawable,
-                        // but also support canvas fallback for backward compat)
-                        canvas.drawLine(cx, cy - r * 0.44f, cx, cy + r * 0.16f, fg)
-                        val p = Path().apply {
-                            moveTo(cx - r * 0.26f, cy - r * 0.06f)
-                            lineTo(cx, cy + r * 0.2f)
-                            lineTo(cx + r * 0.26f, cy - r * 0.06f)
-                        }
-                        canvas.drawPath(p, fg)
-                        canvas.drawLine(cx - r * 0.34f, cy + r * 0.42f, cx + r * 0.34f, cy + r * 0.42f, fg)
+                        // IDLE / MENU: the arrow is the ic_bubble_arrow ImageView below.
                     }
                 }
             }
         }
         addView(indicatorView, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT))
+
+        // ic_bubble_arrow centered at ~62% of the bubble diameter. The bubble
+        // is SIZE_DP (54dp) wide, so 62% is 33dp.
+        val arrowSize = (54 * 0.62f * resources.displayMetrics.density).roundToInt()
+        arrowView = ImageView(context).apply {
+            setImageResource(R.drawable.ic_bubble_arrow)
+            scaleType = ImageView.ScaleType.FIT_CENTER
+        }
+        addView(arrowView, LayoutParams(arrowSize, arrowSize, Gravity.CENTER))
     }
 
     private fun updateIndicator() {
+        // The arrow shows when idle; busy / done / error draw their own glyph.
+        arrowView.visibility =
+            if (state == BubbleState.IDLE || state == BubbleState.MENU) VISIBLE else INVISIBLE
         indicatorView.invalidate()
     }
 }

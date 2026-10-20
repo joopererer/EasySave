@@ -255,7 +255,11 @@ Future<void> _handleSubmit(MethodChannel channel, Map<dynamic, dynamic> args) as
       unawaited(_awaitBatchAndNotify(channel, batch, started, url, toasts));
     } on ParseFailure catch (e) {
       await _log(channel, 'PARSE FAIL[${e.code}] (${sw.elapsedMilliseconds}ms) ${e.message} :: $url');
-      if (toasts) await _toast(channel, '解析失败：${e.message}');
+      if (e.code == ParseErrorCode.loginRequired) {
+        if (toasts) await _toast(channel, '需要登录：${e.message}');
+      } else if (toasts) {
+        await _toast(channel, '解析失败：${e.message}');
+      }
       await _tile(channel, false, null);
       await _bubble(channel, false, 0, 0, null, true, url, e.code, e.message);
       await _error(channel, url, e.code, e.message);
