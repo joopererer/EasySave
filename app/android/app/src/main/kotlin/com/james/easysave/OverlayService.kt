@@ -196,6 +196,7 @@ class OverlayService : Service() {
             y = resources.displayMetrics.heightPixels / 3
         }
         val v = BubbleView(this)
+        v.alpha = 0.8f
         attachTouch(v, params)
         bubble = v
         bubbleParams = params
@@ -572,7 +573,8 @@ private class BubbleView(context: Context) : FrameLayout(context) {
     init {
         background = ContextCompat.getDrawable(context, R.drawable.bg_bubble)
         
-        // Center indicator View that draws state (progress/checkmark/error/arrow)
+        // Center indicator View: show ic_bubble_arrow (62% of diameter) when IDLE,
+        // overlay state indicators (progress/checkmark/error) for other states
         indicatorView = object : View(context) {
             override fun onDraw(canvas: Canvas) {
                 val w = width.toFloat()
@@ -602,6 +604,8 @@ private class BubbleView(context: Context) : FrameLayout(context) {
                         canvas.drawPoint(cx, cy + r * 0.42f, fg)
                     }
                     else -> {
+                        // IDLE: draw arrow downward (already handled by bg_bubble + ic_bubble_arrow drawable,
+                        // but also support canvas fallback for backward compat)
                         canvas.drawLine(cx, cy - r * 0.44f, cx, cy + r * 0.16f, fg)
                         val p = Path().apply {
                             moveTo(cx - r * 0.26f, cy - r * 0.06f)
