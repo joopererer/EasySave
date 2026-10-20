@@ -39,11 +39,6 @@ abstract final class DevLog {
 
   static const String _redacted = '<redacted>';
 
-  /// Keys whose values must never be written.
-  static final RegExp _sensitiveKey = RegExp(
-    r'(cookie|authorization|auth|token|password|passwd|secret|session|api[_-]?key|sig|signature)',
-    caseSensitive: false,
-  );
 
   /// Any http(s) URL inside a message.
   static final RegExp _urlPattern = RegExp(r'''https?://[^\s"'<>]+''');
