@@ -4,7 +4,6 @@
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
-
     <!--
         Android 13+ monochrome adaptive icon layer.
         White circle silhouette with the arrow+baseline cut out (transparent).
@@ -33,5 +32,4 @@
             L27,79
             Z
         " />
-
 </vector>

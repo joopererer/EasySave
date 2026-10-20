@@ -4,19 +4,16 @@
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
-
     <!--
         Adaptive icon foreground layer.
         White circle (~61% of 108dp ≈ 66dp) centered at (54,33.5), radius 33dp.
         Inside: red (#F0443F) stroked download arrow + baseline, strokeWidth≈5.4dp,
         round line-cap/line-join to match the reference illustration.
     -->
-
     <!-- White filled circle -->
     <path
         android:fillColor="#FFFFFF"
         android:pathData="M54,0.5 A33,33 0 1,1 54,66.5 A33,33 0 1,1 54,0.5 Z" />
-
     <!--
         Stroked arrow + baseline, scaled from 24dp reference (×4.5).
         Reference: M12,4 L12,15 M12,15 L7.5,10.5 M12,15 L16.5,10.5 M5,19.5 L19,19.5
@@ -29,5 +26,4 @@
         android:strokeLineCap="round"
         android:strokeLineJoin="round"
         android:pathData="M54,21 L54,58 M54,58 L36,40 M54,58 L72,40 M27,72.5 L81,72.5" />
-
 </vector>

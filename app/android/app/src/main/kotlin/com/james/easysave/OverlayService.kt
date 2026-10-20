@@ -181,7 +181,7 @@ class OverlayService : Service() {
         val notif = NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("EasySave 悬浮球")
             .setContentText("点击气泡可下载剪贴板中的链接")
-            .setSmallIcon(android.R.drawable.stat_sys_download)
+            .setSmallIcon(R.drawable.ic_stat_easysave)
             .setOngoing(true)
             .build()
         startForeground(NOTIF_ID, notif)
@@ -323,10 +323,10 @@ class OverlayService : Service() {
         val radius = dp(120).toFloat()
 
         val items = listOf(
-            Triple("all", "全部下载", R.drawable.ic_bubble_all),
-            Triple("select", "选择下载", R.drawable.ic_bubble_select),
-            Triple("caption", "复制文案", R.drawable.ic_bubble_caption),
-            Triple("open", "打开 EasySave", R.drawable.ic_bubble_open),
+            Triple("all", "全部下载", R.drawable.ic_stat_easysave),
+            Triple("select", "选择下载", R.drawable.ic_stat_easysave),
+            Triple("caption", "复制文案", R.drawable.ic_stat_easysave),
+            Triple("open", "打开 EasySave", R.drawable.ic_stat_easysave),
         )
         for (i in items.indices) {
             val t = (i - 1.5) / 1.5

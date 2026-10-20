@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Floating bubble background: gradient circle. -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="oval">
+    <gradient android:type="linear" android:angle="315"
+        android:startColor="#FC494C" android:endColor="#FA662E" />
+</shape>
