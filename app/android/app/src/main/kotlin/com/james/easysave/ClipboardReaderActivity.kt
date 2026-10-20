@@ -73,7 +73,9 @@ class ClipboardReaderActivity : Activity() {
         val clip = cm.primaryClip
         val text: String? =
             if (clip != null && clip.itemCount > 0) clip.getItemAt(0).coerceToText(this)?.toString() else null
-        Log.i(TAG, "CLIPBOARD=${text ?: "<null>"}")
+        // Never log the clipboard content itself (it can contain a share link
+        // with tokens) — only its length and the host of the first URL.
+        Log.i(TAG, "CLIPBOARD=${LogSanitizer.summarize(text)}")
         // Shown from this (foreground) activity so it isn't suppressed the way a
         // background toast would be. The authoritative supported-host check
         // runs in Dart; this only guards the obvious "no URL" case.

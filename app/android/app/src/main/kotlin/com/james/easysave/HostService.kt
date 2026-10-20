@@ -155,7 +155,10 @@ class HostService : Service() {
                         result.success(null)
                     }
                     "log" -> {
-                        Log.i(TAG, call.arguments as? String ?: "")
+                        // The message comes from Dart; scrub it again here so a
+                        // URL with query parameters can never reach logcat.
+                        val msg = call.arguments as? String ?: ""
+                        Log.i(TAG, LogSanitizer.scrub(msg))
                         result.success(null)
                     }
                     "notify" -> {

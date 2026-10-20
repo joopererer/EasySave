@@ -8,6 +8,7 @@ import 'dart:async';
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 
+import '../core/dev_log.dart';
 import '../core/models.dart';
 import '../services/download_manager.dart';
 import '../services/history_db.dart';
@@ -59,8 +60,11 @@ Future<void> _invoke(MethodChannel channel, String method, [dynamic args]) async
   }
 }
 
+/// Log to the native sink. The message is scrubbed first: URLs lose their
+/// query parameters (xsec_token, share_id, ...) and cookie/token-ish values
+/// are redacted, so nothing sensitive can reach logcat.
 Future<void> _log(MethodChannel channel, String msg) =>
-    _invoke(channel, 'log', msg);
+    _invoke(channel, 'log', DevLog.scrub(msg));
 
 Future<void> _notify(MethodChannel channel, String msg) =>
     _invoke(channel, 'notify', msg);

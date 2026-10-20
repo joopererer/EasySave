@@ -36,7 +36,9 @@ class ShareToBackgroundActivity : Activity() {
 
         val text = intent?.getStringExtra(Intent.EXTRA_TEXT)
             ?: intent?.getCharSequenceExtra(Intent.EXTRA_TEXT)?.toString()
-        Log.i(TAG, "share text=${text?.take(120) ?: "<null>"}")
+        // Never log the shared text itself (it can contain a link with
+        // tokens) — only its length and the host of the first URL.
+        Log.i(TAG, "share text=${LogSanitizer.summarize(text)}")
 
         // Cheap guard: a share with no URL at all should not spin up the host.
         // The authoritative supported-host check runs in Dart (platformFromUrl).

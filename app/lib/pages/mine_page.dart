@@ -5,6 +5,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 
+import '../core/dev_log.dart';
 import '../services/auth.dart';
 import '../services/bubble_service.dart';
 import '../services/settings.dart';
@@ -351,6 +352,21 @@ class _MinePageState extends State<MinePage> with WidgetsBindingObserver {
     ).showSnackBar(SnackBar(content: Text('已清理缓存（$removed 个临时文件）')));
   }
 
+  /// Copy the (already redacted) log file out of the app's private directory
+  /// so it can be read with `adb shell cat .../files/v16dl.log`.
+  Future<void> _exportLog() async {
+    final messenger = ScaffoldMessenger.of(context);
+    final path = await DevLog.exportToExternal();
+    if (!mounted) return;
+    messenger.showSnackBar(
+      SnackBar(
+        content: Text(
+          path == null ? '没有可导出的日志' : '日志已导出：$path',
+        ),
+      ),
+    );
+  }
+
   /// Subtitle for a platform row: "已登录" / "未登录", plus a hint when a
   /// parse recently proved the stored session is dead.
   Widget _loginSubtitle(PlatformKind platform) {
@@ -492,6 +508,11 @@ class _MinePageState extends State<MinePage> with WidgetsBindingObserver {
             child: Column(
               children: [
                 ListTile(title: const Text('清除缓存'), onTap: _clearCache),
+                ListTile(
+                  title: const Text('导出日志'),
+                  subtitle: const Text('调试用：把脱敏后的运行日志复制到可读取目录'),
+                  onTap: _exportLog,
+                ),
                 ListTile(title: const Text('版本号'), subtitle: Text(_version)),
                 ListTile(
                   title: const Text('解析器版本'),

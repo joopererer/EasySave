@@ -356,7 +356,13 @@ class SelectPanelView(
                 }
                 conn.disconnect()
             } catch (e: Exception) {
-                Log.w(TAG, "thumb failed: ${e.message}")
+                // The exception message can contain the full CDN url (with
+                // query parameters) — log only the host and the error type.
+                Log.w(
+                    TAG,
+                    "thumb failed: ${e.javaClass.simpleName} host=" +
+                        LogSanitizer.hostPath(url),
+                )
             }
             val bmp = bitmap
             main.post {
