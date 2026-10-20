@@ -2,7 +2,7 @@ const sharp = require('sharp');
 const fs = require('fs');
 const path = require('path');
 
-const srcSvg = 'docs/design/icon/easysave-icon-C/svg/bubble-arrow-24.svg';
+const srcSvg = 'docs/design/icon/easysave-icon-C/svg/notification-24.svg';
 const basePath = 'app/android/app/src/main/res';
 
 const densities = [
