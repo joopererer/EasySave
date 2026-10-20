@@ -20,6 +20,10 @@ class AppSettings {
   bool saveCaptionTxt = false;
   bool autoClipboard = true;
 
+  /// Save provenance metadata (XMP) to downloaded images. When false, skips
+  /// XMP embedding but still writes assetId to HistoryDb.
+  bool saveProvenanceInImages = true;
+
   /// Show a Toast for background (share / tile / bubble) download progress:
   /// "下载准备中…", start, error and completion. Some users prefer the
   /// notification instead.
@@ -61,7 +65,8 @@ class AppSettings {
         HistorySort.values,
         prefs.getString('historySort'),
         HistorySort.latest,
-      );
+      )
+      ..saveProvenanceInImages = prefs.getBool('saveProvenanceInImages') ?? true;
   }
 
   Future<void> save() async {
@@ -76,6 +81,7 @@ class AppSettings {
     await prefs.setString('historyView', historyView.name);
     await prefs.setString('historyLayout', historyLayout.name);
     await prefs.setString('historySort', historySort.name);
+    await prefs.setBool('saveProvenanceInImages', saveProvenanceInImages);
   }
 
   static T _enumFromName<T extends Enum>(List<T> values, String? name, T fallback) {

@@ -15,10 +15,12 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../core/dev_log.dart';
 import '../core/models.dart';
+import '../metadata/metadata_service.dart';
 import 'gallery_locator_service.dart';
 import 'history_db.dart';
 import 'parse_service.dart';
 import 'saver.dart';
+import 'settings.dart';
 import 'update_service.dart';
 
 
@@ -77,6 +79,9 @@ class DownloadJob {
   bool saved = false;
   String? error;
   int? lastStatusCode;
+  
+  /// Provenance assetId written to this file (if any).
+  String? assetId;
 
   /// Real MediaStore id + actual on-disk title of the saved asset, captured
   /// right after import so history can locate the file by id instead of
@@ -97,6 +102,7 @@ class DownloadJob {
     'saved': saved,
     'error': error,
     'lastStatusCode': lastStatusCode,
+    'assetId': assetId,
     'mediaId': mediaId,
     'savedTitle': savedTitle,
   };
@@ -116,6 +122,7 @@ class DownloadJob {
     job.saved = map['saved'] as bool? ?? false;
     job.error = map['error'] as String?;
     job.lastStatusCode = (map['lastStatusCode'] as num?)?.toInt();
+    job.assetId = map['assetId'] as String?;
     job.mediaId = map['mediaId'] as String?;
     job.savedTitle = map['savedTitle'] as String?;
     return job;
@@ -531,6 +538,20 @@ class DownloadManager extends ChangeNotifier {
     job.currentTaskId = taskId;
     job.state = job.attempts == 1 ? JobState.queued : JobState.active;
     job.error = null;
+    
+    // Look up existing assetId for this file (for re-download reuse)
+    String? existingAssetId;
+    try {
+      final db = await HistoryDb.instance();
+      final existing = await db.getByPostId(batch.postId);
+      if (existing != null) {
+        final existingFile = existing.files.where((f) => f.itemIndex == job.itemIndex && f.isImage == job.isImage).firstOrNull;
+        existingAssetId = existingFile?.assetId;
+      }
+    } catch (_) {
+      // Best effort - continue without assetId
+    }
+    
     final task = DownloadTask(
       taskId: taskId,
       url: url,
@@ -552,6 +573,9 @@ class DownloadManager extends ChangeNotifier {
         'author': batch.authorName,
         'title': batch.title,
         'caption': batch.caption,
+        'itemIndex': job.itemIndex,
+        'isImage': job.isImage,
+        'existingAssetId': existingAssetId,
       }),
     );
     await _persist(batch);
@@ -655,6 +679,18 @@ class DownloadManager extends ChangeNotifier {
       await _afterTerminal(batch);
       return;
     }
+    
+    // Parse metadata for provenance
+    String? existingAssetId;
+    int? itemIndex;
+    bool isImage = true;
+    try {
+      final meta = jsonDecode(task.metaData);
+      existingAssetId = meta['existingAssetId'] as String?;
+      itemIndex = meta['itemIndex'] as int?;
+      isImage = meta['isImage'] as bool? ?? true;
+    } catch (_) {}
+    
     try {
       final file = File(path);
       if (!await file.exists()) {
@@ -679,13 +715,28 @@ class DownloadManager extends ChangeNotifier {
             // Temp file cleanup is best effort.
           }
         } else {
-          final saved = await saveToGallery(path, job.isImage, batch.album);
+          // Embed provenance metadata before saving to gallery
+          String? writtenAssetId;
+          if (isImage) {
+            writtenAssetId = await _embedProvenance(
+              filePath: path,
+              batch: batch,
+              job: job,
+              existingAssetId: existingAssetId,
+              itemIndex: itemIndex ?? job.itemIndex,
+            );
+          }
+          
+          final saved = await saveToGallery(path, isImage, batch.album);
           _log('gallery import done: ${job.filename} -> ${saved.mediaId}');
           job.mediaId = saved.mediaId;
           job.savedTitle = saved.title;
           job.state = JobState.done;
           job.progress = 1;
           job.saved = true;
+          
+          // Store assetId for reuse
+          job.assetId = writtenAssetId;
         }
       }
     } catch (e) {
@@ -695,6 +746,59 @@ class DownloadManager extends ChangeNotifier {
     await _persist(batch);
     notifyListeners();
     await _afterTerminal(batch);
+  }
+  
+  /// Embed provenance metadata into an image file.
+  /// Returns the assetId if written, null if skipped or failed.
+  Future<String?> _embedProvenance({
+    required String filePath,
+    required DownloadBatch batch,
+    required DownloadJob job,
+    String? existingAssetId,
+    required int itemIndex,
+  }) async {
+    try {
+      // Check setting
+      final settings = await AppSettings.load();
+      if (!settings.saveProvenanceInImages) {
+        _log('provenance skipped (setting disabled): ${job.filename}');
+        return null;
+      }
+      
+      // Build provenance metadata
+      final itemCount = batch.jobs.where((j) => j.isImage).length;
+      final provenance = ProvenanceBuilder(
+        platform: batch.platform,
+        postId: batch.postId,
+        postUrl: batch.postUrl,
+        authorName: batch.authorName,
+        title: batch.title,
+        caption: batch.caption,
+        itemIndex: itemIndex,
+        itemCount: itemCount,
+        existingAssetId: existingAssetId,
+      ).build();
+      
+      // Embed into file
+      final result = await MetadataService.embedProvenance(
+        filePath: filePath,
+        provenance: provenance,
+        checkC2pa: true,
+      );
+      
+      if (result.skippedC2pa) {
+        _log('provenance skipped (C2PA detected): ${job.filename}');
+      } else if (result.success) {
+        _log('provenance embedded: ${job.filename}');
+        return provenance.assetId;
+      } else {
+        _log('provenance embed failed: ${job.filename} - ${result.error}');
+      }
+    } catch (e) {
+      _log('provenance embed error: ${job.filename} - $e');
+      // Metadata failures are logged but do not block the save
+    }
+    return null;
   }
 
   Future<void> _failAttempt(
@@ -733,6 +837,7 @@ class DownloadManager extends ChangeNotifier {
               mediaId: job.mediaId,
               itemIndex: job.itemIndex,
               isImage: job.isImage,
+              assetId: job.assetId,
               status: job.mediaId != null
                   ? FileStatus.found
                   : FileStatus.unknown,

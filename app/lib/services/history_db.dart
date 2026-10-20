@@ -21,6 +21,7 @@ class HistoryFile {
     this.status = FileStatus.unknown,
     this.itemIndex = 0,
     this.isImage = true,
+    this.assetId,
   });
 
   final String filename;
@@ -29,6 +30,10 @@ class HistoryFile {
   final FileStatus status;
   final int itemIndex;
   final bool isImage;
+  
+  /// Provenance asset ID (prov:assetId). Stored in files_json for reuse
+  /// when re-downloading the same file across devices.
+  final String? assetId;
 
   Map<String, Object?> toMap() => {
     'filename': filename,
@@ -37,6 +42,7 @@ class HistoryFile {
     'status': status.name,
     'item_index': itemIndex,
     'is_image': isImage ? 1 : 0,
+    'asset_id': assetId,
   };
 
   factory HistoryFile.fromMap(Map<String, Object?> map) => HistoryFile(
@@ -49,6 +55,7 @@ class HistoryFile {
     ),
     itemIndex: (map['item_index'] as num?)?.toInt() ?? 0,
     isImage: (map['is_image'] as num?)?.toInt() != 0,
+    assetId: map['asset_id'] as String?,
   );
 
   HistoryFile copyWith({
@@ -58,6 +65,7 @@ class HistoryFile {
     FileStatus? status,
     int? itemIndex,
     bool? isImage,
+    String? assetId,
   }) => HistoryFile(
     filename: filename ?? this.filename,
     savedAt: savedAt ?? this.savedAt,
@@ -65,6 +73,7 @@ class HistoryFile {
     status: status ?? this.status,
     itemIndex: itemIndex ?? this.itemIndex,
     isImage: isImage ?? this.isImage,
+    assetId: assetId ?? this.assetId,
   );
 }
 
@@ -353,6 +362,7 @@ class HistoryDb {
             );
           }
         }
+        // Future migrations go here
       },
     );
     final historyDb = HistoryDb._(db);
