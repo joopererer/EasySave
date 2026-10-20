@@ -139,23 +139,35 @@ abstract final class DevLog {
   }
 
   /// Remove sensitive data from a message:
-  ///   * `cookie=...`, `authorization: ...`, `xsec_token=...` -> `<redacted>`
+  ///   * Cookie / Set-Cookie headers: entire value replaced with `<redacted>`
+  ///   * `authorization: ...`, `xsec_token=...` -> `<redacted>`
   ///   * `https://host/path?a=b` -> `host/path`
   static String scrub(String message) {
     var out = message;
-    // 1. sensitive key=value / key: value pairs.
+    // 1. Cookie / Set-Cookie headers: redact everything after the colon.
+    //    These headers can contain multiple key=value pairs separated by
+    //    semicolons, so we must redact the entire line to prevent leaking
+    //    any session token.
+    out = out.replaceAllMapped(
+      RegExp(
+        r'''\b(Cookie|Set-Cookie)\s*:\s*.*''',
+        caseSensitive: false,
+      ),
+      (m) => '${m.group(1)}: $_redacted',
+    );
+    // 2. Other sensitive key=value / key: value pairs.
     //    The value side allows an optional "Bearer "/"Basic " prefix and
     //    non-separator characters so we grab the whole token-shaped token in
     //    one go (e.g. "authorization: Bearer eyJhbGciOi.J9.sig"). Also
     //    supports quoted values.
     out = out.replaceAllMapped(
       RegExp(
-        r'''([A-Za-z0-9_.-]*(?:cookie|authorization|auth|token|password|passwd|secret|session|api[_-]?key|sig|signature)[A-Za-z0-9_.-]*)\s*[=:]\s*(?:(?:Bearer|Basic)\s+)?("[^"]*"|'[^']*'|[^\s,;)]+)''',
+        r'''([A-Za-z0-9_.-]*(?:authorization|auth|token|password|passwd|secret|session|api[_-]?key|sig|signature)[A-Za-z0-9_.-]*)\s*[=:]\s*(?:(?:Bearer|Basic)\s+)?("[^"]*"|'[^']*'|[^\s,;)]+)''',
         caseSensitive: false,
       ),
       (m) => '${m.group(1)}=$_redacted',
     );
-    // 2. fallback for a stray "Bearer xxx" that didn't follow a sensitive
+    // 3. fallback for a stray "Bearer xxx" that didn't follow a sensitive
     //    key (e.g. an exception message saying "missing Bearer abc").
     out = out.replaceAllMapped(
       RegExp(
@@ -164,7 +176,7 @@ abstract final class DevLog {
       ),
       (m) => _redacted,
     );
-    // 3. URLs -> host + path (no query, no fragment)
+    // 4. URLs -> host + path (no query, no fragment)
     out = out.replaceAllMapped(_urlPattern, (m) => _hostPath(m.group(0)!));
     return out;
   }
