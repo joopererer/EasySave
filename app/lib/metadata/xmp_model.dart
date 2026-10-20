@@ -19,9 +19,11 @@ class XmpProvenance {
   final String? title;
   final List<String>? creators;
   final String? description;
+  final List<String>? subject;
+  final int? rating;
   final String? credit;
   
-  /// Arbitrary fields from other namespaces (e.g., photoshop:Headline, user-set dc:subject).
+  /// Arbitrary fields from other namespaces (e.g., photoshop:Headline).
   /// Preserved when merging XMP.
   final Map<String, String> otherFields;
 
@@ -41,6 +43,8 @@ class XmpProvenance {
     this.title,
     this.creators,
     this.description,
+    this.subject,
+    this.rating,
     this.credit,
     this.otherFields = const {},
   });
@@ -61,6 +65,8 @@ class XmpProvenance {
         if (title != null) 'dc:title': title,
         if (creators != null) 'dc:creator': creators,
         if (description != null) 'dc:description': description,
+        if (subject != null) 'dc:subject': subject,
+        if (rating != null) 'xmp:Rating': rating,
         if (credit != null) 'photoshop:Credit': credit,
         ...otherFields,
       };
@@ -82,14 +88,22 @@ class XmpProvenance {
       sourceUrl: json['prov:sourceUrl'] as String,
       platform: json['prov:platform'] as String,
       sourceId: json['prov:sourceId'] as String,
-      itemIndex: json['prov:itemIndex'] as int?,
-      itemCount: json['prov:itemCount'] as int?,
+      itemIndex: json['prov:itemIndex'] != null
+          ? (json['prov:itemIndex'] is int ? json['prov:itemIndex'] as int : int.tryParse(json['prov:itemIndex'].toString()))
+          : null,
+      itemCount: json['prov:itemCount'] != null
+          ? (json['prov:itemCount'] is int ? json['prov:itemCount'] as int : int.tryParse(json['prov:itemCount'].toString()))
+          : null,
       authorId: json['prov:authorId'] as String?,
       publishedAt:
           json['prov:publishedAt'] != null ? DateTime.parse(json['prov:publishedAt'] as String) : null,
       title: json['dc:title'] as String?,
       creators: json['dc:creator'] != null ? List<String>.from(json['dc:creator'] as List) : null,
       description: json['dc:description'] as String?,
+      subject: json['dc:subject'] != null ? List<String>.from(json['dc:subject'] as List) : null,
+      rating: json['xmp:Rating'] != null 
+          ? (json['xmp:Rating'] is int ? json['xmp:Rating'] as int : int.tryParse(json['xmp:Rating'].toString()))
+          : null,
       credit: json['photoshop:Credit'] as String?,
       otherFields: otherFields,
     );
