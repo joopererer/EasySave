@@ -533,17 +533,23 @@ function Test-A-MetadataWrite {
     
     $exiftoolPath = Get-ExiftoolPath
     
+    # Capture the file list once before any download starts. Downloads for
+    # different platforms can complete within the same second or two, so we
+    # must not snapshot "files before" per-platform - a later platform's
+    # before-snapshot could already include an earlier platform's files that
+    # just landed, hiding them from that earlier platform's new-file diff
+    # while also not belonging to the later platform (the original bug).
+    $filesBeforeAll = Get-Album-Files
+    Log-Info "Files before all downloads: $($filesBeforeAll.Count)"
+    
+    # Fire all three shares first, waiting for each DOWNLOAD done/failed marker,
+    # but defer file collection and verification until all shares are done.
     foreach ($platform in @("xhs", "instagram", "x")) {
-        Log-Test "[$platform] Starting metadata test"
+        Log-Test "[$platform] Sharing and waiting for download"
         
         $url = $testUrls[$platform]
-        $canonicalPlatform = $platformNames[$platform]
         $platformDir = Join-Path $testADir $platform
         New-Item -ItemType Directory -Path $platformDir -Force | Out-Null
-        
-        # Get files before download
-        $filesBefore = Get-Album-Files
-        Log-Info "[$platform] Files before: $($filesBefore.Count)"
         
         # Start logcat capture BEFORE sharing so V16SHARE's immediate log line is not lost
         Start-LogcatCapture
@@ -558,50 +564,56 @@ function Test-A-MetadataWrite {
             $testResults["a"].errors += "[$platform] Download timeout"
             $testResults["a"].status = "FAILED"
             Take-Screenshot "timeout" $platformDir
-            continue
+        } else {
+            Log-Success "[$platform] Download completed"
         }
+    }
+    
+    # Give the filesystem a moment to settle, then collect ALL new files once
+    Start-Sleep -Seconds 2
+    $filesAfterAll = Get-Album-Files
+    $allNewFiles = Get-New-Files $filesBeforeAll $filesAfterAll
+    
+    if ($allNewFiles.Count -eq 0) {
+        Log-Error "No new files downloaded from any platform"
+        $testResults["a"].status = "FAILED"
+        return
+    }
+    
+    Log-Info "Total new files across all platforms: $($allNewFiles.Count)"
+    Log-Info "Files: $($allNewFiles -join ', ')"
+    
+    # Pull every new file into each platform's directory once (cheap - local adb pull)
+    foreach ($platform in @("xhs", "instagram", "x")) {
+        $platformDir = Join-Path $testADir $platform
+        Pull-Files $allNewFiles $AlbumDir $platformDir
+    }
+    
+    # Verify metadata per platform by reading each file's actual Platform field
+    # rather than assuming files belong to whichever platform happened to be
+    # "current" when the file appeared.
+    $allPass = $true
+    
+    foreach ($platform in @("xhs", "instagram", "x")) {
+        Log-Test "[$platform] Verifying metadata"
         
-        Start-Sleep -Seconds 2
-        
-        # Get files after download
-        $filesAfter = Get-Album-Files
-        $newFiles = Get-New-Files $filesBefore $filesAfter
-        
-        if ($newFiles.Count -eq 0) {
-            Log-Error "[$platform] No new files downloaded"
-            $testResults["a"].errors += "[$platform] No new files"
-            $testResults["a"].status = "FAILED"
-            continue
-        }
-        
-        Log-Info "[$platform] New files: $($newFiles.Count)"
-        Log-Info "[$platform] Files: $($newFiles -join ', ')"
-        
-        # Pull new files
-        Pull-Files $newFiles $AlbumDir $platformDir
-        
-        # Verify metadata for each file
-        # Since multiple platforms may download simultaneously, we must filter by examining
-        # the actual Platform field in each file rather than assuming all newFiles belong to this test
-        $allPass = $true
+        $canonicalPlatform = $platformNames[$platform]
+        $platformDir = Join-Path $testADir $platform
         $verifiedCount = 0
-        $skippedCount = 0
         
-        foreach ($newFile in ($newFiles | Sort-Object)) {
+        foreach ($newFile in ($allNewFiles | Sort-Object)) {
             $filePath = Join-Path $platformDir $newFile
+            if (-not (Test-Path $filePath)) { continue }
             
-            # Quick check: read the Platform field first to confirm this file belongs to current test
+            # Read the Platform field to determine true ownership of this file
             $platformCheck = & $exiftoolPath -s -s -s -XMP-prov:Platform $filePath 2>$null
             if (-not $platformCheck -or $platformCheck.Trim().ToLower() -ne $canonicalPlatform.ToLower()) {
-                Log-Warning "[$platform] Skipping $newFile (belongs to platform: $platformCheck)"
-                $skippedCount++
-                continue
+                continue  # Belongs to a different platform - skip silently, not an error
             }
             
             $verifiedCount++
             
-            # For multi-item posts, we expect itemIndex to match the file's position within its own post
-            # Read the actual ItemIndex and ItemCount from the file rather than assuming sequential order
+            # Read the actual ItemIndex/ItemCount from the file instead of assuming sequence
             $actualItemIndex = [int](& $exiftoolPath -s -s -s -XMP-prov:ItemIndex $filePath 2>$null)
             $actualItemCount = [int](& $exiftoolPath -s -s -s -XMP-prov:ItemCount $filePath 2>$null)
             
@@ -633,22 +645,21 @@ function Test-A-MetadataWrite {
         }
         
         if ($verifiedCount -eq 0) {
-            Log-Error "[$platform] No files matched this platform (skipped: $skippedCount)"
+            Log-Error "[$platform] No files found for this platform among the new files"
             $testResults["a"].errors += "[$platform] No matching files"
-            $testResults["a"].status = "FAILED"
+            $allPass = $false
+        } else {
+            Log-Info "[$platform] Verified $verifiedCount file(s)"
         }
         
         Take-Screenshot "$platform-complete" $platformDir
-        
-        if (-not $allPass) {
-            $testResults["a"].status = "FAILED"
-        }
     }
     
-    if ($testResults["a"].status -ne "FAILED") {
+    if ($allPass -and $testResults["a"].status -ne "FAILED") {
         $testResults["a"].status = "PASSED"
         Log-Success "Test A: PASSED"
     } else {
+        $testResults["a"].status = "FAILED"
         Log-Error "Test A: FAILED"
     }
 }
