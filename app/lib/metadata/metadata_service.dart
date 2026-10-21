@@ -69,7 +69,7 @@ class MetadataService {
       final format = _detectFormat(bytes);
 
       if (format == null) {
-        return EmbedResult.failure('Unknown file format: $filePath');
+        return EmbedResult.failure('Unknown file format (unrecognized magic bytes): $filePath');
       }
 
       // Check for C2PA content credentials
@@ -87,7 +87,7 @@ class MetadataService {
       // Write back
       final modified = _writeXmp(bytes, merged, format);
       if (modified == null) {
-        return EmbedResult.failure('Write failed for format: $format');
+        return EmbedResult.failure('Write failed (returned null) for format: $format');
       }
 
       await file.writeAsBytes(modified);
