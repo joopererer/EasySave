@@ -67,6 +67,9 @@ class ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
   List<HistoryRecord> _recentAll = const [];
   StreamSubscription<List<SharedMediaFile>>? _shareSub;
   bool _handlingShare = false;
+  
+  /// Last parsed postId to detect duplicate navigation (Issue 3: floating bubble re-parse)
+  String? _lastParsedPostId;
 
   @override
   void initState() {
@@ -604,6 +607,37 @@ class ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
       if (!mounted || _cancelRequested) return;
       closeParsingSnackBar();
       setState(() => _busy = false);
+      
+      // Issue 3 fix: avoid duplicate preview navigation when resuming from bubble
+      // 1. If we just parsed this exact post (still on its preview), skip navigation
+      if (_lastParsedPostId == outcome.data.id) {
+        // Already on this post's preview - just bring app to foreground
+        return;
+      }
+      
+      // 2. If this post is already in History, open its cached preview instead of re-parsing
+      final db = await HistoryDb.instance();
+      final existing = await db.getByPostId(outcome.data.id);
+      
+      if (existing != null) {
+        // Post already saved - open cached preview showing "saved" state
+        _lastParsedPostId = outcome.data.id;
+        await Navigator.of(context).push(
+          MaterialPageRoute<void>(
+            builder: (_) => PreviewPage(
+              post: PreviewPage.postFromRecord(existing),
+              onSaved: () {
+                if (mounted) _linkController.clear();
+              },
+            ),
+          ),
+        );
+        _reloadRecent();
+        return;
+      }
+      
+      // 3. Fresh parse - open preview normally
+      _lastParsedPostId = outcome.data.id;
       await Navigator.of(context).push(
         MaterialPageRoute<void>(
           builder: (_) => PreviewPage(
