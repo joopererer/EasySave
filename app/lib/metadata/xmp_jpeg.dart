@@ -37,20 +37,24 @@ XmpProvenance? readJpegXmp(Uint8List bytes) {
     if (segmentLength < 2) break;
 
     if (marker == 0xE1 && offset + 2 + _xmpHeaderBytes <= bytes.length) {
-      // APP1 segment
+      // APP1 segment - may be XMP or EXIF
       final headerStart = offset + 2;
       final headerEnd = headerStart + _xmpHeaderBytes;
       
       // Check if we have enough space for header
       if (headerEnd <= offset + segmentLength) {
-        final header = utf8.decode(bytes.sublist(headerStart, headerEnd));
+        try {
+          final header = utf8.decode(bytes.sublist(headerStart, headerEnd));
 
-        if (header == _xmpHeader) {
-          // Found XMP segment
-          final xmpStart = headerEnd;
-          final xmpEnd = offset + segmentLength;
-          final xmpPayload = utf8.decode(bytes.sublist(xmpStart, xmpEnd));
-          return parseXmpXml(xmpPayload);
+          if (header == _xmpHeader) {
+            // Found XMP segment
+            final xmpStart = headerEnd;
+            final xmpEnd = offset + segmentLength;
+            final xmpPayload = utf8.decode(bytes.sublist(xmpStart, xmpEnd));
+            return parseXmpXml(xmpPayload);
+          }
+        } catch (_) {
+          // Not XMP (e.g., EXIF binary data); skip this APP1 segment
         }
       }
     }
@@ -113,16 +117,20 @@ Uint8List writeJpegXmp(Uint8List bytes, XmpProvenance xmp) {
       final headerEnd = headerStart + _xmpHeaderBytes;
       
       if (headerEnd <= offset + segmentLength) {
-        final header = utf8.decode(bytes.sublist(headerStart, headerEnd));
+        try {
+          final header = utf8.decode(bytes.sublist(headerStart, headerEnd));
 
-        if (header == _xmpHeader) {
-          // Replace existing XMP
-          builder.add([0xFF, 0xE1]);
-          builder.add([newSegmentLength >> 8, newSegmentLength & 0xFF]);
-          builder.add(xmpBytes);
-          xmpWritten = true;
-          offset += segmentLength;
-          continue;
+          if (header == _xmpHeader) {
+            // Replace existing XMP
+            builder.add([0xFF, 0xE1]);
+            builder.add([newSegmentLength >> 8, newSegmentLength & 0xFF]);
+            builder.add(xmpBytes);
+            xmpWritten = true;
+            offset += segmentLength;
+            continue;
+          }
+        } catch (_) {
+          // Not XMP (e.g., EXIF binary); leave it as-is
         }
       }
     }

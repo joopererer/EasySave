@@ -517,6 +517,130 @@ void main() {
     });
   });
 
+  group('MetadataService.embedProvenance Live Photo JPEG (EXIF APP1)', () {
+    late Directory tempDir;
+
+    setUp(() async {
+      tempDir = await Directory.systemTemp.createTemp('easysave_live_test_');
+    });
+
+    tearDown(() async {
+      if (await tempDir.exists()) {
+        await tempDir.delete(recursive: true);
+      }
+    });
+
+    /// Reproduces the real-world failure: Live Photo still-image covers
+    /// (e.g. downloaded from Xiaohongshu/Instagram CDNs) are valid JPEGs
+    /// but carry an EXIF APP1 segment instead of an XMP APP1 segment.
+    /// The EXIF payload is binary TIFF data ("Exif\0\0" + IFD bytes), which
+    /// is not valid UTF-8. Before the fix, readJpegXmp/writeJpegXmp called
+    /// utf8.decode() unconditionally on the APP1 payload when checking for
+    /// the XMP header, so a FormatException ("Bad UTF-8 encoding") was
+    /// thrown and bubbled up through embedProvenance's outer catch as
+    /// `EmbedResult.failure('FormatException: ...')`. HistoryBackfillService
+    /// then matched the string "Format" in that message and misclassified
+    /// a perfectly valid, writable JPEG as "format not supported".
+    Uint8List jpegWithExifApp1() {
+      // Binary EXIF payload: "Exif\0\0" header followed by non-UTF8 bytes
+      // (0xFF 0xFE is an invalid UTF-8 continuation sequence).
+      final exifPayload = <int>[
+        0x45, 0x78, 0x69, 0x66, 0x00, 0x00, // "Exif\0\0"
+        0x4D, 0x4D, 0x00, 0x2A, // TIFF header (big-endian) + magic
+        0x00, 0x00, 0x00, 0x08, // offset to first IFD
+        0xFF, 0xFE, 0x80, 0x81, // invalid UTF-8 continuation bytes
+      ];
+      final app1Length = 2 + exifPayload.length; // length field includes itself
+      return Uint8List.fromList([
+        0xFF, 0xD8, // SOI
+        0xFF, 0xE1, (app1Length >> 8) & 0xFF, app1Length & 0xFF, // APP1 (EXIF)
+        ...exifPayload,
+        0xFF, 0xC0, 0x00, 0x0B, // SOF0 length=11
+        ...List.filled(9, 0),
+        0xFF, 0xDA, 0x00, 0x08, // SOS length=8
+        ...List.filled(6, 0),
+        0xFF, 0xD9, // EOI
+      ]);
+    }
+
+    test('writes XMP to a JPEG whose only APP1 segment is EXIF', () async {
+      final filePath = '${tempDir.path}/live_cover.jpg';
+      await File(filePath).writeAsBytes(jpegWithExifApp1());
+
+      final xmp = XmpProvenance(
+        schema: '0.1',
+        assetId: 'live-asset-id',
+        capturedAt: DateTime.utc(2026, 10, 20),
+        capturedBy: 'EasySave',
+        metadataDate: DateTime.utc(2026, 10, 20),
+        sourceUrl: 'https://example.com/live',
+        platform: 'xiaohongshu',
+        sourceId: 'live123',
+      );
+
+      final result = await MetadataService.embedProvenance(
+        filePath: filePath,
+        provenance: xmp,
+      );
+
+      expect(result.success, isTrue);
+      expect(result.error, isNull);
+
+      final read = MetadataService.readProvenance(filePath);
+      expect(read, isNotNull);
+      expect(read!.assetId, 'live-asset-id');
+      expect(read.sourceId, 'live123');
+    });
+
+    test('readProvenance does not throw on EXIF-only APP1 and returns null', () {
+      final filePath = '${tempDir.path}/live_cover_unwritten.jpg';
+      File(filePath).writeAsBytesSync(jpegWithExifApp1());
+
+      // Before any XMP write, there is no provenance - must return null,
+      // not throw, even though the file has a non-XMP APP1 segment.
+      final read = MetadataService.readProvenance(filePath);
+      expect(read, isNull);
+    });
+
+    test('preserves the original EXIF APP1 segment after writing XMP', () async {
+      final filePath = '${tempDir.path}/live_cover_preserve.jpg';
+      final original = jpegWithExifApp1();
+      await File(filePath).writeAsBytes(original);
+
+      final xmp = XmpProvenance(
+        schema: '0.1',
+        assetId: 'live-asset-id-2',
+        capturedAt: DateTime.utc(2026, 10, 20),
+        capturedBy: 'EasySave',
+        metadataDate: DateTime.utc(2026, 10, 20),
+        sourceUrl: 'https://example.com/live2',
+        platform: 'xiaohongshu',
+        sourceId: 'live456',
+      );
+
+      await MetadataService.embedProvenance(filePath: filePath, provenance: xmp);
+
+      final written = await File(filePath).readAsBytes();
+      // The original EXIF APP1 bytes (marker + length + "Exif\0\0" + payload)
+      // must still be present somewhere in the output - the writer must not
+      // have discarded or corrupted the EXIF segment while inserting XMP.
+      final exifMarker = [0x45, 0x78, 0x69, 0x66, 0x00, 0x00]; // "Exif\0\0"
+      bool containsExif = false;
+      for (var i = 0; i <= written.length - exifMarker.length; i++) {
+        if (written[i] == exifMarker[0] &&
+            written[i + 1] == exifMarker[1] &&
+            written[i + 2] == exifMarker[2] &&
+            written[i + 3] == exifMarker[3] &&
+            written[i + 4] == exifMarker[4] &&
+            written[i + 5] == exifMarker[5]) {
+          containsExif = true;
+          break;
+        }
+      }
+      expect(containsExif, isTrue, reason: 'EXIF APP1 segment must be preserved');
+    });
+  });
+
   group('MetadataService C2PA detection', () {
     test('hasC2pa returns false for clean JPEG', () async {
       final tempDir = await Directory.systemTemp.createTemp('easysave_c2pa_test_');
