@@ -25,15 +25,24 @@ import '../services/update_service.dart';
 import '../theme/app_theme.dart';
 import '../widgets/download_sheet.dart';
 import '../widgets/gallery_browser.dart';
+import '../widgets/parse_feedback.dart';
 import '../widgets/shared.dart';
 import 'batch_page.dart';
 import 'login_page.dart';
 import 'preview_page.dart';
 
 class ParsePage extends StatefulWidget {
-  const ParsePage({super.key, this.onSeeAll});
+  const ParsePage({super.key, this.onSeeAll, this.isVisible, this.onShowSelf});
 
   final VoidCallback? onSeeAll;
+
+  /// Whether the Parse tab is the one on screen. When it is not (the
+  /// clipboard dialog also appears over History / Mine), parse progress and
+  /// errors are shown as snackbars instead of the inline state.
+  final bool Function()? isVisible;
+
+  /// Switch to the Parse tab (used by the error snackbar's "查看" action).
+  final VoidCallback? onShowSelf;
 
   @override
   State<ParsePage> createState() => ParsePageState();
@@ -543,6 +552,15 @@ class ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
     _handleLinks(url);
   }
 
+  void _showOffscreenError(String code, String? message) {
+    showParseErrorSnackBar(
+      context,
+      code: code,
+      message: message,
+      onView: () => widget.onShowSelf?.call(),
+    );
+  }
+
   Future<void> _resolve(String link) async {
     if (_busy) return;
     _currentLink = link;
@@ -560,9 +578,31 @@ class ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
       _errorCode = null;
       _errorMessage = null;
     });
+    // Parsing started from another tab: the inline state below is not on
+    // screen, so show it as a snackbar until the preview opens or it fails.
+    final offscreen = !(widget.isVisible?.call() ?? true);
+    if (offscreen) {
+      showParsingSnackBar(
+        context,
+        onCancel: () {
+          if (!mounted) return;
+          setState(() {
+            _cancelRequested = true;
+            _busy = false;
+          });
+        },
+      );
+    }
+    void closeParsingSnackBar() {
+      if (offscreen && mounted) {
+        ScaffoldMessenger.of(context).hideCurrentSnackBar();
+      }
+    }
+
     try {
       final outcome = await parsePostOutcome(link);
       if (!mounted || _cancelRequested) return;
+      closeParsingSnackBar();
       setState(() => _busy = false);
       await Navigator.of(context).push(
         MaterialPageRoute<void>(
@@ -587,6 +627,7 @@ class ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
         final platform = platformFromUrl(link);
         if (platform != null) LoginExpiredBus.markExpired(platform);
       }
+      if (offscreen) _showOffscreenError(e.code, e.message);
     } catch (_) {
       if (!mounted || _cancelRequested) return;
       setState(() {
@@ -594,6 +635,7 @@ class ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
         _errorCode = ParseErrorCode.invalidPage;
         _errorMessage = null;
       });
+      if (offscreen) _showOffscreenError(ParseErrorCode.invalidPage, null);
     }
   }
 

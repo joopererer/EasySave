@@ -80,7 +80,12 @@ class _MainShellState extends State<MainShell> with WidgetsBindingObserver {
       body: IndexedStack(
         index: _index,
         children: [
-          ParsePage(key: _parseKey, onSeeAll: () => _select(1)),
+          ParsePage(
+            key: _parseKey,
+            onSeeAll: () => _select(1),
+            isVisible: () => _index == 0,
+            onShowSelf: () => _select(0),
+          ),
           HistoryPage(
             key: _historyKey,
             onGoParse: () => _select(0),

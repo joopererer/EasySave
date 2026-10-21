@@ -272,8 +272,7 @@ class ErrorCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final copy = errorCopyFor(code);
-    final displayMessage =
-        (message != null && message!.isNotEmpty) ? message! : copy.message;
+    final displayMessage = displayErrorMessage(code, message);
     return Card(
       color: SecondaryBg.pink(context),
       child: Padding(

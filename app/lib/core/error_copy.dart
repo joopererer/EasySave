@@ -14,6 +14,13 @@ class ErrorCopy {
   final ErrorAction action;
 }
 
+/// Text shown for a parse error: the engine's own message when it has one,
+/// otherwise the spec copy for [code].
+String displayErrorMessage(String code, String? message) =>
+    (message != null && message.isNotEmpty)
+    ? message
+    : errorCopyFor(code).message;
+
 /// Copy for parse error codes. Unknown codes fall back to a retry prompt.
 ErrorCopy errorCopyFor(String code) {
   switch (code) {
