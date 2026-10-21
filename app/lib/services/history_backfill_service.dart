@@ -16,17 +16,41 @@ import 'history_db.dart';
 import 'media_delete_service.dart';
 
 /// Result of a backfill operation.
+///
+/// [totalFiles] is every HistoryFile across every record (the universe this
+/// run considered). The remaining counts partition that universe exactly:
+/// totalFiles == success + authRequired + alreadyHasMetadata + fileNotFound +
+/// noWritePermission + formatNotSupported + skippedVideo + skippedNotLocated +
+/// otherError. Every file that contributes to one of these counters also has
+/// a corresponding DevLog line explaining why.
 class BackfillResult {
+  /// Every HistoryFile examined, including ones filtered out before the
+  /// per-file write attempt (videos, un-locatable files, etc).
+  final int totalFiles;
+
+  /// Files that were actually attempted (passed all pre-filters and didn't
+  /// already have metadata). Kept for backward-compatible display as
+  /// "X/total written".
   final int total;
+
   final int success;
   final int authRequired;
   final int alreadyHasMetadata;
   final int fileNotFound;
   final int noWritePermission;
   final int formatNotSupported;
+
+  /// Video files (mp4 etc) - provenance is only embedded in images.
+  final int skippedVideo;
+
+  /// Files with no mediaId (or a mediaId that no longer resolves) that
+  /// GalleryLocatorService also failed to locate by filename/postId.
+  final int skippedNotLocated;
+
   final int otherError;
 
   const BackfillResult({
+    required this.totalFiles,
     required this.total,
     required this.success,
     required this.authRequired,
@@ -34,10 +58,19 @@ class BackfillResult {
     required this.fileNotFound,
     required this.noWritePermission,
     required this.formatNotSupported,
+    required this.skippedVideo,
+    required this.skippedNotLocated,
     required this.otherError,
   });
 
-  int get skipped => alreadyHasMetadata + fileNotFound + noWritePermission + formatNotSupported + otherError;
+  int get skipped =>
+      alreadyHasMetadata +
+      fileNotFound +
+      noWritePermission +
+      formatNotSupported +
+      skippedVideo +
+      skippedNotLocated +
+      otherError;
 
   @override
   String toString() {
@@ -48,6 +81,8 @@ class BackfillResult {
       if (fileNotFound > 0) '$fileNotFound file not found',
       if (noWritePermission > 0) '$noWritePermission no write permission',
       if (formatNotSupported > 0) '$formatNotSupported format not supported',
+      if (skippedVideo > 0) '$skippedVideo video (not applicable)',
+      if (skippedNotLocated > 0) '$skippedNotLocated not located in gallery',
       if (otherError > 0) '$otherError other errors',
     ];
     return parts.join(', ');
@@ -65,57 +100,89 @@ class HistoryBackfillService {
   /// Backfill provenance metadata to files that don't have it.
   /// 
   /// Algorithm:
-  /// 1. Query HistoryDb for records with files having status == found
-  /// 2. For each file with linked mediaId:
+  /// 1. Query HistoryDb for all records
+  /// 2. For each file in each record:
+  ///    - Try to locate asset by mediaId first
+  ///    - If no mediaId or asset not found, use GalleryLocatorService to locate by filename/postId
   ///    - Check if file already has XMP provenance (real check, not just assetId presence)
+  ///    - Skip video files (only process images)
   ///    - If not: try to write metadata directly
   ///    - If not writable, request permission via MediaStore.createWriteRequest
-  /// 3. Show result summary with breakdown by skip reason
+  /// 3. Show result summary with breakdown by skip reason, logging every file
   Future<BackfillResult> backfill({
     void Function(int current, int total, String filename)? onProgress,
   }) async {
     final db = await HistoryDb.instance();
     final records = await db.recent(limit: 10000); // Get all records
 
-    // Filter records with files that have mediaId (i.e., were successfully saved)
-    final recordsWithFiles = records.where((r) =>
-      r.files.any((f) => f.status == FileStatus.found && f.mediaId != null)
-    ).toList();
-
-    var total = 0;
+    var totalFiles = 0;
     var success = 0;
     var authRequired = 0;
     var alreadyHasMetadata = 0;
     var fileNotFound = 0;
     var noWritePermission = 0;
     var formatNotSupported = 0;
+    var skippedVideo = 0;
+    var skippedNoMediaId = 0;
+    var skippedNotFound = 0;
     var otherError = 0;
 
     // Collect all files needing backfill
     final filesToBackfill = <_BackfillItem>[];
 
-    for (final record in recordsWithFiles) {
-      for (final file in record.files) {
-        if (file.status != FileStatus.found || file.mediaId == null) continue;
+    // Ensure gallery is scanned for locating files without mediaId
+    final locator = GalleryLocatorService.instance;
+    if (!locator.scanned) {
+      await locator.scanAlbum();
+    }
 
-        // Try to get the file path
-        final asset = GalleryLocatorService.instance.getAssetById(file.mediaId);
-        if (asset == null) {
-          fileNotFound++;
-          DevLog.write(_logTag, 'Asset not found for ${file.filename}');
+    for (final record in records) {
+      for (final file in record.files) {
+        totalFiles++;
+        
+        // Skip video files - only process images
+        if (!file.isImage) {
+          skippedVideo++;
+          DevLog.write(_logTag, 'Skipped (video): ${file.filename}');
           continue;
         }
 
+        // Try to get asset by mediaId first
+        AssetEntity? asset = file.mediaId != null 
+            ? locator.getAssetById(file.mediaId) 
+            : null;
+
+        // If no mediaId or asset not found, try to locate by filename/postId
+        if (asset == null) {
+          if (file.mediaId == null || file.status != FileStatus.found) {
+            asset = locator.locateAsset(file, record.postId);
+            if (asset == null) {
+              skippedNoMediaId++;
+              DevLog.write(_logTag, 'Skipped (no mediaId, not found in gallery): ${file.filename}');
+              continue;
+            }
+            // Found via locate - log and continue processing
+            DevLog.write(_logTag, 'Located in gallery (no prior mediaId): ${file.filename} -> ${asset.id}');
+          } else {
+            fileNotFound++;
+            DevLog.write(_logTag, 'Asset not found by mediaId: ${file.filename} (mediaId: ${file.mediaId})');
+            continue;
+          }
+        }
+
+        // Get file path
         File? filePath;
         try {
           filePath = await asset.file;
-        } catch (_) {
+        } catch (e) {
           fileNotFound++;
+          DevLog.write(_logTag, 'Failed to get file path for ${file.filename}: $e');
           continue;
         }
 
         if (filePath == null || !await filePath.exists()) {
           fileNotFound++;
+          DevLog.write(_logTag, 'File not accessible: ${file.filename}');
           continue;
         }
 
@@ -133,7 +200,6 @@ class HistoryBackfillService {
           continue;
         }
 
-        total++;
         filesToBackfill.add(_BackfillItem(
           asset: asset,
           filePath: filePath.path,
@@ -142,6 +208,10 @@ class HistoryBackfillService {
         ));
       }
     }
+
+    final total = filesToBackfill.length;
+    DevLog.write(_logTag, 'Backfill candidates: $total files (from $totalFiles total)');
+    DevLog.write(_logTag, 'Skipped: video=$skippedVideo, noMediaId=$skippedNoMediaId, alreadyHas=$alreadyHasMetadata');
 
     // Process files in batches
     final batchSize = 20;
@@ -173,6 +243,7 @@ class HistoryBackfillService {
     }
 
     return BackfillResult(
+      totalFiles: totalFiles,
       total: total,
       success: success,
       authRequired: authRequired,
@@ -180,6 +251,8 @@ class HistoryBackfillService {
       fileNotFound: fileNotFound,
       noWritePermission: noWritePermission,
       formatNotSupported: formatNotSupported,
+      skippedVideo: skippedVideo,
+      skippedNotLocated: skippedNoMediaId,
       otherError: otherError,
     );
   }

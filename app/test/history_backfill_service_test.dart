@@ -9,6 +9,7 @@ void main() {
   group('BackfillResult', () {
     test('breakdown message includes detailed skip reasons', () {
       final result = BackfillResult(
+        totalFiles: 110,
         total: 100,
         success: 50,
         authRequired: 10,
@@ -16,6 +17,8 @@ void main() {
         fileNotFound: 10,
         noWritePermission: 5,
         formatNotSupported: 3,
+        skippedVideo: 8,
+        skippedNotLocated: 2,
         otherError: 2,
       );
 
@@ -26,11 +29,14 @@ void main() {
       expect(msg, contains('10 file not found'));
       expect(msg, contains('5 no write permission'));
       expect(msg, contains('3 format not supported'));
+      expect(msg, contains('8 video'));
+      expect(msg, contains('2 not located'));
       expect(msg, contains('2 other errors'));
     });
 
     test('skipped getter sums all skip categories', () {
       final result = BackfillResult(
+        totalFiles: 110,
         total: 100,
         success: 50,
         authRequired: 10,
@@ -38,15 +44,19 @@ void main() {
         fileNotFound: 10,
         noWritePermission: 5,
         formatNotSupported: 3,
+        skippedVideo: 8,
+        skippedNotLocated: 2,
         otherError: 2,
       );
 
-      expect(result.skipped, 40); // 20 + 10 + 5 + 3 + 2 (authRequired is not part of skipped)
-      expect(result.success + result.authRequired + result.skipped, 100);
+      // skipped = already + notFound + noWrite + formatNotSupported + video + notLocated + other
+      expect(result.skipped, 50); // 20 + 10 + 5 + 3 + 8 + 2 + 2
+      expect(result.success + result.authRequired + result.skipped, 110);
     });
 
     test('omits zero-count reasons from message', () {
       final result = BackfillResult(
+        totalFiles: 50,
         total: 50,
         success: 50,
         authRequired: 0,
@@ -54,6 +64,8 @@ void main() {
         fileNotFound: 0,
         noWritePermission: 0,
         formatNotSupported: 0,
+        skippedVideo: 0,
+        skippedNotLocated: 0,
         otherError: 0,
       );
 
