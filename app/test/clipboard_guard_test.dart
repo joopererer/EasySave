@@ -113,4 +113,88 @@ void main() {
       expect(clipboardKeyOf(link), clipboardKeyOf('快来看 $link'));
     });
   });
+
+  group('decideBubbleAction (Issue 2: floating bubble deduplication)', () {
+    final xhsId2 = '6ace0d440000000013019639'; // Different post
+    final records = <KnownPost>[
+      (postUrl: 'https://www.xiaohongshu.com/explore/$xhsId', postId: xhsId),
+      (
+        postUrl: 'https://www.instagram.com/p/DeM3KzPktAC/',
+        postId: 'DeM3KzPktAC',
+      ),
+    ];
+
+    test('already on preview page: skip navigation', () {
+      // Currently viewing the Instagram post on the preview page
+      expect(
+        decideBubbleAction(
+          'https://www.instagram.com/p/DeM3KzPktAC/',
+          currentPreviewPostId: 'DeM3KzPktAC',
+          knownPosts: records,
+        ),
+        BubbleAction.skipAlreadyOnPreview,
+      );
+    });
+
+    test('left preview page but post in history: open cached', () {
+      // Not on any preview page, but XHS post is in history
+      expect(
+        decideBubbleAction(
+          'https://www.xiaohongshu.com/explore/$xhsId',
+          currentPreviewPostId: null,
+          knownPosts: records,
+        ),
+        BubbleAction.openCached,
+      );
+    });
+
+    test('post in history: open cached', () {
+      // On a different preview page, but link is in history
+      expect(
+        decideBubbleAction(
+          'https://www.instagram.com/p/DeM3KzPktAC/',
+          currentPreviewPostId: xhsId, // Different post
+          knownPosts: records,
+        ),
+        BubbleAction.openCached,
+      );
+    });
+
+    test('post not in history: parse fresh', () {
+      // Link not in history and not currently on preview
+      expect(
+        decideBubbleAction(
+          'https://www.instagram.com/p/OtherCode1/',
+          currentPreviewPostId: null,
+          knownPosts: records,
+        ),
+        BubbleAction.parseFresh,
+      );
+    });
+
+    test('short link resolved through redirect: open cached', () {
+      // Short link that resolves to a post in history
+      expect(
+        decideBubbleAction(
+          'http://xhslink.com/a/abc',
+          currentPreviewPostId: null,
+          knownPosts: records,
+          resolvedUrl: 'https://www.xiaohongshu.com/explore/$xhsId',
+        ),
+        BubbleAction.openCached,
+      );
+    });
+
+    test('already on preview but different resolution: still skip', () {
+      // Case-insensitive comparison: currently on preview with lowercase ID
+      expect(
+        decideBubbleAction(
+          'https://www.xiaohongshu.com/explore/${xhsId.toUpperCase()}',
+          currentPreviewPostId: xhsId,
+          knownPosts: records,
+        ),
+        BubbleAction.skipAlreadyOnPreview,
+      );
+    });
+  });
 }

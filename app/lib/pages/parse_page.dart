@@ -64,12 +64,10 @@ class ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
   List<HistoryRecord> _recent = [];
 
   /// Wider window used only for the "already downloaded" clipboard dedupe.
-  List<HistoryRecord> _recentAll = const [];
-  StreamSubscription<List<SharedMediaFile>>? _shareSub;
-  bool _handlingShare = false;
-  
-  /// Last parsed postId to detect duplicate navigation (Issue 3: floating bubble re-parse)
-  String? _lastParsedPostId;
+  /// Post ID of the current PreviewPage on the route stack (if any).
+  /// Updated when pushing/popping PreviewPage to help the floating bubble
+  /// deduplication check if we're already viewing a specific post.
+  String? _currentPreviewPostId;
 
   @override
   void initState() {
@@ -566,6 +564,48 @@ class ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
 
   Future<void> _resolve(String link) async {
     if (_busy) return;
+    
+    // Task 2a+2b: Pre-parse deduplication using normalized URL and route stack
+    final action = decideBubbleAction(
+      link,
+      currentPreviewPostId: _currentPreviewPostId,
+      knownPosts: _knownPosts,
+    );
+    
+    switch (action) {
+      case BubbleAction.skipAlreadyOnPreview:
+        // Already viewing this post's preview - just return
+        return;
+      
+      case BubbleAction.openCached:
+        // Post is in history - open cached preview without parsing
+        final db = await HistoryDb.instance();
+        final linkId = postIdOfUrl(link);
+        if (linkId == null) return; // Should not happen given isLinkKnown succeeded
+        final existing = await db.getByPostId(linkId);
+        if (existing == null) return; // Race condition: record was deleted
+        
+        if (!mounted) return;
+        _currentPreviewPostId = existing.postId;
+        await Navigator.of(context).push(
+          MaterialPageRoute<void>(
+            builder: (_) => PreviewPage(
+              post: PreviewPage.postFromRecord(existing),
+              onSaved: () {
+                if (mounted) _linkController.clear();
+              },
+            ),
+          ),
+        );
+        _currentPreviewPostId = null;
+        _reloadRecent();
+        return;
+      
+      case BubbleAction.parseFresh:
+        // Continue with normal parse flow
+        break;
+    }
+    
     _currentLink = link;
     // Reflect the link actually being parsed (it may come from a share intent,
     // not the box), so retry / login flows re-use the correct one.
@@ -608,36 +648,8 @@ class ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
       closeParsingSnackBar();
       setState(() => _busy = false);
       
-      // Issue 3 fix: avoid duplicate preview navigation when resuming from bubble
-      // 1. If we just parsed this exact post (still on its preview), skip navigation
-      if (_lastParsedPostId == outcome.data.id) {
-        // Already on this post's preview - just bring app to foreground
-        return;
-      }
-      
-      // 2. If this post is already in History, open its cached preview instead of re-parsing
-      final db = await HistoryDb.instance();
-      final existing = await db.getByPostId(outcome.data.id);
-      
-      if (existing != null) {
-        // Post already saved - open cached preview showing "saved" state
-        _lastParsedPostId = outcome.data.id;
-        await Navigator.of(context).push(
-          MaterialPageRoute<void>(
-            builder: (_) => PreviewPage(
-              post: PreviewPage.postFromRecord(existing),
-              onSaved: () {
-                if (mounted) _linkController.clear();
-              },
-            ),
-          ),
-        );
-        _reloadRecent();
-        return;
-      }
-      
-      // 3. Fresh parse - open preview normally
-      _lastParsedPostId = outcome.data.id;
+      // Open preview and track the post ID for route-based deduplication
+      _currentPreviewPostId = outcome.data.id;
       await Navigator.of(context).push(
         MaterialPageRoute<void>(
           builder: (_) => PreviewPage(
@@ -649,6 +661,7 @@ class ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
           ),
         ),
       );
+      _currentPreviewPostId = null; // Cleared when we return from preview
       _reloadRecent();
     } on ParseFailure catch (e) {
       if (!mounted || _cancelRequested) return;

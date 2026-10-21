@@ -73,3 +73,52 @@ String? clipboardKeyOf(String text) {
   if (links.length > 1) return 'batch:${links.join('|')}';
   return links.single;
 }
+
+/// Floating-bubble deduplication decision (Issue 2).
+///
+/// Returns the action to take when a link is opened (e.g. from the floating
+/// bubble): skip (already on preview), open cached (in history), or parse fresh.
+enum BubbleAction {
+  /// Already viewing this exact post's preview page - do nothing.
+  skipAlreadyOnPreview,
+
+  /// Post is in history but not on the current preview - open cached preview.
+  openCached,
+
+  /// Fresh parse needed - not in history and not currently on preview.
+  parseFresh,
+}
+
+/// Decide what to do when opening [link]: skip if already on its preview page,
+/// open cached preview if in history, or parse fresh otherwise.
+///
+/// - [link]: the URL being opened (possibly a short link)
+/// - [currentPreviewPostId]: post ID of the top PreviewPage route, or null if
+///   no PreviewPage is on the stack
+/// - [knownPosts]: history records to check for cached preview
+/// - [resolvedUrl]: optional redirect target of a short link
+BubbleAction decideBubbleAction(
+  String link, {
+  required String? currentPreviewPostId,
+  required Iterable<KnownPost> knownPosts,
+  String? resolvedUrl,
+}) {
+  // Extract post ID from the link (try both the original and resolved URL)
+  final linkId = postIdOfUrl(link) ??
+      (resolvedUrl == null ? null : postIdOfUrl(resolvedUrl));
+
+  // 1. If we're already on this post's preview page, skip navigation
+  if (linkId != null &&
+      currentPreviewPostId != null &&
+      linkId.toLowerCase() == currentPreviewPostId.toLowerCase()) {
+    return BubbleAction.skipAlreadyOnPreview;
+  }
+
+  // 2. If this post is in history, open cached preview
+  if (isLinkKnown(link, knownPosts, resolvedUrl: resolvedUrl)) {
+    return BubbleAction.openCached;
+  }
+
+  // 3. Fresh parse needed
+  return BubbleAction.parseFresh;
+}
