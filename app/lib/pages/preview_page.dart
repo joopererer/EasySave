@@ -9,6 +9,7 @@ import '../services/download_manager.dart';
 import '../services/gallery_locator_service.dart';
 import '../services/history_db.dart';
 import '../services/host_bridge.dart';
+import '../services/preview_route_observer.dart';
 import '../services/saver.dart';
 import '../theme/app_theme.dart';
 import '../widgets/download_sheet.dart';
@@ -33,6 +34,21 @@ class PreviewPage extends StatefulWidget {
   /// Rebuild a post from a stored history record (shared by the history
   /// list and the home "recent" cards).
   static ParsedPost postFromRecord(HistoryRecord record) => record.toPost();
+
+  /// The only way preview pages should be pushed: the route carries a name
+  /// and the post id so [PreviewRouteObserver] can tell from the real page
+  /// stack which post's preview is on screen.
+  static Route<void> route({
+    required ParsedPost post,
+    List<RawImageEntry> rawImages = const [],
+    VoidCallback? onSaved,
+  }) {
+    return MaterialPageRoute<void>(
+      settings: RouteSettings(name: kPreviewRouteName, arguments: post.id),
+      builder: (_) =>
+          PreviewPage(post: post, rawImages: rawImages, onSaved: onSaved),
+    );
+  }
 
   @override
   State<PreviewPage> createState() => _PreviewPageState();

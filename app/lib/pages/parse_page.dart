@@ -18,6 +18,7 @@ import '../services/gallery_locator_service.dart';
 import '../services/history_db.dart';
 import '../services/host_bridge.dart';
 import '../services/links.dart';
+import '../services/preview_open_guard.dart';
 import '../services/parse_service.dart';
 import '../services/seal.dart';
 import '../services/settings.dart';
@@ -64,10 +65,10 @@ class ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
   List<HistoryRecord> _recent = [];
 
   /// Wider window used only for the "already downloaded" clipboard dedupe.
-  /// Post ID of the current PreviewPage on the route stack (if any).
-  /// Updated when pushing/popping PreviewPage to help the floating bubble
-  /// deduplication check if we're already viewing a specific post.
-  String? _currentPreviewPostId;
+  List<HistoryRecord> _recentAll = [];
+
+  StreamSubscription<List<SharedMediaFile>>? _shareSub;
+  bool _handlingShare = false;
 
   @override
   void initState() {
@@ -164,7 +165,9 @@ class ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
   /// Single entry for clipboard dialog, paste button and share intents:
   /// YouTube links detour to Seal, multiple links open the batch queue,
   /// exactly one supported link resolves directly.
-  Future<void> _handleLinks(String text) async {
+  ///
+  /// [entry] is passed on to the dedup decision so the log names the door.
+  Future<void> _handleLinks(String text, {String entry = 'input'}) async {
     final yt = extractYouTubeLink(text);
     if (yt != null) {
       await _showYouTubeSheet(yt);
@@ -213,7 +216,7 @@ class ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
       return;
     }
     if (links.length == 1) {
-      await _resolve(links.first);
+      await _resolve(links.first, entry: entry);
       return;
     }
     if (mounted) {
@@ -371,7 +374,7 @@ class ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
           ],
         ),
       );
-      if (go == true && mounted) _handleLinks(text);
+      if (go == true && mounted) _handleLinks(text, entry: 'clipboard');
       return;
     }
     final links = extractLinks(text);
@@ -461,7 +464,7 @@ class ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
       if (links.length == 1) {
         // Show feedback that download is starting
         _showDownloadStartedSnackBar(1);
-        await _resolve(links.first);
+        await _resolve(links.first, entry: 'share');
         _reloadRecent();
       } else {
         // Multiple links: show multi-link dialog first, then batch page
@@ -563,7 +566,7 @@ class ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
       _lastLink = key;
       _externalLink = key;
     }
-    _handleLinks(url);
+    _handleLinks(url, entry: 'bubble');
   }
 
   void _showOffscreenError(String code, String? message) {
@@ -575,57 +578,50 @@ class ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
     );
   }
 
-  Future<void> _resolve(String link) async {
+  /// Resolve [link] and open its preview.
+  ///
+  /// [entry] names the entry point (bubble / clipboard / share / input ...) and
+  /// is what the DevLog line reports, so a device log shows which door the
+  /// request came through. The dedup rule itself lives in [PreviewOpenGuard].
+  Future<void> _resolve(String link, {String entry = 'input'}) async {
     if (_busy) return;
-    
-    // Task 2a+2b: Pre-parse deduplication using normalized URL and route stack
-    final action = decideBubbleAction(
-      link,
-      currentPreviewPostId: _currentPreviewPostId,
-      knownPosts: _knownPosts,
-    );
-    
-    switch (action) {
-      case BubbleAction.skipAlreadyOnPreview:
-        // Already viewing this post's preview - just return
+
+    final decision = await PreviewOpenGuard.decide(entry: entry, link: link);
+    final normalizedLink = decision.normalizedLink;
+
+    switch (decision.action) {
+      case PreviewOpenAction.skipAlreadyOnPreview:
         return;
-      
-      case BubbleAction.openCached:
-        // Post is in history - open cached preview without parsing
-        final db = await HistoryDb.instance();
-        final linkId = postIdOfUrl(link);
-        if (linkId == null) return; // Should not happen given isLinkKnown succeeded
-        final existing = await db.getByPostId(linkId);
-        if (existing == null) return; // Race condition: record was deleted
-        
+
+      case PreviewOpenAction.openCached:
+        final existing = decision.cachedRecord;
+        if (existing == null) return;
         if (!mounted) return;
-        _currentPreviewPostId = existing.postId;
         await Navigator.of(context).push(
-          MaterialPageRoute<void>(
-            builder: (_) => PreviewPage(
-              post: PreviewPage.postFromRecord(existing),
-              onSaved: () {
-                if (mounted) _linkController.clear();
-              },
-            ),
+          PreviewPage.route(
+            post: PreviewPage.postFromRecord(existing),
+            onSaved: () {
+              if (mounted) _linkController.clear();
+            },
           ),
         );
-        _currentPreviewPostId = null;
         _reloadRecent();
         return;
-      
-      case BubbleAction.parseFresh:
-        // Continue with normal parse flow
+
+      case PreviewOpenAction.parseFresh:
         break;
     }
-    
-    _currentLink = link;
+
+    // Anything below touches state and BuildContext after the awaits above.
+    if (!mounted) return;
+
+    _currentLink = normalizedLink;
     // Reflect the link actually being parsed (it may come from a share intent,
     // not the box), so retry / login flows re-use the correct one.
-    if (_linkController.text != link) {
+    if (_linkController.text != normalizedLink) {
       _linkController.value = TextEditingValue(
-        text: link,
-        selection: TextSelection.collapsed(offset: link.length),
+        text: normalizedLink,
+        selection: TextSelection.collapsed(offset: normalizedLink.length),
       );
     }
     setState(() {
@@ -656,25 +652,22 @@ class ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
     }
 
     try {
-      final outcome = await parsePostOutcome(link);
+      final outcome = await parsePostOutcome(normalizedLink);
       if (!mounted || _cancelRequested) return;
       closeParsingSnackBar();
       setState(() => _busy = false);
       
-      // Open preview and track the post ID for route-based deduplication
-      _currentPreviewPostId = outcome.data.id;
+      // Preview pages are always pushed through PreviewPage.route so the route
+      // carries the post id that PreviewRouteObserver reads back.
       await Navigator.of(context).push(
-        MaterialPageRoute<void>(
-          builder: (_) => PreviewPage(
-            post: outcome.data,
-            rawImages: outcome.rawImages,
-            onSaved: () {
-              if (mounted) _linkController.clear();
-            },
-          ),
+        PreviewPage.route(
+          post: outcome.data,
+          rawImages: outcome.rawImages,
+          onSaved: () {
+            if (mounted) _linkController.clear();
+          },
         ),
       );
-      _currentPreviewPostId = null; // Cleared when we return from preview
       _reloadRecent();
     } on ParseFailure catch (e) {
       if (!mounted || _cancelRequested) return;
@@ -717,7 +710,7 @@ class ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
           );
           // Re-run the failed parse as soon as the session is confirmed.
           if (loggedIn == true && mounted) {
-            _handleLinks(link);
+            _handleLinks(link, entry: 'login');
           }
         }
       case ErrorAction.backHome:
@@ -725,6 +718,7 @@ class ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
       case ErrorAction.retry:
         _handleLinks(
           _currentLink.isNotEmpty ? _currentLink : _linkController.text.trim(),
+          entry: 'retry',
         );
       case ErrorAction.repaste:
         _inputFocus.requestFocus();
@@ -859,7 +853,7 @@ class ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
                       GradientButton(
                         label: '解析',
                         onPressed: () =>
-                            _handleLinks(_linkController.text.trim()),
+                            _handleLinks(_linkController.text.trim(), entry: 'input'),
                       ),
                   ],
                 ),
@@ -954,9 +948,9 @@ class ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
       if (!mounted) return;
       ScaffoldMessenger.of(context).hideCurrentSnackBar();
       Navigator.of(context).push(
-        MaterialPageRoute<void>(
-          builder: (_) =>
-              PreviewPage(post: outcome.data, rawImages: outcome.rawImages),
+        PreviewPage.route(
+          post: outcome.data,
+          rawImages: outcome.rawImages,
         ),
       );
       _reloadRecent();
@@ -974,9 +968,7 @@ class ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
       final platform = platformFromKey(record.platform);
       if (cachedPost.items.isNotEmpty) {
         Navigator.of(context).push(
-          MaterialPageRoute<void>(
-            builder: (_) => PreviewPage(post: cachedPost),
-          ),
+          PreviewPage.route(post: cachedPost),
         );
         if (isLoginRequired) {
           LoginExpiredBus.markExpired(platform);

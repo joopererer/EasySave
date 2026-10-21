@@ -354,11 +354,9 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
       if (!mounted) return;
       ScaffoldMessenger.of(context).hideCurrentSnackBar();
       Navigator.of(context).push(
-        MaterialPageRoute<void>(
-          builder: (_) => PreviewPage(
-            post: outcome.data,
-            rawImages: outcome.rawImages,
-          ),
+        PreviewPage.route(
+          post: outcome.data,
+          rawImages: outcome.rawImages,
         ),
       );
     } catch (e) {
@@ -370,9 +368,7 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
       final cachedPost = record.toPost();
       if (cachedPost.items.isNotEmpty) {
         Navigator.of(context).push(
-          MaterialPageRoute<void>(
-            builder: (_) => PreviewPage(post: cachedPost),
-          ),
+          PreviewPage.route(post: cachedPost),
         );
         if (isLoginRequired) {
           final platform = platformFromKey(record.platform);

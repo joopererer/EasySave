@@ -10,6 +10,7 @@ import '../core/error_copy.dart';
 import '../core/models.dart';
 import '../services/links.dart';
 import '../services/parse_service.dart';
+import '../services/preview_open_guard.dart';
 import '../services/seal.dart';
 import '../widgets/shared.dart';
 import 'preview_page.dart';
@@ -101,11 +102,15 @@ class _BatchPageState extends State<BatchPage> {
 
   Future<void> _open(BatchItem item) async {
     if (_opening || item.post == null) return;
+    final post = item.post!;
+    // Same rule as every other entry: the top page may already be this post's
+    // preview (e.g. tapped twice before the push finished).
+    if (PreviewOpenGuard.isTopPreview(post.id)) return;
     _opening = true;
     await Navigator.of(context).push(
-      MaterialPageRoute<void>(
-        builder: (_) =>
-            PreviewPage(post: item.post!, rawImages: item.rawImages),
+      PreviewPage.route(
+        post: post,
+        rawImages: item.rawImages,
       ),
     );
     _opening = false;

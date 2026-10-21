@@ -7,6 +7,7 @@ import 'pages/main_shell.dart';
 import 'services/download_manager.dart';
 import 'services/gallery_locator_service.dart';
 import 'services/host_bridge.dart';
+import 'services/preview_route_observer.dart';
 import 'services/update_service.dart';
 import 'theme/app_theme.dart';
 
@@ -49,6 +50,7 @@ class EasySaveApp extends StatelessWidget {
       title: 'EasySave',
       theme: buildLightTheme(),
       darkTheme: buildDarkTheme(),
+      navigatorObservers: [PreviewRouteObserver.instance],
       home: const MainShell(),
     );
   }
