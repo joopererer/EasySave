@@ -98,7 +98,7 @@ void main() {
   });
 
   group('Rebuild restores deleted records', () {
-    test('upsert() clears isDeleted flag when merging', () async {
+    test('upsert() with restoreDeleted=true clears isDeleted flag', () async {
       final original = HistoryRecord(
         platform: 'xhs',
         postId: 'restore1',
@@ -123,7 +123,7 @@ void main() {
       expect(deleted!.isDeleted, isTrue);
       expect((await db.recent()).isEmpty, isTrue);
 
-      // Rebuild: upsert same record
+      // Rebuild: upsert same record with restoreDeleted=true
       final rebuild = HistoryRecord(
         platform: 'xhs',
         postId: 'restore1',
@@ -139,13 +139,64 @@ void main() {
         ],
       );
 
-      await db.upsert(rebuild);
+      await db.upsert(rebuild, restoreDeleted: true);
 
       // Should be restored
       final restored = await db.getByPostId('restore1');
       expect(restored, isNotNull);
       expect(restored!.isDeleted, isFalse);
       expect((await db.recent()).length, 1);
+    });
+
+    test('upsert() without restoreDeleted preserves deleted state', () async {
+      final original = HistoryRecord(
+        platform: 'xhs',
+        postId: 'stay_deleted',
+        postUrl: 'https://example.com/stay_deleted',
+        fileCount: 1,
+        createdAt: DateTime.now(),
+        files: [
+          HistoryFile(
+            filename: 'file1.jpg',
+            savedAt: DateTime.now().millisecondsSinceEpoch,
+            itemIndex: 1,
+          ),
+        ],
+      );
+
+      await db.upsert(original);
+      final inserted = await db.getByPostId('stay_deleted');
+      await db.delete(inserted!.id!);
+
+      // Regular upsert (e.g., from download or status update)
+      final update = HistoryRecord(
+        platform: 'xhs',
+        postId: 'stay_deleted',
+        postUrl: 'https://example.com/stay_deleted',
+        fileCount: 2,
+        createdAt: DateTime.now(),
+        files: [
+          HistoryFile(
+            filename: 'file1.jpg',
+            savedAt: DateTime.now().millisecondsSinceEpoch,
+            itemIndex: 1,
+          ),
+          HistoryFile(
+            filename: 'file2.jpg',
+            savedAt: DateTime.now().millisecondsSinceEpoch,
+            itemIndex: 2,
+          ),
+        ],
+      );
+
+      await db.upsert(update);
+
+      // Should still be deleted
+      final stillDeleted = await db.getByPostId('stay_deleted');
+      expect(stillDeleted, isNotNull);
+      expect(stillDeleted!.isDeleted, isTrue);
+      expect(stillDeleted.files.length, 2); // Files were merged
+      expect((await db.recent()).isEmpty, isTrue);
     });
   });
 }

@@ -417,7 +417,12 @@ class HistoryDb {
     }
   }
 
-  Future<void> upsert(HistoryRecord record) async {
+  /// Insert or merge a history record.
+  /// 
+  /// When [restoreDeleted] is true, merging will clear the isDeleted flag,
+  /// restoring soft-deleted records. This should only be true for rebuild operations.
+  /// Regular downloads and status updates preserve the deletion state.
+  Future<void> upsert(HistoryRecord record, {bool restoreDeleted = false}) async {
     await _db.transaction((txn) async {
       final existing = await _getByPostUrl(txn, record.postUrl) ??
           await _getByPostId(txn, record.postId);
@@ -449,8 +454,8 @@ class HistoryDb {
         createdAt: DateTime.now(),
         itemsJson: record.itemsJson ?? existing.itemsJson,
         files: mergedFiles,
-        // Restore deleted records during rebuild
-        isDeleted: false,
+        // Only restore deleted records when explicitly requested (rebuild flow)
+        isDeleted: restoreDeleted ? false : existing.isDeleted,
       );
         await txn.update(
           'history_records',

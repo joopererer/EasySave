@@ -174,7 +174,7 @@ class HistoryRebuildService {
           files: mergedList,
         );
 
-        await db.upsert(mergedRecord);
+        await db.upsert(mergedRecord, restoreDeleted: true);
         merged++;
         DevLog.write(_logTag, 'Merged record: $platform:$sourceId');
       } else {
@@ -193,7 +193,7 @@ class HistoryRebuildService {
           files: files,
         );
 
-        await db.upsert(record);
+        await db.upsert(record, restoreDeleted: true);
         created++;
         DevLog.write(_logTag, 'Created record: $platform:$sourceId');
       }
