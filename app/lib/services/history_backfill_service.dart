@@ -10,6 +10,7 @@ import 'package:photo_manager/photo_manager.dart';
 import '../core/dev_log.dart';
 import '../core/models.dart';
 import '../metadata/metadata_service.dart';
+import '../metadata/xmp_model.dart';
 import 'gallery_locator_service.dart';
 import 'history_db.dart';
 import 'media_delete_service.dart';
@@ -215,33 +216,22 @@ class HistoryBackfillService {
       try {
         final decoded = jsonDecode(record.itemsJson!);
         if (decoded is List) {
-          items = decoded.map((raw) {
-            final map = (raw as Map).cast<String, Object?>();
-            return MediaItem(
-              type: map['type'] as String? ?? 'image',
-              url: map['url'] as String? ?? '',
-              videoUrl: map['videoUrl'] as String?,
-              posterUrl: map['posterUrl'] as String?,
-              width: map['width'] as num?,
-              height: map['height'] as num?,
-              duration: map['duration'] as num?,
-              isGif: map['isGif'] as bool?,
-              fallbacks: (map['fallbacks'] as List?)?.cast<String>(),
-            );
-          }).toList();
+          items = decoded
+              .map((raw) => MediaItem.fromJson(
+                    (raw as Map).cast<String, dynamic>(),
+                  ))
+              .toList();
         }
       } catch (_) {}
     }
 
-    if (items == null) {
-      // Fallback: create minimal item list
-      items = [
-        MediaItem(
-          type: asset.type == AssetType.video ? 'video' : 'image',
-          url: '',
-        ),
-      ];
-    }
+    // Fallback: create minimal item list
+    items ??= [
+      MediaItem(
+        type: asset.type == AssetType.video ? 'video' : 'image',
+        url: '',
+      ),
+    ];
 
     // Calculate itemCount (images only for provenance)
     final itemCount = items.where((it) => it.type != 'video' || it.videoUrl != null).length;
