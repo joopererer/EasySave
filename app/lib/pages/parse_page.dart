@@ -439,7 +439,53 @@ class ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
     try {
       final text = files.map((f) => f.path).join('\n');
       if (text.trim().isEmpty || !mounted) return;
-      await _handleLinks(text);
+
+      // Extract single link and resolve directly (shows loading state)
+      final links = extractLinks(text);
+      if (links.length == 1) {
+        await _resolve(links.first);
+        _reloadRecent();
+      } else {
+        // Multiple links: show multi-link dialog first, then batch page
+        final go = await showDialog<bool>(
+          context: context,
+          builder: (context) => AlertDialog(
+            title: Text('发现 ${links.length} 个链接'),
+            content: SizedBox(
+              width: double.maxFinite,
+              child: ListView.builder(
+                shrinkWrap: true,
+                itemCount: links.length,
+                itemBuilder: (context, i) => Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 2),
+                  child: Text(
+                    links[i],
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(fontSize: 12),
+                  ),
+                ),
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(context).pop(false),
+                child: const Text('取消'),
+              ),
+              TextButton(
+                onPressed: () => Navigator.of(context).pop(true),
+                child: const Text('逐个解析'),
+              ),
+            ],
+          ),
+        );
+        if (go == true && mounted) {
+          await Navigator.of(context).push(
+            MaterialPageRoute<void>(builder: (_) => BatchPage(links: links)),
+          );
+          _reloadRecent();
+        }
+      }
     } finally {
       _handlingShare = false;
     }

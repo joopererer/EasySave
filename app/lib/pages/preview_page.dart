@@ -8,6 +8,7 @@ import '../core/models.dart';
 import '../services/download_manager.dart';
 import '../services/gallery_locator_service.dart';
 import '../services/history_db.dart';
+import '../services/host_bridge.dart';
 import '../services/saver.dart';
 import '../theme/app_theme.dart';
 import '../widgets/download_sheet.dart';
@@ -159,6 +160,8 @@ class _PreviewPageState extends State<PreviewPage> {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('已将 $associated 个本地文件关联到历史记录')),
       );
+      // Notify history page to refresh
+      HostBridge.historyRevision.value = HostBridge.historyRevision.value + 1;
       Navigator.of(context).pop(true);
       return;
     }
@@ -182,6 +185,8 @@ class _PreviewPageState extends State<PreviewPage> {
           ),
         ),
       );
+      // Notify history page to refresh
+      HostBridge.historyRevision.value = HostBridge.historyRevision.value + 1;
       Navigator.of(context).pop(true);
       return;
     }
