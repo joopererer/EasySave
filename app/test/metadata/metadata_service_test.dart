@@ -641,6 +641,335 @@ void main() {
     });
   });
 
+  group('MetadataService dual EXIF+XMP ordering (Issue 1c)', () {
+    late Directory tempDir;
+
+    setUp(() async {
+      tempDir = await Directory.systemTemp.createTemp('easysave_dual_test_');
+    });
+
+    tearDown(() async {
+      if (await tempDir.exists()) {
+        await tempDir.delete(recursive: true);
+      }
+    });
+
+    /// Build a JPEG with both EXIF and XMP APP1 segments in specified order.
+    Uint8List jpegWithExifAndXmp({required bool exifFirst, String? xmpPayload}) {
+      final exifPayload = <int>[
+        0x45, 0x78, 0x69, 0x66, 0x00, 0x00, // "Exif\0\0"
+        0x4D, 0x4D, 0x00, 0x2A, // TIFF header
+        0x00, 0x00, 0x00, 0x08, // IFD offset
+        0xFF, 0xFE, 0x80, 0x81, // binary payload
+      ];
+      
+      final xmpHeader = 'http://ns.adobe.com/xap/1.0/\x00'.codeUnits;
+      final xmpContent = xmpPayload ?? '''<?xml version="1.0" encoding="UTF-8"?>
+<?xpacket begin="" id="W5M0MpCehiHzreSzNTczkc9d"?>
+<x:xmpmeta xmlns:x="adobe:ns:meta/">
+  <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+           xmlns:prov="https://joopererer.github.io/provenance-spec/ns/"
+           xmlns:xmp="http://ns.adobe.com/xap/1.0/">
+    <rdf:Description rdf:about=""
+      prov:schema="0.1"
+      prov:assetId="test-asset"
+      prov:capturedAt="2026-10-20T10:00:00Z"
+      prov:capturedBy="EasySave/1.7.0"
+      prov:platform="xiaohongshu"
+      prov:sourceId="source123"
+      prov:sourceUrl="https://example.com/test"
+      xmp:MetadataDate="2026-10-20T10:00:00Z"/>
+  </rdf:RDF>
+</x:xmpmeta>
+<?xpacket end="w"?>''';
+      final xmpSegmentPayload = [...xmpHeader, ...xmpContent.codeUnits];
+      
+      final exifApp1Length = 2 + exifPayload.length;
+      final xmpApp1Length = 2 + xmpSegmentPayload.length;
+      
+      final exifSegment = [
+        0xFF, 0xE1, (exifApp1Length >> 8) & 0xFF, exifApp1Length & 0xFF,
+        ...exifPayload,
+      ];
+      
+      final xmpSegment = [
+        0xFF, 0xE1, (xmpApp1Length >> 8) & 0xFF, xmpApp1Length & 0xFF,
+        ...xmpSegmentPayload,
+      ];
+      
+      return Uint8List.fromList([
+        0xFF, 0xD8, // SOI
+        ...(exifFirst ? exifSegment : xmpSegment),
+        ...(exifFirst ? xmpSegment : exifSegment),
+        0xFF, 0xC0, 0x00, 0x0B, // SOF0
+        ...List.filled(9, 0),
+        0xFF, 0xDA, 0x00, 0x08, // SOS
+        ...List.filled(6, 0),
+        0xFF, 0xD9, // EOI
+      ]);
+    }
+
+    test('JPEG with EXIF then XMP: reads XMP correctly', () async {
+      final filePath = '${tempDir.path}/exif_then_xmp_read.jpg';
+      await File(filePath).writeAsBytes(jpegWithExifAndXmp(exifFirst: true));
+
+      final read = MetadataService.readProvenance(filePath);
+      expect(read, isNotNull);
+      expect(read!.assetId, 'test-asset');
+      expect(read.schema, '0.1');
+    });
+
+    test('JPEG with XMP then EXIF: reads XMP correctly', () async {
+      final filePath = '${tempDir.path}/xmp_then_exif_read.jpg';
+      await File(filePath).writeAsBytes(jpegWithExifAndXmp(exifFirst: false));
+
+      final read = MetadataService.readProvenance(filePath);
+      expect(read, isNotNull);
+      expect(read!.assetId, 'test-asset');
+      expect(read.schema, '0.1');
+    });
+
+    test('JPEG with EXIF then XMP: writing preserves EXIF byte-for-byte', () async {
+      final filePath = '${tempDir.path}/exif_then_xmp_write.jpg';
+      final original = jpegWithExifAndXmp(exifFirst: true);
+      await File(filePath).writeAsBytes(original);
+
+      // Extract original EXIF segment bytes for comparison
+      final exifMarker = [0x45, 0x78, 0x69, 0x66, 0x00, 0x00]; // "Exif\0\0"
+      int exifStart = -1;
+      for (var i = 0; i < original.length - 20; i++) {
+        if (original[i] == 0xFF && original[i + 1] == 0xE1) {
+          // Check if this APP1 is EXIF
+          final payloadStart = i + 4;
+          if (payloadStart + 6 <= original.length &&
+              original[payloadStart] == exifMarker[0] &&
+              original[payloadStart + 1] == exifMarker[1] &&
+              original[payloadStart + 2] == exifMarker[2] &&
+              original[payloadStart + 3] == exifMarker[3] &&
+              original[payloadStart + 4] == exifMarker[4] &&
+              original[payloadStart + 5] == exifMarker[5]) {
+            exifStart = i;
+            break;
+          }
+        }
+      }
+      expect(exifStart, greaterThan(-1), reason: 'Original must have EXIF segment');
+
+      final exifLength = (original[exifStart + 2] << 8) | original[exifStart + 3];
+      final originalExifBytes = original.sublist(exifStart, exifStart + 2 + exifLength);
+
+      // Write new XMP
+      final newXmp = XmpProvenance(
+        schema: '0.1',
+        assetId: 'new-asset-written',
+        capturedAt: DateTime.utc(2026, 10, 21),
+        capturedBy: 'EasySave/1.7.0',
+        metadataDate: DateTime.utc(2026, 10, 21),
+        sourceUrl: 'https://example.com/new',
+        platform: 'xiaohongshu',
+        sourceId: 'new123',
+      );
+
+      await MetadataService.embedProvenance(filePath: filePath, provenance: newXmp);
+
+      // Read written file and find EXIF segment
+      final written = await File(filePath).readAsBytes();
+      int writtenExifStart = -1;
+      for (var i = 0; i < written.length - 20; i++) {
+        if (written[i] == 0xFF && written[i + 1] == 0xE1) {
+          final payloadStart = i + 4;
+          if (payloadStart + 6 <= written.length &&
+              written[payloadStart] == exifMarker[0] &&
+              written[payloadStart + 1] == exifMarker[1] &&
+              written[payloadStart + 2] == exifMarker[2] &&
+              written[payloadStart + 3] == exifMarker[3] &&
+              written[payloadStart + 4] == exifMarker[4] &&
+              written[payloadStart + 5] == exifMarker[5]) {
+            writtenExifStart = i;
+            break;
+          }
+        }
+      }
+      expect(writtenExifStart, greaterThan(-1), reason: 'Written file must preserve EXIF');
+
+      final writtenExifLength = (written[writtenExifStart + 2] << 8) | written[writtenExifStart + 3];
+      final writtenExifBytes = written.sublist(writtenExifStart, writtenExifStart + 2 + writtenExifLength);
+
+      // Compare byte-for-byte
+      expect(writtenExifBytes, equals(originalExifBytes), reason: 'EXIF segment must be byte-identical after XMP write');
+
+      // Verify new XMP was written
+      final readBack = MetadataService.readProvenance(filePath);
+      expect(readBack, isNotNull);
+      // mergeXmp keeps the existing assetId and takes the rest from the new XMP.
+      expect(readBack!.assetId, 'test-asset');
+      expect(readBack.sourceId, 'new123');
+      expect(readBack.platform, 'xiaohongshu');
+    });
+
+    test('JPEG with XMP then EXIF: writing preserves EXIF byte-for-byte', () async {
+      final filePath = '${tempDir.path}/xmp_then_exif_write.jpg';
+      final original = jpegWithExifAndXmp(exifFirst: false);
+      await File(filePath).writeAsBytes(original);
+
+      // Extract original EXIF bytes
+      final exifMarker = [0x45, 0x78, 0x69, 0x66, 0x00, 0x00];
+      int exifStart = -1;
+      for (var i = 0; i < original.length - 20; i++) {
+        if (original[i] == 0xFF && original[i + 1] == 0xE1) {
+          final payloadStart = i + 4;
+          if (payloadStart + 6 <= original.length &&
+              original[payloadStart] == exifMarker[0] &&
+              original[payloadStart + 1] == exifMarker[1] &&
+              original[payloadStart + 2] == exifMarker[2] &&
+              original[payloadStart + 3] == exifMarker[3] &&
+              original[payloadStart + 4] == exifMarker[4] &&
+              original[payloadStart + 5] == exifMarker[5]) {
+            exifStart = i;
+            break;
+          }
+        }
+      }
+      expect(exifStart, greaterThan(-1));
+
+      final exifLength = (original[exifStart + 2] << 8) | original[exifStart + 3];
+      final originalExifBytes = original.sublist(exifStart, exifStart + 2 + exifLength);
+
+      // Write new XMP
+      final newXmp = XmpProvenance(
+        schema: '0.1',
+        assetId: 'reverse-order-asset',
+        capturedAt: DateTime.utc(2026, 10, 21),
+        capturedBy: 'EasySave/1.7.0',
+        metadataDate: DateTime.utc(2026, 10, 21),
+        sourceUrl: 'https://example.com/reverse',
+        platform: 'instagram',
+        sourceId: 'reverse456',
+      );
+
+      await MetadataService.embedProvenance(filePath: filePath, provenance: newXmp);
+
+      // Find EXIF in written file
+      final written = await File(filePath).readAsBytes();
+      int writtenExifStart = -1;
+      for (var i = 0; i < written.length - 20; i++) {
+        if (written[i] == 0xFF && written[i + 1] == 0xE1) {
+          final payloadStart = i + 4;
+          if (payloadStart + 6 <= written.length &&
+              written[payloadStart] == exifMarker[0] &&
+              written[payloadStart + 1] == exifMarker[1] &&
+              written[payloadStart + 2] == exifMarker[2] &&
+              written[payloadStart + 3] == exifMarker[3] &&
+              written[payloadStart + 4] == exifMarker[4] &&
+              written[payloadStart + 5] == exifMarker[5]) {
+            writtenExifStart = i;
+            break;
+          }
+        }
+      }
+      expect(writtenExifStart, greaterThan(-1));
+
+      final writtenExifLength = (written[writtenExifStart + 2] << 8) | written[writtenExifStart + 3];
+      final writtenExifBytes = written.sublist(writtenExifStart, writtenExifStart + 2 + writtenExifLength);
+
+      expect(writtenExifBytes, equals(originalExifBytes), reason: 'EXIF must be preserved regardless of segment order');
+
+      // Verify XMP update
+      final readBack = MetadataService.readProvenance(filePath);
+      expect(readBack, isNotNull);
+      // mergeXmp keeps the existing assetId and takes the rest from the new XMP.
+      expect(readBack!.assetId, 'test-asset');
+      expect(readBack.sourceId, 'reverse456');
+      expect(readBack.platform, 'instagram');
+    });
+
+    test('JPEG with both segments: replacing XMP preserves EXIF', () async {
+      final filePath = '${tempDir.path}/replace_xmp_keep_exif.jpg';
+      final original = jpegWithExifAndXmp(exifFirst: true);
+      await File(filePath).writeAsBytes(original);
+
+      // First write
+      final firstXmp = XmpProvenance(
+        schema: '0.1',
+        assetId: 'first-write',
+        capturedAt: DateTime.utc(2026, 10, 21, 10, 0),
+        capturedBy: 'EasySave/1.7.0',
+        metadataDate: DateTime.utc(2026, 10, 21, 10, 0),
+        sourceUrl: 'https://example.com/first',
+        platform: 'xiaohongshu',
+        sourceId: 'first111',
+      );
+      await MetadataService.embedProvenance(filePath: filePath, provenance: firstXmp);
+
+      // Capture EXIF after first write
+      final afterFirst = await File(filePath).readAsBytes();
+      final exifMarker = [0x45, 0x78, 0x69, 0x66, 0x00, 0x00];
+      int exifStart = -1;
+      for (var i = 0; i < afterFirst.length - 20; i++) {
+        if (afterFirst[i] == 0xFF && afterFirst[i + 1] == 0xE1) {
+          final payloadStart = i + 4;
+          if (payloadStart + 6 <= afterFirst.length &&
+              afterFirst[payloadStart] == exifMarker[0] &&
+              afterFirst[payloadStart + 1] == exifMarker[1] &&
+              afterFirst[payloadStart + 2] == exifMarker[2] &&
+              afterFirst[payloadStart + 3] == exifMarker[3] &&
+              afterFirst[payloadStart + 4] == exifMarker[4] &&
+              afterFirst[payloadStart + 5] == exifMarker[5]) {
+            exifStart = i;
+            break;
+          }
+        }
+      }
+      expect(exifStart, greaterThan(-1));
+      final exifLength = (afterFirst[exifStart + 2] << 8) | afterFirst[exifStart + 3];
+      final exifBytesAfterFirst = afterFirst.sublist(exifStart, exifStart + 2 + exifLength);
+
+      // Second write (replace XMP)
+      final secondXmp = XmpProvenance(
+        schema: '0.1',
+        assetId: 'first-write', // Keep same assetId
+        capturedAt: DateTime.utc(2026, 10, 21, 11, 0),
+        capturedBy: 'EasySave/1.7.0',
+        metadataDate: DateTime.utc(2026, 10, 21, 11, 0),
+        sourceUrl: 'https://example.com/second',
+        platform: 'instagram',
+        sourceId: 'second222',
+      );
+      await MetadataService.embedProvenance(filePath: filePath, provenance: secondXmp);
+
+      // Verify EXIF still byte-identical after second write
+      final afterSecond = await File(filePath).readAsBytes();
+      int exifStartSecond = -1;
+      for (var i = 0; i < afterSecond.length - 20; i++) {
+        if (afterSecond[i] == 0xFF && afterSecond[i + 1] == 0xE1) {
+          final payloadStart = i + 4;
+          if (payloadStart + 6 <= afterSecond.length &&
+              afterSecond[payloadStart] == exifMarker[0] &&
+              afterSecond[payloadStart + 1] == exifMarker[1] &&
+              afterSecond[payloadStart + 2] == exifMarker[2] &&
+              afterSecond[payloadStart + 3] == exifMarker[3] &&
+              afterSecond[payloadStart + 4] == exifMarker[4] &&
+              afterSecond[payloadStart + 5] == exifMarker[5]) {
+            exifStartSecond = i;
+            break;
+          }
+        }
+      }
+      expect(exifStartSecond, greaterThan(-1));
+      final exifLengthSecond = (afterSecond[exifStartSecond + 2] << 8) | afterSecond[exifStartSecond + 3];
+      final exifBytesAfterSecond = afterSecond.sublist(exifStartSecond, exifStartSecond + 2 + exifLengthSecond);
+
+      expect(exifBytesAfterSecond, equals(exifBytesAfterFirst), 
+             reason: 'EXIF must remain identical across multiple XMP writes');
+
+      // Verify second XMP replaced the first
+      final readBack = MetadataService.readProvenance(filePath);
+      expect(readBack, isNotNull);
+      expect(readBack!.sourceId, 'second222');
+      expect(readBack.platform, 'instagram');
+    });
+  });
+
   group('MetadataService C2PA detection', () {
     test('hasC2pa returns false for clean JPEG', () async {
       final tempDir = await Directory.systemTemp.createTemp('easysave_c2pa_test_');
