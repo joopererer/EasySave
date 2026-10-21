@@ -16,6 +16,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../core/dev_log.dart';
 import '../core/models.dart';
 import '../metadata/metadata_service.dart';
+import '../metadata/xmp_model.dart';
 import 'gallery_locator_service.dart';
 import 'history_db.dart';
 import 'parse_service.dart';
@@ -142,6 +143,7 @@ class DownloadBatch {
     this.authorId,
     this.publishedAt,
     this.itemsJson,
+    this.postItemCount,
     this.source = sourceMain,
     this.updatedAt = 0,
     required this.jobs,
@@ -166,6 +168,26 @@ class DownloadBatch {
   final String? authorId;
   final DateTime? publishedAt;
   final String? itemsJson;
+
+  /// Total number of media items in the whole post (`post.items.length`),
+  /// independent of which items the user selected for this batch.
+  final int? postItemCount;
+
+  /// Item count written to provenance metadata. Prefers the stored post
+  /// total; snapshots written before [postItemCount] existed fall back to
+  /// the length of [itemsJson], and finally to the number of image jobs.
+  int get totalItems {
+    if (postItemCount != null) return postItemCount!;
+    if (itemsJson != null) {
+      try {
+        final decoded = jsonDecode(itemsJson!);
+        if (decoded is List && decoded.isNotEmpty) return decoded.length;
+      } catch (_) {
+        // Fall through to the job-based estimate.
+      }
+    }
+    return jobs.where((j) => j.isImage).length;
+  }
 
   /// Owner engine: [sourceMain] or [sourceBackground].
   final String source;
@@ -198,6 +220,7 @@ class DownloadBatch {
     'authorId': authorId,
     'publishedAt': publishedAt?.toIso8601String(),
     'itemsJson': itemsJson,
+    'postItemCount': postItemCount,
     'source': source,
     'updatedAt': updatedAt,
     'jobs': [for (final j in jobs) j.toJson()],
@@ -218,6 +241,7 @@ class DownloadBatch {
         ? DateTime.tryParse(map['publishedAt'] as String)
         : null,
     itemsJson: map['itemsJson'] as String?,
+    postItemCount: (map['postItemCount'] as num?)?.toInt(),
     // Batches written before this field existed were created by the main
     // engine, so they default to it.
     source: map['source'] as String? ?? sourceMain,
@@ -312,6 +336,30 @@ List<PlannedFile> planFiles(
     }
   }
   return planned;
+}
+
+/// Provenance for one downloaded item of [batch]. `itemIndex` is the 1-based
+/// position in the original post and `itemCount` the size of the whole post,
+/// never the size of the user's selection (selecting items 2 and 4 of a
+/// 5-item post must write 2/5 and 4/5).
+XmpProvenance provenanceForBatchItem(
+  DownloadBatch batch, {
+  required int itemIndex,
+  String? existingAssetId,
+}) {
+  return ProvenanceBuilder(
+    platform: batch.platform,
+    postId: batch.postId,
+    postUrl: batch.postUrl,
+    authorName: batch.authorName,
+    title: batch.title,
+    caption: batch.caption,
+    authorId: batch.authorId,
+    publishedAt: batch.publishedAt,
+    itemIndex: itemIndex,
+    itemCount: batch.totalItems,
+    existingAssetId: existingAssetId,
+  ).build();
 }
 
 class DownloadManager extends ChangeNotifier {
@@ -506,6 +554,7 @@ class DownloadManager extends ChangeNotifier {
       caption: post.caption,
       publishedAt: post.publishedAt != null ? DateTime.tryParse(post.publishedAt!) : null,
       itemsJson: jsonEncode([for (final item in post.items) item.toJson()]),
+      postItemCount: post.items.length,
       source: DownloadManager.owner,
       jobs: [
         for (var i = 0; i < planned.length; i++)
@@ -778,20 +827,11 @@ class DownloadManager extends ChangeNotifier {
       }
       
       // Build provenance metadata
-      final itemCount = batch.jobs.where((j) => j.isImage).length;
-      final provenance = ProvenanceBuilder(
-        platform: batch.platform,
-        postId: batch.postId,
-        postUrl: batch.postUrl,
-        authorName: batch.authorName,
-        title: batch.title,
-        caption: batch.caption,
-        authorId: batch.authorId,
-        publishedAt: batch.publishedAt,
+      final provenance = provenanceForBatchItem(
+        batch,
         itemIndex: itemIndex,
-        itemCount: itemCount,
         existingAssetId: existingAssetId,
-      ).build();
+      );
       
       // Embed into file
       final result = await MetadataService.embedProvenance(
