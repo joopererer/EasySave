@@ -918,7 +918,7 @@ class DownloadManager extends ChangeNotifier {
         _log('provenance embedded: ${job.filename}');
         return provenance.assetId;
       } else {
-        _log('provenance embed failed: ${job.filename} - ${result.error}');
+        _log('provenance embed failed: ${job.filename} - ${result.errorMessage}');
       }
     } catch (e) {
       _log('provenance embed error: ${job.filename} - $e');

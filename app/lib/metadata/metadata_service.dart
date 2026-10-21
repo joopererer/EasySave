@@ -14,46 +14,73 @@ import 'xmp_png.dart';
 import 'xmp_webp.dart';
 import 'xmp_core.dart';
 
+/// Classification of metadata embed failures (used for categorizing skip/error reasons).
+enum EmbedErrorCode {
+  /// File not found on disk.
+  fileNotFound,
+
+  /// File format not recognized (magic bytes do not match JPEG/PNG/WebP).
+  formatNotRecognized,
+
+  /// File format recognized but write failed (e.g., payload too large, XMP parse error).
+  formatUnsupported,
+
+  /// File contains C2PA content credentials; XMP embed skipped per policy.
+  c2paDetected,
+
+  /// Write failed for other reasons (I/O, XMP merge error, etc).
+  writeFailed,
+}
+
 /// Result of a metadata embed operation.
+/// 
+/// On success (success=true, errorCode=null), the file has been modified.
+/// On skip (success=true, errorCode=c2paDetected), the file was not modified.
+/// On failure (success=false, errorCode!=null), the file was not modified.
 class EmbedResult {
   final bool success;
-  final String? error;
-  final bool skippedC2pa;
+
+  /// Error classification; null on success.
+  final EmbedErrorCode? errorCode;
+
+  /// Human-readable error message (for logging/display).
+  /// Set on skip or failure; null on success.
+  final String? errorMessage;
 
   const EmbedResult({
     required this.success,
-    this.error,
-    this.skippedC2pa = false,
+    this.errorCode,
+    this.errorMessage,
   });
 
   factory EmbedResult.success() => const EmbedResult(success: true);
 
-  factory EmbedResult.skipped({String? reason}) => EmbedResult(
+  factory EmbedResult.skippedC2pa() => const EmbedResult(
     success: true,
-    skippedC2pa: reason == 'C2PA',
-    error: reason,
+    errorCode: EmbedErrorCode.c2paDetected,
+    errorMessage: 'C2PA content credentials detected',
   );
 
-  factory EmbedResult.failure(String error) => EmbedResult(
+  factory EmbedResult.failure({
+    required EmbedErrorCode code,
+    required String message,
+  }) => EmbedResult(
     success: false,
-    error: error,
+    errorCode: code,
+    errorMessage: message,
   );
+
+  /// Legacy: return true if this is a "format" error (for backfill classification).
+  bool get isFormatError =>
+      errorCode == EmbedErrorCode.formatNotRecognized ||
+      errorCode == EmbedErrorCode.formatUnsupported;
+
+  /// Legacy: return true if this is a C2PA skip.
+  bool get skippedC2pa => errorCode == EmbedErrorCode.c2paDetected;
 }
 
 /// Metadata service for reading, writing, and managing provenance metadata.
 class MetadataService {
-  /// Embed provenance metadata into a file.
-  /// Returns EmbedResult indicating success, skip (C2PA), or failure.
-  /// 
-  /// This method:
-  /// 1. Reads the file bytes
-  /// 2. Detects format
-  /// 3. Checks for C2PA signatures
-  /// 4. Reads existing XMP (if any)
-  /// 5. Merges with new provenance data
-  /// 6. Writes back to the file
-  /// 
-  /// Failures are logged but do not throw - the file save continues.
   static Future<EmbedResult> embedProvenance({
     required String filePath,
     required XmpProvenance provenance,
@@ -62,21 +89,27 @@ class MetadataService {
     try {
       final file = File(filePath);
       if (!await file.exists()) {
-        return EmbedResult.failure('File not found: $filePath');
+        return EmbedResult.failure(
+          code: EmbedErrorCode.fileNotFound,
+          message: 'File not found: $filePath',
+        );
       }
 
       final bytes = await file.readAsBytes();
       final format = _detectFormat(bytes);
 
       if (format == null) {
-        return EmbedResult.failure('Unknown file format (unrecognized magic bytes): $filePath');
+        return EmbedResult.failure(
+          code: EmbedErrorCode.formatNotRecognized,
+          message: 'Unknown file format: $filePath',
+        );
       }
 
       // Check for C2PA content credentials
       if (checkC2pa) {
         final c2paStatus = detectC2pa(bytes, format);
         if (c2paStatus == C2paStatus.detected) {
-          return EmbedResult.skipped(reason: 'C2PA');
+          return EmbedResult.skippedC2pa();
         }
       }
 
@@ -87,13 +120,19 @@ class MetadataService {
       // Write back
       final modified = _writeXmp(bytes, merged, format);
       if (modified == null) {
-        return EmbedResult.failure('Write failed (returned null) for format: $format');
+        return EmbedResult.failure(
+          code: EmbedErrorCode.formatUnsupported,
+          message: 'Write not supported for format: $format',
+        );
       }
 
       await file.writeAsBytes(modified);
       return EmbedResult.success();
     } catch (e) {
-      return EmbedResult.failure('$e');
+      return EmbedResult.failure(
+        code: EmbedErrorCode.writeFailed,
+        message: 'Write failed: $e',
+      );
     }
   }
 

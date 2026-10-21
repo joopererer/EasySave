@@ -322,7 +322,7 @@ void main() {
       );
 
       expect(result.success, isTrue);
-      expect(result.error, isNull);
+      expect(result.errorMessage, isNull);
 
       // Verify file was modified
       final written = await File(filePath).readAsBytes();
@@ -380,7 +380,7 @@ void main() {
       );
 
       expect(result.success, isFalse);
-      expect(result.error, contains('not found'));
+      expect(result.errorMessage, contains('not found'));
     });
 
     test('returns failure for unknown format', () async {
@@ -399,7 +399,7 @@ void main() {
       );
 
       expect(result.success, isFalse);
-      expect(result.error, contains('Unknown file format'));
+      expect(result.errorMessage, contains('Unknown file format'));
     });
 
     test('exception during write does not crash, returns failure', () async {
@@ -420,7 +420,7 @@ void main() {
       );
 
       expect(result.success, isFalse);
-      expect(result.error, isNotNull);
+      expect(result.errorMessage, isNotNull);
     });
 
     test('reads back embedded provenance', () async {
@@ -584,7 +584,7 @@ void main() {
       );
 
       expect(result.success, isTrue);
-      expect(result.error, isNull);
+      expect(result.errorMessage, isNull);
 
       final read = MetadataService.readProvenance(filePath);
       expect(read, isNotNull);

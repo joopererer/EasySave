@@ -284,41 +284,53 @@ class HistoryBackfillService {
         return _BackfillStatusResult(_BackfillStatus.success);
       }
 
-      // Categorize error
-      if (result.error?.contains('Permission denied') == true ||
-          result.error?.contains('denied') == true) {
-        // Try to request permission
-        final granted = await MediaDeleteService.instance.requestWriteAccess([
-          MediaRef(mediaId: asset.id, isImage: asset.type == AssetType.image),
-        ]);
+      // Categorize error by code
+      switch (result.errorCode) {
+        case EmbedErrorCode.formatNotRecognized:
+        case EmbedErrorCode.formatUnsupported:
+          DevLog.write(_logTag, 'Format not supported: ${asset.title} (${result.errorMessage})');
+          return _BackfillStatusResult(_BackfillStatus.formatNotSupported);
 
-        if (granted) {
-          // Retry write after permission granted
-          final retryResult = await MetadataService.embedProvenance(
-            filePath: item.filePath,
-            provenance: provenance,
-            checkC2pa: true,
-          );
+        case EmbedErrorCode.fileNotFound:
+          DevLog.write(_logTag, 'File not found: ${asset.title}');
+          return _BackfillStatusResult(_BackfillStatus.fileNotFound);
 
-          if (retryResult.success) {
-            await _updateAssetId(record, file, provenance.assetId);
-            DevLog.write(_logTag, 'Wrote provenance after auth: ${asset.title}');
-            return _BackfillStatusResult(_BackfillStatus.success);
+        case EmbedErrorCode.c2paDetected:
+          // C2PA is success=true, but treat as skip for backfill
+          DevLog.write(_logTag, 'Skipped C2PA: ${asset.title}');
+          return _BackfillStatusResult(_BackfillStatus.otherError);
+
+        case EmbedErrorCode.writeFailed:
+        default:
+          // Check if it's a permission error by inspecting the message
+          final msg = result.errorMessage ?? '';
+          if (msg.contains('Permission denied') || msg.contains('denied')) {
+            // Try to request permission
+            final granted = await MediaDeleteService.instance.requestWriteAccess([
+              MediaRef(mediaId: asset.id, isImage: asset.type == AssetType.image),
+            ]);
+
+            if (granted) {
+              // Retry write after permission granted
+              final retryResult = await MetadataService.embedProvenance(
+                filePath: item.filePath,
+                provenance: provenance,
+                checkC2pa: true,
+              );
+
+              if (retryResult.success) {
+                await _updateAssetId(record, file, provenance.assetId);
+                DevLog.write(_logTag, 'Wrote provenance after auth: ${asset.title}');
+                return _BackfillStatusResult(_BackfillStatus.success);
+              }
+            }
+
+            return _BackfillStatusResult(_BackfillStatus.authRequired);
           }
-        }
 
-        return _BackfillStatusResult(_BackfillStatus.authRequired);
+          DevLog.write(_logTag, 'Write failed for ${asset.title}: $msg');
+          return _BackfillStatusResult(_BackfillStatus.otherError);
       }
-
-      if (result.error?.contains('format') == true ||
-          result.error?.contains('Format') == true ||
-          result.error?.contains('unsupported') == true) {
-        DevLog.write(_logTag, 'Format not supported: ${asset.title}');
-        return _BackfillStatusResult(_BackfillStatus.formatNotSupported);
-      }
-
-      DevLog.write(_logTag, 'Write failed for ${asset.title}: ${result.error}');
-      return _BackfillStatusResult(_BackfillStatus.otherError);
     } catch (e) {
       DevLog.write(_logTag, 'Error writing provenance to ${asset.title}: $e');
       return _BackfillStatusResult(_BackfillStatus.otherError);
