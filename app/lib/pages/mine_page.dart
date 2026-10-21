@@ -361,6 +361,7 @@ class _MinePageState extends State<MinePage> with WidgetsBindingObserver {
         title: const Text('从相册重建历史'),
         content: const Text(
           '扫描相册中的图片，读取来源信息后重建历史记录。\n\n'
+          '会恢复相册中仍存在文件的帖子记录，包括之前删除过记录的帖子。\n\n'
           '此操作会合并或新建历史记录，不会删除现有数据。',
         ),
         actions: [

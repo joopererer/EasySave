@@ -20,18 +20,38 @@ class BackfillResult {
   final int total;
   final int success;
   final int authRequired;
-  final int skipped;
+  final int alreadyHasMetadata;
+  final int fileNotFound;
+  final int noWritePermission;
+  final int formatNotSupported;
+  final int otherError;
 
   const BackfillResult({
     required this.total,
     required this.success,
     required this.authRequired,
-    required this.skipped,
+    required this.alreadyHasMetadata,
+    required this.fileNotFound,
+    required this.noWritePermission,
+    required this.formatNotSupported,
+    required this.otherError,
   });
 
+  int get skipped => alreadyHasMetadata + fileNotFound + noWritePermission + formatNotSupported + otherError;
+
   @override
-  String toString() =>
-      '$success/$total written, $authRequired required permission, $skipped skipped';
+  String toString() {
+    final parts = <String>[
+      '$success/$total written',
+      if (authRequired > 0) '$authRequired required permission',
+      if (alreadyHasMetadata > 0) '$alreadyHasMetadata already had metadata',
+      if (fileNotFound > 0) '$fileNotFound file not found',
+      if (noWritePermission > 0) '$noWritePermission no write permission',
+      if (formatNotSupported > 0) '$formatNotSupported format not supported',
+      if (otherError > 0) '$otherError other errors',
+    ];
+    return parts.join(', ');
+  }
 }
 
 /// Service for backfilling provenance metadata to old files.
@@ -47,9 +67,10 @@ class HistoryBackfillService {
   /// Algorithm:
   /// 1. Query HistoryDb for records with files having status == found
   /// 2. For each file with linked mediaId:
-  ///    - Try to write metadata directly
+  ///    - Check if file already has XMP provenance (real check, not just assetId presence)
+  ///    - If not: try to write metadata directly
   ///    - If not writable, request permission via MediaStore.createWriteRequest
-  /// 3. Show result summary
+  /// 3. Show result summary with breakdown by skip reason
   Future<BackfillResult> backfill({
     void Function(int current, int total, String filename)? onProgress,
   }) async {
@@ -64,7 +85,11 @@ class HistoryBackfillService {
     var total = 0;
     var success = 0;
     var authRequired = 0;
-    var skipped = 0;
+    var alreadyHasMetadata = 0;
+    var fileNotFound = 0;
+    var noWritePermission = 0;
+    var formatNotSupported = 0;
+    var otherError = 0;
 
     // Collect all files needing backfill
     final filesToBackfill = <_BackfillItem>[];
@@ -73,16 +98,11 @@ class HistoryBackfillService {
       for (final file in record.files) {
         if (file.status != FileStatus.found || file.mediaId == null) continue;
 
-        // Skip if already has assetId (already has provenance)
-        if (file.assetId != null) {
-          skipped++;
-          continue;
-        }
-
         // Try to get the file path
         final asset = GalleryLocatorService.instance.getAssetById(file.mediaId);
         if (asset == null) {
-          skipped++;
+          fileNotFound++;
+          DevLog.write(_logTag, 'Asset not found for ${file.filename}');
           continue;
         }
 
@@ -90,19 +110,26 @@ class HistoryBackfillService {
         try {
           filePath = await asset.file;
         } catch (_) {
-          skipped++;
+          fileNotFound++;
           continue;
         }
 
         if (filePath == null || !await filePath.exists()) {
-          skipped++;
+          fileNotFound++;
           continue;
         }
 
-        // Check if file already has provenance metadata
-        final existing = MetadataService.readProvenance(filePath.path);
-        if (existing != null && existing.sourceUrl != null) {
-          skipped++;
+        // Check if file already has provenance metadata (real check)
+        try {
+          final existing = MetadataService.readProvenance(filePath.path);
+          if (existing != null && existing.sourceUrl != null) {
+            alreadyHasMetadata++;
+            DevLog.write(_logTag, 'Already has metadata: ${asset.title}');
+            continue;
+          }
+        } catch (e) {
+          otherError++;
+          DevLog.write(_logTag, 'Error reading provenance from ${asset.title}: $e');
           continue;
         }
 
@@ -129,12 +156,18 @@ class HistoryBackfillService {
         );
 
         final result = await _backfillFile(item);
-        if (result == _BackfillStatus.success) {
+        if (result.status == _BackfillStatus.success) {
           success++;
-        } else if (result == _BackfillStatus.authRequired) {
+        } else if (result.status == _BackfillStatus.authRequired) {
           authRequired++;
+        } else if (result.status == _BackfillStatus.fileNotFound) {
+          fileNotFound++;
+        } else if (result.status == _BackfillStatus.noWritePermission) {
+          noWritePermission++;
+        } else if (result.status == _BackfillStatus.formatNotSupported) {
+          formatNotSupported++;
         } else {
-          skipped++;
+          otherError++;
         }
       }
     }
@@ -143,20 +176,24 @@ class HistoryBackfillService {
       total: total,
       success: success,
       authRequired: authRequired,
-      skipped: skipped,
+      alreadyHasMetadata: alreadyHasMetadata,
+      fileNotFound: fileNotFound,
+      noWritePermission: noWritePermission,
+      formatNotSupported: formatNotSupported,
+      otherError: otherError,
     );
   }
 
-  Future<_BackfillStatus> _backfillFile(_BackfillItem item) async {
+  Future<_BackfillStatusResult> _backfillFile(_BackfillItem item) async {
     final record = item.record;
     final file = item.file;
     final asset = item.asset;
 
-    // Build provenance from history record
+    // Build provenance from history record, using savedAt from files_json as capturedAt
     final provenance = _buildProvenance(record, file, asset);
     if (provenance == null) {
       DevLog.write(_logTag, 'Failed to build provenance for ${asset.title}');
-      return _BackfillStatus.skipped;
+      return _BackfillStatusResult(_BackfillStatus.otherError);
     }
 
     // Try to write directly
@@ -171,9 +208,10 @@ class HistoryBackfillService {
         // Update assetId in HistoryDb
         await _updateAssetId(record, file, provenance.assetId);
         DevLog.write(_logTag, 'Wrote provenance to ${asset.title}');
-        return _BackfillStatus.success;
+        return _BackfillStatusResult(_BackfillStatus.success);
       }
 
+      // Categorize error
       if (result.error?.contains('Permission denied') == true ||
           result.error?.contains('denied') == true) {
         // Try to request permission
@@ -192,17 +230,26 @@ class HistoryBackfillService {
           if (retryResult.success) {
             await _updateAssetId(record, file, provenance.assetId);
             DevLog.write(_logTag, 'Wrote provenance after auth: ${asset.title}');
-            return _BackfillStatus.success;
+            return _BackfillStatusResult(_BackfillStatus.success);
           }
         }
 
-        return _BackfillStatus.authRequired;
+        return _BackfillStatusResult(_BackfillStatus.authRequired);
       }
+
+      if (result.error?.contains('format') == true ||
+          result.error?.contains('Format') == true ||
+          result.error?.contains('unsupported') == true) {
+        DevLog.write(_logTag, 'Format not supported: ${asset.title}');
+        return _BackfillStatusResult(_BackfillStatus.formatNotSupported);
+      }
+
+      DevLog.write(_logTag, 'Write failed for ${asset.title}: ${result.error}');
+      return _BackfillStatusResult(_BackfillStatus.otherError);
     } catch (e) {
       DevLog.write(_logTag, 'Error writing provenance to ${asset.title}: $e');
+      return _BackfillStatusResult(_BackfillStatus.otherError);
     }
-
-    return _BackfillStatus.skipped;
   }
 
   XmpProvenance? _buildProvenance(
@@ -237,6 +284,9 @@ class HistoryBackfillService {
     final itemCount = items.where((it) => it.type != 'video' || it.videoUrl != null).length;
     final itemIndex = file.itemIndex;
 
+    // Use savedAt from files_json as capturedAt (spec §7.2)
+    final capturedAt = DateTime.fromMillisecondsSinceEpoch(file.savedAt);
+
     return ProvenanceBuilder(
       platform: record.platform,
       postId: record.postId,
@@ -249,6 +299,7 @@ class HistoryBackfillService {
       itemIndex: itemIndex,
       itemCount: itemCount > 1 ? itemCount : 1,
       existingAssetId: file.assetId,
+      capturedAt: capturedAt,
     ).build();
   }
 
@@ -273,7 +324,16 @@ class HistoryBackfillService {
 enum _BackfillStatus {
   success,
   authRequired,
-  skipped,
+  fileNotFound,
+  noWritePermission,
+  formatNotSupported,
+  otherError,
+}
+
+class _BackfillStatusResult {
+  final _BackfillStatus status;
+
+  _BackfillStatusResult(this.status);
 }
 
 class _BackfillItem {

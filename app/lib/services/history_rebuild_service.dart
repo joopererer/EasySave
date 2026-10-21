@@ -30,7 +30,7 @@ class RebuildResult {
 
   @override
   String toString() =>
-      '$processed/$total processed, $created new, $merged merged, $skipped skipped';
+      '$processed/$total processed, $created new, $merged merged (including recovered), $skipped skipped';
 }
 
 /// Service for rebuilding history from gallery files.

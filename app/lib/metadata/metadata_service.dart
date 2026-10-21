@@ -199,6 +199,10 @@ class ProvenanceBuilder {
   final int itemCount;
   final String? existingAssetId;
 
+  /// Original save time. When null, the current time is used (fresh download).
+  /// Backfill passes the savedAt recorded in files_json.
+  final DateTime? capturedAt;
+
   ProvenanceBuilder({
     required this.platform,
     required this.postId,
@@ -211,6 +215,7 @@ class ProvenanceBuilder {
     required this.itemIndex,
     required this.itemCount,
     this.existingAssetId,
+    this.capturedAt,
   });
 
   /// Build XmpProvenance for embedding.
@@ -221,7 +226,7 @@ class ProvenanceBuilder {
     return XmpProvenance(
       schema: '0.1',
       assetId: existingAssetId ?? _generateAssetId(),
-      capturedAt: now,
+      capturedAt: capturedAt ?? now,
       capturedBy: 'EasySave/1.7.0',
       metadataDate: now,
       sourceUrl: _normalizeUrl(postUrl, this.platform),

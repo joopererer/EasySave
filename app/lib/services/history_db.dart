@@ -172,6 +172,7 @@ class HistoryRecord {
     required this.createdAt,
     this.itemsJson,
     List<HistoryFile>? files,
+    this.isDeleted = false,
   }) : files = files ?? const [];
 
   final int? id;
@@ -189,6 +190,10 @@ class HistoryRecord {
   final String? itemsJson;
 
   final List<HistoryFile> files;
+
+  /// Soft delete flag. When true, record is hidden from UI but files remain in gallery
+  /// and can be restored on rebuild. See spec/metadata.md §7.1.
+  final bool isDeleted;
 
   /// Rebuild the parsed post from the stored `items_json`. Shared by the
   /// history cards and the preview page so both decode identically. Falls back
@@ -246,6 +251,7 @@ class HistoryRecord {
     'created_at': createdAt.millisecondsSinceEpoch,
     'items_json': itemsJson,
     'files_json': jsonEncode([for (final f in files) f.toMap()]),
+    'is_deleted': isDeleted ? 1 : 0,
   };
 
   static HistoryRecord fromMap(Map<String, Object?> map) {
@@ -256,6 +262,7 @@ class HistoryRecord {
     );
     final itemsJson = map['items_json'] as String?;
     final filesJsonStr = map['files_json'] as String?;
+    final isDeleted = ((map['is_deleted'] as num?)?.toInt() ?? 0) != 0;
 
     List<HistoryFile> resolvedFiles = [];
     if (filesJsonStr != null && filesJsonStr.isNotEmpty) {
@@ -290,6 +297,7 @@ class HistoryRecord {
       createdAt: createdAt,
       itemsJson: itemsJson,
       files: resolvedFiles,
+      isDeleted: isDeleted,
     );
   }
 }
@@ -312,7 +320,7 @@ class HistoryDb {
     final path = dbPath ?? '${await getDatabasesPath()}/easysave_history.db';
     final db = await openDatabase(
       path,
-      version: 2,
+      version: 3,
       // Two engines (main UI isolate + background isolate) can hold a
       // connection to the same file. WAL lets readers work while a writer is
       // active, and busy_timeout makes a writer wait for the lock instead of
@@ -332,7 +340,8 @@ class HistoryDb {
         'file_count INTEGER NOT NULL,'
         'created_at INTEGER NOT NULL,'
         'items_json TEXT,'
-        'files_json TEXT)',
+        'files_json TEXT,'
+        'is_deleted INTEGER DEFAULT 0)',
       ),
       onUpgrade: (db, oldVersion, newVersion) async {
         if (oldVersion < 2) {
@@ -361,6 +370,9 @@ class HistoryDb {
               whereArgs: [id],
             );
           }
+        }
+        if (oldVersion < 3) {
+          await db.execute('ALTER TABLE history_records ADD COLUMN is_deleted INTEGER DEFAULT 0');
         }
         // Future migrations go here
       },
@@ -437,6 +449,8 @@ class HistoryDb {
         createdAt: DateTime.now(),
         itemsJson: record.itemsJson ?? existing.itemsJson,
         files: mergedFiles,
+        // Restore deleted records during rebuild
+        isDeleted: false,
       );
         await txn.update(
           'history_records',
@@ -503,6 +517,7 @@ class HistoryDb {
   Future<List<HistoryRecord>> recent({int limit = 50}) async {
     final rows = await _db.query(
       'history_records',
+      where: 'is_deleted = 0',
       orderBy: 'created_at DESC',
       limit: limit,
     );
@@ -510,6 +525,17 @@ class HistoryDb {
   }
 
   Future<void> delete(int id) async {
+    // Soft delete: mark as deleted instead of removing
+    await _db.update(
+      'history_records',
+      {'is_deleted': 1},
+      where: 'id = ?',
+      whereArgs: [id],
+    );
+  }
+
+  Future<void> permanentlyDelete(int id) async {
+    // Hard delete only used for testing or cleanup
     await _db.delete('history_records', where: 'id = ?', whereArgs: [id]);
   }
 
