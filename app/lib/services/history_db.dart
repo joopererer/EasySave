@@ -309,20 +309,40 @@ class HistoryDb {
   final Database _db;
   static HistoryDb? _instance;
 
-  /// Task 3: notify listeners when history data changes (delete, clear, reinsert, upsert, rebuild)
+  /// Listeners are notified by the write methods themselves (never by their
+  /// callers), so a new caller — a new delete gesture, a rebuild, the
+  /// background isolate — cannot forget to refresh the UI.
   final _listeners = <VoidCallback>[];
 
   void addListener(VoidCallback listener) {
     _listeners.add(listener);
+    DevLog.write('HIST', 'listener added, now ${_listeners.length}'); // i18n:ignore 日志
   }
 
   void removeListener(VoidCallback listener) {
     _listeners.remove(listener);
+    DevLog.write('HIST', 'listener removed, now ${_listeners.length}'); // i18n:ignore 日志
   }
 
-  void notifyChanged() {
-    for (final listener in _listeners) {
-      listener();
+  /// Notify every listener that history data changed.
+  ///
+  /// [reason] ends up in the device log so a bug report shows which mutation
+  /// ran and how many rows it touched. One failing listener must not stop the
+  /// others, so each call is guarded.
+  void notifyChanged([String reason = 'mutation']) {
+    if (_listeners.isEmpty) {
+      DevLog.write('HIST', 'notify ($reason) but no listeners attached', // i18n:ignore 日志
+          level: DevLogLevel.warn);
+      return;
+    }
+    DevLog.write('HIST', 'notify ($reason) -> ${_listeners.length} listener(s)'); // i18n:ignore 日志
+    for (final listener in List<VoidCallback>.of(_listeners)) {
+      try {
+        listener();
+      } catch (e) {
+        DevLog.write('HIST', 'listener threw: $e', // i18n:ignore 日志
+            level: DevLogLevel.warn);
+      }
     }
   }
 
@@ -490,11 +510,11 @@ class HistoryDb {
         conflictAlgorithm: ConflictAlgorithm.replace,
       );
     });
-    notifyChanged();
+    notifyChanged('upsert post=${record.postId}');
   }
 
   Future<void> updateFiles(int id, List<HistoryFile> files) async {
-    await _db.update(
+    final rows = await _db.update(
       'history_records',
       {
         'files_json': jsonEncode([for (final f in files) f.toMap()]),
@@ -502,6 +522,7 @@ class HistoryDb {
       where: 'id = ?',
       whereArgs: [id],
     );
+    notifyChanged('updateFiles id=$id rows=$rows');
   }
 
   Future<HistoryRecord?> getByPostUrl(String postUrl) async =>
@@ -549,38 +570,41 @@ class HistoryDb {
   }
 
   Future<void> delete(int id) async {
-    // Soft delete: mark as deleted instead of removing
-    await _db.update(
+    // Soft delete: mark as deleted instead of removing. The row count is logged
+    // because a caller passing an id that does not exist silently changes
+    // nothing — that used to look like "the list did not refresh".
+    final rows = await _db.update(
       'history_records',
       {'is_deleted': 1},
       where: 'id = ?',
       whereArgs: [id],
     );
-    notifyChanged();
+    notifyChanged('delete id=$id rows=$rows');
   }
 
   Future<void> permanentlyDelete(int id) async {
     // Hard delete only used for testing or cleanup
-    await _db.delete('history_records', where: 'id = ?', whereArgs: [id]);
-    notifyChanged();
+    final rows =
+        await _db.delete('history_records', where: 'id = ?', whereArgs: [id]);
+    notifyChanged('permanentlyDelete id=$id rows=$rows');
   }
 
   Future<void> clear() async {
-    await _db.delete('history_records');
-    notifyChanged();
+    final rows = await _db.delete('history_records');
+    notifyChanged('clear rows=$rows');
   }
 
   Future<void> reinsert(HistoryRecord record) async {
     // Undo of a delete: the record must come back visible, so the soft-delete
     // flag is always cleared regardless of what the passed record carries.
-    await _db.insert(
+    final id = await _db.insert(
       'history_records',
       record.toMap()
         ..remove('id')
         ..['is_deleted'] = 0,
       conflictAlgorithm: ConflictAlgorithm.replace,
     );
-    notifyChanged();
+    notifyChanged('reinsert post=${record.postId} id=$id');
   }
 }
 

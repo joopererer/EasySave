@@ -11,6 +11,7 @@ import 'package:photo_manager_image_provider/photo_manager_image_provider.dart';
 import 'package:receive_sharing_intent/receive_sharing_intent.dart';
 
 import '../core/error_copy.dart';
+import '../core/dev_log.dart';
 import '../core/models.dart';
 import '../services/auth.dart';
 import '../services/clipboard_guard.dart';
@@ -148,6 +149,7 @@ class ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
       _recent = records;
       _recentAll = all;
     });
+    DevLog.write('HIST', 'recent refreshed shown=${records.length} known=${all.length}'); // i18n:ignore 日志
   }
 
   Future<void> _reloadRecent() async {

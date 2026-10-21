@@ -362,4 +362,120 @@ void main() {
       expect(notifyCount, 4);
     });
   });
+
+  // ---------------------------------------------------------------------
+  // Task 3 fix (v1.7): every way of deleting from the history page must
+  // reach a listener. The page itself never notifies — it only calls the
+  // HistoryDb methods exercised below — so these are the paths that matter:
+  //   swipe to delete  -> _deleteRecords([record])   -> delete(id) per row
+  //   multi select     -> _deleteRecords(records)    -> delete(id) per row
+  //   delete with files-> MediaDeleteService + the same delete(id) loop
+  //   clear all        -> db.clear()
+  // ---------------------------------------------------------------------
+  group('Every delete path notifies listeners', () {
+    Future<HistoryRecord> addRecord(String postId) async {
+      await db.upsert(
+        HistoryRecord(
+          platform: 'xhs',
+          postId: postId,
+          postUrl: 'https://example.com/$postId',
+          fileCount: 1,
+          createdAt: DateTime.now(),
+          files: [HistoryFile(filename: '$postId.jpg', savedAt: 0)],
+        ),
+      );
+      return (await db.getByPostId(postId))!;
+    }
+
+    test('swipe delete (single record) notifies', () async {
+      var notified = 0;
+      db.addListener(() => notified++);
+
+      final record = await addRecord('swipe_1');
+      notified = 0;
+
+      await db.delete(record.id!);
+
+      expect(notified, 1);
+      expect(await db.recent(), isEmpty);
+    });
+
+    test('multi-select delete notifies once per record and empties the list',
+        () async {
+      final records = [
+        await addRecord('multi_1'),
+        await addRecord('multi_2'),
+        await addRecord('multi_3'),
+      ];
+
+      var notified = 0;
+      db.addListener(() => notified++);
+
+      for (final record in records) {
+        await db.delete(record.id!);
+      }
+
+      expect(notified, records.length);
+      expect(await db.recent(), isEmpty);
+    });
+
+    test('delete with album files still notifies', () async {
+      final record = await addRecord('with_files');
+      var notified = 0;
+      db.addListener(() => notified++);
+
+      // MediaDeleteService runs before the record deletion; the record write
+      // is the same call as the plain delete path.
+      await db.delete(record.id!);
+
+      expect(notified, 1);
+      expect(await db.recent(), isEmpty);
+    });
+
+    test('clear all notifies', () async {
+      await addRecord('clear_1');
+      await addRecord('clear_2');
+      var notified = 0;
+      db.addListener(() => notified++);
+
+      await db.clear();
+
+      expect(notified, 1);
+      expect(await db.recent(), isEmpty);
+    });
+
+    test('permanentlyDelete notifies', () async {
+      final record = await addRecord('perm_1');
+      var notified = 0;
+      db.addListener(() => notified++);
+
+      await db.permanentlyDelete(record.id!);
+
+      expect(notified, 1);
+      expect(await db.getByPostId('perm_1'), isNull);
+    });
+
+    test('updateFiles notifies (status refresh path)', () async {
+      final record = await addRecord('status_1');
+      var notified = 0;
+      db.addListener(() => notified++);
+
+      await db.updateFiles(record.id!, [
+        HistoryFile(filename: 'status_1.jpg', savedAt: 0, status: FileStatus.found),
+      ]);
+
+      expect(notified, 1);
+    });
+
+    test('a throwing listener does not block the others', () async {
+      final record = await addRecord('isolated');
+      var reached = 0;
+      db.addListener(() => throw StateError('boom'));
+      db.addListener(() => reached++);
+
+      await db.delete(record.id!);
+
+      expect(reached, 1);
+    });
+  });
 }
