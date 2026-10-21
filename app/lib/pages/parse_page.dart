@@ -13,6 +13,7 @@ import 'package:receive_sharing_intent/receive_sharing_intent.dart';
 import '../core/error_copy.dart';
 import '../core/models.dart';
 import '../services/auth.dart';
+import '../services/clipboard_guard.dart';
 import '../services/gallery_locator_service.dart';
 import '../services/history_db.dart';
 import '../services/host_bridge.dart';
@@ -46,6 +47,9 @@ class ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
   String? _errorCode;
   String? _errorMessage;
   String _lastLink = '';
+
+  /// Clipboard key of the link opened by an external entry (bubble).
+  String? _externalLink;
   String _currentLink = '';
   String _appVersion = '';
   List<HistoryRecord> _recent = [];
@@ -280,55 +284,42 @@ class ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
     );
   }
 
-  /// Best-effort post identity for a link: the XHS 24-hex note id, an
-  /// Instagram shortcode or an X status id.
-  String? _postIdOf(String url) {
-    final uri = Uri.tryParse(url.trim());
-    if (uri == null) return null;
-    final hex = RegExp(r'[0-9a-fA-F]{24}').firstMatch(uri.path)?.group(0);
-    if (hex != null) return hex.toLowerCase();
-    final segs = uri.pathSegments;
-    for (var i = 0; i + 1 < segs.length; i++) {
-      final s = segs[i];
-      if (s == 'p' || s == 'reel' || s == 'tv' || s == 'status') {
-        return segs[i + 1].toLowerCase();
-      }
-    }
-    return null;
-  }
+  Iterable<KnownPost> get _knownPosts =>
+      _recentAll.map((r) => (postUrl: r.postUrl, postId: r.postId));
 
   /// True when this link was already downloaded (e.g. through the floating
   /// bubble). Matching is done by post id, so a short link (xhslink) still
   /// matches the record stored under its canonical url.
   Future<bool> _alreadyDownloaded(String link) async {
-    String norm(String u) {
-      try {
-        final uri = Uri.parse(u.trim());
-        final host = uri.host.replaceFirst('www.', '');
-        return '$host${uri.path}'.replaceAll(RegExp(r'/+$'), '');
-      } catch (_) {
-        return u.trim();
-      }
+    if (isLinkKnown(link, _knownPosts)) return true;
+    if (postIdOfUrl(link) != null) return false;
+    // Short link: resolve it once so the note id can be extracted.
+    try {
+      return isLinkKnown(
+        link,
+        _knownPosts,
+        resolvedUrl: await resolveShortLink(link),
+      );
+    } catch (_) {
+      return false;
     }
+  }
 
-    final normLink = norm(link);
-    if (_recentAll.any((r) => norm(r.postUrl) == normLink)) return true;
-    var id = _postIdOf(link);
-    if (id == null) {
-      // Short link: resolve it once so the note id can be extracted.
-      try {
-        id = _postIdOf(await resolveShortLink(link));
-      } catch (_) {
-        id = null;
-      }
+  /// Clear leftovers in the input box: when every link in it is already in
+  /// the recent history (downloaded earlier, e.g. through the bubble), the
+  /// text is stale. Never touches the box while a parse runs or an error for
+  /// it is on screen.
+  void _clearStaleInput() {
+    if (_busy || _errorCode != null) return;
+    final text = _linkController.text;
+    if (text.trim().isEmpty) return;
+    if (inputIsStale(text, (l) => isLinkKnown(l, _knownPosts))) {
+      _linkController.clear();
     }
-    if (id == null) return false;
-    return _recentAll.any(
-      (r) => r.postId.toLowerCase() == id || _postIdOf(r.postUrl) == id,
-    );
   }
 
   Future<void> _checkClipboard() async {
+    _clearStaleInput();
     final settings = await AppSettings.load();
     if (!settings.autoClipboard || !mounted) return;
     final data = await Clipboard.getData(Clipboard.kTextPlain);
@@ -398,7 +389,9 @@ class ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
     // nag again.
     if (link == _linkController.text.trim()) return;
     if (await _alreadyDownloaded(link)) return;
-    if (!mounted) return;
+    // An external entry (bubble) may have claimed this link, or started a
+    // parse, while the history lookup was awaiting.
+    if (!mounted || _busy || _externalLink == link) return;
     final go = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
@@ -539,6 +532,14 @@ class ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
   /// Parse + open the given url (e.g. the bubble's "打开 EasySave").
   void showExternalUrl(String url) {
     if (url.trim().isEmpty) return;
+    // Claim the clipboard key synchronously: the app is resuming at the same
+    // moment and its clipboard check would otherwise prompt for the very
+    // link we are about to open.
+    final key = clipboardKeyOf(url);
+    if (key != null) {
+      _lastLink = key;
+      _externalLink = key;
+    }
     _handleLinks(url);
   }
 
@@ -852,10 +853,8 @@ class ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
       ScaffoldMessenger.of(context).hideCurrentSnackBar();
       Navigator.of(context).push(
         MaterialPageRoute<void>(
-          builder: (_) => PreviewPage(
-            post: outcome.data,
-            rawImages: outcome.rawImages,
-          ),
+          builder: (_) =>
+              PreviewPage(post: outcome.data, rawImages: outcome.rawImages),
         ),
       );
       _reloadRecent();
@@ -901,9 +900,7 @@ class ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
           // Not a login problem: the share link lost its `xsec_token` (or it
           // expired), so XHS can't serve the note again.
           ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('已使用本地记录打开预览（重新解析需重新粘贴分享链接）'),
-            ),
+            const SnackBar(content: Text('已使用本地记录打开预览（重新解析需重新粘贴分享链接）')),
           );
         }
         return;
@@ -933,9 +930,9 @@ class ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
       }
 
       final msg = e is ParseFailure ? e.message : '$e';
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('解析失败：$msg')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('解析失败：$msg')));
     }
   }
 
@@ -967,7 +964,8 @@ class ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
       AssetEntity? asset;
       FileStatus status = FileStatus.unknown;
       if (matchedFile != null) {
-        asset = locator.getAssetById(matchedFile.mediaId) ??
+        asset =
+            locator.getAssetById(matchedFile.mediaId) ??
             locator.locateAsset(matchedFile, record.postId);
         status = matchedFile.status;
       }
@@ -1024,7 +1022,8 @@ class ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
 
     AssetEntity? asset;
     for (final f in record.files) {
-      asset = locator.getAssetById(f.mediaId) ??
+      asset =
+          locator.getAssetById(f.mediaId) ??
           locator.locateAsset(f, record.postId);
       if (asset != null) break;
     }
@@ -1053,7 +1052,8 @@ class ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
       return const ShimmerBox(width: 48, height: 48);
     }
 
-    final allNotFound = record.files.isNotEmpty &&
+    final allNotFound =
+        record.files.isNotEmpty &&
         record.files.every((f) => f.status == FileStatus.notFound);
 
     if (locator.isFullyAuthorized && allNotFound) {
