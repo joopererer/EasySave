@@ -229,7 +229,11 @@ class ProvenanceBuilder {
       sourceId: postId,
       itemIndex: itemCount > 1 ? itemIndex : null,
       itemCount: itemCount > 1 ? itemCount : null,
-      authorId: authorId,
+      // For X platform, author.id is the username (e.g., n8_AIart) which is not
+      // a stable numeric ID per the spec. Only write authorId if it looks like
+      // a numeric ID or is provided by non-X platforms. X platform may have
+      // numeric IDs in future if the parser provides them.
+      authorId: _shouldWriteAuthorId(platform, authorId) ? authorId : null,
       publishedAt: publishedAt,
       title: title,
       creators: authorName != null ? [authorName!] : null,
@@ -253,40 +257,26 @@ class ProvenanceBuilder {
 
   /// Normalize URL per SPEC §5 using the url_normalizer package.
   static String _normalizeUrl(String url, String platform) {
-    // Convert app platform identifier to spec platform name for normalization
-    final specPlatform = toSpecPlatform(platform);
-    
-    // First normalize the URL using the shared normalizer (handles tracking params, etc.)
-    var normalized = normalizeUrl(url);
-    
-    // Apply platform-specific normalization to get canonical form
-    // The normalizeUrl function handles most cases, but we need to ensure
-    // the output matches SPEC §5 exactly for xiaohongshu and x
-    if (specPlatform == 'xiaohongshu') {
-      // Extract noteId from various URL formats and produce canonical form
-      // normalizeUrl already does this, but we verify here
-      final match = RegExp(r'/explore/([a-f0-9]+)').firstMatch(normalized);
-      if (match != null) {
-        return 'https://www.xiaohongshu.com/explore/${match.group(1)}';
-      }
-      // Also check for /discovery/item/{id}
-      final discoveryMatch = RegExp(r'/discovery/item/([a-f0-9]+)').firstMatch(normalized);
-      if (discoveryMatch != null) {
-        return 'https://www.xiaohongshu.com/explore/${discoveryMatch.group(1)}';
-      }
-    } else if (specPlatform == 'x') {
-      // Ensure X URLs use the canonical /i/status/{id} form
-      final match = RegExp(r'x\.com/[^/]+/status/(\d+)').firstMatch(normalized);
-      if (match != null) {
-        return 'https://x.com/i/status/${match.group(1)}';
-      }
-      // Already in canonical form?
-      if (normalized.contains('x.com/i/status/')) {
-        return normalized;
-      }
-    }
+    // Delegate to the shared url_normalizer for all normalization
+    return normalizeUrl(url);
+  }
 
-    return normalized;
+  /// Decide whether to write authorId based on platform and the ID value.
+  /// 
+  /// Per spec, prov:authorId should be a stable numeric user ID. X platform
+  /// currently provides usernames (e.g., n8_AIart) instead of numeric IDs.
+  /// We only write authorId when:
+  /// 1. It's provided (not null/empty), AND
+  /// 2. Either the platform is NOT X, OR the ID is purely numeric (future-proofing)
+  /// 
+  /// This is documented as a known limitation in v1.7.md.
+  static bool _shouldWriteAuthorId(String platform, String? authorId) {
+    if (authorId == null || authorId.isEmpty) return false;
+    // For non-X platforms, always write (they provide stable IDs)
+    if (platform != 'x') return true;
+    // For X platform, only write if it's a numeric ID
+    // (currently X parser provides username, so this will be null in most cases)
+    return RegExp(r'^\d+$').hasMatch(authorId);
   }
 
   /// Get display name for platform (app internal identifier).

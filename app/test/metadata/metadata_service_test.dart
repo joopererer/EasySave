@@ -200,7 +200,7 @@ void main() {
       expect(xmp.description, endsWith('…'));
     });
 
-    test('itemIndex values match input', () {
+    test('itemIndex values match input (1-based)', () {
       final indices = [1, 3, 7];
 
       for (final idx in indices) {
@@ -213,8 +213,40 @@ void main() {
         );
 
         final xmp = builder.build();
-        expect(xmp.itemIndex, idx, reason: 'itemIndex should be $idx');
+        expect(xmp.itemIndex, idx, reason: 'itemIndex should be $idx (1-based per spec)');
       }
+    });
+
+    test('X platform skips non-numeric authorId', () {
+      final builder = ProvenanceBuilder(
+        platform: 'x',
+        postId: 'abc123',
+        postUrl: 'https://x.com/i/status/abc123',
+        authorId: 'n8_AIart', // Username, not a stable numeric ID
+        authorName: 'X User',
+        itemIndex: 1,
+        itemCount: 1,
+      );
+
+      final xmp = builder.build();
+      expect(xmp.authorId, isNull, reason: 'X username should not be written as authorId');
+      expect(xmp.creators, ['X User']); // creator still written
+    });
+
+    test('numeric authorId is preserved for X platform', () {
+      // Even for X, if the parser provides a numeric ID (future-proofing), write it
+      final builder = ProvenanceBuilder(
+        platform: 'x',
+        postId: 'abc123',
+        postUrl: 'https://x.com/i/status/abc123',
+        authorId: '1234567890', // Numeric user ID from parser
+        authorName: 'X User',
+        itemIndex: 1,
+        itemCount: 1,
+      );
+
+      final xmp = builder.build();
+      expect(xmp.authorId, '1234567890');
     });
 
     test('publishedAt output includes timezone', () {

@@ -274,7 +274,7 @@ List<PlannedFile> planFiles(
           urls: imageUrls,
           filename: '${nameFor(base, seq, 'jpg')}.jpg',
           isImage: true,
-          itemIndex: index,
+          itemIndex: index + 1, // 1-based position in original post
         ),
       );
       planned.add(
@@ -283,7 +283,7 @@ List<PlannedFile> planFiles(
           urls: [item.videoUrl!],
           filename: '${nameFor(base, seq, 'mp4')}.mp4',
           isImage: false,
-          itemIndex: index,
+          itemIndex: index + 1, // 1-based position in original post
         ),
       );
     } else if (item.type == 'video') {
@@ -295,7 +295,7 @@ List<PlannedFile> planFiles(
           urls: item.videoUrl != null ? [url, ...imageUrls] : imageUrls,
           filename: '${nameFor(label, seq, 'mp4')}.mp4',
           isImage: false,
-          itemIndex: index,
+          itemIndex: index + 1, // 1-based position in original post
         ),
       );
     } else {
@@ -306,7 +306,7 @@ List<PlannedFile> planFiles(
           urls: imageUrls,
           filename: '${nameFor(label, seq, 'jpg')}.jpg',
           isImage: true,
-          itemIndex: index,
+          itemIndex: index + 1, // 1-based position in original post
         ),
       );
     }

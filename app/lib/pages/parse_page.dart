@@ -443,6 +443,8 @@ class ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
       // Extract single link and resolve directly (shows loading state)
       final links = extractLinks(text);
       if (links.length == 1) {
+        // Show feedback that download is starting
+        _showDownloadStartedSnackBar(1);
         await _resolve(links.first);
         _reloadRecent();
       } else {
@@ -484,6 +486,8 @@ class ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
             MaterialPageRoute<void>(builder: (_) => BatchPage(links: links)),
           );
           _reloadRecent();
+        } else if (go == false && mounted) {
+          // User cancelled - no action needed
         }
       }
     } finally {
@@ -512,6 +516,24 @@ class ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
       final platform = platformFromUrl(url);
       if (platform != null) LoginExpiredBus.markExpired(platform);
     }
+  }
+
+  /// Show a snackbar indicating download has started.
+  void _showDownloadStartedSnackBar(int count) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('已开始下载 $count 个文件'),
+        duration: const Duration(seconds: 3),
+        action: SnackBarAction(
+          label: '查看',
+          onPressed: () {
+            // Navigate to history tab - this is handled by the parent shell
+            widget.onSeeAll?.call();
+          },
+        ),
+      ),
+    );
   }
 
   /// Parse + open the given url (e.g. the bubble's "打开 EasySave").

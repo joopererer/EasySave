@@ -55,7 +55,7 @@ void main() {
         postId: 'abc123',
         postUrl: 'https://www.xiaohongshu.com/explore/abc123',
         authorName: '测试用户',
-        itemIndex: 0,
+        itemIndex: 1, // 1-based
         itemCount: 1,
       );
 
@@ -70,7 +70,7 @@ void main() {
         postId: 'abc123',
         postUrl: 'https://www.xiaohongshu.com/explore/abc123',
         authorName: '测试用户',
-        itemIndex: 0,
+        itemIndex: 1, // 1-based
         itemCount: 1,
       );
 
@@ -85,7 +85,7 @@ void main() {
         postId: 'abc123',
         postUrl: 'https://www.instagram.com/p/abc123',
         authorName: 'Test User',
-        itemIndex: 0,
+        itemIndex: 1, // 1-based
         itemCount: 1,
       );
 
@@ -100,7 +100,7 @@ void main() {
         postId: '1234567890',
         postUrl: 'https://x.com/user/status/1234567890',
         authorName: 'X User',
-        itemIndex: 0,
+        itemIndex: 1, // 1-based
         itemCount: 1,
       );
 
@@ -116,7 +116,7 @@ void main() {
         platform: 'xhs',
         postId: 'abc123',
         postUrl: 'https://www.xiaohongshu.com/discovery/item/abc123?type=normal',
-        itemIndex: 0,
+        itemIndex: 1, // 1-based
         itemCount: 1,
       );
 
@@ -130,7 +130,7 @@ void main() {
         platform: 'x',
         postId: '1234567890',
         postUrl: 'https://x.com/username/status/1234567890',
-        itemIndex: 0,
+        itemIndex: 1, // 1-based
         itemCount: 1,
       );
 
@@ -144,7 +144,7 @@ void main() {
         platform: 'xhs',
         postId: 'abc123',
         postUrl: 'https://www.xiaohongshu.com/explore/abc123?utm_source=test&fbclid=abc&igsh=xyz',
-        itemIndex: 0,
+        itemIndex: 1, // 1-based
         itemCount: 1,
       );
 
@@ -211,13 +211,13 @@ void main() {
   });
 
   group('ProvenanceBuilder with authorId and publishedAt', () {
-    test('authorId is passed through to XmpProvenance', () {
+    test('authorId is passed through to XmpProvenance for non-X platforms', () {
       final builder = ProvenanceBuilder(
         platform: 'xhs',
         postId: 'abc123',
         postUrl: 'https://www.xiaohongshu.com/explore/abc123',
         authorId: 'author123',
-        itemIndex: 0,
+        itemIndex: 1, // 1-based
         itemCount: 1,
       );
 
@@ -233,7 +233,7 @@ void main() {
         postId: 'abc123',
         postUrl: 'https://www.xiaohongshu.com/explore/abc123',
         publishedAt: publishedAt,
-        itemIndex: 0,
+        itemIndex: 1, // 1-based
         itemCount: 1,
       );
 
@@ -249,7 +249,7 @@ void main() {
         postId: 'abc123',
         postUrl: 'https://www.xiaohongshu.com/explore/abc123',
         publishedAt: publishedAt,
-        itemIndex: 0,
+        itemIndex: 1, // 1-based
         itemCount: 1,
       );
 
@@ -257,6 +257,21 @@ void main() {
       final json = xmp.toXmpJson();
 
       expect(json['prov:publishedAt'], matches(RegExp(r'2026-10-20T10:30:45[+-]\d{2}:\d{2}')));
+    });
+
+    test('X platform skips non-numeric authorId (username)', () {
+      final builder = ProvenanceBuilder(
+        platform: 'x',
+        postId: '123',
+        postUrl: 'https://x.com/i/status/123',
+        authorId: 'n8_AIart', // Username, not stable ID
+        itemIndex: 1, // 1-based
+        itemCount: 1,
+      );
+
+      final xmp = builder.build();
+
+      expect(xmp.authorId, isNull, reason: 'X username should not be written as authorId');
     });
   });
 }
