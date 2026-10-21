@@ -362,6 +362,78 @@ XmpProvenance provenanceForBatchItem(
   ).build();
 }
 
+/// Extracts the first image from the itemsJson of a batch for the thumbnail.
+String? _thumbnailFor(DownloadBatch batch) {
+  if (batch.itemsJson == null) return null;
+  try {
+    final decoded = jsonDecode(batch.itemsJson!) as List;
+    String? firstImage;
+    for (final raw in decoded) {
+      final map = (raw as Map).cast<String, Object?>();
+      if (map['type'] == 'video' && map['posterUrl'] is String) {
+        return map['posterUrl'] as String;
+      }
+      if (map['type'] == 'image' && firstImage == null) {
+        firstImage = map['url'] as String?;
+      }
+    }
+    return firstImage;
+  } catch (_) {
+    return null;
+  }
+}
+
+/// Write the history record for a finished batch.
+///
+/// When [recovered] is true (startup/foreground reconcile), this is a resumed
+/// batch that was interrupted, so the deletion state should NOT be restored
+/// (restoreDeleted: false). When false (live update from a user-initiated
+/// download), the history write may restore soft-deleted records.
+Future<void> writeBatchHistory(
+  HistoryDb db,
+  DownloadBatch batch, {
+  required bool recovered,
+}) async {
+  final thumb = _thumbnailFor(batch);
+  final files = [
+    for (final job in batch.jobs)
+      if (job.saved && job.state == JobState.done)
+        HistoryFile(
+          // Prefer the real on-disk title (system may rename on clash),
+          // and pin the MediaStore id so the file is found by id later.
+          filename: (job.savedTitle?.isNotEmpty == true)
+              ? job.savedTitle!
+              : job.filename,
+          savedAt: DateTime.now().millisecondsSinceEpoch,
+          mediaId: job.mediaId,
+          itemIndex: job.itemIndex,
+          isImage: job.isImage,
+          assetId: job.assetId,
+          status: job.mediaId != null
+              ? FileStatus.found
+              : FileStatus.unknown,
+        ),
+  ];
+  await db.upsert(
+    HistoryRecord(
+      platform: batch.platform,
+      postId: batch.postId,
+      authorName: batch.authorName,
+      title: batch.title,
+      caption: batch.caption,
+      thumbnailUrl: thumb,
+      postUrl: batch.postUrl,
+      fileCount: batch.succeeded,
+      createdAt: DateTime.now(),
+      itemsJson: batch.itemsJson,
+      files: files,
+    ),
+    // User-initiated downloads (live updates): restore deleted records.
+    // Startup-resumed / interrupted batches: preserve deletion state.
+    restoreDeleted: !recovered,
+  );
+}
+
 class DownloadManager extends ChangeNotifier {
   DownloadManager._();
 
@@ -689,7 +761,7 @@ class DownloadManager extends ChangeNotifier {
         unawaited(_failAttempt(batch, job, update));
       case TaskStatus.canceled:
         if (job.state != JobState.done) job.state = JobState.canceled;
-        unawaited(_afterTerminal(batch));
+        unawaited(_afterTerminal(batch, recovered: false));
       case TaskStatus.paused:
       case TaskStatus.enqueued:
       case TaskStatus.waitingToRetry:
@@ -737,7 +809,7 @@ class DownloadManager extends ChangeNotifier {
       job.state = JobState.failed;
       await _persist(batch);
       notifyListeners();
-      await _afterTerminal(batch);
+      await _afterTerminal(batch, recovered: false);
       return;
     }
     
@@ -806,7 +878,7 @@ class DownloadManager extends ChangeNotifier {
     }
     await _persist(batch);
     notifyListeners();
-    await _afterTerminal(batch);
+    await _afterTerminal(batch, recovered: false);
   }
   
   /// Embed provenance metadata into an image file.
@@ -870,50 +942,22 @@ class DownloadManager extends ChangeNotifier {
         : (update.exception?.toString() ?? '下载失败');
     await _persist(batch);
     notifyListeners();
-    await _afterTerminal(batch);
+    await _afterTerminal(batch, recovered: false);
   }
 
-  Future<void> _afterTerminal(DownloadBatch batch) async {
+  /// [recovered] is true only when the batch is finished by the startup /
+  /// foreground reconcile ([reconcile]); live updates and user actions on a
+  /// running batch pass false. It decides whether the history write may
+  /// restore a soft-deleted record (see [writeBatchHistory]).
+  Future<void> _afterTerminal(
+    DownloadBatch batch, {
+    required bool recovered,
+  }) async {
     if (!batch.isTerminal) return;
     if (!batch.historyWritten) {
       batch.historyWritten = true;
-      final thumb = _thumbnailFor(batch);
-      final files = [
-        for (final job in batch.jobs)
-          if (job.saved && job.state == JobState.done)
-            HistoryFile(
-              // Prefer the real on-disk title (system may rename on clash),
-              // and pin the MediaStore id so the file is found by id later.
-              filename: (job.savedTitle?.isNotEmpty == true)
-                  ? job.savedTitle!
-                  : job.filename,
-              savedAt: DateTime.now().millisecondsSinceEpoch,
-              mediaId: job.mediaId,
-              itemIndex: job.itemIndex,
-              isImage: job.isImage,
-              assetId: job.assetId,
-              status: job.mediaId != null
-                  ? FileStatus.found
-                  : FileStatus.unknown,
-            ),
-      ];
-      await HistoryDb.instance().then(
-        (db) => db.upsert(
-          HistoryRecord(
-            platform: batch.platform,
-            postId: batch.postId,
-            authorName: batch.authorName,
-            title: batch.title,
-            caption: batch.caption,
-            thumbnailUrl: thumb,
-            postUrl: batch.postUrl,
-            fileCount: batch.succeeded,
-            createdAt: DateTime.now(),
-            itemsJson: batch.itemsJson,
-            files: files,
-          ),
-        ),
-      );
+      final db = await HistoryDb.instance();
+      await writeBatchHistory(db, batch, recovered: recovered);
       final locator = GalleryLocatorService.instance;
       if (locator.hasAccess) {
         unawaited(locator.scanAlbum(force: true));
@@ -922,26 +966,6 @@ class DownloadManager extends ChangeNotifier {
     await _persist(batch);
     notifyListeners();
     unawaited(_refreshNotification(batch));
-  }
-
-  String? _thumbnailFor(DownloadBatch batch) {
-    if (batch.itemsJson == null) return null;
-    try {
-      final decoded = jsonDecode(batch.itemsJson!) as List;
-      String? firstImage;
-      for (final raw in decoded) {
-        final map = (raw as Map).cast<String, Object?>();
-        if (map['type'] == 'video' && map['posterUrl'] is String) {
-          return map['posterUrl'] as String;
-        }
-        if (map['type'] == 'image' && firstImage == null) {
-          firstImage = map['url'] as String?;
-        }
-      }
-      return firstImage;
-    } catch (_) {
-      return null;
-    }
   }
 
   /// Manual per-row retry: re-parse the post first so 403/expired CDN links
@@ -993,7 +1017,7 @@ class DownloadManager extends ChangeNotifier {
     }
     await _persist(batch);
     notifyListeners();
-    await _afterTerminal(batch);
+    await _afterTerminal(batch, recovered: false);
   }
 
   /// Kill-recovery: finish gallery imports for tasks that completed while
@@ -1120,7 +1144,7 @@ class DownloadManager extends ChangeNotifier {
       }
     }
     if (batch.isTerminal) {
-      await _afterTerminal(batch);
+      await _afterTerminal(batch, recovered: true);
       changed = true;
     }
     return changed;

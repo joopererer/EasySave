@@ -1,6 +1,11 @@
+import 'dart:io';
+
 import 'package:easysave/core/models.dart';
 import 'package:easysave/services/download_manager.dart';
+import 'package:easysave/services/history_db.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:path/path.dart' as p;
+import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 ParsedPost _post() => ParsedPost(
   platform: 'xhs',
@@ -224,5 +229,130 @@ void main() {
       expect(restored.jobs.single.urls, ['https://img/1.jpg']);
       expect(restored.isTerminal, isFalse);
     });
+  });
+
+  group('writeBatchHistory restoreDeleted scoping', () {
+    late String tempDbPath;
+    late HistoryDb db;
+
+    setUpAll(() {
+      sqfliteFfiInit();
+      databaseFactory = databaseFactoryFfi;
+    });
+
+    setUp(() async {
+      final tempDir = await Directory.systemTemp.createTemp('easysave_dm_test');
+      tempDbPath = p.join(
+        tempDir.path,
+        'test_history_${DateTime.now().millisecondsSinceEpoch}.db',
+      );
+      HistoryDb.resetInstanceForTesting();
+      db = await HistoryDb.instance(dbPath: tempDbPath);
+    });
+
+    tearDown(() async {
+      HistoryDb.resetInstanceForTesting();
+      try {
+        final file = File(tempDbPath);
+        if (await file.exists()) await file.delete();
+      } catch (_) {
+        // Ignore cleanup errors
+      }
+    });
+
+    DownloadBatch finishedBatch(String postId) => DownloadBatch(
+      batchId: 'b-$postId',
+      album: 'EasySave',
+      postUrl: 'https://www.xiaohongshu.com/explore/$postId',
+      platform: 'xhs',
+      postId: postId,
+      jobs: [
+        DownloadJob(
+          key: 'b-$postId-0',
+          label: '图片 1',
+          filename: 'f1.jpg',
+          urls: ['https://img/1.jpg'],
+          isImage: true,
+          itemIndex: 1,
+        )..state = JobState.done
+         ..saved = true
+         ..mediaId = 'media1',
+      ],
+    );
+
+    test(
+      'user re-download of a soft-deleted post restores it (recovered: false, '
+      'restoreDeleted: !recovered = true — live user download)',
+      () async {
+        // Seed a soft-deleted record for the post, mirroring an earlier
+        // download that the user deleted from History.
+        await db.upsert(
+          HistoryRecord(
+            platform: 'xhs',
+            postId: 'redl',
+            postUrl: 'https://www.xiaohongshu.com/explore/redl',
+            fileCount: 1,
+            createdAt: DateTime.now(),
+            files: [
+              HistoryFile(
+                filename: 'old.jpg',
+                savedAt: DateTime.now().millisecondsSinceEpoch,
+                itemIndex: 1,
+              ),
+            ],
+          ),
+        );
+        final existing = await db.getByPostId('redl');
+        await db.delete(existing!.id!);
+        expect((await db.recent()).isEmpty, isTrue);
+
+        // Active user-initiated download finishes: _afterTerminal passes
+        // recovered: false, which maps to restoreDeleted: !recovered = true.
+        final batch = finishedBatch('redl');
+        await writeBatchHistory(db, batch, recovered: false);
+
+        final restored = await db.getByPostId('redl');
+        expect(restored, isNotNull);
+        expect(restored!.isDeleted, isFalse);
+        expect((await db.recent()).length, 1);
+      },
+    );
+
+    test(
+      'startup recovery of an interrupted batch does not restore a '
+      'soft-deleted record (writeBatchHistory recovered: true → restoreDeleted: false)',
+      () async {
+        await db.upsert(
+          HistoryRecord(
+            platform: 'xhs',
+            postId: 'resumed',
+            postUrl: 'https://www.xiaohongshu.com/explore/resumed',
+            fileCount: 1,
+            createdAt: DateTime.now(),
+            files: [
+              HistoryFile(
+                filename: 'old.jpg',
+                savedAt: DateTime.now().millisecondsSinceEpoch,
+                itemIndex: 1,
+              ),
+            ],
+          ),
+        );
+        final existing = await db.getByPostId('resumed');
+        await db.delete(existing!.id!);
+        expect((await db.recent()).isEmpty, isTrue);
+
+        // _reconcileBatch (startup / foreground resume of an interrupted
+        // batch) calls _afterTerminal(batch, recovered: true), which maps
+        // to writeBatchHistory(..., recovered: true) → restoreDeleted: false.
+        final batch = finishedBatch('resumed');
+        await writeBatchHistory(db, batch, recovered: true);
+
+        final stillDeleted = await db.getByPostId('resumed');
+        expect(stillDeleted, isNotNull);
+        expect(stillDeleted!.isDeleted, isTrue);
+        expect((await db.recent()).isEmpty, isTrue);
+      },
+    );
   });
 }

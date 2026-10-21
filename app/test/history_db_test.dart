@@ -198,5 +198,103 @@ void main() {
       expect(stillDeleted.files.length, 2); // Files were merged
       expect((await db.recent()).isEmpty, isTrue);
     });
+
+    test('user re-download of deleted post restores it', () async {
+      final original = HistoryRecord(
+        platform: 'xhs',
+        postId: 'redownload',
+        postUrl: 'https://example.com/redownload',
+        fileCount: 1,
+        createdAt: DateTime.now(),
+        files: [
+          HistoryFile(
+            filename: 'file1.jpg',
+            savedAt: DateTime.now().millisecondsSinceEpoch,
+            itemIndex: 1,
+          ),
+        ],
+      );
+
+      await db.upsert(original);
+      final inserted = await db.getByPostId('redownload');
+      await db.delete(inserted!.id!);
+
+      // User initiates a new download (live update, not recovered batch)
+      final redownload = HistoryRecord(
+        platform: 'xhs',
+        postId: 'redownload',
+        postUrl: 'https://example.com/redownload',
+        fileCount: 2,
+        createdAt: DateTime.now(),
+        files: [
+          HistoryFile(
+            filename: 'file1.jpg',
+            savedAt: DateTime.now().millisecondsSinceEpoch,
+            itemIndex: 1,
+          ),
+          HistoryFile(
+            filename: 'file2.jpg',
+            savedAt: DateTime.now().millisecondsSinceEpoch,
+            itemIndex: 2,
+          ),
+        ],
+      );
+
+      await db.upsert(redownload, restoreDeleted: true);
+
+      // Should be restored
+      final restored = await db.getByPostId('redownload');
+      expect(restored, isNotNull);
+      expect(restored!.isDeleted, isFalse);
+      expect(restored.files.length, 2);
+      expect((await db.recent()).length, 1);
+    });
+
+    test('startup reconcile does not restore stopped download', () async {
+      final original = HistoryRecord(
+        platform: 'xhs',
+        postId: 'no_restore',
+        postUrl: 'https://example.com/no_restore',
+        fileCount: 1,
+        createdAt: DateTime.now(),
+        files: [
+          HistoryFile(
+            filename: 'file1.jpg',
+            savedAt: DateTime.now().millisecondsSinceEpoch,
+            itemIndex: 1,
+          ),
+        ],
+      );
+
+      await db.upsert(original);
+      final inserted = await db.getByPostId('no_restore');
+      await db.delete(inserted!.id!);
+
+      // Simulates a reconcile without user action (e.g., updating file status)
+      final update = HistoryRecord(
+        platform: 'xhs',
+        postId: 'no_restore',
+        postUrl: 'https://example.com/no_restore',
+        fileCount: 1,
+        createdAt: DateTime.now(),
+        files: [
+          HistoryFile(
+            filename: 'file1.jpg',
+            savedAt: DateTime.now().millisecondsSinceEpoch,
+            itemIndex: 1,
+            status: FileStatus.found,
+          ),
+        ],
+      );
+
+      // Reconcile: recovered=true but we're NOT restoring
+      await db.upsert(update, restoreDeleted: false);
+
+      // Should still be deleted
+      final stillDeleted = await db.getByPostId('no_restore');
+      expect(stillDeleted, isNotNull);
+      expect(stillDeleted!.isDeleted, isTrue);
+      expect((await db.recent()).isEmpty, isTrue);
+    });
   });
 }
