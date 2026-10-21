@@ -1,5 +1,34 @@
 // Copyright 2026 EasySave. All rights reserved.
-// URL normalization for provenance metadata.
+// App internal platform identifiers to spec-compliant platform names.
+// See SPEC §2: prov:platform must be "xiaohongshu", "instagram", or "x".
+const appPlatformToSpecPlatform = {
+  'xhs': 'xiaohongshu',
+  'xiaohongshu': 'xiaohongshu',
+  'instagram': 'instagram',
+  'x': 'x',
+};
+
+/// Returns the spec-compliant platform name for an app internal identifier.
+String toSpecPlatform(String platform) {
+  return appPlatformToSpecPlatform[platform] ?? platform;
+}
+
+/// Platform display names for photoshop:Credit field.
+/// Maps app internal identifiers to localized display names.
+/// Also accepts spec platform names (xiaohongshu, instagram, x) as input.
+const appPlatformToDisplayName = {
+  'xhs': '小红书',
+  'xiaohongshu': '小红书',
+  'instagram': 'Instagram',
+  'x': 'X',
+};
+
+/// Returns the localized display name for a platform.
+/// Accepts both app internal identifiers (xhs, instagram, x) and 
+/// spec platform names (xiaohongshu, instagram, x).
+String platformDisplayName(String platform) {
+  return appPlatformToDisplayName[platform] ?? platform;
+}
 // Implements the normalization rules in docs/provenance-spec/SPEC.md §3.
 
 /// Normalizes a URL for provenance metadata according to SPEC §3.

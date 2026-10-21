@@ -232,9 +232,12 @@ void main() {
       final xmp = builder.build();
       final json = xmp.toXmpJson();
 
-      // UTC dates in ISO8601 format end with 'Z'
-      expect(json['prov:publishedAt'], contains('Z'));
-      expect(json['prov:publishedAt'], startsWith('2026-10-20'));
+      // Dates must include timezone offset (e.g., +02:00 or -05:00)
+      // or UTC marker (Z)
+      final output = json['prov:publishedAt'] as String;
+      expect(output, startsWith('2026-10-20'));
+      expect(output, matches(RegExp(r'[\+\-]\d{2}:\d{2}|Z$')), 
+          reason: 'Date must include timezone offset or Z');
     });
   });
 

@@ -139,6 +139,8 @@ class DownloadBatch {
     this.authorName,
     this.title,
     this.caption,
+    this.authorId,
+    this.publishedAt,
     this.itemsJson,
     this.source = sourceMain,
     this.updatedAt = 0,
@@ -161,6 +163,8 @@ class DownloadBatch {
   final String? authorName;
   final String? title;
   final String? caption;
+  final String? authorId;
+  final DateTime? publishedAt;
   final String? itemsJson;
 
   /// Owner engine: [sourceMain] or [sourceBackground].
@@ -191,6 +195,8 @@ class DownloadBatch {
     'authorName': authorName,
     'title': title,
     'caption': caption,
+    'authorId': authorId,
+    'publishedAt': publishedAt?.toIso8601String(),
     'itemsJson': itemsJson,
     'source': source,
     'updatedAt': updatedAt,
@@ -207,6 +213,10 @@ class DownloadBatch {
     authorName: map['authorName'] as String?,
     title: map['title'] as String?,
     caption: map['caption'] as String?,
+    authorId: map['authorId'] as String?,
+    publishedAt: map['publishedAt'] != null 
+        ? DateTime.tryParse(map['publishedAt'] as String)
+        : null,
     itemsJson: map['itemsJson'] as String?,
     // Batches written before this field existed were created by the main
     // engine, so they default to it.
@@ -491,8 +501,10 @@ class DownloadManager extends ChangeNotifier {
       platform: post.platform,
       postId: post.id,
       authorName: post.author.name,
+      authorId: post.author.id,
       title: post.title,
       caption: post.caption,
+      publishedAt: post.publishedAt != null ? DateTime.tryParse(post.publishedAt!) : null,
       itemsJson: jsonEncode([for (final item in post.items) item.toJson()]),
       source: DownloadManager.owner,
       jobs: [
@@ -774,6 +786,8 @@ class DownloadManager extends ChangeNotifier {
         authorName: batch.authorName,
         title: batch.title,
         caption: batch.caption,
+        authorId: batch.authorId,
+        publishedAt: batch.publishedAt,
         itemIndex: itemIndex,
         itemCount: itemCount,
         existingAssetId: existingAssetId,

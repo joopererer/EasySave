@@ -6,6 +6,8 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'c2pa_detector.dart';
+import 'date_formatter.dart';
+import 'url_normalizer.dart';
 import 'xmp_model.dart';
 import 'xmp_jpeg.dart';
 import 'xmp_png.dart';
@@ -214,6 +216,7 @@ class ProvenanceBuilder {
   /// Build XmpProvenance for embedding.
   XmpProvenance build() {
     final now = DateTime.now();
+    final specPlatform = toSpecPlatform(platform);
     
     return XmpProvenance(
       schema: '0.1',
@@ -222,7 +225,7 @@ class ProvenanceBuilder {
       capturedBy: 'EasySave/1.7.0',
       metadataDate: now,
       sourceUrl: _normalizeUrl(postUrl, this.platform),
-      platform: platform,
+      platform: specPlatform,
       sourceId: postId,
       itemIndex: itemCount > 1 ? itemIndex : null,
       itemCount: itemCount > 1 ? itemCount : null,
@@ -248,67 +251,46 @@ class ProvenanceBuilder {
     return '${hex.substring(0, 8)}-${hex.substring(8, 12)}-${hex.substring(12, 16)}-${hex.substring(16, 20)}-${hex.substring(20, 32)}';
   }
 
-  /// Normalize URL per SPEC §5.
+  /// Normalize URL per SPEC §5 using the url_normalizer package.
   static String _normalizeUrl(String url, String platform) {
-    var normalized = url;
+    // Convert app platform identifier to spec platform name for normalization
+    final specPlatform = toSpecPlatform(platform);
     
-    // Remove fragments
-    final fragmentIndex = normalized.indexOf('#');
-    if (fragmentIndex > 0) {
-      normalized = normalized.substring(0, fragmentIndex);
-    }
-
-    // Platform-specific normalization
-    if (platform == 'xiaohongshu') {
-      // Extract noteId from various URL formats
+    // First normalize the URL using the shared normalizer (handles tracking params, etc.)
+    var normalized = normalizeUrl(url);
+    
+    // Apply platform-specific normalization to get canonical form
+    // The normalizeUrl function handles most cases, but we need to ensure
+    // the output matches SPEC §5 exactly for xiaohongshu and x
+    if (specPlatform == 'xiaohongshu') {
+      // Extract noteId from various URL formats and produce canonical form
+      // normalizeUrl already does this, but we verify here
       final match = RegExp(r'/explore/([a-f0-9]+)').firstMatch(normalized);
       if (match != null) {
         return 'https://www.xiaohongshu.com/explore/${match.group(1)}';
       }
-    } else if (platform == 'instagram') {
-      // Normalize to /p/{shortcode}/
-      final match = RegExp(r'/p/([^/]+)').firstMatch(normalized);
-      if (match != null) {
-        return 'https://www.instagram.com/p/${match.group(1)}/';
+      // Also check for /discovery/item/{id}
+      final discoveryMatch = RegExp(r'/discovery/item/([a-f0-9]+)').firstMatch(normalized);
+      if (discoveryMatch != null) {
+        return 'https://www.xiaohongshu.com/explore/${discoveryMatch.group(1)}';
       }
-    }
-
-    // Remove tracking parameters
-    final trackingParams = [
-      'utm_source', 'utm_medium', 'utm_campaign', 'utm_content', 'utm_term',
-      'fbclid', 'gclid', 'igsh', 'igshid', 'si',
-      'spm', 'share_*', 'shareRedId', 'xsec_token', 'xsec_source',
-      'apptime', 'author_share', 'xhsshare', 'track_code',
-      'app_platform', 'app_version', 'ignoreEngage', 'dlrf', 'xtok', 'img_index',
-    ];
-
-    try {
-      final uri = Uri.parse(normalized);
-      final filtered = uri.queryParameters.keys
-          .where((key) => !trackingParams.any((p) => 
-              p.endsWith('*') ? key.startsWith(p.substring(0, p.length - 1)) : key == p))
-          .toList();
-      
-      final newQuery = filtered.isEmpty ? '' : filtered.map((k) => '$k=${uri.queryParameters[k]}').join('&');
-      normalized = '${uri.scheme}://${uri.host}${uri.path}${newQuery.isEmpty ? '' : '?$newQuery'}';
-    } catch (_) {
-      // Keep original if parsing fails
+    } else if (specPlatform == 'x') {
+      // Ensure X URLs use the canonical /i/status/{id} form
+      final match = RegExp(r'x\.com/[^/]+/status/(\d+)').firstMatch(normalized);
+      if (match != null) {
+        return 'https://x.com/i/status/${match.group(1)}';
+      }
+      // Already in canonical form?
+      if (normalized.contains('x.com/i/status/')) {
+        return normalized;
+      }
     }
 
     return normalized;
   }
 
-  /// Get display name for platform.
-  static String _platformDisplayName(String platform) {
-    switch (platform) {
-      case 'xiaohongshu':
-        return '小红书';
-      case 'instagram':
-        return 'Instagram';
-      case 'x':
-        return 'X';
-      default:
-        return platform;
-    }
+  /// Get display name for platform (app internal identifier).
+  static String _platformDisplayName(String appPlatform) {
+    return platformDisplayName(appPlatform);
   }
 }

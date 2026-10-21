@@ -1,6 +1,8 @@
 // Copyright 2026 EasySave. All rights reserved.
 // XMP provenance metadata model matching provenance-spec v0.1 §7.
 
+import 'date_formatter.dart';
+
 /// XMP provenance metadata for a single image or video file.
 /// Mirrors the JSON structure in provenance-spec v0.1 §7.
 class XmpProvenance {
@@ -53,9 +55,9 @@ class XmpProvenance {
   Map<String, dynamic> toJson() => {
         'schema': schema,
         'assetId': assetId,
-        'capturedAt': capturedAt.toIso8601String(),
+        'capturedAt': formatDateTimeWithTimezone(capturedAt),
         'capturedBy': capturedBy,
-        'metadataDate': metadataDate.toIso8601String(),
+        'metadataDate': formatDateTimeWithTimezone(metadataDate),
         'source': {
           'url': sourceUrl,
           'platform': platform,
@@ -63,7 +65,7 @@ class XmpProvenance {
           if (itemIndex != null) 'itemIndex': itemIndex,
           if (itemCount != null) 'itemCount': itemCount,
           if (authorId != null) 'authorId': authorId,
-          if (publishedAt != null) 'publishedAt': publishedAt!.toIso8601String(),
+          if (publishedAt != null) 'publishedAt': formatDateTimeWithTimezone(publishedAt!),
         },
         if (title != null) 'title': title,
         if (creators != null) 'creator': creators,
@@ -79,16 +81,16 @@ class XmpProvenance {
   Map<String, dynamic> toXmpJson() => {
         'prov:schema': schema,
         'prov:assetId': assetId,
-        'prov:capturedAt': capturedAt.toIso8601String(),
+        'prov:capturedAt': formatDateTimeWithTimezone(capturedAt),
         'prov:capturedBy': capturedBy,
-        'xmp:MetadataDate': metadataDate.toIso8601String(),
+        'xmp:MetadataDate': formatDateTimeWithTimezone(metadataDate),
         'prov:sourceUrl': sourceUrl,
         'prov:platform': platform,
         'prov:sourceId': sourceId,
         if (itemIndex != null) 'prov:itemIndex': itemIndex,
         if (itemCount != null) 'prov:itemCount': itemCount,
         if (authorId != null) 'prov:authorId': authorId,
-        if (publishedAt != null) 'prov:publishedAt': publishedAt!.toIso8601String(),
+        if (publishedAt != null) 'prov:publishedAt': formatDateTimeWithTimezone(publishedAt!),
         if (title != null) 'dc:title': title,
         if (creators != null) 'dc:creator': creators,
         if (description != null) 'dc:description': description,
