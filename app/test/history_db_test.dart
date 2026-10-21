@@ -296,5 +296,70 @@ void main() {
       expect(stillDeleted!.isDeleted, isTrue);
       expect((await db.recent()).isEmpty, isTrue);
     });
+
+    test('Task 3: reinsert clears is_deleted flag', () async {
+      final record = HistoryRecord(
+        platform: 'xhs',
+        postId: 'reinsert_test',
+        postUrl: 'https://example.com/reinsert_test',
+        fileCount: 1,
+        createdAt: DateTime.now(),
+        files: [
+          HistoryFile(
+            filename: 'test.jpg',
+            savedAt: DateTime.now().millisecondsSinceEpoch,
+          ),
+        ],
+      );
+
+      // Insert and soft-delete
+      await db.upsert(record);
+      final inserted = await db.getByPostId('reinsert_test');
+      await db.delete(inserted!.id!);
+
+      // Verify it's deleted
+      var deleted = await db.getByPostId('reinsert_test');
+      expect(deleted!.isDeleted, isTrue);
+      expect((await db.recent()).isEmpty, isTrue);
+
+      // Undo: reinsert must clear the deleted flag
+      await db.reinsert(deleted);
+
+      // Should be restored and visible
+      final restored = await db.getByPostId('reinsert_test');
+      expect(restored, isNotNull);
+      expect(restored!.isDeleted, isFalse);
+      expect((await db.recent()).length, 1);
+    });
+
+    test('Task 3: delete/clear/reinsert notify listeners', () async {
+      var notifyCount = 0;
+      db.addListener(() => notifyCount++);
+
+      final record = HistoryRecord(
+        platform: 'xhs',
+        postId: 'listen_test',
+        postUrl: 'https://example.com/listen_test',
+        fileCount: 1,
+        createdAt: DateTime.now(),
+      );
+
+      // upsert notifies
+      await db.upsert(record);
+      expect(notifyCount, 1);
+
+      // delete notifies
+      final inserted = await db.getByPostId('listen_test');
+      await db.delete(inserted!.id!);
+      expect(notifyCount, 2);
+
+      // reinsert notifies
+      await db.reinsert(inserted);
+      expect(notifyCount, 3);
+
+      // clear notifies
+      await db.clear();
+      expect(notifyCount, 4);
+    });
   });
 }

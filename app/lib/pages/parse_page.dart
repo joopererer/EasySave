@@ -88,6 +88,18 @@ class ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
     // without these listeners the list would stay stale.
     GalleryLocatorService.instance.addListener(_onHistoryChanged);
     HostBridge.historyRevision.addListener(_onHistoryChanged);
+    // Every mutation made through HistoryDb in this isolate (delete, clear,
+    // undo, restore, rebuild, new download) also refreshes the list.
+    unawaited(_attachHistoryDb());
+  }
+
+  HistoryDb? _historyDb;
+
+  Future<void> _attachHistoryDb() async {
+    final db = await HistoryDb.instance();
+    if (!mounted) return;
+    _historyDb = db;
+    db.addListener(_onHistoryChanged);
   }
 
   /// New history record available (in-app download or background engine).
@@ -116,6 +128,7 @@ class ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
     WidgetsBinding.instance.removeObserver(this);
     GalleryLocatorService.instance.removeListener(_onHistoryChanged);
     HostBridge.historyRevision.removeListener(_onHistoryChanged);
+    _historyDb?.removeListener(_onHistoryChanged);
     _shareSub?.cancel();
     _linkController.dispose();
     _inputFocus.dispose();

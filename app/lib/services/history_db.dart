@@ -2,6 +2,7 @@
 
 import 'dart:convert';
 
+import 'package:flutter/foundation.dart';
 import 'package:sqflite/sqflite.dart';
 
 import '../core/dev_log.dart';
@@ -308,6 +309,23 @@ class HistoryDb {
   final Database _db;
   static HistoryDb? _instance;
 
+  /// Task 3: notify listeners when history data changes (delete, clear, reinsert, upsert, rebuild)
+  final _listeners = <VoidCallback>[];
+
+  void addListener(VoidCallback listener) {
+    _listeners.add(listener);
+  }
+
+  void removeListener(VoidCallback listener) {
+    _listeners.remove(listener);
+  }
+
+  void notifyChanged() {
+    for (final listener in _listeners) {
+      listener();
+    }
+  }
+
   static void resetInstanceForTesting() {
     _instance = null;
   }
@@ -472,6 +490,7 @@ class HistoryDb {
         conflictAlgorithm: ConflictAlgorithm.replace,
       );
     });
+    notifyChanged();
   }
 
   Future<void> updateFiles(int id, List<HistoryFile> files) async {
@@ -537,23 +556,31 @@ class HistoryDb {
       where: 'id = ?',
       whereArgs: [id],
     );
+    notifyChanged();
   }
 
   Future<void> permanentlyDelete(int id) async {
     // Hard delete only used for testing or cleanup
     await _db.delete('history_records', where: 'id = ?', whereArgs: [id]);
+    notifyChanged();
   }
 
   Future<void> clear() async {
     await _db.delete('history_records');
+    notifyChanged();
   }
 
   Future<void> reinsert(HistoryRecord record) async {
+    // Undo of a delete: the record must come back visible, so the soft-delete
+    // flag is always cleared regardless of what the passed record carries.
     await _db.insert(
       'history_records',
-      record.toMap()..remove('id'),
+      record.toMap()
+        ..remove('id')
+        ..['is_deleted'] = 0,
       conflictAlgorithm: ConflictAlgorithm.replace,
     );
+    notifyChanged();
   }
 }
 
