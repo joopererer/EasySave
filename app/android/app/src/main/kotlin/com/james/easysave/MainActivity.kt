@@ -28,6 +28,7 @@ class MainActivity : FlutterActivity() {
         private const val TILE_CHANNEL = "easysave/tile"
         private const val BUBBLE_CHANNEL = "easysave/bubble"
         private const val DELETE_REQUEST_CODE = 50021
+        private const val WRITE_REQUEST_CODE = 50022
         const val EXTRA_OPEN_URL = "easy_open_url"
     }
 
@@ -37,6 +38,13 @@ class MainActivity : FlutterActivity() {
      * a time; the Dart side never issues concurrent requests.
      */
     private var pendingDeleteResult: MethodChannel.Result? = null
+
+    /**
+     * Result callback for the system's batch-write confirmation dialog
+     * (MediaStore.createWriteRequest). Only one write flow can be pending at
+     * a time.
+     */
+    private var pendingWriteResult: MethodChannel.Result? = null
 
     private var hostChannel: MethodChannel? = null
     private var receiverRegistered = false
@@ -163,6 +171,7 @@ class MainActivity : FlutterActivity() {
             .setMethodCallHandler { call, result ->
                 when (call.method) {
                     "deleteMedia" -> deleteMedia(call, result)
+                    "requestWriteAccess" -> requestWriteAccess(call, result)
                     else -> result.notImplemented()
                 }
             }
@@ -270,9 +279,15 @@ class MainActivity : FlutterActivity() {
 
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
-        if (requestCode == DELETE_REQUEST_CODE) {
-            pendingDeleteResult?.success(resultCode == RESULT_OK)
-            pendingDeleteResult = null
+        when (requestCode) {
+            DELETE_REQUEST_CODE -> {
+                pendingDeleteResult?.success(resultCode == RESULT_OK)
+                pendingDeleteResult = null
+            }
+            WRITE_REQUEST_CODE -> {
+                pendingWriteResult?.success(resultCode == RESULT_OK)
+                pendingWriteResult = null
+            }
         }
     }
 
@@ -341,6 +356,63 @@ class MainActivity : FlutterActivity() {
         } catch (e: Exception) {
             pendingDeleteResult = null
             result.error("delete_failed", e.message, null)
+        }
+    }
+
+    /**
+     * Request write access for media files through the OS confirmation flow.
+     *
+     * On Android 11+ (API 30+), apps can only modify media files they created.
+     * This method requests permission to write to existing files via
+     * `MediaStore.createWriteRequest`.
+     *
+     * Returns true if user grants permission, false otherwise.
+     */
+    private fun requestWriteAccess(call: MethodCall, result: MethodChannel.Result) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
+            // On older versions, we have full access to external storage
+            result.success(true)
+            return
+        }
+        if (pendingWriteResult != null) {
+            result.error("busy", "A write request is already in progress", null)
+            return
+        }
+
+        val ids = call.argument<List<String>>("ids") ?: emptyList()
+        val isImage = call.argument<List<Boolean>>("isImage") ?: emptyList()
+
+        val uris = ArrayList<Uri>()
+        for (i in ids.indices) {
+            val id = ids[i].toLongOrNull() ?: continue
+            val image = isImage.getOrNull(i) ?: true
+            val collection = if (image) {
+                MediaStore.Images.Media.EXTERNAL_CONTENT_URI
+            } else {
+                MediaStore.Video.Media.EXTERNAL_CONTENT_URI
+            }
+            uris.add(ContentUris.withAppendedId(collection, id))
+        }
+        if (uris.isEmpty()) {
+            result.success(false)
+            return
+        }
+
+        try {
+            val pendingIntent = MediaStore.createWriteRequest(contentResolver, uris)
+            pendingWriteResult = result
+            @Suppress("DEPRECATION")
+            startIntentSenderForResult(
+                pendingIntent.intentSender,
+                WRITE_REQUEST_CODE,
+                null,
+                0,
+                0,
+                0,
+            )
+        } catch (e: Exception) {
+            pendingWriteResult = null
+            result.error("write_request_failed", e.message, null)
         }
     }
 

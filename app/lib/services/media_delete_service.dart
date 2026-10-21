@@ -51,6 +51,37 @@ class MediaDeleteService {
       return false;
     }
   }
+
+  /// Request write access for media files through the OS confirmation flow.
+  /// On Android 11+ (API 30+), apps can only modify media files they created.
+  /// This method requests permission to write to existing files via
+  /// `MediaStore.createWriteRequest`.
+  ///
+  /// Returns true if user grants permission, false otherwise.
+  Future<bool> requestWriteAccess(List<MediaRef> media) async {
+    if (!isSupported) return true; // iOS/non-Android has no restriction
+
+    final ids = <String>[];
+    final isImage = <bool>[];
+    for (final m in media) {
+      if (m.mediaId.isEmpty) continue;
+      ids.add(m.mediaId);
+      isImage.add(m.isImage);
+    }
+    if (ids.isEmpty) return false;
+
+    try {
+      final result = await _channel.invokeMethod<bool>('requestWriteAccess', {
+        'ids': ids,
+        'isImage': isImage,
+      });
+      return result ?? false;
+    } on PlatformException {
+      return false;
+    } on MissingPluginException {
+      return false;
+    }
+  }
 }
 
 /// A locatable album asset to delete (id + collection type).

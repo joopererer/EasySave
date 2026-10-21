@@ -8,6 +8,8 @@ import 'package:package_info_plus/package_info_plus.dart';
 import '../core/dev_log.dart';
 import '../services/auth.dart';
 import '../services/bubble_service.dart';
+import '../services/history_backfill_service.dart';
+import '../services/history_rebuild_service.dart';
 import '../services/settings.dart';
 import '../services/tile_service.dart';
 import '../services/update_service.dart';
@@ -352,6 +354,138 @@ class _MinePageState extends State<MinePage> with WidgetsBindingObserver {
     ).showSnackBar(SnackBar(content: Text('已清理缓存（$removed 个临时文件）')));
   }
 
+  Future<void> _rebuildHistory() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('从相册重建历史'),
+        content: const Text(
+          '扫描相册中的图片，读取来源信息后重建历史记录。\n\n'
+          '此操作会合并或新建历史记录，不会删除现有数据。',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('取消'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('开始重建'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+
+    // Show progress dialog
+    final progressText = ValueNotifier<String>('准备中…');
+    final dialog = showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => AlertDialog(
+        title: const Text('正在重建历史'),
+        content: ValueListenableBuilder<String>(
+          valueListenable: progressText,
+          builder: (_, value, __) => Text(value),
+        ),
+      ),
+    );
+
+    try {
+      final result = await HistoryRebuildService.instance.rebuild(
+        onProgress: (current, total, filename) {
+          progressText.value = '$current / $total\n$filename';
+        },
+      );
+
+      if (!mounted) return;
+      Navigator.of(context).pop(); // Close progress dialog
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            '已完成：${result.created} 新建，${result.merged} 合并，${result.skipped} 跳过',
+          ),
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      Navigator.of(context).pop(); // Close progress dialog
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('重建失败：$e')),
+      );
+    }
+  }
+
+  Future<void> _backfillMetadata() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('为旧文件补写来源信息'),
+        content: const Text(
+          '为历史记录中已保存但没有来源信息的文件写入元数据。\n\n'
+          '需要相册访问权限，部分文件可能需要授权写入。',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('取消'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('开始写入'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+
+    // Show progress dialog
+    final progressText = ValueNotifier<String>('准备中…');
+    showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => AlertDialog(
+        title: const Text('正在补写来源信息'),
+        content: ValueListenableBuilder<String>(
+          valueListenable: progressText,
+          builder: (_, value, __) => Text(value),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('取消'),
+          ),
+        ],
+      ),
+    );
+
+    try {
+      final result = await HistoryBackfillService.instance.backfill(
+        onProgress: (current, total, filename) {
+          progressText.value = '$current / $total\n$filename';
+        },
+      );
+
+      if (!mounted) return;
+      Navigator.of(context).pop(); // Close progress dialog
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            '已完成：${result.success} 写入，${result.authRequired} 需要授权，${result.skipped} 跳过',
+          ),
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      Navigator.of(context).pop(); // Close progress dialog
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('写入失败：$e')),
+      );
+    }
+  }
+
   /// Copy the (already redacted) log file out of the app's private directory
   /// so it can be read with `adb shell cat .../files/v16dl.log`.
   Future<void> _exportLog() async {
@@ -518,6 +652,16 @@ class _MinePageState extends State<MinePage> with WidgetsBindingObserver {
           Card(
             child: Column(
               children: [
+                ListTile(
+                  title: const Text('从相册重建历史'),
+                  subtitle: const Text('扫描相册中的图片，读取来源信息'),
+                  onTap: _rebuildHistory,
+                ),
+                ListTile(
+                  title: const Text('为旧文件补写来源信息'),
+                  subtitle: const Text('为已保存但没有来源信息的文件写入元数据'),
+                  onTap: _backfillMetadata,
+                ),
                 ListTile(title: const Text('清除缓存'), onTap: _clearCache),
                 ListTile(
                   title: const Text('导出日志'),

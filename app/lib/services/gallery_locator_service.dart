@@ -461,5 +461,9 @@ class GalleryLocatorService extends ChangeNotifier {
     );
     return files.length;
   }
+
+  /// Returns all scanned assets for rebuild purposes.
+  /// Only valid after [scanAlbum] has been called.
+  List<AssetEntity> getScannedAssets() => List.unmodifiable(_allAssets);
 }
 
