@@ -5,158 +5,165 @@ import 'package:xml/xml.dart';
 import 'xmp_model.dart';
 
 /// Canonical namespace URIs for provenance-spec fields.
-const _provNs = 'https://joopererer.github.io/provenance-spec/ns/';
-const _dcNs = 'http://purl.org/dc/elements/1.1/';
-const _xmpNs = 'http://ns.adobe.com/xap/1.0/';
-const _photoshopNs = 'http://ns.adobe.com/photoshop/1.0/';
-
-/// Build a qualified name from namespace URI and local name.
-String _qname(String uri, String local) {
-  // Derive prefix from URI for canonical output
-  if (uri == _provNs) return 'prov:$local';
-  if (uri == _dcNs) return 'dc:$local';
-  if (uri == _xmpNs) return 'xmp:$local';
-  if (uri == _photoshopNs) return 'photoshop:$local';
-  return local;
-}
-
-/// Get canonical qualified name from an XML element's name.
-String _canonicalKey(XmlElement elem) {
-  final ns = elem.name.prefix;
-  final local = elem.name.local;
-  if (ns == 'prov' || ns == 'pv') return 'prov:$local';
-  if (ns == 'dc') return 'dc:$local';
-  if (ns == 'xmp') return 'xmp:$local';
-  if (ns == 'photoshop') return 'photoshop:$local';
-  return elem.name.qualified;
-}
+const provNsUri = 'https://joopererer.github.io/provenance-spec/ns/';
+const dcNsUri = 'http://purl.org/dc/elements/1.1/';
+const xmpNsUri = 'http://ns.adobe.com/xap/1.0/';
+const photoshopNsUri = 'http://ns.adobe.com/photoshop/1.0/';
 
 /// Parse XMP XML string into XmpProvenance model.
 XmpProvenance parseXmpXml(String xml) {
   final document = XmlDocument.parse(xml);
-
   final json = <String, dynamic>{};
 
-  // Build namespace prefix map from root element
-  final nsMap = <String, String>{};
+  // Build namespace map from rdf:RDF element (xmlns:* are typically there)
+  final prefixToUri = <String, String>{};
   for (final rdf in document.findAllElements('rdf:RDF')) {
-    final desc = rdf.findElements('rdf:Description').firstOrNull;
-    if (desc != null) {
-      for (final attr in desc.attributes) {
-        if (attr.name.local.startsWith('xmlns')) {
-          nsMap[attr.value] = attr.name.local.replaceFirst('xmlns:', '');
-        }
+    for (final attr in rdf.attributes) {
+      if (attr.name.prefix == 'xmlns') {
+        prefixToUri[attr.name.local] = attr.value;
       }
     }
   }
 
-  // Parse ALL rdf:Description elements in the document (handle multiple blocks)
+  // Parse ALL rdf:Description elements in the document
   for (final rdf in document.findAllElements('rdf:RDF')) {
     for (final desc in rdf.findAllElements('rdf:Description')) {
-      _parseDescriptionElement(desc, json, nsMap);
+      _parseDescriptionElement(desc, json, prefixToUri);
     }
   }
 
   return XmpProvenance.fromJson(json);
 }
 
-/// Parse a single rdf:Description element, extracting fields from attributes or child elements.
-void _parseDescriptionElement(XmlElement desc, Map<String, dynamic> json, Map<String, String> nsMap) {
-  // Build URI -> prefix map from attributes
-  final uriToPrefix = <String, String>{};
-  for (final attr in desc.attributes) {
-    if (attr.name.local.startsWith('xmlns') && attr.name.local.contains(':')) {
-      final prefix = attr.name.local.replaceFirst('xmlns:', '');
-      uriToPrefix[attr.value] = prefix;
-    }
-  }
-
+/// Parse a single rdf:Description element.
+void _parseDescriptionElement(
+  XmlElement desc,
+  Map<String, dynamic> json,
+  Map<String, String> prefixToUri,
+) {
   // Parse attributes - skip xmlns:* and rdf:about
   for (final attr in desc.attributes) {
-    final key = attr.name.qualified;
-    if (key.startsWith('xmlns:') || key == 'rdf:about') {
-      continue;
-    }
+    // Skip xmlns declarations and rdf:about
+    if (attr.name.prefix == 'xmlns' || attr.name.local == 'about') continue;
 
-    // Resolve canonical name from namespace
-    final attrUri = attr.name.prefix;
-    String canonicalKey;
-    if (attrUri != null && attrUri.isNotEmpty) {
-      canonicalKey = _canonicalKeyFromPrefix(attrUri, attr.name.local, uriToPrefix);
-    } else {
-      // No prefix: check if this looks like a known field by local name
-      canonicalKey = _canonicalKeyFromPrefix('prov', attr.name.local, uriToPrefix);
-    }
-
-    // Only set if not already present (attributes take precedence in same block)
-    if (!json.containsKey(canonicalKey)) {
+    final canonicalKey = _canonicalKeyFromAttr(attr, prefixToUri);
+    if (canonicalKey != null && !json.containsKey(canonicalKey)) {
       json[canonicalKey] = attr.value;
     }
   }
 
   // Parse child elements
   for (final child in desc.children.whereType<XmlElement>()) {
-    final tagName = child.name.qualified;
+    final canonicalKey = _canonicalKeyFromElement(child, prefixToUri);
+    if (canonicalKey == null || json.containsKey(canonicalKey)) continue;
 
-    // Resolve canonical name from namespace
-    final childNs = child.name.prefix ?? '';
-    String canonicalTagName;
-    if (childNs.isNotEmpty) {
-      canonicalTagName = _canonicalKeyFromPrefix(childNs, child.name.local, uriToPrefix);
-    } else {
-      canonicalTagName = _canonicalKeyFromPrefix('prov', child.name.local, uriToPrefix);
-    }
-
-    if (json.containsKey(canonicalTagName)) continue; // Already have this field
-
-    // Check for rdf:Alt (single localized text)
-    if (child.findElements('rdf:Alt').isNotEmpty) {
-      final alt = child.findElements('rdf:Alt').first;
+    // Check for rdf:Alt (localized text)
+    final alt = child.findElements('rdf:Alt').firstOrNull;
+    if (alt != null) {
       final li = alt.findElements('rdf:li').firstOrNull;
-      if (li != null) {
-        json[canonicalTagName] = li.innerText;
-      }
+      if (li != null) json[canonicalKey] = li.innerText;
+      continue;
     }
+
     // Check for rdf:Seq (ordered array)
-    else if (child.findElements('rdf:Seq').isNotEmpty) {
-      final seq = child.findElements('rdf:Seq').first;
-      json[canonicalTagName] = seq.findElements('rdf:li').map((e) => e.innerText).toList();
+    final seq = child.findElements('rdf:Seq').firstOrNull;
+    if (seq != null) {
+      json[canonicalKey] = seq.findElements('rdf:li').map((e) => e.innerText).toList();
+      continue;
     }
-    // Check for rdf:Bag (unordered set, treat as array)
-    else if (child.findElements('rdf:Bag').isNotEmpty) {
-      final bag = child.findElements('rdf:Bag').first;
-      json[canonicalTagName] = bag.findElements('rdf:li').map((e) => e.innerText).toList();
+
+    // Check for rdf:Bag (unordered set)
+    final bag = child.findElements('rdf:Bag').firstOrNull;
+    if (bag != null) {
+      json[canonicalKey] = bag.findElements('rdf:li').map((e) => e.innerText).toList();
+      continue;
     }
+
     // Simple text node
-    else if (child.children.length == 1 && child.children.first is XmlText) {
-      json[canonicalTagName] = (child.children.first as XmlText).value;
+    if (child.children.length == 1 && child.children.first is XmlText) {
+      json[canonicalKey] = (child.children.first as XmlText).value;
     }
   }
 }
 
-/// Resolve a canonical qualified name from prefix and local name.
-String _canonicalKeyFromPrefix(String prefix, String local, Map<String, String> uriToPrefix) {
-  // Check if prefix maps to a known namespace URI
-  final uri = uriToPrefix.entries
-      .where((e) => e.value == prefix)
-      .map((e) => e.key)
-      .firstOrNull;
+/// Get canonical key for an attribute, returns null if unrecognized.
+String? _canonicalKeyFromAttr(XmlAttribute attr, Map<String, String> prefixToUri) {
+  final prefix = attr.name.prefix ?? '';
+  final local = attr.name.local;
+  return _canonicalKeyFromPrefixAndLocal(prefix, local, prefixToUri);
+}
 
-  if (uri == _provNs || prefix == 'prov' || prefix == 'pv') {
-    return 'prov:$local';
-  }
-  if (uri == _dcNs || prefix == 'dc') {
-    return 'dc:$local';
-  }
-  if (uri == _xmpNs || prefix == 'xmp') {
-    return 'xmp:$local';
-  }
-  if (uri == _photoshopNs || prefix == 'photoshop') {
-    return 'photoshop:$local';
+/// Get canonical key for an element, returns null if unrecognized.
+String? _canonicalKeyFromElement(XmlElement elem, Map<String, String> prefixToUri) {
+  final prefix = elem.name.prefix ?? '';
+  final local = elem.name.local;
+  return _canonicalKeyFromPrefixAndLocal(prefix, local, prefixToUri);
+}
+
+/// Resolve canonical key from prefix and local name.
+/// Returns null if the namespace URI doesn't match a known provenance namespace.
+String? _canonicalKeyFromPrefixAndLocal(
+  String prefix,
+  String local,
+  Map<String, String> prefixToUri,
+) {
+  // No prefix: try to match by local name to known fields (fallback)
+  if (prefix.isEmpty) {
+    return _canonicalKeyFromLocalName(local);
   }
 
-  // Unknown prefix: return as-is
-  return '$prefix:$local';
+  // Get the namespace URI for this prefix
+  final uri = prefixToUri[prefix];
+
+  // If xmlns wasn't parsed (uri is null), fall back to known prefix names only
+  if (uri == null) {
+    if (prefix == 'prov' || prefix == 'pv') return 'prov:$local';
+    if (prefix == 'dc') return 'dc:$local';
+    if (prefix == 'xmp') return 'xmp:$local';
+    if (prefix == 'photoshop') return 'photoshop:$local';
+    return null;
+  }
+
+  // Map namespace URI to canonical prefix - URI MUST match
+  if (uri == provNsUri) return 'prov:$local';
+  if (uri == dcNsUri) return 'dc:$local';
+  if (uri == xmpNsUri) return 'xmp:$local';
+  if (uri == photoshopNsUri) return 'photoshop:$local';
+
+  // Unknown namespace: ignore (not a provenance field)
+  return null;
+}
+
+/// Fallback: match by local name for known provenance fields.
+String? _canonicalKeyFromLocalName(String local) {
+  switch (local) {
+    case 'schema':
+    case 'assetId':
+    case 'capturedAt':
+    case 'capturedBy':
+    case 'sourceUrl':
+    case 'platform':
+    case 'sourceId':
+    case 'itemIndex':
+    case 'itemCount':
+    case 'authorId':
+    case 'publishedAt':
+    case 'metadataDate':
+      return 'prov:$local';
+    case 'MetadataDate':
+      return 'xmp:$local';
+    case 'title':
+    case 'creator':
+    case 'description':
+    case 'subject':
+      return 'dc:$local';
+    case 'Rating':
+      return 'xmp:$local';
+    case 'Credit':
+      return 'photoshop:$local';
+    default:
+      return null;
+  }
 }
 
 /// Build XMP XML string from XmpProvenance model.
