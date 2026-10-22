@@ -75,7 +75,9 @@ class AppSettings {
         HistorySort.latest,
       )
       ..saveProvenanceInImages = prefs.getBool('saveProvenanceInImages') ?? true
-      ..usedAlbumNames = prefs.getStringList('usedAlbumNames') ?? const [];
+      ..usedAlbumNames = List<String>.from(
+        prefs.getStringList('usedAlbumNames') ?? const <String>[],
+      );
   }
 
   Future<void> save() async {
@@ -106,7 +108,7 @@ class AppSettings {
       (n) => n.trim().toLowerCase() == trimmed.toLowerCase(),
     );
     if (exists) return;
-    usedAlbumNames.add(trimmed);
+    usedAlbumNames = <String>[...usedAlbumNames, trimmed];
   }
 
   /// All albums the app has used: the current one plus the remembered ones.

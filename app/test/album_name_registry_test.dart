@@ -12,6 +12,7 @@ import 'package:easysave/services/album_name_registry.dart';
 import 'package:easysave/services/history_db.dart';
 import 'package:easysave/services/settings.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 void main() {
@@ -62,6 +63,16 @@ void main() {
   }
 
   group('AppSettings album list', () {
+    test('rememberAlbum supports the unpersisted production default list', () {
+      final settings = AppSettings();
+
+      settings.rememberAlbum('EasySave');
+      settings.rememberAlbum('EasySave5');
+
+      expect(settings.usedAlbumNames, ['EasySave', 'EasySave5']);
+      expect(settings.effectiveAlbumNames, ['EasySave', 'EasySave5']);
+    });
+
     test('renaming the album appends and keeps the old one', () {
       final settings = AppSettings()..albumName = 'EasySave';
       settings.rememberAlbum(settings.albumName);
@@ -92,7 +103,8 @@ void main() {
       await seedFile('post1', 'media1');
       await seedFile('post2', 'media2');
 
-      final settings = AppSettings()..albumName = 'EasySave';
+      SharedPreferences.setMockInitialValues({});
+      final settings = await AppSettings.load();
       final added = await AlbumNameRegistry.completeFromHistory(
         settings,
         db: db,

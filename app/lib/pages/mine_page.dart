@@ -363,13 +363,35 @@ class _MinePageState extends State<MinePage> with WidgetsBindingObserver {
   Future<({Set<String> albums, bool allAlbums})?> _pickRebuildAlbums() async {
     final locator = GalleryLocatorService.instance;
     // Make sure the used-album list is complete before showing it.
-    await AlbumNameRegistry.completeFromHistory(_settings);
-    await _saveSettings();
+    try {
+      await AlbumNameRegistry.completeFromHistory(_settings);
+      await _saveSettings();
+    } catch (e) {
+      await DevLog.write(
+        'V16DL',
+        'WARN: failed to prepare rebuild album names: $e',
+        level: DevLogLevel.warn,
+      );
+    }
 
     final used = _settings.effectiveAlbumNames;
     if (!mounted) return null;
-    final options = await locator.albumOptions();
-    final allCount = await locator.allAlbumCount();
+    var options = await locator.albumOptions();
+    var allCount = 0;
+    try {
+      allCount = await locator.allAlbumCount();
+    } catch (e) {
+      await DevLog.write(
+        'V16DL',
+        'WARN: failed to count albums for rebuild picker: $e',
+        level: DevLogLevel.warn,
+      );
+    }
+    for (final album in used) {
+      if (!options.any((option) => option.name.toLowerCase() == album.toLowerCase())) {
+        options = [...options, (name: album, count: 0)];
+      }
+    }
     if (!mounted) return null;
 
     final selected = <String>{...used};

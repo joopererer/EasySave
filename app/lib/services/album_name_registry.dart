@@ -52,12 +52,20 @@ abstract final class AlbumNameRegistry {
     final resolver = queryAlbum ?? MediaHeaderService.queryAlbum;
     final added = <String>[];
     for (final mediaId in mediaIds) {
-      final info = await resolver(mediaId);
-      final name = _albumNameOf(info?.album, info?.relativePath);
-      if (name == null) continue;
-      final before = settings.usedAlbumNames.length;
-      settings.rememberAlbum(name);
-      if (settings.usedAlbumNames.length > before) added.add(name);
+      try {
+        final info = await resolver(mediaId);
+        final name = _albumNameOf(info?.album, info?.relativePath);
+        if (name == null) continue;
+        final before = settings.usedAlbumNames.length;
+        settings.rememberAlbum(name);
+        if (settings.usedAlbumNames.length > before) added.add(name);
+      } catch (e) {
+        DevLog.write(
+          logTag,
+          'WARN: failed to complete album name for media $mediaId: $e',
+          level: DevLogLevel.warn,
+        );
+      }
     }
 
     if (added.isNotEmpty) {
