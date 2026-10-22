@@ -29,6 +29,16 @@ abstract final class LocalAutoBackup {
     return File('${backupDir.path}/easysave-backup.json');
   }
 
+  /// Check if a private backup file exists.
+  static Future<bool> hasPrivateBackup({String? customSupportDirPath}) async {
+    try {
+      final file = await getBackupFile(customSupportDirPath: customSupportDirPath);
+      return await file.exists();
+    } catch (_) {
+      return false;
+    }
+  }
+
   /// Perform automatic backup to private directory.
   /// Returns true if backup was written, false if skipped (e.g. empty history or throttled).
   static Future<bool> performAutoBackup({
@@ -56,15 +66,22 @@ abstract final class LocalAutoBackup {
       }
     }
 
+    final currentSettings = settings ?? await AppSettings.load();
     final jsonContent = await BackupService.exportBackup(
       db: store,
-      settings: settings,
+      settings: currentSettings,
       now: currentTime,
     );
 
     final file = await getBackupFile(customSupportDirPath: customSupportDirPath);
     await file.writeAsString(jsonContent, flush: true);
     _lastBackupTimestampMs = currentTime.millisecondsSinceEpoch;
+    try {
+      currentSettings.lastBackupTime = currentTime.millisecondsSinceEpoch;
+      await currentSettings.save();
+    } catch (_) {
+      // Best effort saving lastBackupTime
+    }
     return true;
   }
 }

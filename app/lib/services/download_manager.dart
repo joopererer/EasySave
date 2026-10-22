@@ -17,6 +17,7 @@ import '../core/dev_log.dart';
 import '../core/models.dart';
 import '../metadata/metadata_service.dart';
 import '../metadata/xmp_model.dart';
+import 'backup/local_auto_backup.dart';
 import 'gallery_locator_service.dart';
 import 'history_db.dart';
 import 'parse_service.dart';
@@ -981,6 +982,7 @@ class DownloadManager extends ChangeNotifier {
       if (locator.hasAccess) {
         unawaited(locator.scanAlbum(force: true));
       }
+      unawaited(LocalAutoBackup.performAutoBackup(db: db));
     }
     // Record who finished a batch it did not start. The snapshot keeps its
     // terminal jobs, so this flag is the only thing that stops the next start
