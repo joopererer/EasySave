@@ -15,6 +15,7 @@ import '../services/history_rebuild_service.dart';
 import '../services/settings.dart';
 import '../services/tile_service.dart';
 import '../services/update_service.dart';
+import 'backup_restore_page.dart';
 import 'login_page.dart';
 
 class MinePage extends StatefulWidget {
@@ -581,6 +582,16 @@ class _MinePageState extends State<MinePage> with WidgetsBindingObserver {
 
   /// Copy the (already redacted) log file out of the app's private directory
   /// so it can be read with `adb shell cat .../files/v16dl.log`.
+  String _formatBackupTime(int epochMs) {
+    final dt = DateTime.fromMillisecondsSinceEpoch(epochMs);
+    final y = dt.year.toString().padLeft(4, '0');
+    final m = dt.month.toString().padLeft(2, '0');
+    final d = dt.day.toString().padLeft(2, '0');
+    final h = dt.hour.toString().padLeft(2, '0');
+    final min = dt.minute.toString().padLeft(2, '0');
+    return '$y-$m-$d $h:$min';
+  }
+
   Future<void> _exportLog() async {
     final messenger = ScaffoldMessenger.of(context);
     final path = await DevLog.exportToExternal();
@@ -777,6 +788,24 @@ class _MinePageState extends State<MinePage> with WidgetsBindingObserver {
           Card(
             child: Column(
               children: [
+                ListTile(
+                  leading: const Icon(Icons.backup_outlined),
+                  title: const Text('备份与恢复'),
+                  subtitle: Text(
+                    _settings.lastBackupTime != null
+                        ? '上次备份：${_formatBackupTime(_settings.lastBackupTime!)}'
+                        : (_settings.backupTreeUri != null ? '已设置备份目录' : '未设置备份目录'),
+                  ),
+                  trailing: const Icon(Icons.chevron_right),
+                  onTap: () async {
+                    await Navigator.of(context).push(
+                      MaterialPageRoute(
+                        builder: (_) => const BackupRestorePage(),
+                      ),
+                    );
+                    await _load();
+                  },
+                ),
                 ListTile(
                   title: const Text('从相册重建历史'),
                   subtitle: const Text('扫描相册中的图片，读取来源信息'),

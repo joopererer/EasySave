@@ -498,6 +498,22 @@ class DownloadManager extends ChangeNotifier {
 
   DownloadBatch? batchById(String batchId) => _batches[batchId];
 
+  /// Whether any download batch is currently active or queued.
+  bool get hasActiveDownloads =>
+      _batches.values.any((b) => !b.isTerminal);
+
+  @visibleForTesting
+  void setBatchForTesting(DownloadBatch batch) {
+    _batches[batch.batchId] = batch;
+    notifyListeners();
+  }
+
+  @visibleForTesting
+  void clearBatchesForTesting() {
+    _batches.clear();
+    notifyListeners();
+  }
+
   static String _batchKey(String batchId) => 'easysave_batch_$batchId';
   static const _batchIndexKey = 'easysave_batches';
 

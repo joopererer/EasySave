@@ -379,6 +379,14 @@ class HistoryDb {
     _instances.clear();
   }
 
+  static void setInstanceForTesting(HistoryDb? db) {
+    if (db == null) {
+      _instances.remove(_defaultKey);
+    } else {
+      _instances[_defaultKey] = Future.value(db);
+    }
+  }
+
   /// One history store per database file, per isolate.
   ///
   /// The *future* is cached, not just the result: `instance()` is called from

@@ -1,6 +1,7 @@
 // Copyright 2026 EasySave. All rights reserved.
 // Core export, import, and reconciliation logic for backups (spec/backup.md).
 
+import 'dart:async';
 import 'dart:convert';
 
 import '../../metadata/date_formatter.dart';
@@ -14,12 +15,18 @@ class ImportResult {
   final int restoredFiles;
   final bool restoredSettings;
   final bool overlayNotice;
+  final int insertedPosts;
+  final int mergedPosts;
+  final int skippedPosts;
 
   ImportResult({
     required this.restoredPosts,
     required this.restoredFiles,
     required this.restoredSettings,
     this.overlayNotice = false,
+    this.insertedPosts = 0,
+    this.mergedPosts = 0,
+    this.skippedPosts = 0,
   });
 }
 
@@ -171,7 +178,7 @@ abstract final class BackupService {
     HistoryDb? db,
     AppSettings? settings,
     bool restoreSettings = false,
-    bool Function(String)? checkOverlayPermission,
+    FutureOr<bool> Function(String)? checkOverlayPermission,
   }) async {
     final decoded = jsonDecode(jsonStr);
     if (decoded is! Map) {
@@ -181,8 +188,19 @@ abstract final class BackupService {
     final database = db ?? await HistoryDb.instance();
 
     var restoredFilesCount = 0;
+    var insertedPosts = 0;
+    var mergedPosts = 0;
+    var skippedPosts = 0;
+
     for (final post in data.posts) {
       final appPlatform = toAppPlatform(post.platform);
+      final existing = await database.getByPostId(post.sourceId) ??
+          await database.getByPostUrl(post.originalUrl);
+      if (existing == null) {
+        insertedPosts++;
+      } else {
+        mergedPosts++;
+      }
 
       final files = <HistoryFile>[];
       for (final f in post.files) {
@@ -258,7 +276,9 @@ abstract final class BackupService {
 
       // Bubble permission safeguard
       if (data.settings.bubbleEnabled) {
-        final hasOverlay = checkOverlayPermission?.call('overlay') ?? false;
+        final hasOverlay = checkOverlayPermission != null
+            ? await checkOverlayPermission('overlay')
+            : false;
         if (hasOverlay) {
           settings.bubbleEnabled = true;
         } else {
@@ -277,6 +297,9 @@ abstract final class BackupService {
       restoredFiles: restoredFilesCount,
       restoredSettings: restoreSettings,
       overlayNotice: overlayNotice,
+      insertedPosts: insertedPosts,
+      mergedPosts: mergedPosts,
+      skippedPosts: skippedPosts,
     );
   }
 }
