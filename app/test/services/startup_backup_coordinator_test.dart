@@ -28,7 +28,7 @@ void main() {
       expect(content.contains('<data-extraction-rules>'), isTrue);
       expect(content.contains('<cloud-backup>'), isTrue);
       expect(content.contains('<device-transfer>'), isTrue);
-      expect(content.contains('<include domain="file" path="backup/easysave-backup.json" />'), isTrue);
+      expect(content.contains('<include domain="file" path="backup/" />'), isTrue);
       expect(content.contains('<exclude domain="database" path="." />'), isTrue);
       expect(content.contains('<exclude domain="sharedpref" path="." />'), isTrue);
     });
@@ -42,7 +42,7 @@ void main() {
 
       final content = file.readAsStringSync();
       expect(content.contains('<full-backup-content>'), isTrue);
-      expect(content.contains('<include domain="file" path="backup/easysave-backup.json" />'), isTrue);
+      expect(content.contains('<include domain="file" path="backup/" />'), isTrue);
       expect(content.contains('<exclude domain="database" path="." />'), isTrue);
       expect(content.contains('<exclude domain="sharedpref" path="." />'), isTrue);
     });

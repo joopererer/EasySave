@@ -2,6 +2,7 @@
 // Tier 3 SAF folder backup service, rotation logic, and platform channel bridge.
 
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:flutter/services.dart';
 
@@ -32,6 +33,12 @@ class SafDirectoryNotFoundException extends SafException {
 /// Thrown when the target storage volume is full.
 class SafStorageFullException extends SafException {
   const SafStorageFullException([super.message = 'Storage volume is full']);
+}
+
+/// Thrown when read-back verification of a written backup file fails
+/// (e.g. format mismatch, version mismatch, or posts count mismatch).
+class SafVerificationException extends SafException {
+  const SafVerificationException([super.message = 'Backup read-back verification failed']);
 }
 
 /// General I/O exception during SAF read/write operations.
@@ -157,7 +164,7 @@ abstract final class SafService {
     }
   }
 
-  /// Write a backup file to the target tree directory and trigger rotation.
+  /// Write a backup file to the target tree directory.
   static Future<String> writeBackupToDirectory(
     String treeUri,
     String fileName,
@@ -181,11 +188,79 @@ abstract final class SafService {
     }
   }
 
-  /// Check if the active history is empty (used by UI to trigger manual confirmation dialog).
-  static Future<bool> isHistoryEmpty({HistoryDb? db}) async {
-    final store = db ?? await HistoryDb.instance();
-    final count = await store.countActive();
-    return count == 0;
+  /// Prune old backups in the directory via platform channel.
+  static Future<int> rotateBackups(
+    String treeUri, {
+    MethodChannel? channelOverride,
+  }) async {
+    final ch = channelOverride ?? _channel;
+    try {
+      final pruned = await ch.invokeMethod<int>('rotateBackups', {
+        'treeUri': treeUri,
+      });
+      return pruned ?? 0;
+    } on PlatformException catch (e) {
+      DevLog.write('SAF', 'rotateBackups error: ${e.message}', level: DevLogLevel.warn);
+      throw _mapPlatformException(e);
+    }
+  }
+
+  /// Writes backup JSON to target tree directory, reads back and verifies
+  /// (format, formatVersion, postCount), and ONLY then triggers rotation.
+  /// Throws [SafVerificationException] or [SafException] on failure.
+  static Future<String> writeAndVerifyBackup({
+    required String treeUri,
+    required String fileName,
+    required String content,
+    required int expectedPostCount,
+    MethodChannel? channelOverride,
+  }) async {
+    // 1. Write new file (or overwrite existing same-name file with "wt")
+    final fileUri = await writeBackupToDirectory(
+      treeUri,
+      fileName,
+      content,
+      channelOverride: channelOverride,
+    );
+
+    // 2. Read back & verify
+    final readBackContent = await readDocumentContent(
+      fileUri,
+      channelOverride: channelOverride,
+    );
+
+    final Map<String, dynamic> readBackData;
+    try {
+      final decoded = jsonDecode(readBackContent);
+      if (decoded is! Map<String, dynamic>) {
+        throw const FormatException('Root is not a JSON object');
+      }
+      readBackData = decoded;
+    } catch (e) {
+      throw SafVerificationException('Failed to parse read-back backup JSON: $e');
+    }
+
+    if (readBackData['format'] != 'easysave-backup') {
+      throw SafVerificationException(
+        "Invalid format in read-back backup: ${readBackData['format']}",
+      );
+    }
+    if (readBackData['formatVersion'] != 1) {
+      throw SafVerificationException(
+        "Invalid formatVersion in read-back backup: ${readBackData['formatVersion']}",
+      );
+    }
+    final readPosts = readBackData['posts'] as List?;
+    if (readPosts == null || readPosts.length != expectedPostCount) {
+      throw SafVerificationException(
+        'Post count mismatch: expected $expectedPostCount, got ${readPosts?.length}',
+      );
+    }
+
+    // 3. Verification passed: prune / rotate old backups
+    await rotateBackups(treeUri, channelOverride: channelOverride);
+
+    return fileUri;
   }
 
   /// Perform automatic backup to the user's selected SAF folder.
@@ -204,8 +279,7 @@ abstract final class SafService {
     }
 
     final store = db ?? await HistoryDb.instance();
-    final count = await store.countActive();
-    if (count == 0) {
+    if (await BackupService.isHistoryEmpty(db: store)) {
       // Empty history protection (§4.3):
       // When history is empty, Tier 3 auto-backup MUST NOT write any file
       // and MUST NOT run rotation pruning, preserving existing backups.
@@ -227,12 +301,15 @@ abstract final class SafService {
       settings: currentSettings,
       now: currentTime,
     );
+    final decoded = jsonDecode(jsonContent) as Map<String, dynamic>;
+    final expectedPostCount = (decoded['posts'] as List).length;
 
     final fileName = formatBackupFileName(currentTime);
-    await writeBackupToDirectory(
-      treeUri,
-      fileName,
-      jsonContent,
+    await writeAndVerifyBackup(
+      treeUri: treeUri,
+      fileName: fileName,
+      content: jsonContent,
+      expectedPostCount: expectedPostCount,
       channelOverride: channelOverride,
     );
 
@@ -263,12 +340,15 @@ abstract final class SafService {
       settings: currentSettings,
       now: currentTime,
     );
+    final decoded = jsonDecode(jsonContent) as Map<String, dynamic>;
+    final expectedPostCount = (decoded['posts'] as List).length;
 
     final fileName = formatBackupFileName(currentTime);
-    final fileUri = await writeBackupToDirectory(
-      treeUri,
-      fileName,
-      jsonContent,
+    final fileUri = await writeAndVerifyBackup(
+      treeUri: treeUri,
+      fileName: fileName,
+      content: jsonContent,
+      expectedPostCount: expectedPostCount,
       channelOverride: channelOverride,
     );
 

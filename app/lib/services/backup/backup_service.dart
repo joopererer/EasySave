@@ -24,6 +24,14 @@ class ImportResult {
 }
 
 abstract final class BackupService {
+  /// Check if the active (non-deleted) history is empty.
+  /// Shared across services and UI to enforce empty history protection.
+  static Future<bool> isHistoryEmpty({HistoryDb? db}) async {
+    final store = db ?? await HistoryDb.instance();
+    final count = await store.countActive();
+    return count == 0;
+  }
+
   /// Export backup JSON containing active history records and non-sensitive settings.
   /// Strictly queries non-deleted records (`is_deleted = 0`).
   static Future<String> exportBackup({

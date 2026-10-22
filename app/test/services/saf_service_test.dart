@@ -7,6 +7,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 import 'package:easysave/services/backup/saf_service.dart';
+import 'package:easysave/services/backup/backup_service.dart';
 import 'package:easysave/services/history_db.dart';
 import 'package:easysave/services/settings.dart';
 
@@ -107,7 +108,7 @@ void main() {
     });
 
     test('isHistoryEmpty correctly identifies empty vs non-empty history', () async {
-      expect(await SafService.isHistoryEmpty(db: db), isTrue);
+      expect(await BackupService.isHistoryEmpty(db: db), isTrue);
 
       await db.upsert(
         HistoryRecord(
@@ -121,7 +122,7 @@ void main() {
         ),
       );
 
-      expect(await SafService.isHistoryEmpty(db: db), isFalse);
+      expect(await BackupService.isHistoryEmpty(db: db), isFalse);
     });
 
     test('performAutoBackupToDirectory: history empty skips auto-backup without writing or deleting', () async {
@@ -159,7 +160,7 @@ void main() {
       expect(result, isFalse);
     });
 
-    test('performAutoBackupToDirectory: active history executes backup and updates lastBackupTime', () async {
+    test('performAutoBackupToDirectory: active history executes backup, verifies, rotates, and updates lastBackupTime', () async {
       await db.upsert(
         HistoryRecord(
           platform: 'xhs',
@@ -174,6 +175,7 @@ void main() {
 
       var writtenFileName = '';
       var writtenContent = '';
+      var rotated = false;
       final channel = MethodChannel('mock_channel');
       TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
           .setMockMethodCallHandler(channel, (call) async {
@@ -181,6 +183,11 @@ void main() {
           writtenFileName = call.arguments['fileName'] as String;
           writtenContent = call.arguments['content'] as String;
           return 'content://uri/$writtenFileName';
+        } else if (call.method == 'readDocumentContent') {
+          return writtenContent;
+        } else if (call.method == 'rotateBackups') {
+          rotated = true;
+          return 0;
         }
         return null;
       });
@@ -196,6 +203,7 @@ void main() {
       );
 
       expect(result, isTrue);
+      expect(rotated, isTrue);
       expect(writtenFileName, 'easysave-backup-20261022-1630.json');
       expect(writtenContent.contains('easysave-backup'), isTrue);
       expect(settings.lastBackupTime, backupTime.millisecondsSinceEpoch);
@@ -215,12 +223,18 @@ void main() {
       );
 
       int writeCount = 0;
+      String lastWritten = '';
       final channel = MethodChannel('mock_channel');
       TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
           .setMockMethodCallHandler(channel, (call) async {
         if (call.method == 'writeBackupToDirectory') {
           writeCount++;
+          lastWritten = call.arguments['content'] as String;
           return 'content://uri/file';
+        } else if (call.method == 'readDocumentContent') {
+          return lastWritten;
+        } else if (call.method == 'rotateBackups') {
+          return 0;
         }
         return null;
       });
@@ -326,6 +340,144 @@ void main() {
         () => SafService.readDocumentContent('content://uri', channelOverride: channel),
         throwsA(isA<SafIOException>()),
       );
+    });
+  });
+
+  group('2a Correction: Write, Read-back Verification and Rotation Order', () {
+    test('writeAndVerifyBackup: verification succeeds and triggers rotation', () async {
+      var rotateCalled = false;
+      var writeCalled = false;
+      const validJson = '{"format":"easysave-backup","formatVersion":1,"exportedAt":"2026-10-22T10:00:00Z","posts":[{"platform":"xiaohongshu","postId":"1"}]}';
+
+      final channel = MethodChannel('mock_verify_channel');
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(channel, (call) async {
+        if (call.method == 'writeBackupToDirectory') {
+          writeCalled = true;
+          return 'content://uri/easysave-backup-20261022-1000.json';
+        } else if (call.method == 'readDocumentContent') {
+          return validJson;
+        } else if (call.method == 'rotateBackups') {
+          rotateCalled = true;
+          return 1;
+        }
+        return null;
+      });
+
+      final resultUri = await SafService.writeAndVerifyBackup(
+        treeUri: 'content://tree/target',
+        fileName: 'easysave-backup-20261022-1000.json',
+        content: validJson,
+        expectedPostCount: 1,
+        channelOverride: channel,
+      );
+
+      expect(resultUri, 'content://uri/easysave-backup-20261022-1000.json');
+      expect(writeCalled, isTrue);
+      expect(rotateCalled, isTrue);
+    });
+
+    test('writeAndVerifyBackup: write failure throws SafException and does NOT rotate (old backups unchanged)', () async {
+      var rotateCalled = false;
+      int existingBackupsCount = 5;
+
+      final channel = MethodChannel('mock_verify_channel');
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(channel, (call) async {
+        if (call.method == 'writeBackupToDirectory') {
+          throw PlatformException(code: 'IO_ERROR', message: 'Disk failure');
+        } else if (call.method == 'rotateBackups') {
+          rotateCalled = true;
+          existingBackupsCount--;
+          return 1;
+        }
+        return null;
+      });
+
+      await expectLater(
+        () => SafService.writeAndVerifyBackup(
+          treeUri: 'content://tree/target',
+          fileName: 'easysave-backup-20261022-1000.json',
+          content: '{}',
+          expectedPostCount: 1,
+          channelOverride: channel,
+        ),
+        throwsA(isA<SafIOException>()),
+      );
+
+      expect(rotateCalled, isFalse);
+      expect(existingBackupsCount, 5, reason: 'Old backups count must remain unchanged when write fails');
+    });
+
+    test('writeAndVerifyBackup: post count mismatch throws SafVerificationException and does NOT rotate', () async {
+      var rotateCalled = false;
+      int existingBackupsCount = 5;
+      // Read-back content has 1 post, but expected was 2
+      const jsonWithOnePost = '{"format":"easysave-backup","formatVersion":1,"exportedAt":"2026-10-22T10:00:00Z","posts":[{"platform":"xiaohongshu","postId":"1"}]}';
+
+      final channel = MethodChannel('mock_verify_channel');
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(channel, (call) async {
+        if (call.method == 'writeBackupToDirectory') {
+          return 'content://uri/easysave-backup-20261022-1000.json';
+        } else if (call.method == 'readDocumentContent') {
+          return jsonWithOnePost;
+        } else if (call.method == 'rotateBackups') {
+          rotateCalled = true;
+          existingBackupsCount--;
+          return 1;
+        }
+        return null;
+      });
+
+      await expectLater(
+        () => SafService.writeAndVerifyBackup(
+          treeUri: 'content://tree/target',
+          fileName: 'easysave-backup-20261022-1000.json',
+          content: jsonWithOnePost,
+          expectedPostCount: 2, // Mismatch!
+          channelOverride: channel,
+        ),
+        throwsA(isA<SafVerificationException>()),
+      );
+
+      expect(rotateCalled, isFalse);
+      expect(existingBackupsCount, 5, reason: 'Old backups count must remain unchanged when verification fails');
+    });
+
+    test('writeAndVerifyBackup: format mismatch throws SafVerificationException and does NOT rotate', () async {
+      var rotateCalled = false;
+      int existingBackupsCount = 5;
+      const invalidFormatJson = '{"format":"wrong-format","formatVersion":1,"posts":[]}';
+
+      final channel = MethodChannel('mock_verify_channel');
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(channel, (call) async {
+        if (call.method == 'writeBackupToDirectory') {
+          return 'content://uri/file';
+        } else if (call.method == 'readDocumentContent') {
+          return invalidFormatJson;
+        } else if (call.method == 'rotateBackups') {
+          rotateCalled = true;
+          existingBackupsCount--;
+          return 1;
+        }
+        return null;
+      });
+
+      await expectLater(
+        () => SafService.writeAndVerifyBackup(
+          treeUri: 'content://tree/target',
+          fileName: 'easysave-backup-20261022-1000.json',
+          content: invalidFormatJson,
+          expectedPostCount: 0,
+          channelOverride: channel,
+        ),
+        throwsA(isA<SafVerificationException>()),
+      );
+
+      expect(rotateCalled, isFalse);
+      expect(existingBackupsCount, 5);
     });
   });
 }

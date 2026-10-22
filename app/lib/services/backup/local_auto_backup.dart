@@ -49,8 +49,7 @@ abstract final class LocalAutoBackup {
     DateTime? now,
   }) async {
     final store = db ?? await HistoryDb.instance();
-    final count = await store.countActive();
-    if (count == 0) {
+    if (await BackupService.isHistoryEmpty(db: store)) {
       // Empty history protection (§4.3): never write or overwrite auto backup
       // if active history is empty, preserving existing backups recovered by OS.
       return false;
@@ -74,7 +73,16 @@ abstract final class LocalAutoBackup {
     );
 
     final file = await getBackupFile(customSupportDirPath: customSupportDirPath);
-    await file.writeAsString(jsonContent, flush: true);
+    final tmpFile = File('${file.path}.tmp');
+    await tmpFile.writeAsString(jsonContent, flush: true);
+    try {
+      await tmpFile.rename(file.path);
+    } on FileSystemException {
+      if (await file.exists()) {
+        await file.delete();
+      }
+      await tmpFile.rename(file.path);
+    }
     _lastBackupTimestampMs = currentTime.millisecondsSinceEpoch;
     try {
       currentSettings.lastBackupTime = currentTime.millisecondsSinceEpoch;

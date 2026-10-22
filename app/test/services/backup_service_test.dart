@@ -212,6 +212,40 @@ void main() {
       expect(await backupFile.readAsString(), '{"original":"content"}');
     });
 
+    test('2a Correction: LocalAutoBackup writes to .tmp before atomic rename', () async {
+      final customPath = '${tempDir.path}/app_support_atomic';
+      final backupFile = await LocalAutoBackup.getBackupFile(customSupportDirPath: customPath);
+      final tmpFile = File('${backupFile.path}.tmp');
+
+      // Add a record so history is not empty
+      await db.upsert(
+        HistoryRecord(
+          platform: 'xhs',
+          postId: 'atomic_post_1',
+          postUrl: 'https://example.com/p',
+          title: 'Atomic Post',
+          fileCount: 0,
+          createdAt: DateTime.now(),
+          files: [],
+        ),
+      );
+
+      final didBackup = await LocalAutoBackup.performAutoBackup(
+        db: db,
+        customSupportDirPath: customPath,
+        force: true,
+      );
+
+      expect(didBackup, isTrue);
+      // Official backup file must exist
+      expect(await backupFile.exists(), isTrue);
+      // .tmp file must be renamed/consumed, not left behind
+      expect(await tmpFile.exists(), isFalse);
+
+      final content = await backupFile.readAsString();
+      expect(content, contains('atomic_post_1'));
+    });
+
     test('TC-02: Repeated import is idempotent', () async {
       final now = DateTime(2026, 10, 22, 10, 0, 0);
       final record = HistoryRecord(

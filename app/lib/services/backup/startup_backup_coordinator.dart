@@ -6,6 +6,7 @@ import 'dart:io';
 
 import '../history_db.dart';
 import '../settings.dart';
+import 'backup_service.dart';
 import 'local_auto_backup.dart';
 import 'saf_service.dart';
 
@@ -57,7 +58,7 @@ abstract final class StartupBackupCoordinator {
     bool skipAutoBackupExecution = false,
   }) async {
     final store = db ?? await HistoryDb.instance();
-    final activeCount = await store.countActive();
+    final isHistoryEmpty = await BackupService.isHistoryEmpty(db: store);
     final backupFile = getBackupFileOverride != null
         ? await getBackupFileOverride()
         : await LocalAutoBackup.getBackupFile(
@@ -66,7 +67,7 @@ abstract final class StartupBackupCoordinator {
     final backupExists = await backupFile.exists();
 
     // 1. Mandatory First Step (§4.3): Check if history is empty and private backup exists.
-    if (activeCount == 0) {
+    if (isHistoryEmpty) {
       if (backupExists) {
         hasPendingRestorePrompt = true;
         pendingBackupFile = backupFile;

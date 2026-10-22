@@ -298,6 +298,14 @@ class MainActivity : FlutterActivity() {
                             result.error("INVALID_ARGS", "Missing URI argument", null)
                         }
                     }
+                    "rotateBackups" -> {
+                        val treeUri = call.argument<String>("treeUri")
+                        if (treeUri != null) {
+                            rotateBackupsInDirectory(treeUri, result)
+                        } else {
+                            result.error("INVALID_ARGS", "Missing treeUri argument", null)
+                        }
+                    }
                     else -> result.notImplemented()
                 }
             }
@@ -630,25 +638,29 @@ class MainActivity : FlutterActivity() {
                 return
             }
 
-            val newFile = treeDoc.createFile("application/json", fileName)
-            if (newFile == null) {
-                Log.e("EasySaveSAF", "Failed to create document file: $fileName")
+            // Overwrite existing file with same name if present, avoiding system auto-renaming (e.g. xxx (1).json)
+            val existingFile = treeDoc.findFile(fileName)
+            val targetFile = if (existingFile != null && existingFile.isFile) {
+                existingFile
+            } else {
+                treeDoc.createFile("application/json", fileName)
+            }
+            if (targetFile == null) {
+                Log.e("EasySaveSAF", "Failed to obtain or create document file: $fileName")
                 result.error("IO_ERROR", "Failed to create backup document file", null)
                 return
             }
 
-            val outputStream = contentResolver.openOutputStream(newFile.uri, "w")
-                ?: throw IOException("Unable to open output stream for ${newFile.uri}")
+            // Always open with "wt" mode to truncate and overwrite cleanly
+            val outputStream = contentResolver.openOutputStream(targetFile.uri, "wt")
+                ?: throw IOException("Unable to open output stream for ${targetFile.uri}")
 
             outputStream.use { os ->
                 os.write(content.toByteArray(Charsets.UTF_8))
                 os.flush()
             }
 
-            // Rotate backups in target directory (keep newest 7)
-            rotateBackups(treeDoc)
-
-            result.success(newFile.uri.toString())
+            result.success(targetFile.uri.toString())
         } catch (e: SecurityException) {
             Log.e("EasySaveSAF", "SecurityException writing backup: ${e.message}", e)
             result.error("PERMISSION_LOST", e.message, null)
@@ -666,7 +678,24 @@ class MainActivity : FlutterActivity() {
         }
     }
 
-    private fun rotateBackups(treeDoc: DocumentFile) {
+    private fun rotateBackupsInDirectory(treeUriString: String, result: MethodChannel.Result) {
+        try {
+            val uri = Uri.parse(treeUriString)
+            val treeDoc = DocumentFile.fromTreeUri(this, uri)
+            if (treeDoc != null && treeDoc.exists() && treeDoc.isDirectory) {
+                val deleted = rotateBackups(treeDoc)
+                result.success(deleted)
+            } else {
+                result.success(0)
+            }
+        } catch (e: Exception) {
+            Log.w("EasySaveSAF", "rotateBackupsInDirectory error: ${e.message}", e)
+            result.success(0)
+        }
+    }
+
+    private fun rotateBackups(treeDoc: DocumentFile): Int {
+        var deletedCount = 0
         try {
             val files = treeDoc.listFiles()
             val matchingBackups = mutableListOf<Pair<String, DocumentFile>>()
@@ -687,7 +716,9 @@ class MainActivity : FlutterActivity() {
                 for (i in 7 until matchingBackups.size) {
                     val oldFile = matchingBackups[i].second
                     try {
-                        oldFile.delete()
+                        if (oldFile.delete()) {
+                            deletedCount++
+                        }
                     } catch (e: Exception) {
                         Log.w("EasySaveSAF", "Failed to delete rotated backup: ${oldFile.name}", e)
                     }
@@ -696,6 +727,7 @@ class MainActivity : FlutterActivity() {
         } catch (e: Exception) {
             Log.w("EasySaveSAF", "Rotation error: ${e.message}", e)
         }
+        return deletedCount
     }
 
     private fun readDocumentContent(uriString: String, result: MethodChannel.Result) {
