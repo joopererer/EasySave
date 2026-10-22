@@ -399,6 +399,42 @@ void main() {
 
       _validateJsonMatch(actual, expected, 'multiblock-elements.jpg');
     });
+
+    test('baidupan-single.jpg → JSON matches expected (optional sourceUrl, opaque sourceId)', () async {
+      final file = File(p.join(testVectorsPath, 'baidupan-single.jpg'));
+      final expectedFile = File(p.join(testVectorsPath, 'baidupan-single.jpg.expected.json'));
+      
+      expect(file.existsSync(), isTrue, reason: 'baidupan-single.jpg not found');
+      expect(expectedFile.existsSync(), isTrue, reason: 'baidupan-single.jpg.expected.json not found');
+
+      final bytes = await file.readAsBytes();
+      final xmp = readJpegXmp(bytes);
+      
+      expect(xmp, isNotNull, reason: 'Failed to read XMP from baidupan-single.jpg');
+      
+      final actual = xmp!.toJson();
+      final expected = jsonDecode(await expectedFile.readAsString()) as Map<String, dynamic>;
+
+      _validateJsonMatch(actual, expected, 'baidupan-single.jpg');
+    });
+
+    test('exif-before-xmp.jpg → JSON matches expected (EXIF APP1 skipped, pairId parsed)', () async {
+      final file = File(p.join(testVectorsPath, 'exif-before-xmp.jpg'));
+      final expectedFile = File(p.join(testVectorsPath, 'exif-before-xmp.jpg.expected.json'));
+      
+      expect(file.existsSync(), isTrue, reason: 'exif-before-xmp.jpg not found');
+      expect(expectedFile.existsSync(), isTrue, reason: 'exif-before-xmp.jpg.expected.json not found');
+
+      final bytes = await file.readAsBytes();
+      final xmp = readJpegXmp(bytes);
+      
+      expect(xmp, isNotNull, reason: 'Failed to read XMP from exif-before-xmp.jpg');
+      
+      final actual = xmp!.toJson();
+      final expected = jsonDecode(await expectedFile.readAsString()) as Map<String, dynamic>;
+
+      _validateJsonMatch(actual, expected, 'exif-before-xmp.jpg');
+    });
   });
 
   // =========================================================================
@@ -524,6 +560,160 @@ void main() {
       // XML special characters (& < > ") preserved
       expect(readBack.description, contains('&'));
       expect(readBack.description, contains('<'));
+    });
+
+    test('JPEG: baidupan-single.jpg write → read → verify fields unchanged (sourceUrl omitted, opaque sourceId)', () async {
+      final file = File(p.join(testVectorsPath, 'baidupan-single.jpg'));
+      final bytes = await file.readAsBytes();
+      
+      final originalXmp = readJpegXmp(bytes)!;
+      final originalAssetId = originalXmp.assetId;
+      expect(originalXmp.sourceUrl, isNull);
+      expect(originalXmp.platform, equals('baidupan'));
+      expect(originalXmp.sourceId, equals('1092837465019283'));
+
+      final updatedXmp = XmpProvenance(
+        schema: originalXmp.schema,
+        assetId: originalXmp.assetId,
+        capturedAt: originalXmp.capturedAt,
+        capturedBy: originalXmp.capturedBy,
+        metadataDate: DateTime.now(),
+        sourceUrl: originalXmp.sourceUrl,
+        platform: originalXmp.platform,
+        sourceId: originalXmp.sourceId,
+        itemIndex: originalXmp.itemIndex,
+        itemCount: originalXmp.itemCount,
+        authorId: originalXmp.authorId,
+        publishedAt: originalXmp.publishedAt,
+        pairId: originalXmp.pairId,
+        title: originalXmp.title,
+        creators: originalXmp.creators,
+        description: originalXmp.description,
+        subject: originalXmp.subject,
+        rating: originalXmp.rating,
+        credit: originalXmp.credit,
+        otherFields: originalXmp.otherFields,
+      );
+
+      final modifiedBytes = writeJpegXmp(bytes, updatedXmp);
+      final readBack = readJpegXmp(modifiedBytes)!;
+
+      expect(readBack.assetId, equals(originalAssetId));
+      expect(readBack.sourceUrl, isNull);
+      expect(readBack.platform, equals('baidupan'));
+      expect(readBack.sourceId, equals('1092837465019283'));
+      expect(readBack.title, equals(originalXmp.title));
+      expect(readBack.subject, equals(originalXmp.subject));
+    });
+
+    test('JPEG: baidupan-single.jpg non-metadata bytes unchanged', () async {
+      final file = File(p.join(testVectorsPath, 'baidupan-single.jpg'));
+      final bytes = await file.readAsBytes();
+      final originalXmp = readJpegXmp(bytes)!;
+
+      final updatedXmp = XmpProvenance(
+        schema: originalXmp.schema,
+        assetId: originalXmp.assetId,
+        capturedAt: originalXmp.capturedAt,
+        capturedBy: originalXmp.capturedBy,
+        metadataDate: DateTime.now(),
+        sourceUrl: originalXmp.sourceUrl,
+        platform: originalXmp.platform,
+        sourceId: originalXmp.sourceId,
+        itemIndex: originalXmp.itemIndex,
+        itemCount: originalXmp.itemCount,
+        authorId: originalXmp.authorId,
+        publishedAt: originalXmp.publishedAt,
+        pairId: originalXmp.pairId,
+        title: originalXmp.title,
+        creators: originalXmp.creators,
+        description: originalXmp.description,
+        subject: originalXmp.subject,
+        rating: originalXmp.rating,
+        credit: originalXmp.credit,
+        otherFields: originalXmp.otherFields,
+      );
+      final modifiedBytes = writeJpegXmp(bytes, updatedXmp);
+
+      final nonMetadataDiff = _compareNonMetadataBytes(bytes, modifiedBytes, 'JPEG');
+      expect(nonMetadataDiff, isNull, reason: nonMetadataDiff);
+    });
+
+    test('JPEG: exif-before-xmp.jpg write → read → verify fields unchanged and EXIF preserved (§4.7)', () async {
+      final file = File(p.join(testVectorsPath, 'exif-before-xmp.jpg'));
+      final bytes = await file.readAsBytes();
+      
+      final originalXmp = readJpegXmp(bytes)!;
+      final originalAssetId = originalXmp.assetId;
+      expect(originalXmp.pairId, equals('6ad511fa0000000021034011#1'));
+
+      final updatedXmp = XmpProvenance(
+        schema: originalXmp.schema,
+        assetId: originalXmp.assetId,
+        capturedAt: originalXmp.capturedAt,
+        capturedBy: originalXmp.capturedBy,
+        metadataDate: DateTime.now(),
+        sourceUrl: originalXmp.sourceUrl,
+        platform: originalXmp.platform,
+        sourceId: originalXmp.sourceId,
+        itemIndex: originalXmp.itemIndex,
+        itemCount: originalXmp.itemCount,
+        authorId: originalXmp.authorId,
+        publishedAt: originalXmp.publishedAt,
+        pairId: originalXmp.pairId,
+        title: originalXmp.title,
+        creators: originalXmp.creators,
+        description: originalXmp.description,
+        subject: originalXmp.subject,
+        rating: originalXmp.rating,
+        credit: originalXmp.credit,
+        otherFields: originalXmp.otherFields,
+      );
+
+      final modifiedBytes = writeJpegXmp(bytes, updatedXmp);
+      final readBack = readJpegXmp(modifiedBytes)!;
+
+      expect(readBack.assetId, equals(originalAssetId));
+      expect(readBack.sourceUrl, equals(originalXmp.sourceUrl));
+      expect(readBack.platform, equals(originalXmp.platform));
+      expect(readBack.sourceId, equals(originalXmp.sourceId));
+      expect(readBack.pairId, equals('6ad511fa0000000021034011#1'));
+      expect(readBack.title, equals(originalXmp.title));
+      expect(readBack.rating, equals(originalXmp.rating));
+      expect(readBack.subject, equals(originalXmp.subject));
+    });
+
+    test('JPEG: exif-before-xmp.jpg non-metadata bytes unchanged (EXIF segment preserved byte-for-byte)', () async {
+      final file = File(p.join(testVectorsPath, 'exif-before-xmp.jpg'));
+      final bytes = await file.readAsBytes();
+      final originalXmp = readJpegXmp(bytes)!;
+
+      final updatedXmp = XmpProvenance(
+        schema: originalXmp.schema,
+        assetId: originalXmp.assetId,
+        capturedAt: originalXmp.capturedAt,
+        capturedBy: originalXmp.capturedBy,
+        metadataDate: DateTime.now(),
+        sourceUrl: originalXmp.sourceUrl,
+        platform: originalXmp.platform,
+        sourceId: originalXmp.sourceId,
+        itemIndex: originalXmp.itemIndex,
+        itemCount: originalXmp.itemCount,
+        authorId: originalXmp.authorId,
+        publishedAt: originalXmp.publishedAt,
+        pairId: originalXmp.pairId,
+        title: originalXmp.title,
+        creators: originalXmp.creators,
+        description: originalXmp.description,
+        subject: originalXmp.subject,
+        rating: originalXmp.rating,
+        credit: originalXmp.credit,
+        otherFields: originalXmp.otherFields,
+      );
+      final modifiedBytes = writeJpegXmp(bytes, updatedXmp);
+
+      final nonMetadataDiff = _compareNonMetadataBytes(bytes, modifiedBytes, 'JPEG');
+      expect(nonMetadataDiff, isNull, reason: nonMetadataDiff);
     });
 
     // ----- PNG Tests -----

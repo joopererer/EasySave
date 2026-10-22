@@ -149,6 +149,7 @@ String? _canonicalKeyFromLocalName(String local) {
     case 'authorId':
     case 'publishedAt':
     case 'metadataDate':
+    case 'pairId':
       return 'prov:$local';
     case 'MetadataDate':
       return 'xmp:$local';
@@ -244,6 +245,7 @@ XmpProvenance mergeXmp(XmpProvenance? existing, XmpProvenance newXmp) {
     itemCount: newXmp.itemCount,
     authorId: newXmp.authorId,
     publishedAt: newXmp.publishedAt,
+    pairId: newXmp.pairId ?? existing.pairId,
     title: newXmp.title,
     creators: newXmp.creators,
     description: newXmp.description,

@@ -24,6 +24,7 @@ class XmpProvenance {
   final List<String>? subject;
   final int? rating;
   final String? credit;
+  final String? pairId;
   
   /// Arbitrary fields from other namespaces (e.g., photoshop:Headline).
   /// Preserved when merging XMP.
@@ -42,6 +43,7 @@ class XmpProvenance {
     this.itemCount,
     this.authorId,
     this.publishedAt,
+    this.pairId,
     this.title,
     this.creators,
     this.description,
@@ -58,15 +60,17 @@ class XmpProvenance {
         'capturedAt': formatDateTimeWithTimezone(capturedAt),
         'capturedBy': capturedBy,
         'metadataDate': formatDateTimeWithTimezone(metadataDate),
-        'source': {
-          'url': sourceUrl,
-          'platform': platform,
-          'id': sourceId,
-          if (itemIndex != null) 'itemIndex': itemIndex,
-          if (itemCount != null) 'itemCount': itemCount,
-          if (authorId != null) 'authorId': authorId,
-          if (publishedAt != null) 'publishedAt': formatDateTimeWithTimezone(publishedAt!),
-        },
+        if (sourceUrl != null || platform != null || sourceId != null || itemIndex != null || itemCount != null || authorId != null || publishedAt != null || pairId != null)
+          'source': {
+            if (sourceUrl != null) 'url': sourceUrl,
+            if (platform != null) 'platform': platform,
+            if (sourceId != null) 'id': sourceId,
+            if (itemIndex != null) 'itemIndex': itemIndex,
+            if (itemCount != null) 'itemCount': itemCount,
+            if (authorId != null) 'authorId': authorId,
+            if (publishedAt != null) 'publishedAt': formatDateTimeWithTimezone(publishedAt!),
+            if (pairId != null) 'pairId': pairId,
+          },
         if (title != null) 'title': title,
         if (creators != null) 'creator': creators,
         if (description != null) 'description': description,
@@ -84,13 +88,14 @@ class XmpProvenance {
         'prov:capturedAt': formatDateTimeWithTimezone(capturedAt),
         'prov:capturedBy': capturedBy,
         'xmp:MetadataDate': formatDateTimeWithTimezone(metadataDate),
-        'prov:sourceUrl': sourceUrl,
-        'prov:platform': platform,
-        'prov:sourceId': sourceId,
+        if (sourceUrl != null) 'prov:sourceUrl': sourceUrl,
+        if (platform != null) 'prov:platform': platform,
+        if (sourceId != null) 'prov:sourceId': sourceId,
         if (itemIndex != null) 'prov:itemIndex': itemIndex,
         if (itemCount != null) 'prov:itemCount': itemCount,
         if (authorId != null) 'prov:authorId': authorId,
         if (publishedAt != null) 'prov:publishedAt': formatDateTimeWithTimezone(publishedAt!),
+        if (pairId != null) 'prov:pairId': pairId,
         if (title != null) 'dc:title': title,
         if (creators != null) 'dc:creator': creators,
         if (description != null) 'dc:description': description,
@@ -133,6 +138,7 @@ class XmpProvenance {
     List<String>? subject;
     int? rating;
     String? credit;
+    String? pairId;
 
     // Try XMP format first, fall back to SPEC format
     if (json.containsKey('prov:assetId')) {
@@ -176,6 +182,7 @@ class XmpProvenance {
       if (source?['publishedAt'] != null) {
         publishedAt = DateTime.parse(source!['publishedAt'] as String);
       }
+      pairId = source?['pairId'] as String?;
     } else {
       sourceUrl = json['sourceUrl'] as String?;
     }
@@ -197,6 +204,11 @@ class XmpProvenance {
     }
     if (json.containsKey('prov:publishedAt') && publishedAt == null) {
       publishedAt = DateTime.parse(json['prov:publishedAt'] as String);
+    }
+    if (json.containsKey('prov:pairId') && pairId == null) {
+      pairId = json['prov:pairId'] as String?;
+    } else if (json.containsKey('pairId') && pairId == null) {
+      pairId = json['pairId'] as String?;
     }
 
     // Dublin Core fields
@@ -249,6 +261,7 @@ class XmpProvenance {
       itemCount: itemCount,
       authorId: authorId,
       publishedAt: publishedAt,
+      pairId: pairId,
       title: title,
       creators: creators,
       description: description,
@@ -279,6 +292,7 @@ class XmpProvenance {
     'prov:itemCount',
     'prov:authorId',
     'prov:publishedAt',
+    'prov:pairId',
     'dc:title',
     'dc:creator',
     'dc:description',
@@ -299,6 +313,7 @@ class XmpProvenance {
     'itemCount',
     'authorId',
     'publishedAt',
+    'pairId',
     'title',
     'creator',
     'description',
