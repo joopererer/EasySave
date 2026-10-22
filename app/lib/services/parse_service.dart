@@ -138,9 +138,8 @@ Future<ParseFailure> _reclassifyFailure(String url, ParseFailure e) async {
 /// /login, so HTTP resolution throws away the real note URL and its
 /// `xsec_token`. For XHS we hand the short link to the WebView untouched —
 /// a real browser engine follows the redirect to the actual note page.
+/// Resolve short links to their final URL.
 Future<String> _resolveForParse(String url) async {
-  final host = Uri.tryParse(url)?.host.toLowerCase() ?? '';
-  if (isXhsHost(host)) return url;
   try {
     return await resolveShortLink(
       url,
@@ -179,11 +178,22 @@ Future<void> _waitForNoteState(
 (() => {
   try {
     const state = window.__INITIAL_STATE__;
-    if (!state || !state.note || !state.note.noteDetailMap) return false;
+    if (!state) return false;
     const wanted = ${jsonEncode(noteId)};
-    const map = state.note.noteDetailMap;
-    if (!wanted) return Object.keys(map).length > 0;
-    return Object.prototype.hasOwnProperty.call(map, wanted);
+    if (state.note && state.note.noteDetailMap) {
+      const map = state.note.noteDetailMap;
+      if (!wanted) return Object.keys(map).length > 0;
+      return Object.prototype.hasOwnProperty.call(map, wanted);
+    }
+    if (state.noteData && state.noteData.data) {
+      const note = state.noteData.data.noteData || state.noteData.data;
+      if (note) {
+        if (!wanted) return true;
+        const id = note.noteId || note.id;
+        return !id || id === wanted;
+      }
+    }
+    return false;
   } catch (_) {
     return false;
   }
@@ -375,7 +385,7 @@ Future<ParseOutcome> _headlessParse(String targetUrl, {required bool isXhs}) asy
         sharedCookiesEnabled: true,
         cacheEnabled: true,
         mixedContentMode: MixedContentMode.MIXED_CONTENT_ALWAYS_ALLOW,
-        userAgent: isXhs ? loginUserAgent(PlatformKind.xhs) : null,
+        userAgent: null,
       ),
       // XHS pages auto-navigate to xhsdiscover:// (app-open scheme) after
       // load, and probe 127.0.0.1 to detect its desktop client. Cancel every

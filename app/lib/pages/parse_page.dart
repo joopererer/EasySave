@@ -164,7 +164,11 @@ class ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
     final locator = GalleryLocatorService.instance;
     await locator.checkPermission();
     if (locator.hasAccess) {
-      await locator.preloadMediaIds(_recent);
+      if (!locator.scanned) {
+        await locator.scanAlbum();
+      } else {
+        await locator.preloadMediaIds(_recent);
+      }
       if (mounted) setState(() {});
       await locator.syncAll(_recent);
       if (mounted) setState(() {});
@@ -1048,44 +1052,64 @@ class ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
     final post = PreviewPage.postFromRecord(record);
     final locator = GalleryLocatorService.instance;
 
-    final downloadedIndices = record.files.map((f) => f.itemIndex).toSet();
-    final targetIndices = downloadedIndices.isNotEmpty
-        ? (downloadedIndices.toList()..sort())
-        : [for (var i = 0; i < post.items.length; i++) i];
-
+    final files = [...record.files]..sort((a, b) => a.itemIndex.compareTo(b.itemIndex));
     final items = <GalleryBrowserItem>[];
-    for (final i in targetIndices) {
-      if (i < 0 || i >= post.items.length) continue;
-      final postItem = post.items[i];
-      HistoryFile? matchedFile;
-      for (final f in record.files) {
-        if (f.itemIndex == i) {
-          matchedFile = f;
-          break;
+
+    if (files.isNotEmpty) {
+      final is1Based = files.every((f) => f.itemIndex > 0);
+      for (final f in files) {
+        final zeroBasedIdx = is1Based ? f.itemIndex - 1 : f.itemIndex;
+        MediaItem? postItem;
+        if (zeroBasedIdx >= 0 && zeroBasedIdx < post.items.length) {
+          postItem = post.items[zeroBasedIdx];
+        } else if (f.itemIndex >= 0 && f.itemIndex < post.items.length) {
+          postItem = post.items[f.itemIndex];
         }
+
+        final asset = locator.getAssetById(f.mediaId) ??
+            locator.locateAsset(f, record.postId);
+
+        items.add(
+          GalleryBrowserItem(
+            index: zeroBasedIdx,
+            type: postItem?.type ?? (f.isImage ? 'image' : 'video'),
+            url: postItem?.url ?? '',
+            videoUrl: postItem?.videoUrl,
+            posterUrl: postItem?.posterUrl,
+            fallbacks: postItem?.fallbacks ?? const [],
+            isGif: postItem?.isGif ?? false,
+            asset: asset,
+            status: f.status,
+            filename: f.filename,
+          ),
+        );
       }
-      AssetEntity? asset;
-      FileStatus status = FileStatus.unknown;
-      if (matchedFile != null) {
-        asset =
-            locator.getAssetById(matchedFile.mediaId) ??
-            locator.locateAsset(matchedFile, record.postId);
-        status = matchedFile.status;
+    }
+
+    if (items.isEmpty && post.items.isNotEmpty) {
+      for (var i = 0; i < post.items.length; i++) {
+        final postItem = post.items[i];
+        items.add(
+          GalleryBrowserItem(
+            index: i,
+            type: postItem.type,
+            url: postItem.url,
+            videoUrl: postItem.videoUrl,
+            posterUrl: postItem.posterUrl,
+            fallbacks: postItem.fallbacks,
+            isGif: postItem.isGif ?? false,
+            status: FileStatus.unknown,
+          ),
+        );
       }
-      items.add(
-        GalleryBrowserItem(
-          index: i,
-          type: postItem.type,
-          url: postItem.url,
-          videoUrl: postItem.videoUrl,
-          posterUrl: postItem.posterUrl,
-          fallbacks: postItem.fallbacks,
-          isGif: postItem.isGif ?? false,
-          asset: asset,
-          status: status,
-          filename: matchedFile?.filename,
-        ),
+    }
+
+    if (items.isEmpty) {
+      _openingRecord = false;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('未找到可查看的媒体文件')),
       );
+      return;
     }
 
     Navigator.of(context)

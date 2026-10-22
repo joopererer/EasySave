@@ -36,7 +36,11 @@ function isXhsHost(host: string): boolean {
     host === "xiaohongshu.com" ||
     host.endsWith(".xiaohongshu.com") ||
     host === "xhslink.com" ||
-    host.endsWith(".xhslink.com")
+    host.endsWith(".xhslink.com") ||
+    host === "xhslink.cn" ||
+    host.endsWith(".xhslink.cn") ||
+    host === "xhs.cn" ||
+    host.endsWith(".xhs.cn")
   );
 }
 

@@ -1003,7 +1003,8 @@ class DownloadManager extends ChangeNotifier {
     if (job.state != JobState.failed) return;
     try {
       final outcome = await parsePostOutcome(batch.postUrl);
-      final fresh = planFilesForItem(outcome.data, job.itemIndex);
+      final postIdx = job.itemIndex > 0 ? job.itemIndex - 1 : job.itemIndex;
+      final fresh = planFilesForItem(outcome.data, postIdx);
       if (fresh != null && fresh.isNotEmpty) {
         job.urls = fresh;
       }

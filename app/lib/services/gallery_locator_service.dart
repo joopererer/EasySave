@@ -337,7 +337,7 @@ class GalleryLocatorService extends ChangeNotifier {
           updatedFiles.add(file);
         }
       } else {
-        if (isFullyAuthorized) {
+        if (isFullyAuthorized && _scanned) {
           if (file.status != FileStatus.notFound) {
             updatedFiles.add(file.copyWith(status: FileStatus.notFound));
             changed = true;
@@ -345,7 +345,7 @@ class GalleryLocatorService extends ChangeNotifier {
             updatedFiles.add(file);
           }
         } else {
-          // If permission is limited, denied, or notDetermined, keep unknown
+          // If permission is limited, denied, notDetermined, or album not scanned yet, keep unknown
           if (file.status != FileStatus.unknown) {
             updatedFiles.add(file.copyWith(status: FileStatus.unknown));
             changed = true;
@@ -386,10 +386,12 @@ class GalleryLocatorService extends ChangeNotifier {
       final db = await HistoryDb.instance();
       final record = await db.getByPostId(post.id);
       if (record != null && record.files.isNotEmpty) {
+        final is1Based = record.files.every((f) => f.itemIndex > 0);
         for (final file in record.files) {
           final asset = locateAsset(file, post.id);
           if (asset != null) {
-            result[file.itemIndex] = asset;
+            final zeroBased = is1Based ? file.itemIndex - 1 : file.itemIndex;
+            result[zeroBased] = asset;
           }
         }
       }
@@ -462,7 +464,7 @@ class GalleryLocatorService extends ChangeNotifier {
           filename: asset.title ?? '',
           savedAt: now,
           mediaId: asset.id,
-          itemIndex: i,
+          itemIndex: i + 1,
           isImage: asset.type == AssetType.image,
           status: FileStatus.found,
         ),

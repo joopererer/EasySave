@@ -924,7 +924,7 @@ var EasySaveParser = (() => {
     }
   }
   function isXhsHost(host) {
-    return /xiaohongshu\.com|xhslink\.com/.test(host);
+    return /xiaohongshu\.com|xhslink\.com|xhslink\.cn|xhs\.cn/.test(host);
   }
   function isInstagramHost(host) {
     return /instagram\.com|instagr\.am/.test(host);

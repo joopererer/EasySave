@@ -36,6 +36,11 @@ MediaItem? coverItemFor(HistoryRecord record) {
   if (post.items.isEmpty) return null;
   if (record.files.isNotEmpty) {
     final idx = record.files.first.itemIndex;
+    final is1Based = record.files.every((f) => f.itemIndex > 0);
+    final zeroBased = is1Based ? idx - 1 : idx;
+    if (zeroBased >= 0 && zeroBased < post.items.length) {
+      return post.items[zeroBased];
+    }
     if (idx >= 0 && idx < post.items.length) return post.items[idx];
   }
   return post.items.first;
@@ -677,9 +682,13 @@ class AllMediaCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final post = record.toPost();
-    final item = (itemIndex >= 0 && itemIndex < post.items.length)
-        ? post.items[itemIndex]
-        : null;
+    final is1Based = record.files.isNotEmpty && record.files.every((f) => f.itemIndex > 0);
+    final zeroBased = is1Based ? itemIndex - 1 : itemIndex;
+    final item = (zeroBased >= 0 && zeroBased < post.items.length)
+        ? post.items[zeroBased]
+        : ((itemIndex >= 0 && itemIndex < post.items.length)
+            ? post.items[itemIndex]
+            : null);
     final radius = BorderRadius.circular(16);
     final badge = listTypeBadge(item);
 

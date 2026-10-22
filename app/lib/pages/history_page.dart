@@ -429,48 +429,73 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
 
     final post = record.toPost();
     final locator = GalleryLocatorService.instance;
-    final downloadedIndices = record.files.map((f) => f.itemIndex).toSet();
-    final targetIndices = downloadedIndices.isNotEmpty
-        ? (downloadedIndices.toList()..sort())
-        : [for (var i = 0; i < post.items.length; i++) i];
-
+    final files = [...record.files]..sort((a, b) => a.itemIndex.compareTo(b.itemIndex));
     final items = <GalleryBrowserItem>[];
     var initial = 0;
-    for (final i in targetIndices) {
-      if (i < 0 || i >= post.items.length) continue;
-      final postItem = post.items[i];
-      HistoryFile? matchedFile;
-      for (final f in record.files) {
-        if (f.itemIndex == i) {
-          matchedFile = f;
-          break;
+
+    if (files.isNotEmpty) {
+      final is1Based = files.every((f) => f.itemIndex > 0);
+      for (final f in files) {
+        final zeroBasedIdx = is1Based ? f.itemIndex - 1 : f.itemIndex;
+        MediaItem? postItem;
+        if (zeroBasedIdx >= 0 && zeroBasedIdx < post.items.length) {
+          postItem = post.items[zeroBasedIdx];
+        } else if (f.itemIndex >= 0 && f.itemIndex < post.items.length) {
+          postItem = post.items[f.itemIndex];
         }
+
+        final asset = locator.getAssetById(f.mediaId) ??
+            locator.locateAsset(f, record.postId);
+
+        if (highlightItemIndex != null &&
+            (f.itemIndex == highlightItemIndex || zeroBasedIdx == highlightItemIndex)) {
+          initial = items.length;
+        }
+
+        items.add(
+          GalleryBrowserItem(
+            index: zeroBasedIdx,
+            type: postItem?.type ?? (f.isImage ? 'image' : 'video'),
+            url: postItem?.url ?? '',
+            videoUrl: postItem?.videoUrl,
+            posterUrl: postItem?.posterUrl,
+            fallbacks: postItem?.fallbacks ?? const [],
+            isGif: postItem?.isGif ?? false,
+            asset: asset,
+            status: f.status,
+            filename: f.filename,
+          ),
+        );
       }
-      AssetEntity? asset;
-      FileStatus status = FileStatus.unknown;
-      if (matchedFile != null) {
-        asset =
-            locator.getAssetById(matchedFile.mediaId) ??
-            locator.locateAsset(matchedFile, record.postId);
-        status = matchedFile.status;
+    }
+
+    if (items.isEmpty && post.items.isNotEmpty) {
+      for (var i = 0; i < post.items.length; i++) {
+        final postItem = post.items[i];
+        if (highlightItemIndex != null && i == highlightItemIndex) {
+          initial = items.length;
+        }
+        items.add(
+          GalleryBrowserItem(
+            index: i,
+            type: postItem.type,
+            url: postItem.url,
+            videoUrl: postItem.videoUrl,
+            posterUrl: postItem.posterUrl,
+            fallbacks: postItem.fallbacks,
+            isGif: postItem.isGif ?? false,
+            status: FileStatus.unknown,
+          ),
+        );
       }
-      if (highlightItemIndex != null && i == highlightItemIndex) {
-        initial = items.length;
-      }
-      items.add(
-        GalleryBrowserItem(
-          index: i,
-          type: postItem.type,
-          url: postItem.url,
-          videoUrl: postItem.videoUrl,
-          posterUrl: postItem.posterUrl,
-          fallbacks: postItem.fallbacks,
-          isGif: postItem.isGif ?? false,
-          asset: asset,
-          status: status,
-          filename: matchedFile?.filename,
-        ),
+    }
+
+    if (items.isEmpty) {
+      _opening = false;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('未找到可查看的媒体文件')),
       );
+      return;
     }
 
     Navigator.of(context)
@@ -717,9 +742,13 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
         final byKind = <String, List<HistThumbRef>>{};
         for (final ref in all) {
           final post = ref.record.toPost();
-          final item = (ref.itemIndex >= 0 && ref.itemIndex < post.items.length)
-              ? post.items[ref.itemIndex]
-              : null;
+          final is1Based = ref.record.files.isNotEmpty && ref.record.files.every((f) => f.itemIndex > 0);
+          final zeroBased = is1Based ? ref.itemIndex - 1 : ref.itemIndex;
+          final item = (zeroBased >= 0 && zeroBased < post.items.length)
+              ? post.items[zeroBased]
+              : ((ref.itemIndex >= 0 && ref.itemIndex < post.items.length)
+                  ? post.items[ref.itemIndex]
+                  : null);
           byKind.putIfAbsent(mediaKindLabel(item), () => []).add(ref);
         }
         final ordered = _kindOrder.where(byKind.containsKey).toList()

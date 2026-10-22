@@ -226,8 +226,18 @@ class HistoryRecord {
         // Fall through to the single-thumbnail fallback.
       }
     }
-    if (items.isEmpty && thumbnailUrl != null) {
+    if (items.isEmpty && thumbnailUrl != null && thumbnailUrl!.isNotEmpty) {
       items.add(MediaItem(type: 'image', url: thumbnailUrl!));
+    }
+    if (items.isEmpty && files.isNotEmpty) {
+      for (final f in files) {
+        items.add(
+          MediaItem(
+            type: f.isImage ? 'image' : 'video',
+            url: '',
+          ),
+        );
+      }
     }
     return ParsedPost(
       platform: platform,
