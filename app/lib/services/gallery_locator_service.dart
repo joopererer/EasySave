@@ -435,11 +435,15 @@ class GalleryLocatorService extends ChangeNotifier {
   /// [matches] can be supplied by callers that already resolved the album
   /// assets (the preview page scans once and reuses the result), and by tests.
   /// [db] overrides the history store (tests); production uses the app store.
+  ///
+  /// [restoreDeleted] has no default on purpose: every caller must state
+  /// whether the record it writes may resurrect a record the user deleted.
+  /// Only a user-initiated save passes true; recovery paths must not.
   Future<int> associateExisting(
     ParsedPost post,
     List<int> indices, {
+    required bool restoreDeleted,
     Map<int, AssetEntity>? matches,
-    bool restoreDeleted = true,
     HistoryDb? db,
   }) async {
     final resolved = matches ?? await matchPostItems(post);

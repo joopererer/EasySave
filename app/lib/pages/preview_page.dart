@@ -178,6 +178,9 @@ class _PreviewPageState extends State<PreviewPage> {
       associated = await locator.associateExisting(
         widget.post,
         toAssociate,
+        // The user pressed "保存": the post must be back in the history, even
+        // if they had deleted the record before.
+        restoreDeleted: true,
         matches: matches,
       );
     }

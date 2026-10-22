@@ -120,6 +120,7 @@ void main() {
       final associated = await GalleryLocatorService.instance.associateExisting(
         post,
         [0, 1],
+        restoreDeleted: true,
         matches: matches,
         db: db,
       );
@@ -141,6 +142,7 @@ void main() {
       final associated = await GalleryLocatorService.instance.associateExisting(
         post,
         [0],
+        restoreDeleted: true,
         matches: matches,
         db: db,
       );
