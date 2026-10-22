@@ -115,7 +115,6 @@ void main() {
   });
 
   group('decideBubbleAction (Issue 2: floating bubble deduplication)', () {
-    final xhsId2 = '6ace0d440000000013019639'; // Different post
     final records = <KnownPost>[
       (postUrl: 'https://www.xiaohongshu.com/explore/$xhsId', postId: xhsId),
       (
@@ -197,4 +196,61 @@ void main() {
       );
     });
   });
+
+  group('postIdOfUrl', () {
+    test('extracts 24-hex XHS note id', () {
+      expect(
+        postIdOfUrl('https://www.xiaohongshu.com/explore/6ace0d440000000013019638'),
+        '6ace0d440000000013019638',
+      );
+    });
+
+    test('extracts modern alphanumeric XHS note id from /discovery/item/ and /explore/', () {
+      expect(
+        postIdOfUrl('https://www.xiaohongshu.com/discovery/item/DeqdQQPHcYe?xsec_token=xyz'),
+        'DeqdQQPHcYe',
+      );
+      expect(
+        postIdOfUrl('https://www.xiaohongshu.com/explore/DeqdQQPHcYe'),
+        'DeqdQQPHcYe',
+      );
+    });
+
+    test('extracts Douyin and TikTok video/note ids', () {
+      expect(
+        postIdOfUrl('https://www.douyin.com/video/7123456789012345678'),
+        '7123456789012345678',
+      );
+      expect(
+        postIdOfUrl('https://www.douyin.com/note/7123456789012345678'),
+        '7123456789012345678',
+      );
+      expect(
+        postIdOfUrl('https://www.tiktok.com/@user/video/7123456789012345678'),
+        '7123456789012345678',
+      );
+    });
+
+    test('extracts Bilibili, Instagram, X status ids', () {
+      expect(
+        postIdOfUrl('https://www.bilibili.com/video/BV1xx411c7mD'),
+        'BV1xx411c7mD',
+      );
+      expect(
+        postIdOfUrl('https://www.instagram.com/reel/CxYzAbCdEfG/'),
+        'CxYzAbCdEfG',
+      );
+      expect(
+        postIdOfUrl('https://x.com/user/status/1234567890'),
+        '1234567890',
+      );
+    });
+
+    test('returns null for unparseable or short URLs', () {
+      expect(postIdOfUrl('https://xhslink.cn/o/5E0mBMnzaH4'), isNull);
+      expect(postIdOfUrl('https://v.douyin.com/iABCDEF/'), isNull);
+      expect(postIdOfUrl('not a url'), isNull);
+    });
+  });
 }
+

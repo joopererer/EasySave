@@ -18,8 +18,8 @@ String linkKey(String url) {
   }
 }
 
-/// Best-effort post identity for a link: the XHS 24-hex note id, an
-/// Instagram shortcode or an X status id.
+/// Best-effort post identity for a link: XHS note id (24-hex or alphanumeric),
+/// Douyin/TikTok video/note id, Instagram shortcode, X status id, Bilibili BV/av id, Weibo detail id.
 String? postIdOfUrl(String url) {
   final uri = Uri.tryParse(url.trim());
   if (uri == null) return null;
@@ -27,9 +27,18 @@ String? postIdOfUrl(String url) {
   if (hex != null) return hex.toLowerCase();
   final segs = uri.pathSegments;
   for (var i = 0; i + 1 < segs.length; i++) {
-    final s = segs[i];
-    if (s == 'p' || s == 'reel' || s == 'tv' || s == 'status') {
-      return segs[i + 1].toLowerCase();
+    final s = segs[i].toLowerCase();
+    if (s == 'p' ||
+        s == 'reel' ||
+        s == 'tv' ||
+        s == 'status' ||
+        s == 'item' ||
+        s == 'explore' ||
+        s == 'video' ||
+        s == 'note' ||
+        s == 'detail') {
+      final next = segs[i + 1].trim();
+      if (next.isNotEmpty) return next;
     }
   }
   return null;
@@ -45,12 +54,19 @@ bool isLinkKnown(
 }) {
   final key = linkKey(link);
   if (records.any((r) => linkKey(r.postUrl) == key)) return true;
+  if (resolvedUrl != null && resolvedUrl.trim().isNotEmpty) {
+    final resKey = linkKey(resolvedUrl);
+    if (records.any((r) => linkKey(r.postUrl) == resKey)) return true;
+  }
   final id =
       postIdOfUrl(link) ??
       (resolvedUrl == null ? null : postIdOfUrl(resolvedUrl));
   if (id == null) return false;
+  final idLower = id.toLowerCase();
   return records.any(
-    (r) => r.postId.toLowerCase() == id || postIdOfUrl(r.postUrl) == id,
+    (r) =>
+        r.postId.toLowerCase() == idLower ||
+        postIdOfUrl(r.postUrl)?.toLowerCase() == idLower,
   );
 }
 

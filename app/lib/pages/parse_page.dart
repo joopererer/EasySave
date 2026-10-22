@@ -331,14 +331,15 @@ class ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
   /// matches the record stored under its canonical url.
   Future<bool> _alreadyDownloaded(String link) async {
     if (isLinkKnown(link, _knownPosts)) return true;
-    if (postIdOfUrl(link) != null) return false;
-    // Short link: resolve it once so the note id can be extracted.
+    String? resolved;
     try {
-      return isLinkKnown(
-        link,
-        _knownPosts,
-        resolvedUrl: await resolveShortLink(link),
-      );
+      resolved = await resolveShortLink(link);
+      if (isLinkKnown(link, _knownPosts, resolvedUrl: resolved)) return true;
+    } catch (_) {}
+    try {
+      final db = await HistoryDb.instance();
+      final record = await db.findRecordByLink(link, resolvedUrl: resolved);
+      return record != null;
     } catch (_) {
       return false;
     }
@@ -569,7 +570,7 @@ class ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
   }
 
   /// Parse + open the given url (e.g. the bubble's "打开 EasySave").
-  void showExternalUrl(String url) {
+  Future<void> showExternalUrl(String url) async {
     if (url.trim().isEmpty) return;
     // Claim the clipboard key synchronously: the app is resuming at the same
     // moment and its clipboard check would otherwise prompt for the very
@@ -579,6 +580,16 @@ class ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
       _lastLink = key;
       _externalLink = key;
     }
+    final links = extractLinks(url);
+    if (links.isEmpty) return;
+    if (links.length == 1) {
+      final link = links.first;
+      if (await _alreadyDownloaded(link)) {
+        if (mounted) _clearStaleInput();
+        return;
+      }
+    }
+    if (!mounted) return;
     _handleLinks(url, entry: 'bubble');
   }
 
@@ -607,6 +618,12 @@ class ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
         return;
 
       case PreviewOpenAction.openCached:
+        if (entry == 'bubble') {
+          // When entering via bubble "打开 EasySave", if already in history,
+          // do not push preview; no action needed.
+          if (mounted) _clearStaleInput();
+          return;
+        }
         final existing = decision.cachedRecord;
         if (existing == null) return;
         if (!mounted) return;

@@ -149,6 +149,24 @@ void main() {
       expect(decision.entry, 'share');
     });
 
+    test('matches modern alphanumeric XHS note id case-insensitively', () async {
+      const modernId = 'DeqdQQPHcYe';
+      final record = await seedRecord(
+        postId: modernId,
+        postUrl: 'https://www.xiaohongshu.com/discovery/item/$modernId',
+      );
+
+      // Query with different case or from explore endpoint
+      final decision = await PreviewOpenGuard.decide(
+        entry: 'bubble',
+        link: 'https://www.xiaohongshu.com/explore/${modernId.toLowerCase()}?xsec_token=123',
+        db: db,
+      );
+
+      expect(decision.action, PreviewOpenAction.openCached);
+      expect(decision.cachedRecord?.id, record.id);
+    });
+
     test('a popup over the preview keeps the skip decision', () async {
       PreviewRouteObserver.instance.didPush(_previewRoute(_xhsId), null);
       // A dialog / bottom sheet on top of the preview does not mean the user

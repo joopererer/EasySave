@@ -7,6 +7,7 @@ import 'package:sqflite/sqflite.dart';
 
 import '../core/dev_log.dart';
 import '../core/models.dart';
+import 'clipboard_guard.dart';
 
 enum FileStatus {
   unknown,
@@ -595,12 +596,43 @@ class HistoryDb {
   ) async {
     final rows = await db.query(
       'history_records',
-      where: 'post_id = ?',
+      where: 'LOWER(post_id) = LOWER(?)',
       whereArgs: [postId],
       limit: 1,
     );
     if (rows.isEmpty) return null;
     return HistoryRecord.fromMap(rows.first);
+  }
+
+  /// Find a history record matching a link (by postId, canonical URL, or resolved URL).
+  Future<HistoryRecord?> findRecordByLink(
+    String link, {
+    String? resolvedUrl,
+  }) async {
+    final id = postIdOfUrl(link) ??
+        (resolvedUrl != null ? postIdOfUrl(resolvedUrl) : null);
+    if (id != null) {
+      final rec = await getByPostId(id);
+      if (rec != null && !rec.isDeleted) return rec;
+    }
+    final byUrl = await getByPostUrl(link.trim());
+    if (byUrl != null && !byUrl.isDeleted) return byUrl;
+
+    if (resolvedUrl != null && resolvedUrl.trim().isNotEmpty) {
+      final byResUrl = await getByPostUrl(resolvedUrl.trim());
+      if (byResUrl != null && !byResUrl.isDeleted) return byResUrl;
+    }
+
+    final key = linkKey(link);
+    final resKey = resolvedUrl != null ? linkKey(resolvedUrl) : null;
+    final all = await recent(limit: 50);
+    for (final r in all) {
+      final rKey = linkKey(r.postUrl);
+      if (rKey == key || (resKey != null && rKey == resKey)) {
+        return r;
+      }
+    }
+    return null;
   }
 
   Future<List<HistoryRecord>> recent({int limit = 50}) async {

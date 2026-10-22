@@ -187,8 +187,10 @@ Future<void> _handleSubmit(MethodChannel channel, Map<dynamic, dynamic> args) as
           final db = await HistoryDb.instance();
           final existing = await db.getByPostId(post.id);
           if (existing != null) {
+            final is1Based = existing.files.isNotEmpty &&
+                existing.files.every((f) => f.itemIndex > 0);
             for (final f in existing.files) {
-              savedIdx.add(f.itemIndex);
+              savedIdx.add(is1Based ? f.itemIndex - 1 : f.itemIndex);
             }
           }
         } catch (e) {

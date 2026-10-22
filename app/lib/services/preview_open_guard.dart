@@ -127,23 +127,7 @@ abstract final class PreviewOpenGuard {
     }
 
     final store = db ?? await HistoryDb.instance();
-    HistoryRecord? cached;
-    if (postId != null) {
-      final byId = await store.getByPostId(postId);
-      if (byId != null && !byId.isDeleted) cached = byId;
-    }
-    if (cached == null) {
-      // Short links (and records stored under a slightly different url) are
-      // matched by canonical link key against recent history.
-      final key = linkKey(normalized);
-      final known = await store.recent(limit: 50);
-      for (final record in known) {
-        if (linkKey(record.postUrl) == key) {
-          cached = record;
-          break;
-        }
-      }
-    }
+    final cached = await store.findRecordByLink(normalized, resolvedUrl: resolved);
 
     return finish(
       cached == null ? PreviewOpenAction.parseFresh : PreviewOpenAction.openCached,
