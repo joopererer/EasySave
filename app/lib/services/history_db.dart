@@ -24,6 +24,7 @@ class HistoryFile {
     this.itemIndex = 0,
     this.isImage = true,
     this.assetId,
+    this.relativePath,
   });
 
   final String filename;
@@ -37,6 +38,10 @@ class HistoryFile {
   /// when re-downloading the same file across devices.
   final String? assetId;
 
+  /// MediaStore RELATIVE_PATH (e.g. Pictures/EasySave/).
+  /// May be null for older records before first gallery location.
+  final String? relativePath;
+
   Map<String, Object?> toMap() => {
     'filename': filename,
     'saved_at': savedAt,
@@ -45,6 +50,7 @@ class HistoryFile {
     'item_index': itemIndex,
     'is_image': isImage ? 1 : 0,
     'asset_id': assetId,
+    'relative_path': relativePath,
   };
 
   factory HistoryFile.fromMap(Map<String, Object?> map) => HistoryFile(
@@ -58,6 +64,7 @@ class HistoryFile {
     itemIndex: (map['item_index'] as num?)?.toInt() ?? 0,
     isImage: (map['is_image'] as num?)?.toInt() != 0,
     assetId: map['asset_id'] as String?,
+    relativePath: map['relative_path'] as String?,
   );
 
   HistoryFile copyWith({
@@ -68,6 +75,7 @@ class HistoryFile {
     int? itemIndex,
     bool? isImage,
     String? assetId,
+    String? relativePath,
   }) => HistoryFile(
     filename: filename ?? this.filename,
     savedAt: savedAt ?? this.savedAt,
@@ -76,6 +84,7 @@ class HistoryFile {
     itemIndex: itemIndex ?? this.itemIndex,
     isImage: isImage ?? this.isImage,
     assetId: assetId ?? this.assetId,
+    relativePath: relativePath ?? this.relativePath,
   );
 }
 
