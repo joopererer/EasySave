@@ -1,11 +1,17 @@
 // Copyright 2026 EasySave. All rights reserved.
-// App internal platform identifiers to spec-compliant platform names.
-// See SPEC §2: prov:platform must be "xiaohongshu", "instagram", or "x".
-const appPlatformToSpecPlatform = {
+/// Primary canonical mapping from internal app identifiers to spec platform names.
+/// See SPEC §2: prov:platform must be "xiaohongshu", "instagram", or "x".
+const internalPlatformToSpec = <String, String>{
   'xhs': 'xiaohongshu',
-  'xiaohongshu': 'xiaohongshu',
   'instagram': 'instagram',
   'x': 'x',
+};
+
+/// Map of platform identifiers to spec-compliant names.
+/// Automatically includes idempotent mappings (spec -> spec).
+final Map<String, String> appPlatformToSpecPlatform = {
+  ...internalPlatformToSpec,
+  for (final spec in internalPlatformToSpec.values) spec: spec,
 };
 
 /// Returns the spec-compliant platform name for an app internal identifier.
@@ -13,12 +19,11 @@ String toSpecPlatform(String platform) {
   return appPlatformToSpecPlatform[platform] ?? platform;
 }
 
-/// Spec platform names to app internal platform identifiers.
-const specPlatformToAppPlatform = {
-  'xiaohongshu': 'xhs',
-  'xhs': 'xhs',
-  'instagram': 'instagram',
-  'x': 'x',
+/// Map of spec-compliant platform names to internal app identifiers.
+/// Derived automatically by inverting [internalPlatformToSpec].
+final Map<String, String> specPlatformToAppPlatform = {
+  for (final entry in internalPlatformToSpec.entries) entry.value: entry.key,
+  for (final internal in internalPlatformToSpec.keys) internal: internal,
 };
 
 /// Returns the app internal identifier for a spec platform name.

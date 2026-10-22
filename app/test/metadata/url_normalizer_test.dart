@@ -52,5 +52,22 @@ void main() {
         expect(second, first, reason: 'Input: $input');
       }
     });
+
+    test('bidirectional platform conversion derives properly and preserves original value', () {
+      for (final entry in internalPlatformToSpec.entries) {
+        final internalId = entry.key;
+        final specName = entry.value;
+
+        // toSpecPlatform converts internal -> spec
+        expect(toSpecPlatform(internalId), specName);
+        // toAppPlatform converts spec -> internal
+        expect(toAppPlatform(specName), internalId);
+
+        // Roundtrip internal -> spec -> internal
+        expect(toAppPlatform(toSpecPlatform(internalId)), internalId);
+        // Roundtrip spec -> internal -> spec
+        expect(toSpecPlatform(toAppPlatform(specName)), specName);
+      }
+    });
   });
 }
