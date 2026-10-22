@@ -40,6 +40,10 @@ class AppSettings {
   /// Floating bubble (roadmap v1.6), default off.
   bool bubbleEnabled = false;
 
+  /// Whether to auto-hide the floating bubble to screen edge when idle
+  /// (roadmap v1.7.1), default on.
+  bool bubbleAutoHide = true;
+
   /// Whether the one-time "allow autostart so the bubble survives swipe"
   /// hint has been shown.
   bool bubbleAutoStartHintShown = false;
@@ -58,6 +62,7 @@ class AppSettings {
       ..autoClipboard = prefs.getBool('autoClipboard') ?? true
       ..backgroundToast = prefs.getBool('backgroundToast') ?? true
       ..bubbleEnabled = prefs.getBool('bubbleEnabled') ?? false
+      ..bubbleAutoHide = prefs.getBool('bubbleAutoHide') ?? true
       ..bubbleAutoStartHintShown = prefs.getBool('bubbleAutoStartHintShown') ?? false
       ..historyView = _enumFromName(
         HistoryView.values,
@@ -88,6 +93,7 @@ class AppSettings {
     await prefs.setBool('autoClipboard', autoClipboard);
     await prefs.setBool('backgroundToast', backgroundToast);
     await prefs.setBool('bubbleEnabled', bubbleEnabled);
+    await prefs.setBool('bubbleAutoHide', bubbleAutoHide);
     await prefs.setBool('bubbleAutoStartHintShown', bubbleAutoStartHintShown);
     await prefs.setString('historyView', historyView.name);
     await prefs.setString('historyLayout', historyLayout.name);

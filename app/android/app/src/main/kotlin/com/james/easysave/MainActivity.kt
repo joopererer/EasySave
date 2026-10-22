@@ -235,6 +235,11 @@ class MainActivity : FlutterActivity() {
                         result.success(null)
                     }
                     "isRunning" -> result.success(OverlayService.isRunning)
+                    "updateAutoHide" -> {
+                        val enabled = call.argument<Boolean>("enabled") ?: true
+                        OverlayService.updateAutoHide(enabled)
+                        result.success(null)
+                    }
                     "openAppSettings" -> {
                         try {
                             startActivity(

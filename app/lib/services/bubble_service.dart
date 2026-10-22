@@ -73,6 +73,13 @@ abstract final class BubbleService {
     } catch (_) {}
   }
 
+  /// Push auto-hide preference change to the running bubble overlay service.
+  static Future<void> updateAutoHide(bool enabled) async {
+    try {
+      await _channel.invokeMethod<void>('updateAutoHide', {'enabled': enabled});
+    } catch (_) {}
+  }
+
   /// At app start: ensure the bubble is running when it's enabled and granted.
   static Future<void> ensureStarted() async {
     final settings = await AppSettings.load();

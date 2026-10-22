@@ -27,10 +27,12 @@ import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.TextView
+import android.view.animation.AccelerateDecelerateInterpolator
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import kotlin.math.abs
 import kotlin.math.cos
+import kotlin.math.hypot
 import kotlin.math.min
 import kotlin.math.roundToInt
 import kotlin.math.sin
@@ -51,6 +53,7 @@ class OverlayService : Service() {
         private const val CHANNEL_ID = "easysave_bubble"
         private const val NOTIF_ID = 9012
         private const val SIZE_DP = 54
+        private const val HIDE_OFFSET_DP = 21
 
         /// Broadcast when the bubble is closed/shown; MainActivity forwards it
         /// to Dart so the settings toggle stays correct while the app is open.
@@ -69,6 +72,10 @@ class OverlayService : Service() {
 
         fun stop(context: Context) {
             context.stopService(Intent(context, OverlayService::class.java))
+        }
+
+        fun updateAutoHide(enabled: Boolean) {
+            instance?.setAutoHide(enabled)
         }
 
         /** Push a state update from HostService. */
@@ -90,12 +97,17 @@ class OverlayService : Service() {
     }
 
     private var wm: WindowManager? = null
+    private var bubbleContainer: FrameLayout? = null
     private var bubble: BubbleView? = null
     private var bubbleParams: WindowManager.LayoutParams? = null
     private var menu: View? = null
     private var pendingText: String? = null
     private var lastError: BubbleError? = null
     private var doneResetRunnable: Runnable? = null
+    private var idleHideRunnable: Runnable? = null
+    private var isHalfHidden = false
+    private var isSnappedToLeft = false
+    private var autoHideEnabled = true
 
     // Drag-to-close target.
     private var closeView: View? = null
@@ -109,8 +121,29 @@ class OverlayService : Service() {
         isRunning = true
         instance = this
         wm = getSystemService(WINDOW_SERVICE) as WindowManager
+        autoHideEnabled = loadAutoHideSetting()
         startForegroundCompat()
         addBubble()
+    }
+
+    private fun loadAutoHideSetting(): Boolean {
+        return try {
+            getSharedPreferences("FlutterSharedPreferences", MODE_PRIVATE)
+                .getBoolean("flutter.bubbleAutoHide", true)
+        } catch (_: Exception) {
+            true
+        }
+    }
+
+    fun setAutoHide(enabled: Boolean) {
+        autoHideEnabled = enabled
+        if (!enabled) {
+            slideOut(immediate = false)
+        } else {
+            if (bubble?.state == BubbleState.IDLE && menu == null) {
+                scheduleIdleHide(2500L)
+            }
+        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -149,9 +182,11 @@ class OverlayService : Service() {
         isRunning = false
         instance = null
         doneResetRunnable?.let { bubble?.removeCallbacks(it) }
+        idleHideRunnable?.let { bubble?.removeCallbacks(it) }
         removeMenu()
         removeClose()
-        bubble?.let { try { wm?.removeView(it) } catch (_: Exception) {} }
+        bubbleContainer?.let { try { wm?.removeView(it) } catch (_: Exception) {} }
+        bubbleContainer = null
         bubble = null
         super.onDestroy()
     }
@@ -187,33 +222,91 @@ class OverlayService : Service() {
 
     // ---------------------------------------------------------------- bubble
 
+    private fun scheduleIdleHide(delayMs: Long = 2500L) {
+        val b = bubble ?: return
+        idleHideRunnable?.let { b.removeCallbacks(it) }
+        if (!autoHideEnabled) return
+        if (b.state != BubbleState.IDLE || menu != null) return
+        val r = Runnable {
+            slideIn()
+        }
+        idleHideRunnable = r
+        b.postDelayed(r, delayMs)
+    }
+
+    private fun slideIn() {
+        val b = bubble ?: return
+        if (!autoHideEnabled) return
+        if (b.state != BubbleState.IDLE || menu != null) return
+        if (isHalfHidden) return
+        isHalfHidden = true
+        val targetTx = if (isSnappedToLeft) -dp(HIDE_OFFSET_DP).toFloat() else dp(HIDE_OFFSET_DP).toFloat()
+        b.animate()
+            .translationX(targetTx)
+            .alpha(0.6f)
+            .setDuration(200)
+            .setInterpolator(AccelerateDecelerateInterpolator())
+            .start()
+    }
+
+    private fun slideOut(immediate: Boolean = false) {
+        val b = bubble ?: return
+        idleHideRunnable?.let { b.removeCallbacks(it) }
+        isHalfHidden = false
+        if (immediate) {
+            b.animate().cancel()
+            b.translationX = 0f
+            b.alpha = 0.8f
+        } else {
+            b.animate()
+                .translationX(0f)
+                .alpha(0.8f)
+                .setDuration(200)
+                .setInterpolator(AccelerateDecelerateInterpolator())
+                .start()
+        }
+    }
+
     private fun addBubble() {
+        val screenW = resources.displayMetrics.widthPixels
+        val screenH = resources.displayMetrics.heightPixels
+        val minY = dp(64)
+        val maxY = screenH - dp(SIZE_DP + 84)
+
         val params = WindowManager.LayoutParams(
             dp(SIZE_DP), dp(SIZE_DP), overlayType(), baseFlags(), PixelFormat.TRANSLUCENT
         ).apply {
             gravity = Gravity.TOP or Gravity.START
-            x = resources.displayMetrics.widthPixels - dp(SIZE_DP + 6)
-            y = resources.displayMetrics.heightPixels / 3
+            x = screenW - dp(SIZE_DP - 6)
+            y = (screenH * 0.33f).roundToInt().coerceIn(minY, maxY)
+        }
+        val container = FrameLayout(this).apply {
+            clipChildren = false
+            clipToPadding = false
         }
         val v = BubbleView(this)
         v.alpha = 0.8f
-        attachTouch(v, params)
+        container.addView(v, FrameLayout.LayoutParams(dp(SIZE_DP), dp(SIZE_DP)))
+        attachTouch(container, params)
+        bubbleContainer = container
         bubble = v
         bubbleParams = params
+        isSnappedToLeft = false
         try {
-            wm?.addView(v, params)
+            wm?.addView(container, params)
         } catch (e: Exception) {
             Log.e(TAG, "addView failed: $e")
         }
+        scheduleIdleHide(2500L)
     }
 
-    private fun attachTouch(v: View, params: WindowManager.LayoutParams) {
+    private fun attachTouch(container: View, params: WindowManager.LayoutParams) {
         var startX = 0
         var startY = 0
         var touchX = 0f
         var touchY = 0f
         var dragging = false
-        v.setOnTouchListener { view, e ->
+        container.setOnTouchListener { view, e ->
             when (e.action) {
                 MotionEvent.ACTION_DOWN -> {
                     startX = params.x
@@ -221,18 +314,25 @@ class OverlayService : Service() {
                     touchX = e.rawX
                     touchY = e.rawY
                     dragging = false
+                    idleHideRunnable?.let { bubble?.removeCallbacks(it) }
                     true
                 }
                 MotionEvent.ACTION_MOVE -> {
                     val dx = (e.rawX - touchX).toInt()
                     val dy = (e.rawY - touchY).toInt()
-                    if (abs(dx) > dp(6) || abs(dy) > dp(6)) dragging = true
+                    val dist = hypot(dx.toDouble(), dy.toDouble())
+                    if (!dragging && dist >= dp(10)) {
+                        dragging = true
+                        if (isHalfHidden) {
+                            slideOut(immediate = true)
+                        }
+                    }
                     if (dragging) {
                         removeMenu()
                         if (closeView == null) showClose()
                         params.x = startX + dx
                         params.y = startY + dy
-                        clamp(params)
+                        clampDrag(params)
                         try {
                             wm?.updateViewLayout(view, params)
                         } catch (_: Exception) {
@@ -258,7 +358,7 @@ class OverlayService : Service() {
         }
     }
 
-    private fun clamp(params: WindowManager.LayoutParams) {
+    private fun clampDrag(params: WindowManager.LayoutParams) {
         val screenW = resources.displayMetrics.widthPixels
         val screenH = resources.displayMetrics.heightPixels
         params.x = params.x.coerceIn(-dp(8), screenW - dp(SIZE_DP) + dp(8))
@@ -267,16 +367,35 @@ class OverlayService : Service() {
 
     private fun snap(params: WindowManager.LayoutParams, view: View) {
         val screenW = resources.displayMetrics.widthPixels
-        params.x = if (params.x + dp(SIZE_DP) / 2 < screenW / 2) -dp(6) else screenW - dp(SIZE_DP - 6)
+        val screenH = resources.displayMetrics.heightPixels
+        isSnappedToLeft = (params.x + dp(SIZE_DP) / 2 < screenW / 2)
+        params.x = if (isSnappedToLeft) -dp(6) else screenW - dp(SIZE_DP - 6)
+        val minY = dp(64)
+        val maxY = screenH - dp(SIZE_DP + 84)
+        params.y = params.y.coerceIn(minY, maxY)
         try {
             wm?.updateViewLayout(view, params)
         } catch (_: Exception) {
+        }
+        if (bubble?.state == BubbleState.IDLE && menu == null) {
+            scheduleIdleHide(2500L)
         }
     }
 
     private fun onClickBubble() {
         if (menu != null) {
             removeMenu()
+            return
+        }
+        if (isHalfHidden) {
+            slideOut(immediate = false)
+        }
+        // Busy state: tap toasts current progress, does not re-trigger.
+        if (bubble?.state == BubbleState.BUSY) {
+            val total = bubble?.total ?: 0
+            val done = bubble?.done ?: 0
+            val msg = if (total > 0) "正在下载 ($done/$total)" else "正在下载中…"
+            android.widget.Toast.makeText(this, msg, android.widget.Toast.LENGTH_SHORT).show()
             return
         }
         // Error state: tap opens the same error page as a manual parse.
@@ -288,8 +407,9 @@ class OverlayService : Service() {
             if (t.contains("http", ignoreCase = true)) {
                 pendingText = t
                 showMenu()
+            } else {
+                scheduleIdleHide(2500L)
             }
-            // No link: ClipboardReaderActivity already toasted the hint.
         }
         val intent = Intent(this, ClipboardReaderActivity::class.java).apply {
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
@@ -299,6 +419,7 @@ class OverlayService : Service() {
             startActivity(intent)
         } catch (e: Exception) {
             Log.e(TAG, "startActivity clipboard failed: $e")
+            scheduleIdleHide(2500L)
         }
     }
 
@@ -306,6 +427,8 @@ class OverlayService : Service() {
 
     private fun showMenu() {
         removeMenu()
+        slideOut(immediate = true)
+        bubble?.state = BubbleState.MENU
         val root = FrameLayout(this)
         root.setBackgroundColor(0x66000000)
         root.setOnClickListener { removeMenu() }
@@ -385,7 +508,10 @@ class OverlayService : Service() {
     private fun removeMenu() {
         menu?.let { try { wm?.removeView(it) } catch (_: Exception) {} }
         menu = null
-        if (bubble?.state == BubbleState.MENU) bubble?.state = BubbleState.IDLE
+        if (bubble?.state == BubbleState.MENU) {
+            bubble?.state = BubbleState.IDLE
+            scheduleIdleHide(2500L)
+        }
     }
 
     private fun onMenuAction(key: String) {
@@ -475,6 +601,8 @@ class OverlayService : Service() {
         android.widget.Toast.makeText(
             this, "已关闭悬浮球，可在设置中重新开启", android.widget.Toast.LENGTH_SHORT
         ).show()
+        idleHideRunnable?.let { bubble?.removeCallbacks(it) }
+        doneResetRunnable?.let { bubble?.removeCallbacks(it) }
         // Mirror the Dart setting so 我的 → 设置 shows the toggle as off.
         try {
             getSharedPreferences("FlutterSharedPreferences", MODE_PRIVATE)
@@ -485,9 +613,10 @@ class OverlayService : Service() {
             Log.e(TAG, "persist bubbleEnabled failed: $e")
         }
         try {
-            bubble?.let { wm?.removeView(it) }
+            bubbleContainer?.let { wm?.removeView(it) }
         } catch (_: Exception) {
         }
+        bubbleContainer = null
         bubble = null
         try {
             sendBroadcast(Intent(ACTION_BUBBLE_STATE))
@@ -509,6 +638,8 @@ class OverlayService : Service() {
     ) {
         val v = bubble ?: return
         doneResetRunnable?.let { v.removeCallbacks(it) }
+        idleHideRunnable?.let { v.removeCallbacks(it) }
+        slideOut(immediate = false)
         when {
             active -> {
                 v.state = BubbleState.BUSY
@@ -536,6 +667,7 @@ class OverlayService : Service() {
             if (v.state == BubbleState.DONE || v.state == BubbleState.ERROR) {
                 v.state = BubbleState.IDLE
                 v.invalidate()
+                scheduleIdleHide(2500L)
             }
         }
         doneResetRunnable = r

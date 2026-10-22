@@ -733,6 +733,20 @@ class _MinePageState extends State<MinePage> with WidgetsBindingObserver {
                   onChanged: _toggleBubble,
                 ),
                 SwitchListTile(
+                  title: const Text('闲置时贴边隐藏'),
+                  subtitle: Text(
+                    _settings.bubbleAutoHide
+                        ? '闲置 2.5 秒后贴边半隐藏，透明度降为 60%'
+                        : '保持贴边完整显示，80% 透明度',
+                  ),
+                  value: _settings.bubbleAutoHide,
+                  onChanged: (v) async {
+                    setState(() => _settings.bubbleAutoHide = v);
+                    await _saveSettings();
+                    await BubbleService.updateAutoHide(v);
+                  },
+                ),
+                SwitchListTile(
                   title: const Text('后台下载结果提示'),
                   subtitle: const Text('用 Toast 显示准备、开始、结果'),
                   value: _settings.backgroundToast,
