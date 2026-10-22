@@ -53,6 +53,15 @@ class AppSettings {
   HistoryLayout historyLayout = HistoryLayout.waterfall;
   HistorySort historySort = HistorySort.latest;
 
+  /// User-chosen directory tree URI for external automatic backups (v1.8).
+  String? backupTreeUri;
+
+  /// Timestamp (ms) of the last successful backup (v1.8).
+  int? lastBackupTime;
+
+  /// Whether user clicked 'Skip' on the initial restore prompt (v1.8).
+  bool skipRestoreHint = false;
+
   static Future<AppSettings> load() async {
     final prefs = await SharedPreferences.getInstance();
     return AppSettings()
@@ -82,7 +91,10 @@ class AppSettings {
       ..saveProvenanceInImages = prefs.getBool('saveProvenanceInImages') ?? true
       ..usedAlbumNames = List<String>.from(
         prefs.getStringList('usedAlbumNames') ?? const <String>[],
-      );
+      )
+      ..backupTreeUri = prefs.getString('backupTreeUri')
+      ..lastBackupTime = prefs.getInt('lastBackupTime')
+      ..skipRestoreHint = prefs.getBool('skipRestoreHint') ?? false;
   }
 
   Future<void> save() async {
@@ -100,6 +112,17 @@ class AppSettings {
     await prefs.setString('historySort', historySort.name);
     await prefs.setBool('saveProvenanceInImages', saveProvenanceInImages);
     await prefs.setStringList('usedAlbumNames', usedAlbumNames);
+    if (backupTreeUri != null) {
+      await prefs.setString('backupTreeUri', backupTreeUri!);
+    } else {
+      await prefs.remove('backupTreeUri');
+    }
+    if (lastBackupTime != null) {
+      await prefs.setInt('lastBackupTime', lastBackupTime!);
+    } else {
+      await prefs.remove('lastBackupTime');
+    }
+    await prefs.setBool('skipRestoreHint', skipRestoreHint);
   }
 
   /// Remember [albumName] as an album the app has used.

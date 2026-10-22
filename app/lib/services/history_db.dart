@@ -679,6 +679,26 @@ class HistoryDb {
     notifyChanged('clear rows=$rows');
   }
 
+  /// Read all non-deleted records in a single read transaction for backup export.
+  Future<List<HistoryRecord>> getAllActiveForBackup() async {
+    return _db.transaction((txn) async {
+      final rows = await txn.query(
+        'history_records',
+        where: 'is_deleted = 0',
+        orderBy: 'created_at ASC',
+      );
+      return rows.map(HistoryRecord.fromMap).toList();
+    });
+  }
+
+  /// Total count of non-deleted records.
+  Future<int> countActive() async {
+    final result = await _db.rawQuery(
+      'SELECT COUNT(*) as count FROM history_records WHERE is_deleted = 0',
+    );
+    return (result.first['count'] as num?)?.toInt() ?? 0;
+  }
+
   /// Bring a record back after an undo.
   ///
   /// Only the undo affordance may call this: it clears the soft-delete flag by

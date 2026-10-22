@@ -13,6 +13,19 @@ String toSpecPlatform(String platform) {
   return appPlatformToSpecPlatform[platform] ?? platform;
 }
 
+/// Spec platform names to app internal platform identifiers.
+const specPlatformToAppPlatform = {
+  'xiaohongshu': 'xhs',
+  'xhs': 'xhs',
+  'instagram': 'instagram',
+  'x': 'x',
+};
+
+/// Returns the app internal identifier for a spec platform name.
+String toAppPlatform(String platform) {
+  return specPlatformToAppPlatform[platform] ?? platform;
+}
+
 /// Platform display names for photoshop:Credit field.
 /// Maps app internal identifiers to localized display names.
 /// Also accepts spec platform names (xiaohongshu, instagram, x) as input.
