@@ -95,6 +95,7 @@ class DownloadJob {
   /// relying on a filename that the system may have changed.
   String? mediaId;
   String? savedTitle;
+  String? relativePath;
 
   Map<String, Object?> toJson() => {
     'key': key,
@@ -112,6 +113,7 @@ class DownloadJob {
     'assetId': assetId,
     'mediaId': mediaId,
     'savedTitle': savedTitle,
+    'relativePath': relativePath,
   };
 
   static DownloadJob fromJson(Map<String, Object?> map) {
@@ -132,6 +134,7 @@ class DownloadJob {
     job.assetId = map['assetId'] as String?;
     job.mediaId = map['mediaId'] as String?;
     job.savedTitle = map['savedTitle'] as String?;
+    job.relativePath = map['relativePath'] as String?;
     return job;
   }
 }
@@ -425,6 +428,7 @@ Future<void> writeBatchHistory(
           itemIndex: job.itemIndex,
           isImage: job.isImage,
           assetId: job.assetId,
+          relativePath: job.relativePath,
           status: job.mediaId != null
               ? FileStatus.found
               : FileStatus.unknown,
@@ -876,6 +880,11 @@ class DownloadManager extends ChangeNotifier {
           _log('gallery import skipped, already saved: ${job.filename}');
           job.mediaId = existing.id;
           job.savedTitle = existing.title;
+          try {
+            job.relativePath = existing.relativePath;
+          } catch (_) {
+            job.relativePath = null;
+          }
           job.state = JobState.done;
           job.progress = 1;
           job.saved = true;
@@ -901,6 +910,7 @@ class DownloadManager extends ChangeNotifier {
           _log('gallery import done: ${job.filename} -> ${saved.mediaId}');
           job.mediaId = saved.mediaId;
           job.savedTitle = saved.title;
+          job.relativePath = saved.relativePath;
           job.state = JobState.done;
           job.progress = 1;
           job.saved = true;

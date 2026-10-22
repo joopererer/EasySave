@@ -9,7 +9,11 @@ import 'package:photo_manager/photo_manager.dart';
 
 import '../core/dev_log.dart';
 import '../core/models.dart';
+import '../metadata/metadata_service.dart';
+import '../metadata/url_normalizer.dart';
+import '../metadata/xmp_model.dart';
 import 'history_db.dart';
+import 'media_header_service.dart';
 import 'settings.dart';
 
 class GalleryLocatorService extends ChangeNotifier {
@@ -36,6 +40,8 @@ class GalleryLocatorService extends ChangeNotifier {
   final Map<String, AssetEntity> _exactMap = {};
   final Map<String, AssetEntity> _idMap = {};
   final List<AssetEntity> _allAssets = [];
+  final Map<String, String?> _relPathMap = {};
+  final Map<String, XmpProvenance?> _xmpCache = {};
 
   static const _defaultOption = PermissionRequestOption(
     androidPermission: AndroidPermission(
@@ -225,6 +231,8 @@ class GalleryLocatorService extends ChangeNotifier {
       _exactMap.clear();
       _idMap.clear();
       _allAssets.clear();
+      _relPathMap.clear();
+      _xmpCache.clear();
 
       for (final asset in assetsToIndex) {
         _idMap[asset.id] = asset;
@@ -259,19 +267,320 @@ class GalleryLocatorService extends ChangeNotifier {
     return _exactMap[key];
   }
 
-  /// Locate asset for a HistoryFile.
-  /// 1. Try mediaId
-  /// 2. Try exact filename match (case-insensitive, handling double extension variants)
-  /// 3. Fuzzy match: album assets containing postId
+  /// Testing hook to inject pre-scanned assets and permission state.
+  @visibleForTesting
+  void setScannedForTesting({
+    required bool scanned,
+    required PermissionState permission,
+    List<AssetEntity>? assets,
+    Map<String, String?>? relativePaths,
+  }) {
+    _scanned = scanned;
+    _permission = permission;
+    _exactMap.clear();
+    _idMap.clear();
+    _allAssets.clear();
+    _relPathMap.clear();
+    _xmpCache.clear();
+    if (assets != null) {
+      for (final a in assets) {
+        _idMap[a.id] = a;
+        _allAssets.add(a);
+        final title = (a.title ?? '').trim().toLowerCase();
+        if (title.isNotEmpty) {
+          _exactMap[title] = a;
+          final baseName = title.split('/').last.split('\\').last;
+          _exactMap[baseName] = a;
+        }
+      }
+    }
+    if (relativePaths != null) {
+      _relPathMap.addAll(relativePaths);
+    }
+    notifyListeners();
+  }
+
+  /// Testing hook to reset locator state.
+  @visibleForTesting
+  void resetForTesting() {
+    _scanned = false;
+    _isScanning = false;
+    _permission = PermissionState.notDetermined;
+    _exactMap.clear();
+    _idMap.clear();
+    _allAssets.clear();
+    _relPathMap.clear();
+    _xmpCache.clear();
+  }
+
+  /// Normalize directory/file paths for consistent comparison (e.g.,
+  /// "Pictures/EasySave/" -> "pictures/easysave").
+  static String normalizePath(String path) {
+    var p = path.replaceAll('\\', '/').trim().toLowerCase();
+    while (p.startsWith('/')) {
+      p = p.substring(1);
+    }
+    while (p.endsWith('/')) {
+      p = p.substring(0, p.length - 1);
+    }
+    return p;
+  }
+
+  /// Query or return cached MediaStore RELATIVE_PATH for an asset.
+  Future<String?> getRelativePath(AssetEntity asset) async {
+    if (_relPathMap.containsKey(asset.id)) {
+      return _relPathMap[asset.id];
+    }
+    var rel = asset.relativePath;
+    if (rel == null || rel.isEmpty) {
+      try {
+        final info = await MediaHeaderService.queryAlbum(asset.id);
+        rel = info?.relativePath;
+      } catch (_) {}
+    }
+    _relPathMap[asset.id] = rel;
+    return rel;
+  }
+
+  static bool _matchesDoubleExtension(String candidateName, String targetName) {
+    if (targetName.endsWith('.jpg.jpg')) {
+      return candidateName == targetName.substring(0, targetName.length - 4);
+    }
+    if (targetName.endsWith('.mp4.mp4')) {
+      return candidateName == targetName.substring(0, targetName.length - 4);
+    }
+    if (candidateName.endsWith('.jpg.jpg')) {
+      return candidateName.substring(0, candidateName.length - 4) == targetName;
+    }
+    if (candidateName.endsWith('.mp4.mp4')) {
+      return candidateName.substring(0, candidateName.length - 4) == targetName;
+    }
+    return false;
+  }
+
+  /// Check XMP provenance consistency for Level 2 and Level 3 matches.
+  ///
+  /// Rules:
+  /// 1. If file has no readable XMP, allow association (filename-only).
+  /// 2. If file contains XMP, it MUST match either expectedAssetId or
+  ///    (platform + sourceId == expectedPostId). Files with conflicting XMP
+  ///    MUST NOT be associated.
+  Future<bool> _verifyXmpConsistency(
+    AssetEntity asset, {
+    String? expectedAssetId,
+    String? expectedPlatform,
+    required String expectedPostId,
+  }) async {
+    try {
+      XmpProvenance? prov = _xmpCache[asset.id];
+      if (!_xmpCache.containsKey(asset.id)) {
+        final mime = asset.type == AssetType.video ? 'video/mp4' : 'image/jpeg';
+        final bytes = await MediaHeaderService.readHeader(asset.id, mime);
+        if (bytes.isNotEmpty) {
+          prov = MetadataService.readProvenanceFromBytes(bytes);
+        }
+        _xmpCache[asset.id] = prov;
+      }
+
+      // 只有无 XMP 的文件才允许仅凭文件名关联。
+      if (prov == null) {
+        return true;
+      }
+
+      // 文件含 XMP，必须用 MediaHeaderReader 读出的 assetId 或 platform+sourceId 核对一致，才能关联；
+      // XMP 不一致的文件不得关联（常见文件名会重名）。
+      if (expectedAssetId != null &&
+          expectedAssetId.isNotEmpty &&
+          prov.assetId.isNotEmpty &&
+          prov.assetId == expectedAssetId) {
+        return true;
+      }
+
+      if (prov.platform != null &&
+          prov.sourceId != null &&
+          prov.sourceId == expectedPostId) {
+        if (expectedPlatform != null && expectedPlatform.isNotEmpty) {
+          if (toSpecPlatform(prov.platform!) == toSpecPlatform(expectedPlatform)) {
+            return true;
+          }
+        } else {
+          return true;
+        }
+      }
+
+      // XMP is present but does not match assetId or platform+sourceId!
+      return false;
+    } catch (e) {
+      DevLog.write('GalleryLocator', 'Error checking XMP: $e');
+      return true;
+    }
+  }
+
+  /// Locate asset asynchronously with multi-level fallback and XMP validation:
+  /// 1. relativePath + filename exact match
+  /// 2. usedAlbumNames + filename (validated by XMP)
+  /// 3. postId sequence fuzzy match (validated by XMP)
+  Future<AssetEntity?> locateAssetAsync(
+    HistoryFile file,
+    String postId, {
+    String? platform,
+  }) async {
+    // 0. If mediaId is known and cached, check if valid
+    if (file.mediaId != null && _idMap.containsKey(file.mediaId)) {
+      final cached = _idMap[file.mediaId]!;
+      final title = (cached.title ?? '').trim().toLowerCase();
+      final baseName = title.split('/').last.split('\\').last;
+      final targetName = file.filename.trim().toLowerCase();
+      if (targetName.isEmpty || title == targetName || baseName == targetName) {
+        return cached;
+      }
+    }
+
+    // Priority 1: relativePath + filename
+    if (file.relativePath != null && file.relativePath!.trim().isNotEmpty) {
+      final targetRel = normalizePath(file.relativePath!);
+      final targetName = file.filename.trim().toLowerCase();
+
+      for (final asset in _allAssets) {
+        final title = (asset.title ?? '').trim().toLowerCase();
+        final baseName = title.split('/').last.split('\\').last;
+        if (title == targetName ||
+            baseName == targetName ||
+            _matchesDoubleExtension(baseName, targetName)) {
+          final rel = await getRelativePath(asset);
+          if (rel != null && normalizePath(rel) == targetRel) {
+            _idMap[asset.id] = asset;
+            return asset;
+          }
+        }
+      }
+    }
+
+    // Priority 2: usedAlbumNames + filename
+    final targetName = file.filename.trim().toLowerCase();
+    if (targetName.isNotEmpty) {
+      final candidates = <AssetEntity>[];
+      for (final asset in _allAssets) {
+        final title = (asset.title ?? '').trim().toLowerCase();
+        final baseName = title.split('/').last.split('\\').last;
+        if (title == targetName ||
+            baseName == targetName ||
+            _matchesDoubleExtension(baseName, targetName)) {
+          candidates.add(asset);
+        }
+      }
+
+      for (final candidate in candidates) {
+        final isConsistent = await _verifyXmpConsistency(
+          candidate,
+          expectedAssetId: file.assetId,
+          expectedPlatform: platform,
+          expectedPostId: postId,
+        );
+        if (isConsistent) {
+          _idMap[candidate.id] = candidate;
+          return candidate;
+        }
+      }
+    }
+
+    // Priority 3: postId fuzzy match
+    final cleanPostId = postId.trim().toLowerCase();
+    if (cleanPostId.isNotEmpty) {
+      final matches = _allAssets.where((a) {
+        final t = (a.title ?? '').toLowerCase();
+        return t.contains(cleanPostId);
+      }).toList();
+
+      if (matches.isNotEmpty) {
+        final fn = file.filename.trim().toLowerCase();
+        final isImage = fn.endsWith('.jpg') ||
+            fn.endsWith('.png') ||
+            fn.endsWith('.jpeg') ||
+            fn.endsWith('.webp');
+        final isVideo =
+            fn.endsWith('.mp4') || fn.endsWith('.mov') || fn.endsWith('.webm');
+
+        final typeMatches = matches.where((a) {
+          if (isImage) return a.type == AssetType.image;
+          if (isVideo) return a.type == AssetType.video;
+          return true;
+        }).toList();
+
+        final pool = typeMatches.isNotEmpty ? typeMatches : matches;
+
+        // Sequence ordering
+        final seqMatch = RegExp(r'[_ -](\d+)\.').firstMatch(fn);
+        List<AssetEntity> orderedCandidates = pool;
+        if (seqMatch != null) {
+          final seq = seqMatch.group(1)!;
+          final withSeq = pool.where((a) {
+            final t = (a.title ?? '').toLowerCase();
+            return t.contains('_$seq.') ||
+                t.contains('-$seq.') ||
+                t.contains(' $seq.');
+          }).toList();
+          if (withSeq.isNotEmpty) {
+            orderedCandidates = [
+              ...withSeq,
+              ...pool.where((a) => !withSeq.contains(a)),
+            ];
+          }
+        }
+
+        for (final candidate in orderedCandidates) {
+          final isConsistent = await _verifyXmpConsistency(
+            candidate,
+            expectedAssetId: file.assetId,
+            expectedPlatform: platform,
+            expectedPostId: postId,
+          );
+          if (isConsistent) {
+            _idMap[candidate.id] = candidate;
+            return candidate;
+          }
+        }
+      }
+    }
+
+    return null;
+  }
+
+  /// Locate asset for a HistoryFile synchronously using cached assets.
   AssetEntity? locateAsset(HistoryFile file, String postId) {
     if (file.mediaId != null && _idMap.containsKey(file.mediaId)) {
       return _idMap[file.mediaId];
     }
 
+    // Priority 1: cached relativePath + filename
+    if (file.relativePath != null && file.relativePath!.trim().isNotEmpty) {
+      final targetRel = normalizePath(file.relativePath!);
+      final targetName = file.filename.trim().toLowerCase();
+      for (final asset in _allAssets) {
+        final title = (asset.title ?? '').trim().toLowerCase();
+        final baseName = title.split('/').last.split('\\').last;
+        if (title == targetName ||
+            baseName == targetName ||
+            _matchesDoubleExtension(baseName, targetName)) {
+          final rel = _relPathMap[asset.id] ?? asset.relativePath;
+          if (rel != null && normalizePath(rel) == targetRel) {
+            return asset;
+          }
+        }
+      }
+    }
+
+    // Priority 2: exact filename match
     final fn = file.filename.trim().toLowerCase();
     if (fn.isNotEmpty) {
       if (_exactMap.containsKey(fn)) {
-        return _exactMap[fn];
+        final candidate = _exactMap[fn]!;
+        final prov = _xmpCache[candidate.id];
+        if (prov == null ||
+            (file.assetId != null && prov.assetId == file.assetId) ||
+            prov.sourceId == postId) {
+          return candidate;
+        }
       }
       // Handle possible .jpg.jpg / .mp4.mp4 from older download sheet bug
       if (fn.endsWith('.jpg.jpg')) {
@@ -289,7 +598,7 @@ class GalleryLocatorService extends ChangeNotifier {
       }
     }
 
-    // Fuzzy matching by postId in filename
+    // Priority 3: Fuzzy matching by postId in filename
     final cleanPostId = postId.trim().toLowerCase();
     if (cleanPostId.isNotEmpty) {
       final matches = _allAssets.where((a) {
@@ -335,17 +644,29 @@ class GalleryLocatorService extends ChangeNotifier {
 
   /// Synchronize file statuses and mediaIds for a history record.
   /// Updates database if any state changes.
+  /// Note: Records where files cannot be found are preserved in DB (never deleted).
   Future<void> syncRecord(HistoryRecord record) async {
     var changed = false;
     final updatedFiles = <HistoryFile>[];
 
     for (final file in record.files) {
-      final asset = locateAsset(file, record.postId);
+      final asset = await locateAssetAsync(
+        file,
+        record.postId,
+        platform: record.platform,
+      );
       if (asset != null) {
-        if (file.mediaId != asset.id || file.status != FileStatus.found) {
+        String? newRelPath = file.relativePath;
+        if (newRelPath == null || newRelPath.isEmpty) {
+          newRelPath = await getRelativePath(asset);
+        }
+        if (file.mediaId != asset.id ||
+            file.status != FileStatus.found ||
+            (newRelPath != null && file.relativePath != newRelPath)) {
           updatedFiles.add(file.copyWith(
             mediaId: asset.id,
             status: FileStatus.found,
+            relativePath: newRelPath,
           ));
           changed = true;
         } else {
@@ -403,7 +724,11 @@ class GalleryLocatorService extends ChangeNotifier {
       if (record != null && !record.isDeleted && record.files.isNotEmpty) {
         final is1Based = record.files.every((f) => f.itemIndex > 0);
         for (final file in record.files) {
-          final asset = locateAsset(file, post.id);
+          final asset = await locateAssetAsync(
+            file,
+            post.id,
+            platform: record.platform,
+          );
           if (asset != null) {
             bool exists = true;
             try {

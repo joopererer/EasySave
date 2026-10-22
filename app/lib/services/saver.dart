@@ -9,6 +9,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:photo_manager/photo_manager.dart';
 
 import '../core/models.dart';
+import 'media_header_service.dart';
 
 String refererFor(String platform) {
   if (platform == 'xhs') return 'https://www.xiaohongshu.com/';
@@ -20,12 +21,12 @@ String refererFor(String platform) {
 
 /// Import a finished temp download into the album, then delete the temp file.
 ///
-/// Returns the saved asset's real MediaStore id and on-disk title, so the
-/// history record can point straight at it. `Gal.putImage` returns nothing
+/// Returns the saved asset's real MediaStore id, on-disk title, and relativePath
+/// so the history record can point straight at it. `Gal.putImage` returns nothing
 /// and the system may rename a file on name clashes (e.g. `x (1).jpg`), so we
 /// locate the freshly saved asset right away instead of trusting the planned
 /// filename. Returns nulls when lookup fails (e.g. no photo permission).
-Future<({String? mediaId, String? title})> saveToGallery(
+Future<({String? mediaId, String? title, String? relativePath})> saveToGallery(
   String path,
   bool isImage,
   String album,
@@ -58,7 +59,7 @@ String _stripExtension(String name) {
 /// title matches the planned base name, falling back to the newest asset in
 /// the album (the file we just saved is the most recent). MediaStore indexing
 /// can lag a beat behind the write, so a couple of short retries help.
-Future<({String? mediaId, String? title})> _locateJustSaved(
+Future<({String? mediaId, String? title, String? relativePath})> _locateJustSaved(
   String expectedName,
   bool isImage,
   String album,
@@ -73,10 +74,10 @@ Future<({String? mediaId, String? title})> _locateJustSaved(
     final found = await _locateJustSavedOnce(expectedName, isImage, album);
     if (found.mediaId != null) return found;
   }
-  return (mediaId: null, title: null);
+  return (mediaId: null, title: null, relativePath: null);
 }
 
-Future<({String? mediaId, String? title})> _locateJustSavedOnce(
+Future<({String? mediaId, String? title, String? relativePath})> _locateJustSavedOnce(
   String expectedName,
   bool isImage,
   String album,
@@ -106,19 +107,19 @@ Future<({String? mediaId, String? title})> _locateJustSavedOnce(
       final found = await _matchNewestIn(path, expectedName, isImage);
       if (found.mediaId != null) return found;
     }
-    return (mediaId: null, title: null);
+    return (mediaId: null, title: null, relativePath: null);
   } catch (_) {
-    return (mediaId: null, title: null);
+    return (mediaId: null, title: null, relativePath: null);
   }
 }
 
-Future<({String? mediaId, String? title})> _matchNewestIn(
+Future<({String? mediaId, String? title, String? relativePath})> _matchNewestIn(
   AssetPathEntity path,
   String expectedName,
   bool isImage,
 ) async {
   final count = await path.assetCountAsync;
-  if (count <= 0) return (mediaId: null, title: null);
+  if (count <= 0) return (mediaId: null, title: null, relativePath: null);
   // Newest first: scan a small window, the saved file is at the very front.
   final list = await path.getAssetListRange(
     start: 0,
@@ -158,8 +159,19 @@ Future<({String? mediaId, String? title})> _matchNewestIn(
   // showed the same thumbnail for several distinct photos). Returning null
   // instead lets the caller retry until the right file is indexed.
   final chosen = exact ?? renamed;
-  if (chosen == null) return (mediaId: null, title: null);
-  return (mediaId: chosen.id, title: chosen.title);
+  if (chosen == null) return (mediaId: null, title: null, relativePath: null);
+
+  String? relPath;
+  try {
+    relPath = chosen.relativePath;
+    if (relPath == null || relPath.isEmpty) {
+      final info = await MediaHeaderService.queryAlbum(chosen.id);
+      relPath = info?.relativePath;
+    }
+  } catch (_) {
+    relPath = null;
+  }
+  return (mediaId: chosen.id, title: chosen.title, relativePath: relPath);
 }
 
 /// Save the post caption ("title\nbody") as a txt file next to app storage.
