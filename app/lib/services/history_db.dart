@@ -621,9 +621,14 @@ class HistoryDb {
     notifyChanged('clear rows=$rows');
   }
 
-  Future<void> reinsert(HistoryRecord record) async {
-    // Undo of a delete: the record must come back visible, so the soft-delete
-    // flag is always cleared regardless of what the passed record carries.
+  /// Bring a record back after an undo.
+  ///
+  /// Only the undo affordance may call this: it clears the soft-delete flag by
+  /// design. Recovery paths (batch adoption, startup backfill) must go through
+  /// [upsert] with `restoreDeleted: false` instead, so a record the user
+  /// deleted does not come back by itself. [reason] shows up in the device log
+  /// to make that distinction visible.
+  Future<void> reinsert(HistoryRecord record, {String reason = 'undo'}) async {
     final id = await _db.insert(
       'history_records',
       record.toMap()
@@ -631,7 +636,7 @@ class HistoryDb {
         ..['is_deleted'] = 0,
       conflictAlgorithm: ConflictAlgorithm.replace,
     );
-    notifyChanged('reinsert post=${record.postId} id=$id');
+    notifyChanged('reinsert ($reason) post=${record.postId} id=$id');
   }
 }
 

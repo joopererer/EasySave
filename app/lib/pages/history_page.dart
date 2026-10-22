@@ -591,7 +591,7 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
             label: '撤销',
             onPressed: () async {
               for (final record in records) {
-                await db.reinsert(record);
+                await db.reinsert(record, reason: 'undo');
               }
               await _reload();
             },

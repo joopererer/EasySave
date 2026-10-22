@@ -354,6 +354,34 @@ void main() {
         expect((await db.recent()).isEmpty, isTrue);
       },
     );
+
+    test(
+      'startup adoption of a finished foreign batch keeps a deleted record '
+      'deleted (upsert, never reinsert)',
+      () async {
+        await db.upsert(
+          HistoryRecord(
+            platform: 'xhs',
+            postId: 'adopted',
+            postUrl: 'https://www.xiaohongshu.com/explore/adopted',
+            fileCount: 1,
+            createdAt: DateTime.now(),
+            files: [HistoryFile(filename: 'old.jpg', savedAt: 0)],
+          ),
+        );
+        final existing = await db.getByPostId('adopted');
+        await db.delete(existing!.id!);
+
+        // The batch was finished by the background engine and is adopted by
+        // the main engine on start: recovered: true → restoreDeleted: false.
+        final batch = finishedBatch('adopted');
+        await writeBatchHistory(db, batch, recovered: true);
+
+        final stillDeleted = await db.getByPostId('adopted');
+        expect(stillDeleted!.isDeleted, isTrue);
+        expect(await db.recent(), isEmpty);
+      },
+    );
   });
 
   group('Foreign batch adoption is one-shot', () {

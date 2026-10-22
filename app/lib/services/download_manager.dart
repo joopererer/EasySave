@@ -428,6 +428,11 @@ Future<void> writeBatchHistory(
               : FileStatus.unknown,
         ),
   ];
+  DevLog.write(
+    DownloadManager.logTag,
+    'history write post=${batch.postId} recovered=$recovered '
+    'restoreDeleted=${!recovered} files=${files.length}',
+  );
   await db.upsert(
     HistoryRecord(
       platform: batch.platform,
