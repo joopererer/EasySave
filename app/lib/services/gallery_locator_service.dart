@@ -7,6 +7,7 @@ import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:photo_manager/photo_manager.dart';
 
+import '../core/dev_log.dart';
 import '../core/models.dart';
 import 'history_db.dart';
 import 'settings.dart';
@@ -425,12 +426,27 @@ class GalleryLocatorService extends ChangeNotifier {
 
   /// Link already-saved local album files to [post] in the history database
   /// without downloading them again. Returns the number of files associated.
-  Future<int> associateExisting(ParsedPost post, List<int> indices) async {
-    final matches = await matchPostItems(post);
+  ///
+  /// This is a **user-initiated save** ("保存" on the preview page when every
+  /// selected file is already in the album), so the record is written with
+  /// `restoreDeleted: true`: a record the user deleted earlier must come back
+  /// when they save the same post again. Recovery paths never call this.
+  ///
+  /// [matches] can be supplied by callers that already resolved the album
+  /// assets (the preview page scans once and reuses the result), and by tests.
+  /// [db] overrides the history store (tests); production uses the app store.
+  Future<int> associateExisting(
+    ParsedPost post,
+    List<int> indices, {
+    Map<int, AssetEntity>? matches,
+    bool restoreDeleted = true,
+    HistoryDb? db,
+  }) async {
+    final resolved = matches ?? await matchPostItems(post);
     final now = DateTime.now().millisecondsSinceEpoch;
     final files = <HistoryFile>[];
     for (final i in indices) {
-      final asset = matches[i];
+      final asset = resolved[i];
       if (asset == null) continue;
       files.add(
         HistoryFile(
@@ -444,8 +460,13 @@ class GalleryLocatorService extends ChangeNotifier {
       );
     }
     if (files.isEmpty) return 0;
-    final db = await HistoryDb.instance();
-    await db.upsert(
+    final store = db ?? await HistoryDb.instance();
+    DevLog.write(
+      'V16DL', // i18n:ignore 日志
+      'history write post=${post.id} source=associate-existing '
+      'restoreDeleted=$restoreDeleted files=${files.length}',
+    );
+    await store.upsert(
       HistoryRecord(
         platform: post.platform,
         postId: post.id,
@@ -458,6 +479,7 @@ class GalleryLocatorService extends ChangeNotifier {
         itemsJson: jsonEncode([for (final it in post.items) it.toJson()]),
         files: files,
       ),
+      restoreDeleted: restoreDeleted,
     );
     return files.length;
   }

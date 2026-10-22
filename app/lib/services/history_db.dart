@@ -483,11 +483,18 @@ class HistoryDb {
   }
 
   /// Insert or merge a history record.
-  /// 
+  ///
   /// When [restoreDeleted] is true, merging will clear the isDeleted flag,
-  /// restoring soft-deleted records. This should only be true for rebuild operations.
-  /// Regular downloads and status updates preserve the deletion state.
+  /// restoring soft-deleted records. This should only be true for rebuild
+  /// operations **and for user-initiated saves** (the user asked for this post
+  /// to be saved again, so a record they had deleted must come back). Recovery
+  /// paths (startup, batch adoption) keep the deletion state.
   Future<void> upsert(HistoryRecord record, {bool restoreDeleted = false}) async {
+    DevLog.write(
+      'HIST', // i18n:ignore 日志
+      'history write post=${record.postId} files=${record.files.length} '
+      'restoreDeleted=$restoreDeleted',
+    );
     await _db.transaction((txn) async {
       final existing = await _getByPostUrl(txn, record.postUrl) ??
           await _getByPostId(txn, record.postId);

@@ -4,6 +4,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../core/dev_log.dart';
 import '../core/models.dart';
 import '../services/download_manager.dart';
 import '../services/gallery_locator_service.dart';
@@ -158,15 +159,27 @@ class _PreviewPageState extends State<PreviewPage> {
     final locator = GalleryLocatorService.instance;
     // Re-check which selected items are already in the album right before
     // saving: those are associated with the history record instead of being
-    // downloaded again.
-    final downloaded = await locator.findDownloadedIndices(widget.post);
+    // downloaded again. The album scan happens once and the result is reused
+    // for the association write, so the two steps cannot disagree.
+    final matches = await locator.matchPostItems(widget.post);
+    final downloaded = matches.keys.toSet();
     final toAssociate = _order.where(downloaded.contains).toList();
     final toDownload = _order.where((i) => !downloaded.contains(i)).toList();
     if (!mounted) return;
 
+    DevLog.write(
+      'V16DL', // i18n:ignore 日志
+      'save plan post=${widget.post.id} selected=${_order.length} '
+      'associate=${toAssociate.length} download=${toDownload.length}',
+    );
+
     var associated = 0;
     if (toAssociate.isNotEmpty) {
-      associated = await locator.associateExisting(widget.post, toAssociate);
+      associated = await locator.associateExisting(
+        widget.post,
+        toAssociate,
+        matches: matches,
+      );
     }
     if (!mounted) return;
 
