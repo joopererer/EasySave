@@ -2,7 +2,7 @@
 // Service for rebuilding history from gallery scan.
 // See spec/metadata.md §7.1
 
-import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:photo_manager/photo_manager.dart';
 
@@ -11,6 +11,8 @@ import '../metadata/metadata_service.dart';
 import '../metadata/xmp_model.dart';
 import 'gallery_locator_service.dart';
 import 'history_db.dart';
+import 'media_header_service.dart';
+import 'settings.dart';
 
 /// Result of a rebuild operation.
 class RebuildResult {
@@ -20,17 +22,23 @@ class RebuildResult {
   final int merged;
   final int skipped;
 
+  /// True when the user cancelled: everything processed up to that point was
+  /// still written, only the remaining files were not scanned.
+  final bool cancelled;
+
   const RebuildResult({
     required this.total,
     required this.processed,
     required this.created,
     required this.merged,
     required this.skipped,
+    this.cancelled = false,
   });
 
   @override
   String toString() =>
-      '$processed/$total processed, $created new, $merged merged (including recovered), $skipped skipped';
+      '$processed/$total processed, $created new, $merged merged (including recovered), $skipped skipped'
+      '${cancelled ? ' (cancelled)' : ''}';
 }
 
 /// Service for rebuilding history from gallery files.
@@ -41,58 +49,106 @@ class HistoryRebuildService {
 
   static const _logTag = 'HistoryRebuild';
 
+  /// The only formats whose XMP the rebuild scan can understand.
+  static const Set<String> supportedMimes = {
+    'image/jpeg',
+    'image/png',
+    'image/webp',
+  };
+
   /// Rebuild history records from gallery files.
-  /// Scans EasySave album, reads XMP from each file, and upserts to HistoryDb.
+  ///
+  /// Reads the provenance metadata of each file in [albums] (the used albums
+  /// by default) and upserts one history record per post. Only the file
+  /// headers are fetched (see [MediaHeaderService]), so a rebuild no longer
+  /// copies every file out of the album.
+  ///
+  /// [onProgress] reports "已扫描 n / N"; [isCancelled] is polled before each
+  /// file, and cancelling keeps everything processed so far.
   Future<RebuildResult> rebuild({
+    Set<String>? albums,
+    bool includeAllAlbums = false,
     void Function(int current, int total, String filename)? onProgress,
+    bool Function()? isCancelled,
+    Future<Uint8List> Function(String mediaId, String? mimeType)? readHeader,
+    List<AssetEntity>? assetsOverride,
+    HistoryDb? dbOverride,
   }) async {
     final locator = GalleryLocatorService.instance;
 
-    // Check permission
-    if (!locator.hasAccess) {
+    // Check permission (only needed when the album really has to be read).
+    if (assetsOverride == null && !locator.hasAccess) {
       await PhotoManager.requestPermissionExtend();
       if (!locator.hasAccess) {
         throw Exception('没有相册访问权限');
       }
     }
 
-    // Scan album to get all assets
-    await locator.scanAlbum(force: true);
+    final settings = await AppSettings.load();
+    final selectedAlbums = (albums == null || albums.isEmpty)
+        ? settings.effectiveAlbumNames
+        : albums.toSet();
 
-    // Get all assets from locator
-    final assets = locator.getScannedAssets();
+    final startedAt = DateTime.now();
+    final assets = assetsOverride ??
+        (includeAllAlbums
+            ? await locator.allImages()
+            : await locator.assetsInAlbums(selectedAlbums));
     final total = assets.length;
+
+    DevLog.write(
+      _logTag, // i18n:ignore 日志
+      'scan start albums=${includeAllAlbums ? '<all>' : selectedAlbums.join(',')} '
+      'files=$total at=${startedAt.toIso8601String()}',
+    );
+
+    final reader = readHeader ?? MediaHeaderService.readHeader;
 
     var processed = 0;
     var created = 0;
     var merged = 0;
     var skipped = 0;
+    var cancelled = false;
 
     // Group assets by (platform, sourceId)
     final groups = <String, List<_AssetWithXmp>>{};
 
     for (final asset in assets) {
+      if (isCancelled?.call() == true) {
+        cancelled = true;
+        break;
+      }
       processed++;
       onProgress?.call(processed, total, asset.title ?? 'unknown');
 
-      File? path;
-      try {
-        path = await asset.file;
-      } catch (_) {
-        skipped++;
-        continue;
-      }
-      if (path == null || !await path.exists()) {
+      // Only the formats the XMP readers understand are worth opening.
+      final mime = asset.mimeType?.toLowerCase();
+      if (mime == null || !supportedMimes.contains(mime)) {
         skipped++;
         continue;
       }
 
-      // Read XMP from file
+      // Read only the file header: the XMP lives there, and copying the
+      // whole file out of the album was what made a rebuild slow.
+      Uint8List bytes;
+      try {
+        bytes = await reader(asset.id, mime);
+      } catch (e) {
+        DevLog.write(_logTag, 'Failed to read header of ${asset.title}: $e'); // i18n:ignore 日志
+        skipped++;
+        continue;
+      }
+      if (bytes.isEmpty) {
+        skipped++;
+        continue;
+      }
+
+      // Parse XMP from the header bytes.
       XmpProvenance? provenance;
       try {
-        provenance = MetadataService.readProvenance(path.path);
+        provenance = MetadataService.readProvenanceFromBytes(bytes);
       } catch (e) {
-        DevLog.write(_logTag, 'Failed to read XMP from ${asset.title}: $e');
+        DevLog.write(_logTag, 'Failed to parse XMP of ${asset.title}: $e'); // i18n:ignore 日志
         skipped++;
         continue;
       }
@@ -109,7 +165,7 @@ class HistoryRebuildService {
       }
 
       final key = '${provenance.platform!}:${provenance.sourceId!}';
-      groups.putIfAbsent(key, () => []).add(_AssetWithXmp(asset, path.path, provenance));
+      groups.putIfAbsent(key, () => []).add(_AssetWithXmp(asset, '', provenance));
     }
 
     // Process each group
@@ -139,7 +195,7 @@ class HistoryRebuildService {
       }
 
       // Try to find existing record
-      final db = await HistoryDb.instance();
+      final db = dbOverride ?? await HistoryDb.instance();
       final existing = await db.getByPostId(sourceId);
 
       if (existing != null) {
@@ -176,7 +232,7 @@ class HistoryRebuildService {
 
         await db.upsert(mergedRecord, restoreDeleted: true);
         merged++;
-        DevLog.write(_logTag, 'Merged record: $platform:$sourceId');
+        DevLog.write(_logTag, 'Merged record: $platform:$sourceId'); // i18n:ignore 日志
       } else {
         // Create new record
         final firstProv = assetsWithXmp.first.provenance;
@@ -195,9 +251,18 @@ class HistoryRebuildService {
 
         await db.upsert(record, restoreDeleted: true);
         created++;
-        DevLog.write(_logTag, 'Created record: $platform:$sourceId');
+        DevLog.write(_logTag, 'Created record: $platform:$sourceId'); // i18n:ignore 日志
       }
     }
+
+    final finishedAt = DateTime.now();
+    final elapsed = finishedAt.difference(startedAt).inMilliseconds;
+    DevLog.write(
+      _logTag, // i18n:ignore 日志
+      'scan end files=$total processed=$processed created=$created '
+      'merged=$merged skipped=$skipped cancelled=$cancelled '
+      'elapsedMs=$elapsed at=${finishedAt.toIso8601String()}',
+    );
 
     return RebuildResult(
       total: total,
@@ -205,6 +270,7 @@ class HistoryRebuildService {
       created: created,
       merged: merged,
       skipped: skipped,
+      cancelled: cancelled,
     );
   }
 

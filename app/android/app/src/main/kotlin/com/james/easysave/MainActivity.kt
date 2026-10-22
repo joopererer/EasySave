@@ -172,6 +172,8 @@ class MainActivity : FlutterActivity() {
                 when (call.method) {
                     "deleteMedia" -> deleteMedia(call, result)
                     "requestWriteAccess" -> requestWriteAccess(call, result)
+                    "readMediaHeader" -> readMediaHeader(call, result)
+                    "queryMediaAlbum" -> queryMediaAlbum(call, result)
                     else -> result.notImplemented()
                 }
             }
@@ -416,8 +418,52 @@ class MainActivity : FlutterActivity() {
         }
     }
 
-    private fun isSealInstalled(): Boolean {
-        return try {
+    /**
+     * Read only the header bytes of a media file (see [MediaHeaderReader]).
+     * The result is the byte array that was read, never a byte count.
+     */
+    private fun readMediaHeader(call: MethodCall, result: MethodChannel.Result) {
+        val id = call.argument<String>("id")
+        val mediaId = id?.toLongOrNull()
+        if (mediaId == null) {
+            result.error("bad_args", "id must be a numeric media id", null)
+            return
+        }
+        val mimeType = call.argument<String>("mimeType")
+        try {
+            val uri = ContentUris.withAppendedId(
+                MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
+                mediaId,
+            )
+            result.success(MediaHeaderReader.readHeader(contentResolver, uri, mimeType))
+        } catch (e: Exception) {
+            result.error("read_failed", e.message, null)
+        }
+    }
+
+    /**
+     * Album (MediaStore bucket / relative path) of a media file.
+     * The album name is never derived from the file name.
+     */
+    private fun queryMediaAlbum(call: MethodCall, result: MethodChannel.Result) {
+        val id = call.argument<String>("id")
+        val mediaId = id?.toLongOrNull()
+        if (mediaId == null) {
+            result.error("bad_args", "id must be a numeric media id", null)
+            return
+        }
+        try {
+            val uri = ContentUris.withAppendedId(
+                MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
+                mediaId,
+            )
+            result.success(MediaHeaderReader.queryAlbum(contentResolver, uri))
+        } catch (e: Exception) {
+            result.error("query_failed", e.message, null)
+        }
+    }
+
+    private fun isSealInstalled(): Boolean {        return try {
             packageManager.getPackageInfo(SEAL_PACKAGE, 0)
             true
         } catch (_: Exception) {

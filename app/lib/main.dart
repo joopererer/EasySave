@@ -4,10 +4,12 @@ import 'package:flutter/material.dart';
 
 import 'background/background_entry.dart' as bg;
 import 'pages/main_shell.dart';
+import 'services/album_name_registry.dart';
 import 'services/download_manager.dart';
 import 'services/gallery_locator_service.dart';
 import 'services/host_bridge.dart';
 import 'services/preview_route_observer.dart';
+import 'services/settings.dart';
 import 'services/update_service.dart';
 import 'theme/app_theme.dart';
 
@@ -37,7 +39,17 @@ Future<void> main() async {
   // Runs after the first frame so the activity is attached and the system
   // dialog can actually appear.
   WidgetsBinding.instance.addPostFrameCallback((_) {
-    GalleryLocatorService.instance.ensurePermission();
+    GalleryLocatorService.instance.ensurePermission().then((_) async {
+      // Fill the "albums I have used" list from the albums MediaStore reports
+      // for the files we already located; the rebuild scan needs it.
+      try {
+        final settings = await AppSettings.load();
+        final added = await AlbumNameRegistry.completeFromHistory(settings);
+        if (added.isNotEmpty) await settings.save();
+      } catch (_) {
+        // Best effort: the list is completed again on the next rebuild.
+      }
+    });
   });
 }
 

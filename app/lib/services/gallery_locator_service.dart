@@ -152,6 +152,11 @@ class GalleryLocatorService extends ChangeNotifier {
     try {
       final settings = await AppSettings.load();
       final albumName = settings.albumName.trim().toLowerCase();
+      // Every album the app has used, not just the current one: renaming the
+      // album must not hide the files that were saved before the rename.
+      final wanted = {
+        for (final name in settings.effectiveAlbumNames) name.trim().toLowerCase(),
+      };
 
       final paths = await PhotoManager.getAssetPathList(
         type: RequestType.common,
@@ -164,40 +169,40 @@ class GalleryLocatorService extends ChangeNotifier {
         ),
       );
 
-      AssetPathEntity? targetAlbum;
       AssetPathEntity? allAlbum;
 
       for (final p in paths) {
-        if (p.isAll) {
-          allAlbum = p;
-        }
-        if (p.name.trim().toLowerCase() == albumName) {
-          targetAlbum = p;
-        }
+        if (p.isAll) allAlbum = p;
       }
 
       final assetsToIndex = <AssetEntity>[];
+      final seenIds = <String>{};
 
-      if (targetAlbum != null) {
-        final count = await targetAlbum.assetCountAsync;
-        if (count > 0) {
-          final list = await targetAlbum.getAssetListRange(
-            start: 0,
-            end: count,
-          );
-          assetsToIndex.addAll(list);
+      for (final p in paths) {
+        if (p.isAll) continue;
+        if (!wanted.contains(p.name.trim().toLowerCase())) continue;
+        final count = await p.assetCountAsync;
+        if (count <= 0) continue;
+        final list = await p.getAssetListRange(start: 0, end: count);
+        for (final asset in list) {
+          if (seenIds.add(asset.id)) assetsToIndex.add(asset);
         }
       }
 
-      // In limited mode, or if target album was not found/empty, load from allAlbum
-      if ((isLimited || assetsToIndex.isEmpty) && allAlbum != null) {
+      // Only when no used album exists at all (fresh install with the album
+      // not created yet) fall back to the whole library, so the app is never
+      // left unable to locate its own files.
+      if (assetsToIndex.isEmpty && allAlbum != null) {
+        DevLog.write(
+          'V16DL', // i18n:ignore 日志
+          'no used album found ($albumName), falling back to the whole library',
+          level: DevLogLevel.warn,
+        );
         final count = await allAlbum.assetCountAsync;
         if (count > 0) {
           final list = await allAlbum.getAssetListRange(start: 0, end: count);
           for (final a in list) {
-            if (!assetsToIndex.any((existing) => existing.id == a.id)) {
-              assetsToIndex.add(a);
-            }
+            if (seenIds.add(a.id)) assetsToIndex.add(a);
           }
         }
       }
@@ -491,5 +496,121 @@ class GalleryLocatorService extends ChangeNotifier {
   /// Returns all scanned assets for rebuild purposes.
   /// Only valid after [scanAlbum] has been called.
   List<AssetEntity> getScannedAssets() => List.unmodifiable(_allAssets);
+
+  /// Albums present on the device with their image counts.
+  ///
+  /// Used by the rebuild picker: the used albums are pre-selected, and other
+  /// albums can be added explicitly (a full-device scan is much slower).
+  Future<List<({String name, int count})>> albumOptions() async {
+    if (!_permission.hasAccess) {
+      await checkPermission();
+      if (!_permission.hasAccess) return const [];
+    }
+    try {
+      final paths = await PhotoManager.getAssetPathList(
+        type: RequestType.image,
+        hasAll: false,
+      );
+      final options = <({String name, int count})>[];
+      for (final path in paths) {
+        if (path.isAll) continue;
+        final count = await path.assetCountAsync;
+        options.add((name: path.name, count: count));
+      }
+      return options;
+    } catch (e) {
+      debugPrint('albumOptions error: $e');
+      return const [];
+    }
+  }
+
+  /// Total number of images on the device (the "全部相册" option).
+  Future<int> allAlbumCount() async {
+    if (!_permission.hasAccess) {
+      await checkPermission();
+      if (!_permission.hasAccess) return 0;
+    }
+    try {
+      final paths = await PhotoManager.getAssetPathList(
+        type: RequestType.image,
+        hasAll: true,
+      );
+      for (final path in paths) {
+        if (path.isAll) return await path.assetCountAsync;
+      }
+    } catch (e) {
+      debugPrint('allAlbumCount error: $e');
+    }
+    return 0;
+  }
+
+  /// Assets of [albumNames] (case-insensitive).
+  ///
+  /// Reads straight from MediaStore and does not touch the shared locator
+  /// index: the rebuild scan must not leave the app pointing at a different
+  /// set of assets than [scanAlbum] would.
+  Future<List<AssetEntity>> assetsInAlbums(Iterable<String> albumNames) async {
+    if (!_permission.hasAccess) {
+      await checkPermission();
+      if (!_permission.hasAccess) return const [];
+    }
+    final wanted = {
+      for (final name in albumNames)
+        if (name.trim().isNotEmpty) name.trim().toLowerCase(),
+    };
+    if (wanted.isEmpty) return const [];
+    try {
+      final paths = await PhotoManager.getAssetPathList(
+        type: RequestType.image,
+        hasAll: false,
+        filterOption: FilterOptionGroup(
+          imageOption: const FilterOption(needTitle: true),
+        ),
+      );
+      final assets = <AssetEntity>[];
+      final seen = <String>{};
+      for (final path in paths) {
+        if (path.isAll) continue;
+        if (!wanted.contains(path.name.trim().toLowerCase())) continue;
+        final count = await path.assetCountAsync;
+        if (count <= 0) continue;
+        final list = await path.getAssetListRange(start: 0, end: count);
+        for (final asset in list) {
+          if (seen.add(asset.id)) assets.add(asset);
+        }
+      }
+      return assets;
+    } catch (e) {
+      debugPrint('assetsInAlbums error: $e');
+      return const [];
+    }
+  }
+
+  /// Every image on the device (explicit "全部相册" rebuild only).
+  Future<List<AssetEntity>> allImages() async {
+    if (!_permission.hasAccess) {
+      await checkPermission();
+      if (!_permission.hasAccess) return const [];
+    }
+    try {
+      final paths = await PhotoManager.getAssetPathList(
+        type: RequestType.image,
+        hasAll: true,
+        filterOption: FilterOptionGroup(
+          imageOption: const FilterOption(needTitle: true),
+        ),
+      );
+      for (final path in paths) {
+        if (path.isAll) {
+          final count = await path.assetCountAsync;
+          if (count <= 0) return const [];
+          return path.getAssetListRange(start: 0, end: count);
+        }
+      }
+    } catch (e) {
+      debugPrint('allImages error: $e');
+    }
+    return const [];
+  }
 }
 

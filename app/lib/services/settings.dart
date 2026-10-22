@@ -20,6 +20,14 @@ class AppSettings {
   bool saveCaptionTxt = false;
   bool autoClipboard = true;
 
+  /// Every album the app has ever saved into (the current one plus the ones
+  /// used earlier). The rebuild scan works on this list.
+  ///
+  /// The names are never derived from file names: they come from the album
+  /// the user picked in the settings and from MediaStore
+  /// (BUCKET_DISPLAY_NAME / RELATIVE_PATH) for the files that were located.
+  List<String> usedAlbumNames = <String>[];
+
   /// Save provenance metadata (XMP) to downloaded images. When false, skips
   /// XMP embedding but still writes assetId to HistoryDb.
   bool saveProvenanceInImages = true;
@@ -66,7 +74,8 @@ class AppSettings {
         prefs.getString('historySort'),
         HistorySort.latest,
       )
-      ..saveProvenanceInImages = prefs.getBool('saveProvenanceInImages') ?? true;
+      ..saveProvenanceInImages = prefs.getBool('saveProvenanceInImages') ?? true
+      ..usedAlbumNames = prefs.getStringList('usedAlbumNames') ?? const [];
   }
 
   Future<void> save() async {
@@ -82,6 +91,36 @@ class AppSettings {
     await prefs.setString('historyLayout', historyLayout.name);
     await prefs.setString('historySort', historySort.name);
     await prefs.setBool('saveProvenanceInImages', saveProvenanceInImages);
+    await prefs.setStringList('usedAlbumNames', usedAlbumNames);
+  }
+
+  /// Remember [albumName] as an album the app has used.
+  ///
+  /// Renaming the album appends: the old album still holds files, so the
+  /// rebuild scan must keep looking there. Names are compared case
+  /// insensitively; the first spelling wins.
+  void rememberAlbum(String name) {
+    final trimmed = name.trim();
+    if (trimmed.isEmpty) return;
+    final exists = usedAlbumNames.any(
+      (n) => n.trim().toLowerCase() == trimmed.toLowerCase(),
+    );
+    if (exists) return;
+    usedAlbumNames.add(trimmed);
+  }
+
+  /// All albums the app has used: the current one plus the remembered ones.
+  List<String> get effectiveAlbumNames {
+    final names = <String>[];
+    final seen = <String>{};
+    for (final name in [albumName, ...usedAlbumNames]) {
+      final trimmed = name.trim();
+      if (trimmed.isEmpty) continue;
+      final key = trimmed.toLowerCase();
+      if (!seen.add(key)) continue;
+      names.add(trimmed);
+    }
+    return names;
   }
 
   static T _enumFromName<T extends Enum>(List<T> values, String? name, T fallback) {

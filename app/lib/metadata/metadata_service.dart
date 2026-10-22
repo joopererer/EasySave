@@ -209,6 +209,28 @@ class MetadataService {
     }
   }
 
+  /// Read provenance from a **header byte buffer**.
+  ///
+  /// The rebuild scan streams only the header of each file (the native side
+  /// returns the bytes it read, not a byte count), so the format is detected
+  /// from the magic bytes and the matching XMP reader is used.
+  ///
+  /// The PNG and WebP readers expect the container to start at the file
+  /// beginning, which is what the native side returns: the PNG signature plus
+  /// the XMP chunk, the RIFF header plus the XMP chunk.
+  static XmpProvenance? readProvenanceFromBytes(Uint8List bytes) {
+    if (bytes.isEmpty) return null;
+    final format = _detectFormat(bytes);
+    if (format == null) return null;
+    try {
+      return _readExisting(bytes, format);
+    } on FormatException {
+      // A truncated header is not an error: the file simply has no readable
+      // XMP in the part we fetched.
+      return null;
+    }
+  }
+
   /// Write XMP to file.
   static Uint8List? _writeXmp(Uint8List bytes, XmpProvenance xmp, String format) {
     switch (format) {

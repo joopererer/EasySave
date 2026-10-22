@@ -130,7 +130,10 @@ class HistoryBackfillService {
     // Collect all files needing backfill
     final filesToBackfill = <_BackfillItem>[];
 
-    // Ensure gallery is scanned for locating files without mediaId
+    // Ensure gallery is scanned for locating files without mediaId.
+    // The index only holds the albums the app has used (see
+    // AppSettings.effectiveAlbumNames), so the fallback lookup below stays
+    // inside those albums instead of walking the whole library.
     final locator = GalleryLocatorService.instance;
     if (!locator.scanned) {
       await locator.scanAlbum();

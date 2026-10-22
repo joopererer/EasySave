@@ -6,8 +6,10 @@ import 'package:flutter/material.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 
 import '../core/dev_log.dart';
+import '../services/album_name_registry.dart';
 import '../services/auth.dart';
 import '../services/bubble_service.dart';
+import '../services/gallery_locator_service.dart';
 import '../services/history_backfill_service.dart';
 import '../services/history_rebuild_service.dart';
 import '../services/settings.dart';
@@ -354,32 +356,89 @@ class _MinePageState extends State<MinePage> with WidgetsBindingObserver {
     ).showSnackBar(SnackBar(content: Text('已清理缓存（$removed 个临时文件）')));
   }
 
-  Future<void> _rebuildHistory() async {
-    final confirmed = await showDialog<bool>(
+  /// Ask which albums the rebuild should scan.
+  ///
+  /// Used albums are pre-selected; every other album can be added. Scanning
+  /// the whole library is offered as an explicit, clearly slower option.
+  Future<({Set<String> albums, bool allAlbums})?> _pickRebuildAlbums() async {
+    final locator = GalleryLocatorService.instance;
+    // Make sure the used-album list is complete before showing it.
+    await AlbumNameRegistry.completeFromHistory(_settings);
+    await _saveSettings();
+
+    final used = _settings.effectiveAlbumNames;
+    if (!mounted) return null;
+    final options = await locator.albumOptions();
+    final allCount = await locator.allAlbumCount();
+    if (!mounted) return null;
+
+    final selected = <String>{...used};
+    var allAlbums = false;
+
+    final result = await showDialog<({Set<String> albums, bool allAlbums})>(
       context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('从相册重建历史'),
-        content: const Text(
-          '扫描相册中的图片，读取来源信息后重建历史记录。\n\n'
-          '会恢复相册中仍存在文件的帖子记录，包括之前删除过记录的帖子。\n\n'
-          '此操作会合并或新建历史记录，不会删除现有数据。',
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (dialogContext, setLocal) => AlertDialog(
+          title: const Text('选择要扫描的相册'),
+          content: SizedBox(
+            width: double.maxFinite,
+            child: ListView(
+              shrinkWrap: true,
+              children: [
+                for (final option in options)
+                  CheckboxListTile(
+                    value: selected.contains(option.name),
+                    title: Text(option.name),
+                    subtitle: Text('${option.count} 张图片'),
+                    onChanged: (checked) => setLocal(() {
+                      if (checked == true) {
+                        selected.add(option.name);
+                      } else {
+                        selected.remove(option.name);
+                      }
+                    }),
+                  ),
+                CheckboxListTile(
+                  value: allAlbums,
+                  title: const Text('全部相册'),
+                  subtitle: Text('较慢，约 $allCount 张图片'),
+                  onChanged: (checked) =>
+                      setLocal(() => allAlbums = checked == true),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(),
+              child: const Text('取消'),
+            ),
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(
+                (albums: selected, allAlbums: allAlbums),
+              ),
+              child: const Text('开始重建'),
+            ),
+          ],
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(false),
-            child: const Text('取消'),
-          ),
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(true),
-            child: const Text('开始重建'),
-          ),
-        ],
       ),
     );
-    if (confirmed != true || !mounted) return;
+    return result;
+  }
+
+  Future<void> _rebuildHistory() async {
+    final selection = await _pickRebuildAlbums();
+    if (selection == null || !mounted) return;
+    if (!selection.allAlbums && selection.albums.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('请至少选择一个相册')),
+      );
+      return;
+    }
 
     // Show progress dialog
     final progressText = ValueNotifier<String>('准备中…');
+    final cancelled = ValueNotifier<bool>(false);
     final dialog = showDialog<void>(
       context: context,
       barrierDismissible: false,
@@ -389,14 +448,23 @@ class _MinePageState extends State<MinePage> with WidgetsBindingObserver {
           valueListenable: progressText,
           builder: (_, value, __) => Text(value),
         ),
+        actions: [
+          TextButton(
+            onPressed: () => cancelled.value = true,
+            child: const Text('取消'),
+          ),
+        ],
       ),
     );
 
     try {
       final result = await HistoryRebuildService.instance.rebuild(
+        albums: selection.albums,
+        includeAllAlbums: selection.allAlbums,
         onProgress: (current, total, filename) {
-          progressText.value = '$current / $total\n$filename';
+          progressText.value = '已扫描 $current / $total\n$filename';
         },
+        isCancelled: () => cancelled.value,
       );
 
       if (!mounted) return;
@@ -405,7 +473,9 @@ class _MinePageState extends State<MinePage> with WidgetsBindingObserver {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(
-            '已完成：${result.created} 新建，${result.merged} 合并，${result.skipped} 跳过',
+            result.cancelled
+                ? '已取消：${result.created} 新建，${result.merged} 合并，${result.skipped} 跳过'
+                : '已完成：${result.created} 新建，${result.merged} 合并，${result.skipped} 跳过',
           ),
         ),
       );
@@ -572,11 +642,19 @@ class _MinePageState extends State<MinePage> with WidgetsBindingObserver {
               children: [
                 ListTile(
                   title: const Text('相册名称'),
-                  subtitle: Text(_settings.albumName),
+                  subtitle: Text(
+                    _settings.effectiveAlbumNames.join(' / '),
+                  ),
                   onTap: () => _editText(
                     title: '相册名称',
                     initial: _settings.albumName,
-                    onSave: (v) => _settings.albumName = v,
+                    onSave: (v) {
+                      // Renaming must not lose the old album: the files are
+                      // still there, so the rebuild keeps looking in it.
+                      _settings.rememberAlbum(_settings.albumName);
+                      _settings.albumName = v;
+                      _settings.rememberAlbum(v);
+                    },
                   ),
                 ),
                 ListTile(
