@@ -80,6 +80,21 @@ class GalleryLocatorService extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Evict deleted media IDs from in-memory caches.
+  void evictMediaIds(Iterable<String> ids) {
+    for (final id in ids) {
+      final asset = _idMap.remove(id);
+      final title = (asset?.title ?? '').trim().toLowerCase();
+      if (title.isNotEmpty) {
+        _exactMap.remove(title);
+        final baseName = title.split('/').last.split('\\').last;
+        _exactMap.remove(baseName);
+      }
+      _allAssets.removeWhere((a) => a.id == id);
+    }
+    notifyListeners();
+  }
+
   /// Check current permission state without prompting the user.
   Future<PermissionState> checkPermission() async {
     try {
@@ -385,11 +400,19 @@ class GalleryLocatorService extends ChangeNotifier {
       }
       final db = await HistoryDb.instance();
       final record = await db.getByPostId(post.id);
-      if (record != null && record.files.isNotEmpty) {
+      if (record != null && !record.isDeleted && record.files.isNotEmpty) {
         final is1Based = record.files.every((f) => f.itemIndex > 0);
         for (final file in record.files) {
           final asset = locateAsset(file, post.id);
           if (asset != null) {
+            bool exists = true;
+            try {
+              exists = await asset.exists;
+            } catch (_) {}
+            if (!exists) {
+              evictMediaIds([asset.id]);
+              continue;
+            }
             final zeroBased = is1Based ? file.itemIndex - 1 : file.itemIndex;
             result[zeroBased] = asset;
           }
@@ -420,7 +443,16 @@ class GalleryLocatorService extends ChangeNotifier {
                   t.contains(' $seq.');
             }).toList();
             if (matched.isNotEmpty) {
-              result[i] = matched.first;
+              final candidate = matched.first;
+              bool exists = true;
+              try {
+                exists = await candidate.exists;
+              } catch (_) {}
+              if (exists) {
+                result[i] = candidate;
+              } else {
+                evictMediaIds([candidate.id]);
+              }
             }
           }
         }

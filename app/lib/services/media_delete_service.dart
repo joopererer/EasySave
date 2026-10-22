@@ -11,9 +11,12 @@
 // tell the user the album files were kept. See MainActivity.kt for the full
 // version breakdown.
 
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 
+import 'gallery_locator_service.dart';
 import 'history_db.dart';
 
 class MediaDeleteService {
@@ -44,7 +47,12 @@ class MediaDeleteService {
         'ids': ids,
         'isImage': isImage,
       });
-      return result ?? false;
+      final approved = result ?? false;
+      if (approved) {
+        GalleryLocatorService.instance.evictMediaIds(ids);
+        unawaited(GalleryLocatorService.instance.scanAlbum(force: true));
+      }
+      return approved;
     } on PlatformException {
       return false;
     } on MissingPluginException {
