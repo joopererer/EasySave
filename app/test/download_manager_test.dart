@@ -355,4 +355,73 @@ void main() {
       },
     );
   });
+
+  group('Foreign batch adoption is one-shot', () {
+    const owner = DownloadBatch.sourceMain;
+
+    int staleNow() => kStalledBatchAgeMs * 2;
+
+    DownloadBatch foreignBatch({String? settledBy}) => DownloadBatch(      batchId: 'background-1792611876085',
+      album: 'EasySave',
+      postUrl: 'https://www.xiaohongshu.com/explore/settled',
+      platform: 'xhs',
+      postId: 'settled',
+      source: DownloadBatch.sourceBackground,
+      updatedAt: staleNow(),
+      jobs: [
+        DownloadJob(
+          key: 'settled-0',
+          label: '图片 1',
+          filename: 'f1.jpg',
+          urls: ['https://img/1.jpg'],
+          isImage: true,
+          itemIndex: 1,
+        )..state = JobState.done,
+      ],
+    )..settledBy = settledBy;
+
+    test('a stalled foreign batch with terminal tasks may be adopted once', () {
+      expect(
+        canAdoptForeignBatch(
+          owner: owner,
+          batchSource: DownloadBatch.sourceBackground,
+          updatedAt: staleNow(),
+          now: staleNow() + kStalledBatchAgeMs,
+          allTasksTerminal: true,
+        ),
+        isTrue,
+      );
+    });
+
+    test('a settled foreign batch is never adopted again', () {
+      expect(
+        canAdoptForeignBatch(
+          owner: owner,
+          batchSource: DownloadBatch.sourceBackground,
+          updatedAt: staleNow(),
+          now: staleNow() + kStalledBatchAgeMs,
+          allTasksTerminal: true,
+          settledBy: owner,
+        ),
+        isFalse,
+        reason: 'completed batches keep terminal jobs, so only this flag '
+            'stops the next start from adopting them again',
+      );
+    });
+
+    test('settledBy survives a snapshot round-trip', () {
+      final batch = foreignBatch()..settledBy = owner;
+      final restored = DownloadBatch.fromJson(batch.toJson());
+      expect(restored.settledBy, owner);
+      expect(restored.historyWritten, batch.historyWritten);
+    });
+
+    test('a fresh snapshot has no settledBy', () {
+      expect(foreignBatch().settledBy, isNull);
+      expect(
+        DownloadBatch.fromJson(foreignBatch().toJson()).settledBy,
+        isNull,
+      );
+    });
+  });
 }

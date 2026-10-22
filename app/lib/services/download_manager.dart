@@ -38,6 +38,8 @@ const int kStalledBatchAgeMs = 90 * 1000;
 /// adopt a batch that was started by the other engine?
 ///
 /// - a batch of the own source is never "foreign";
+/// - a foreign batch that some engine already settled is never adopted again
+///   (its jobs stay terminal forever, so nothing else would stop it);
 /// - a foreign batch may only be adopted when its snapshot went stale (the
 ///   owner stopped heart-beating) **and** all of its tasks already reached a
 ///   terminal state — otherwise the owner is still working on it.
@@ -47,8 +49,10 @@ bool canAdoptForeignBatch({
   required int updatedAt,
   required int now,
   required bool allTasksTerminal,
+  String? settledBy,
 }) {
   if (batchSource == owner) return false;
+  if (settledBy != null) return false;
   if (updatedAt <= 0) return false;
   if (now - updatedAt < kStalledBatchAgeMs) return false;
   return allTasksTerminal;
@@ -194,6 +198,13 @@ class DownloadBatch {
   final List<DownloadJob> jobs;
   bool historyWritten = false;
 
+  /// Engine that finished an adopted foreign batch.
+  ///
+  /// A completed background batch stays in the snapshot index (its jobs are
+  /// terminal, so it keeps looking adoptable). Recording who settled it is
+  /// what stops the next start from adopting — and re-reconciling — it again.
+  String? settledBy;
+
   /// Last time the owner wrote this snapshot. The owner refreshes it with a
   /// heartbeat, so a stale value means "the owning engine is gone" and lets
   /// the other engine adopt the batch instead of dropping it.
@@ -225,6 +236,7 @@ class DownloadBatch {
     'updatedAt': updatedAt,
     'jobs': [for (final j in jobs) j.toJson()],
     'historyWritten': historyWritten,
+    'settledBy': settledBy,
   };
 
   static DownloadBatch fromJson(Map<String, Object?> map) => DownloadBatch(
@@ -249,7 +261,9 @@ class DownloadBatch {
     jobs: (map['jobs'] as List)
         .map((e) => DownloadJob.fromJson((e as Map).cast<String, Object?>()))
         .toList(),
-  )..historyWritten = map['historyWritten'] as bool? ?? false;
+  )
+    ..historyWritten = map['historyWritten'] as bool? ?? false
+    ..settledBy = map['settledBy'] as String?;
 }
 
 /// One downloadable file derived from the selection. Pure function so the
@@ -963,6 +977,16 @@ class DownloadManager extends ChangeNotifier {
         unawaited(locator.scanAlbum(force: true));
       }
     }
+    // Record who finished a batch it did not start. The snapshot keeps its
+    // terminal jobs, so this flag is the only thing that stops the next start
+    // from adopting the same completed batch again.
+    if (batch.source != DownloadManager.owner && batch.settledBy == null) {
+      batch.settledBy = DownloadManager.owner;
+      _log(
+        'settle foreign batch ${batch.batchId} '
+        '(source=${batch.source} by=${batch.settledBy} recovered=$recovered)',
+      );
+    }
     await _persist(batch);
     notifyListeners();
     unawaited(_refreshNotification(batch));
@@ -1036,6 +1060,7 @@ class DownloadManager extends ChangeNotifier {
       final prefs = await SharedPreferences.getInstance();
       final index = prefs.getStringList(_batchIndexKey) ?? [];
       var changed = false;
+      var adopted = 0;
       for (final batchId in index) {
         final raw = prefs.getString(_batchKey(batchId));
         if (raw == null) continue;
@@ -1046,11 +1071,22 @@ class DownloadManager extends ChangeNotifier {
         // that BOTH engines can read. Only the engine that started the batch
         // may reconcile it, otherwise the album file would be saved twice.
         if (batch.source != DownloadManager.owner) {
+          if (batch.settledBy != null) {
+            // Already finished by one of the engines. Its jobs stay terminal
+            // forever, so without this check every start would adopt (and
+            // re-reconcile) it again.
+            _log(
+              'skip settled foreign batch ${batch.batchId} '
+              '(settled by ${batch.settledBy})',
+            );
+            continue;
+          }
           if (await _isStalledForeignBatch(batch)) {
             // The owner is gone (its engine was killed) and every task of the
             // batch already finished: adopt it so the album import and the
             // history record still happen exactly once.
             _log('adopt stalled foreign batch ${batch.batchId}');
+            adopted++;
             _batches[batchId] = batch;
             if (await _reconcileBatch(batch)) changed = true;
           } else {
@@ -1061,6 +1097,8 @@ class DownloadManager extends ChangeNotifier {
         _batches[batchId] = batch;
         if (await _reconcileBatch(batch)) changed = true;
       }
+      // One line per start makes two launches directly comparable in the log.
+      _log('reconcile done batches=${index.length} adopted=$adopted');
       if (changed) notifyListeners();
     } catch (_) {
       // Recovery is best effort; live updates still drive the UI.
@@ -1078,6 +1116,7 @@ class DownloadManager extends ChangeNotifier {
       updatedAt: batch.updatedAt,
       now: DateTime.now().millisecondsSinceEpoch,
       allTasksTerminal: allTerminal,
+      settledBy: batch.settledBy,
     );
   }
 
