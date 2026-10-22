@@ -1,11 +1,13 @@
 // Copyright 2026 EasySave. All rights reserved.
 // Cold start backup check and decision coordinator.
 
+import 'dart:async';
 import 'dart:io';
 
 import '../history_db.dart';
 import '../settings.dart';
 import 'local_auto_backup.dart';
+import 'saf_service.dart';
 
 enum StartupRestoreDecision {
   /// History is empty and a private backup exists in application support files.
@@ -118,6 +120,19 @@ abstract final class StartupBackupCoordinator {
       customSupportDirPath: customSupportDirPath,
       now: currentTime,
     );
+
+    // If Tier 3 SAF backup directory is configured, trigger it as well
+    if (appSettings.backupTreeUri != null &&
+        appSettings.backupTreeUri!.isNotEmpty) {
+      unawaited(
+        SafService.performAutoBackupToDirectory(
+          db: store,
+          settings: appSettings,
+          now: currentTime,
+          force: true,
+        ),
+      );
+    }
 
     return StartupBackupResult(
       decision: executed

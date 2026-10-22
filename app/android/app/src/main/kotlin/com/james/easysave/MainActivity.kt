@@ -14,6 +14,10 @@ import android.os.Bundle
 import android.provider.MediaStore
 import android.provider.Settings
 import androidx.core.content.ContextCompat
+import androidx.documentfile.provider.DocumentFile
+import java.io.IOException
+import java.util.regex.Pattern
+import android.util.Log
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodCall
@@ -27,8 +31,11 @@ class MainActivity : FlutterActivity() {
         private const val HOST_CHANNEL = "easysave/host"
         private const val TILE_CHANNEL = "easysave/tile"
         private const val BUBBLE_CHANNEL = "easysave/bubble"
+        private const val SAF_CHANNEL = "easysave/saf"
         private const val DELETE_REQUEST_CODE = 50021
         private const val WRITE_REQUEST_CODE = 50022
+        private const val SAF_PICK_DIRECTORY_REQUEST_CODE = 50023
+        private const val SAF_PICK_FILE_REQUEST_CODE = 50024
         const val EXTRA_OPEN_URL = "easy_open_url"
     }
 
@@ -45,6 +52,9 @@ class MainActivity : FlutterActivity() {
      * a time.
      */
     private var pendingWriteResult: MethodChannel.Result? = null
+    private var pendingPickDirectoryResult: MethodChannel.Result? = null
+    private var pendingPickFileResult: MethodChannel.Result? = null
+    private val BACKUP_FILE_PATTERN = Pattern.compile("^easysave-backup-(\\d{8}-\\d{4})\\.json$")
 
     private var hostChannel: MethodChannel? = null
     private var receiverRegistered = false
@@ -256,6 +266,41 @@ class MainActivity : FlutterActivity() {
                     else -> result.notImplemented()
                 }
             }
+
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, SAF_CHANNEL)
+            .setMethodCallHandler { call, result ->
+                when (call.method) {
+                    "pickDirectory" -> pickDirectory(result)
+                    "pickBackupFile" -> pickBackupFile(result)
+                    "checkDirectoryAccess" -> {
+                        val treeUri = call.argument<String>("treeUri")
+                        if (treeUri != null) {
+                            checkDirectoryAccess(treeUri, result)
+                        } else {
+                            result.success(false)
+                        }
+                    }
+                    "writeBackupToDirectory" -> {
+                        val treeUri = call.argument<String>("treeUri")
+                        val fileName = call.argument<String>("fileName")
+                        val content = call.argument<String>("content")
+                        if (treeUri != null && fileName != null && content != null) {
+                            writeBackupToDirectory(treeUri, fileName, content, result)
+                        } else {
+                            result.error("INVALID_ARGS", "Missing required arguments", null)
+                        }
+                    }
+                    "readDocumentContent" -> {
+                        val uri = call.argument<String>("uri")
+                        if (uri != null) {
+                            readDocumentContent(uri, result)
+                        } else {
+                            result.error("INVALID_ARGS", "Missing URI argument", null)
+                        }
+                    }
+                    else -> result.notImplemented()
+                }
+            }
     }
 
     /// Ask the system to add the Quick Settings tile (Android 13+ shows a
@@ -295,6 +340,30 @@ class MainActivity : FlutterActivity() {
             WRITE_REQUEST_CODE -> {
                 pendingWriteResult?.success(resultCode == RESULT_OK)
                 pendingWriteResult = null
+            }
+            SAF_PICK_DIRECTORY_REQUEST_CODE -> {
+                if (resultCode == RESULT_OK && data?.data != null) {
+                    val treeUri = data.data!!
+                    try {
+                        val takeFlags = Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+                        contentResolver.takePersistableUriPermission(treeUri, takeFlags)
+                        pendingPickDirectoryResult?.success(treeUri.toString())
+                    } catch (e: Exception) {
+                        Log.e("EasySaveSAF", "Failed to take persistable URI permission: ${e.message}", e)
+                        pendingPickDirectoryResult?.error("PERMISSION_LOST", e.message, null)
+                    }
+                } else {
+                    pendingPickDirectoryResult?.success(null)
+                }
+                pendingPickDirectoryResult = null
+            }
+            SAF_PICK_FILE_REQUEST_CODE -> {
+                if (resultCode == RESULT_OK && data?.data != null) {
+                    pendingPickFileResult?.success(data.data.toString())
+                } else {
+                    pendingPickFileResult?.success(null)
+                }
+                pendingPickFileResult = null
             }
         }
     }
@@ -488,6 +557,163 @@ class MainActivity : FlutterActivity() {
             true
         } catch (_: Exception) {
             false
+        }
+    }
+
+    private fun pickDirectory(result: MethodChannel.Result) {
+        pendingPickDirectoryResult = result
+        try {
+            val intent = Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).apply {
+                addFlags(
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION or
+                    Intent.FLAG_GRANT_WRITE_URI_PERMISSION or
+                    Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION
+                )
+            }
+            startActivityForResult(intent, SAF_PICK_DIRECTORY_REQUEST_CODE)
+        } catch (e: Exception) {
+            Log.e("EasySaveSAF", "Failed to start ACTION_OPEN_DOCUMENT_TREE: ${e.message}", e)
+            pendingPickDirectoryResult = null
+            result.error("SAF_ERROR", e.message, null)
+        }
+    }
+
+    private fun pickBackupFile(result: MethodChannel.Result) {
+        pendingPickFileResult = result
+        try {
+            val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+                addCategory(Intent.CATEGORY_OPENABLE)
+                type = "*/*"
+                putExtra(Intent.EXTRA_MIME_TYPES, arrayOf("application/json", "text/plain", "application/octet-stream", "*/*"))
+            }
+            startActivityForResult(intent, SAF_PICK_FILE_REQUEST_CODE)
+        } catch (e: Exception) {
+            Log.e("EasySaveSAF", "Failed to start ACTION_OPEN_DOCUMENT: ${e.message}", e)
+            pendingPickFileResult = null
+            result.error("SAF_ERROR", e.message, null)
+        }
+    }
+
+    private fun checkDirectoryAccess(treeUriString: String, result: MethodChannel.Result) {
+        try {
+            val uri = Uri.parse(treeUriString)
+            val hasPersisted = contentResolver.persistedUriPermissions.any {
+                it.uri == uri && it.isWritePermission && it.isReadPermission
+            }
+            val treeDoc = DocumentFile.fromTreeUri(this, uri)
+            val canWrite = treeDoc != null && treeDoc.exists() && treeDoc.canWrite() && treeDoc.isDirectory
+            result.success(hasPersisted && canWrite)
+        } catch (e: Exception) {
+            Log.w("EasySaveSAF", "checkDirectoryAccess error for $treeUriString: ${e.message}")
+            result.success(false)
+        }
+    }
+
+    private fun writeBackupToDirectory(
+        treeUriString: String,
+        fileName: String,
+        content: String,
+        result: MethodChannel.Result
+    ) {
+        try {
+            val uri = Uri.parse(treeUriString)
+            val treeDoc = DocumentFile.fromTreeUri(this, uri)
+            if (treeDoc == null || !treeDoc.exists() || !treeDoc.isDirectory) {
+                Log.e("EasySaveSAF", "Directory not found: $treeUriString")
+                result.error("DIRECTORY_NOT_FOUND", "Directory does not exist", null)
+                return
+            }
+
+            if (!treeDoc.canWrite()) {
+                Log.e("EasySaveSAF", "Permission lost for directory: $treeUriString")
+                result.error("PERMISSION_LOST", "Permission lost for directory", null)
+                return
+            }
+
+            val newFile = treeDoc.createFile("application/json", fileName)
+            if (newFile == null) {
+                Log.e("EasySaveSAF", "Failed to create document file: $fileName")
+                result.error("IO_ERROR", "Failed to create backup document file", null)
+                return
+            }
+
+            val outputStream = contentResolver.openOutputStream(newFile.uri, "w")
+                ?: throw IOException("Unable to open output stream for ${newFile.uri}")
+
+            outputStream.use { os ->
+                os.write(content.toByteArray(Charsets.UTF_8))
+                os.flush()
+            }
+
+            // Rotate backups in target directory (keep newest 7)
+            rotateBackups(treeDoc)
+
+            result.success(newFile.uri.toString())
+        } catch (e: SecurityException) {
+            Log.e("EasySaveSAF", "SecurityException writing backup: ${e.message}", e)
+            result.error("PERMISSION_LOST", e.message, null)
+        } catch (e: IOException) {
+            Log.e("EasySaveSAF", "IOException writing backup: ${e.message}", e)
+            val msg = e.message ?: ""
+            if (msg.contains("ENOSPC", ignoreCase = true) || msg.contains("No space left", ignoreCase = true)) {
+                result.error("STORAGE_FULL", "Storage device is full", null)
+            } else {
+                result.error("IO_ERROR", e.message, null)
+            }
+        } catch (e: Exception) {
+            Log.e("EasySaveSAF", "Unexpected error writing backup: ${e.message}", e)
+            result.error("IO_ERROR", e.message, null)
+        }
+    }
+
+    private fun rotateBackups(treeDoc: DocumentFile) {
+        try {
+            val files = treeDoc.listFiles()
+            val matchingBackups = mutableListOf<Pair<String, DocumentFile>>()
+
+            for (file in files) {
+                val name = file.name ?: continue
+                val matcher = BACKUP_FILE_PATTERN.matcher(name)
+                if (matcher.matches()) {
+                    val timestampStr = matcher.group(1) ?: continue
+                    matchingBackups.add(Pair(timestampStr, file))
+                }
+            }
+
+            // Sort descending by timestamp string YYYYMMDD-HHmm
+            matchingBackups.sortByDescending { it.first }
+
+            if (matchingBackups.size > 7) {
+                for (i in 7 until matchingBackups.size) {
+                    val oldFile = matchingBackups[i].second
+                    try {
+                        oldFile.delete()
+                    } catch (e: Exception) {
+                        Log.w("EasySaveSAF", "Failed to delete rotated backup: ${oldFile.name}", e)
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            Log.w("EasySaveSAF", "Rotation error: ${e.message}", e)
+        }
+    }
+
+    private fun readDocumentContent(uriString: String, result: MethodChannel.Result) {
+        try {
+            val uri = Uri.parse(uriString)
+            val inputStream = contentResolver.openInputStream(uri)
+                ?: throw IOException("Unable to open input stream for $uriString")
+            val content = inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() }
+            result.success(content)
+        } catch (e: SecurityException) {
+            Log.e("EasySaveSAF", "SecurityException reading $uriString: ${e.message}", e)
+            result.error("PERMISSION_LOST", e.message, null)
+        } catch (e: IOException) {
+            Log.e("EasySaveSAF", "IOException reading $uriString: ${e.message}", e)
+            result.error("IO_ERROR", e.message, null)
+        } catch (e: Exception) {
+            Log.e("EasySaveSAF", "Unexpected error reading $uriString: ${e.message}", e)
+            result.error("IO_ERROR", e.message, null)
         }
     }
 }
