@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'background/background_entry.dart' as bg;
 import 'pages/main_shell.dart';
 import 'services/album_name_registry.dart';
+import 'services/bubble_service.dart';
 import 'services/download_manager.dart';
 import 'services/gallery_locator_service.dart';
 import 'services/host_bridge.dart';
@@ -26,6 +27,8 @@ Future<void> main() async {
   // Let the native HostService tell us when the background engine wrote
   // history, and pick up an error notification tapped at cold start.
   HostBridge.init();
+  BubbleService.startListening();
+  unawaited(BubbleService.ensureStarted());
   unawaited(HostBridge.pullPendingError());
   unawaited(HostBridge.pullPendingOpen());
   // Register background-download callbacks and recover batches that

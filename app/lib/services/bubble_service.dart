@@ -81,10 +81,19 @@ abstract final class BubbleService {
   }
 
   /// At app start: ensure the bubble is running when it's enabled and granted.
+  /// If permission was revoked, syncs the setting switch to false.
   static Future<void> ensureStarted() async {
     final settings = await AppSettings.load();
     if (!settings.bubbleEnabled) return;
-    if (!await hasPermission()) return;
-    if (!await isRunning()) await start();
+    final granted = await hasPermission();
+    if (!granted) {
+      settings.bubbleEnabled = false;
+      await settings.save();
+      stateTick.value = stateTick.value + 1;
+      return;
+    }
+    if (!await isRunning()) {
+      await start();
+    }
   }
 }

@@ -114,6 +114,7 @@ class MainActivity : FlutterActivity() {
 
     override fun onStart() {
         super.onStart()
+        BubbleReconciler.reconcile(this, "main_activity")
         if (!receiverRegistered) {
             ContextCompat.registerReceiver(
                 this,

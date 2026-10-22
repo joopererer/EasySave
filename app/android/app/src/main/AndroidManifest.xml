@@ -21,6 +21,8 @@
     <!-- v1.6 validation: floating bubble overlay -->
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW"/>
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE"/>
+    <!-- v1.7.1: auto-start floating bubble after reboot -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>
     <application
         android:label="EasySave"
         android:name="${applicationName}"
@@ -104,6 +106,15 @@
                 <data android:mimeType="text/plain"/>
             </intent-filter>
         </activity>
+        <!-- v1.7.1: auto-start floating bubble after app update or device reboot -->
+        <receiver
+            android:name=".BubbleAutoStartReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED"/>
+                <action android:name="android.intent.action.BOOT_COMPLETED"/>
+            </intent-filter>
+        </receiver>
         <!-- Don't delete the meta-data below.
              This is used by the Flutter tool to generate GeneratedPluginRegistrant.java -->
         <meta-data

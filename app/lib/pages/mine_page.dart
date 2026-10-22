@@ -732,6 +732,16 @@ class _MinePageState extends State<MinePage> with WidgetsBindingObserver {
                   value: _settings.bubbleEnabled,
                   onChanged: _toggleBubble,
                 ),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+                  child: Text(
+                    '部分手机（如 MIUI）需在系统设置中允许 EasySave 自启动，重启手机后悬浮球才会自动出现；否则打开一次 EasySave 即可恢复。',
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: Theme.of(context).colorScheme.outline,
+                    ),
+                  ),
+                ),
                 SwitchListTile(
                   title: const Text('闲置时贴边隐藏'),
                   subtitle: Text(
