@@ -9,12 +9,10 @@
 import 'dart:io';
 import 'dart:typed_data';
 
-import 'package:easysave/core/models.dart';
 import 'package:easysave/metadata/metadata_service.dart';
 import 'package:easysave/services/history_db.dart';
 import 'package:easysave/services/history_rebuild_service.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:path/path.dart' as p;
 import 'package:photo_manager/photo_manager.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
@@ -50,10 +48,8 @@ void main() {
 
     // A real file with XMP: its first 128 KB are exactly what the native
     // side would return for a JPEG.
-    final vectors = p.normalize(
-      p.join(Directory.current.path, '..', 'docs', 'provenance-spec', 'test-vectors'),
-    );
-    final fixture = File(p.join(vectors, 'xhs-item3.jpg'));
+    final vectors = '${Directory.current.path}/../docs/provenance-spec/test-vectors';
+    final fixture = File('$vectors/xhs-item3.jpg');
     expect(fixture.existsSync(), isTrue, reason: 'test vector not found');
     final bytes = fixture.readAsBytesSync();
     jpegHeader = bytes.length > 128 * 1024
