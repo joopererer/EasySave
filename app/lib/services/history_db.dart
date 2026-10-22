@@ -307,21 +307,30 @@ class HistoryDb {
   HistoryDb._(this._db);
 
   final Database _db;
-  static HistoryDb? _instance;
 
   /// Listeners are notified by the write methods themselves (never by their
   /// callers), so a new caller — a new delete gesture, a rebuild, the
   /// background isolate — cannot forget to refresh the UI.
   final _listeners = <VoidCallback>[];
 
+  /// Handle identity, so a device log can prove every caller shares one store.
+  String get _id => '#${identityHashCode(this)}';
+
   void addListener(VoidCallback listener) {
+    if (_listeners.contains(listener)) {
+      DevLog.write('HIST', 'listener already attached on $_id (${_listeners.length})'); // i18n:ignore 日志
+      return;
+    }
     _listeners.add(listener);
-    DevLog.write('HIST', 'listener added, now ${_listeners.length}'); // i18n:ignore 日志
+    DevLog.write('HIST', 'listener added on $_id, now ${_listeners.length}'); // i18n:ignore 日志
   }
 
   void removeListener(VoidCallback listener) {
-    _listeners.remove(listener);
-    DevLog.write('HIST', 'listener removed, now ${_listeners.length}'); // i18n:ignore 日志
+    final removed = _listeners.remove(listener);
+    DevLog.write(
+      'HIST', // i18n:ignore 日志
+      'listener ${removed ? 'removed' : 'not found'} on $_id, now ${_listeners.length}',
+    );
   }
 
   /// Notify every listener that history data changed.
@@ -331,11 +340,11 @@ class HistoryDb {
   /// others, so each call is guarded.
   void notifyChanged([String reason = 'mutation']) {
     if (_listeners.isEmpty) {
-      DevLog.write('HIST', 'notify ($reason) but no listeners attached', // i18n:ignore 日志
+      DevLog.write('HIST', 'notify ($reason) but no listeners attached on $_id', // i18n:ignore 日志
           level: DevLogLevel.warn);
       return;
     }
-    DevLog.write('HIST', 'notify ($reason) -> ${_listeners.length} listener(s)'); // i18n:ignore 日志
+    DevLog.write('HIST', 'notify ($reason) -> ${_listeners.length} listener(s) on $_id'); // i18n:ignore 日志
     for (final listener in List<VoidCallback>.of(_listeners)) {
       try {
         listener();
@@ -347,14 +356,30 @@ class HistoryDb {
   }
 
   static void resetInstanceForTesting() {
-    _instance = null;
+    _instances.clear();
   }
 
-  static Future<HistoryDb> instance({String? dbPath}) async {
-    if (dbPath == null) {
-      final existing = _instance;
-      if (existing != null) return existing;
-    }
+  /// One history store per database file, per isolate.
+  ///
+  /// The *future* is cached, not just the result: `instance()` is called from
+  /// several places while the first `openDatabase` is still in flight (main()
+  /// init, ParsePage's listener attach, the gallery locator). Caching only the
+  /// finished instance let those concurrent callers each open their own
+  /// `HistoryDb`, and the listener list — which lives on the instance — was
+  /// then split: the page subscribed to an orphaned handle while the history
+  /// page deleted through a different one, so `notify()` reported "no
+  /// listeners attached".
+  static final Map<String, Future<HistoryDb>> _instances = {};
+
+  /// Cache key for the default database (the only one the app uses).
+  static const String _defaultKey = '<default>';
+
+  static Future<HistoryDb> instance({String? dbPath}) {
+    final key = dbPath ?? _defaultKey;
+    return _instances[key] ??= _open(dbPath);
+  }
+
+  static Future<HistoryDb> _open(String? dbPath) async {
     final path = dbPath ?? '${await getDatabasesPath()}/easysave_history.db';
     final db = await openDatabase(
       path,
@@ -416,7 +441,9 @@ class HistoryDb {
       },
     );
     final historyDb = HistoryDb._(db);
-    if (dbPath == null) _instance = historyDb;
+    if (dbPath == null) {
+      DevLog.write('HIST', 'instance opened #${identityHashCode(historyDb)} path=$path'); // i18n:ignore 日志
+    }
     return historyDb;
   }
 

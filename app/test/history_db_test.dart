@@ -478,4 +478,85 @@ void main() {
       expect(reached, 1);
     });
   });
+
+  // ---------------------------------------------------------------------
+  // Task 3 listener fix (v1.7): the listener list lives on the HistoryDb
+  // instance, so the app must only ever get one. instance() used to cache the
+  // finished object rather than the in-flight future; two callers starting
+  // while openDatabase() was still running each got their own handle, and the
+  // page's listener ended up on the handle nobody wrote through ("notify …
+  // but no listeners attached").
+  // ---------------------------------------------------------------------
+  group('HistoryDb is one shared store', () {
+    late String sharedDbPath;
+
+    setUp(() async {
+      HistoryDb.resetInstanceForTesting();
+      final tempDir = await Directory.systemTemp.createTemp('easysave_shared');
+      sharedDbPath =
+          '${tempDir.path}/shared_${DateTime.now().microsecondsSinceEpoch}.db';
+    });
+
+    tearDown(() async {
+      HistoryDb.resetInstanceForTesting();
+      try {
+        final file = File(sharedDbPath);
+        if (await file.exists()) await file.delete();
+      } catch (_) {
+        // Ignore cleanup errors
+      }
+    });
+
+    test('concurrent instance() calls return the same object', () async {
+      // Both calls are issued before the first open finishes — this is what
+      // startup does (main() init, ParsePage attach, gallery locator).
+      final first = HistoryDb.instance(dbPath: sharedDbPath);
+      final second = HistoryDb.instance(dbPath: sharedDbPath);
+      final a = await first;
+      final b = await second;
+
+      expect(
+        identical(a, b),
+        isTrue,
+        reason: 'a second handle would carry its own, empty listener list',
+      );
+    });
+
+    test('history page delete notifies the home page listener', () async {
+      final home = await HistoryDb.instance(dbPath: sharedDbPath);
+      var refreshed = 0;
+      home.addListener(() => refreshed++);
+
+      await home.upsert(
+        HistoryRecord(
+          platform: 'xhs',
+          postId: 'shared_store',
+          postUrl: 'https://example.com/shared_store',
+          fileCount: 1,
+          createdAt: DateTime.now(),
+        ),
+      );
+      refreshed = 0;
+
+      // The history page resolves its own handle and deletes through it.
+      final historyPage = await HistoryDb.instance(dbPath: sharedDbPath);
+      final record = await historyPage.getByPostId('shared_store');
+      await historyPage.delete(record!.id!);
+
+      expect(refreshed, 1);
+      expect(await home.recent(), isEmpty);
+    });
+
+    test('adding the same listener twice notifies it once', () async {
+      final store = await HistoryDb.instance(dbPath: sharedDbPath);
+      var calls = 0;
+      void listener() => calls++;
+      store.addListener(listener);
+      store.addListener(listener);
+
+      await store.clear();
+
+      expect(calls, 1);
+    });
+  });
 }

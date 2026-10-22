@@ -98,10 +98,17 @@ class ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
   HistoryDb? _historyDb;
 
   Future<void> _attachHistoryDb() async {
-    final db = await HistoryDb.instance();
-    if (!mounted) return;
-    _historyDb = db;
-    db.addListener(_onHistoryChanged);
+    try {
+      final db = await HistoryDb.instance();
+      if (!mounted) return;
+      _historyDb = db;
+      db.addListener(_onHistoryChanged);
+    } catch (e) {
+      // Never silent: "no listeners attached" in a device log is otherwise
+      // indistinguishable from a subscription that failed here.
+      DevLog.write('HIST', 'attach failed: $e', // i18n:ignore 日志
+          level: DevLogLevel.warn);
+    }
   }
 
   /// New history record available (in-app download or background engine).
