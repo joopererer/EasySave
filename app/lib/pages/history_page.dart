@@ -17,6 +17,7 @@ import 'package:url_launcher/url_launcher.dart';
 import '../core/models.dart';
 import '../services/auth.dart';
 import '../services/gallery_locator_service.dart';
+import '../services/history_backfill_service.dart';
 import '../services/history_db.dart';
 import '../services/host_bridge.dart';
 import '../services/media_delete_service.dart';
@@ -821,6 +822,7 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
         body: Column(
           children: [
             _permissionBanners(),
+            _videoBackfillHintBanner(),
             if (!_selectionMode) _viewSwitcher(),
             if (_searchOpen && !_selectionMode) _searchField(),
             Expanded(child: _body()),
@@ -1052,6 +1054,75 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
         ],
       ),
     );
+  }
+
+  Widget _videoBackfillHintBanner() {
+    return VideoBackfillHintBanner(
+      dismissed: _settings?.videoBackfillHintDismissed ?? true,
+      records: _records,
+      onDismiss: _dismissVideoBackfillHint,
+      onBackfill: _startVideoBackfill,
+    );
+  }
+
+  Future<void> _dismissVideoBackfillHint() async {
+    setState(() {
+      _settings?.videoBackfillHintDismissed = true;
+    });
+    await _settings?.save();
+  }
+
+  Future<void> _startVideoBackfill() async {
+    setState(() {
+      _settings?.videoBackfillHintDismissed = true;
+    });
+    await _settings?.save();
+
+    final progressText = ValueNotifier<String>('准备中…');
+    if (!mounted) return;
+    showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => AlertDialog(
+        title: const Text('正在补写来源信息'),
+        content: ValueListenableBuilder<String>(
+          valueListenable: progressText,
+          builder: (_, value, __) => Text(value),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('取消'),
+          ),
+        ],
+      ),
+    );
+
+    try {
+      final result = await HistoryBackfillService.instance.backfill(
+        onProgress: (current, total, filename) {
+          progressText.value = '$current / $total\n$filename';
+        },
+      );
+
+      if (!mounted) return;
+      Navigator.of(context, rootNavigator: true).pop();
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            '已完成：${result.success} 写入，${result.authRequired} 需要授权，${result.skipped} 跳过',
+          ),
+        ),
+      );
+      await _reload();
+    } catch (e) {
+      if (!mounted) return;
+      Navigator.of(context, rootNavigator: true).pop();
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('写入失败：$e')),
+      );
+    }
   }
 
   Widget _viewSwitcher() {
@@ -1642,3 +1713,79 @@ class _StickyHeaderDelegate extends SliverPersistentHeaderDelegate {
   bool shouldRebuild(covariant _StickyHeaderDelegate oldDelegate) =>
       oldDelegate.title != title || oldDelegate.background != background;
 }
+
+class VideoBackfillHintBanner extends StatelessWidget {
+  const VideoBackfillHintBanner({
+    super.key,
+    required this.dismissed,
+    required this.records,
+    required this.onDismiss,
+    required this.onBackfill,
+  });
+
+  final bool dismissed;
+  final List<HistoryRecord> records;
+  final VoidCallback onDismiss;
+  final VoidCallback onBackfill;
+
+  @override
+  Widget build(BuildContext context) {
+    if (dismissed) {
+      return const SizedBox.shrink();
+    }
+    final hasVideoWithoutAssetId = records.any(
+      (r) => r.files.any((f) => !f.isImage && (f.assetId == null || f.assetId!.isEmpty)),
+    );
+    if (!hasVideoWithoutAssetId) {
+      return const SizedBox.shrink();
+    }
+
+    return Container(
+      margin: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+      decoration: BoxDecoration(
+        color: Colors.blue.shade50,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Colors.blue.shade200),
+      ),
+      child: Row(
+        children: [
+          Icon(Icons.video_library_outlined, color: Colors.blue.shade900, size: 20),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              '为已保存的视频补写来源信息',
+              style: TextStyle(color: Colors.blue.shade900, fontSize: 13),
+            ),
+          ),
+          TextButton(
+            style: TextButton.styleFrom(
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+              minimumSize: Size.zero,
+              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+            ),
+            onPressed: onDismiss,
+            child: Text(
+              '不再提示',
+              style: TextStyle(color: Colors.blue.shade700, fontSize: 12),
+            ),
+          ),
+          const SizedBox(width: 8),
+          TextButton(
+            style: TextButton.styleFrom(
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+              minimumSize: Size.zero,
+              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+            ),
+            onPressed: onBackfill,
+            child: const Text(
+              '去补写',
+              style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
