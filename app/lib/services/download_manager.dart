@@ -71,6 +71,7 @@ class DownloadJob {
     required this.urls,
     required this.isImage,
     required this.itemIndex,
+    this.isLivePhoto = false,
   });
 
   final String key;
@@ -79,6 +80,7 @@ class DownloadJob {
   List<String> urls;
   final bool isImage;
   final int itemIndex;
+  final bool isLivePhoto;
 
   JobState state = JobState.queued;
   double progress = 0;
@@ -105,6 +107,7 @@ class DownloadJob {
     'urls': urls,
     'isImage': isImage,
     'itemIndex': itemIndex,
+    'isLivePhoto': isLivePhoto,
     'state': state.index,
     'attempts': attempts,
     'currentTaskId': currentTaskId,
@@ -125,6 +128,7 @@ class DownloadJob {
       urls: (map['urls'] as List).cast<String>(),
       isImage: map['isImage'] as bool,
       itemIndex: (map['itemIndex'] as num).toInt(),
+      isLivePhoto: map['isLivePhoto'] as bool? ?? false,
     );
     job.state = JobState.values[(map['state'] as num).toInt()];
     job.attempts = (map['attempts'] as num).toInt();
@@ -281,6 +285,7 @@ class PlannedFile {
     required this.filename,
     required this.isImage,
     required this.itemIndex,
+    this.isLivePhoto = false,
   });
 
   final String label;
@@ -288,6 +293,7 @@ class PlannedFile {
   final String filename;
   final bool isImage;
   final int itemIndex;
+  final bool isLivePhoto;
 }
 
 List<PlannedFile> planFiles(
@@ -319,6 +325,7 @@ List<PlannedFile> planFiles(
           filename: '${nameFor(base, seq, 'jpg')}.jpg',
           isImage: true,
           itemIndex: index + 1, // 1-based position in original post
+          isLivePhoto: true,
         ),
       );
       planned.add(
@@ -328,6 +335,7 @@ List<PlannedFile> planFiles(
           filename: '${nameFor(base, seq, 'mp4')}.mp4',
           isImage: false,
           itemIndex: index + 1, // 1-based position in original post
+          isLivePhoto: true,
         ),
       );
     } else if (item.type == 'video') {
@@ -367,6 +375,7 @@ XmpProvenance provenanceForBatchItem(
   required int itemIndex,
   String? existingAssetId,
   String? capturedBy,
+  String? pairId,
 }) {
   final authorId = _shouldWriteAuthorId(batch.platform, batch.authorId) ? batch.authorId : null;
   return ProvenanceBuilder(
@@ -383,7 +392,7 @@ XmpProvenance provenanceForBatchItem(
     itemIndex: itemIndex,
     itemCount: batch.totalItems,
     existingAssetId: existingAssetId,
-  ).build();
+  ).build().copyWith(pairId: pairId);
 }
 
 bool _shouldWriteAuthorId(String platform, String? authorId) {
@@ -692,6 +701,7 @@ class DownloadManager extends ChangeNotifier {
             urls: planned[i].urls,
             isImage: planned[i].isImage,
             itemIndex: planned[i].itemIndex,
+            isLivePhoto: planned[i].isLivePhoto,
           ),
       ],
     );
@@ -908,17 +918,14 @@ class DownloadManager extends ChangeNotifier {
             // Temp file cleanup is best effort.
           }
         } else {
-          // Embed provenance metadata before saving to gallery
-          String? writtenAssetId;
-          if (isImage) {
-            writtenAssetId = await _embedProvenance(
-              filePath: path,
-              batch: batch,
-              job: job,
-              existingAssetId: existingAssetId,
-              itemIndex: itemIndex ?? job.itemIndex,
-            );
-          }
+          // Embed provenance metadata before saving to gallery (images and videos)
+          final writtenAssetId = await _embedProvenance(
+            filePath: path,
+            batch: batch,
+            job: job,
+            existingAssetId: existingAssetId,
+            itemIndex: itemIndex ?? job.itemIndex,
+          );
           
           final saved = await saveToGallery(path, isImage, batch.album);
           _log('gallery import done: ${job.filename} -> ${saved.mediaId}');
@@ -942,7 +949,7 @@ class DownloadManager extends ChangeNotifier {
     await _afterTerminal(batch, recovered: false);
   }
   
-  /// Embed provenance metadata into an image file.
+  /// Embed provenance metadata into an image or video file.
   /// Returns the assetId if written, null if skipped or failed.
   Future<String?> _embedProvenance({
     required String filePath,
@@ -959,18 +966,25 @@ class DownloadManager extends ChangeNotifier {
         return null;
       }
       
+      // Live Photos write identical pairId (<sourceId>#<itemIndex>) for image and video
+      final pairId = (job.isLivePhoto && batch.postId != null)
+          ? '${batch.postId}#$itemIndex'
+          : null;
+
       // Build provenance metadata
       final provenance = provenanceForBatchItem(
         batch,
         itemIndex: itemIndex,
         existingAssetId: existingAssetId,
+        pairId: pairId,
       );
       
-      // Embed into file
+      // Embed into file (videos use Mp4WriteMode.rewrite in private cache)
       final result = await MetadataService.embedProvenance(
         filePath: filePath,
         provenance: provenance,
         checkC2pa: true,
+        mp4WriteMode: Mp4WriteMode.rewrite,
       );
       
       if (result.errorCode == EmbedErrorCode.c2paDetected) {

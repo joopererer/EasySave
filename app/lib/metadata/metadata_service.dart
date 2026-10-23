@@ -14,16 +14,18 @@ import 'url_normalizer.dart';
 /// Metadata service for EasySave, bridging to package:provenance_dart.
 class MetadataService {
   /// Embed provenance into a file in App private storage.
-  /// Uses provenance_dart's file rewrite (.tmp + rename).
+  /// Uses provenance_dart's file rewrite (.tmp + rename) or inPlace mode.
   static Future<pkg.EmbedResult> embedProvenance({
     required String filePath,
     required pkg.XmpProvenance provenance,
     bool checkC2pa = true,
+    pkg.Mp4WriteMode mp4WriteMode = pkg.Mp4WriteMode.rewrite,
   }) {
     return pkg.MetadataService.embedProvenance(
       filePath: filePath,
       provenance: provenance,
       checkC2pa: checkC2pa,
+      mp4WriteMode: mp4WriteMode,
     );
   }
 
