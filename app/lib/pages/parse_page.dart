@@ -64,6 +64,7 @@ class ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
   String _currentLink = '';
   String _appVersion = '';
   List<HistoryRecord> _recent = [];
+  bool _recentLoaded = false;
 
   /// Wider window used only for the "already downloaded" clipboard dedupe.
   List<HistoryRecord> _recentAll = [];
@@ -75,10 +76,10 @@ class ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    // Kick off history DB load and preloading immediately so records are
+    // ready at or before the very first frame.
+    unawaited(_reloadRecent());
     WidgetsBinding.instance.addPostFrameCallback((_) async {
-      // Refresh history first: the clipboard dedupe compares against the
-      // latest records (e.g. a link just downloaded through the bubble).
-      await _reloadRecent();
       await _checkClipboard();
       _loadVersion();
     });
@@ -151,10 +152,15 @@ class ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
     final db = await HistoryDb.instance();
     final records = await db.recent(limit: 3);
     final all = await db.recent(limit: 30);
+    final locator = GalleryLocatorService.instance;
+    if (locator.hasAccess && records.isNotEmpty) {
+      await locator.preloadMediaIds(records);
+    }
     if (!mounted) return;
     setState(() {
       _recent = records;
       _recentAll = all;
+      _recentLoaded = true;
     });
     DevLog.write('HIST', 'recent refreshed shown=${records.length} known=${all.length}'); // i18n:ignore 日志
   }
@@ -166,16 +172,23 @@ class ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
   }
 
   Future<void> _reloadRecent() async {
-    await _refreshRecentList();
+    final db = await HistoryDb.instance();
+    final records = await db.recent(limit: 3);
+    final all = await db.recent(limit: 30);
     final locator = GalleryLocatorService.instance;
     await locator.checkPermission();
-    if (locator.hasAccess) {
-      // 1. Immediately preload known mediaIds so thumbnails render without delay
-      await locator.preloadMediaIds(_recent);
-      if (mounted) setState(() {});
-      // 2. Perform whole-album scan and status sync silently in background
-      unawaited(_backgroundScanAndSync());
+    if (locator.hasAccess && records.isNotEmpty) {
+      // Preload thumbnails BEFORE triggering setState to prevent any empty/shimmer intermediate frame
+      await locator.preloadMediaIds(records);
     }
+    if (!mounted) return;
+    setState(() {
+      _recent = records;
+      _recentAll = all;
+      _recentLoaded = true;
+    });
+    // Silent background scan and sync
+    unawaited(_backgroundScanAndSync());
   }
 
   Future<void> _backgroundScanAndSync() async {
@@ -930,7 +943,12 @@ class ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
               ],
             ),
           ),
-          if (_recent.isEmpty)
+          if (!_recentLoaded && _recent.isEmpty)
+            const Padding(
+              padding: EdgeInsets.fromLTRB(16, 0, 16, 16),
+              child: SizedBox(height: 56),
+            )
+          else if (_recent.isEmpty)
             const Padding(
               padding: EdgeInsets.fromLTRB(16, 0, 16, 16),
               child: Text('粘贴链接开始第一次保存'),
@@ -1210,23 +1228,33 @@ class ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
     if (asset != null) {
       return ClipRRect(
         borderRadius: const BorderRadius.all(Radius.circular(8)),
-        child: SizedBox(
+        child: Container(
           width: 48,
           height: 48,
-          child: AssetEntityImage(
-            asset,
-            isOriginal: false,
-            thumbnailSize: const ThumbnailSize.square(150),
+          color: SecondaryBg.beige(context),
+          child: Image(
+            image: AssetEntityImageProvider(
+              asset,
+              isOriginal: false,
+              thumbnailSize: const ThumbnailSize.square(150),
+            ),
             fit: BoxFit.cover,
+            gaplessPlayback: true,
+            frameBuilder: (context, child, frame, wasSynchronouslyLoaded) {
+              if (wasSynchronouslyLoaded) return child;
+              return AnimatedOpacity(
+                opacity: frame == null ? 0.0 : 1.0,
+                duration: const Duration(milliseconds: 200),
+                curve: Curves.easeOut,
+                child: child,
+              );
+            },
+            errorBuilder: (_, __, ___) => const Center(
+              child: Icon(Icons.broken_image, size: 24, color: Colors.grey),
+            ),
           ),
         ),
       );
-    }
-
-    // While scanning album or preloading, show shimmering placeholder rather than
-    // a premature broken image icon.
-    if (locator.isScanning || !locator.scanned) {
-      return const ShimmerBox(width: 48, height: 48);
     }
 
     final allNotFound =
@@ -1248,9 +1276,9 @@ class ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
     return Container(
       width: 48,
       height: 48,
-      decoration: const BoxDecoration(
-        color: AppTokens.beigeBg,
-        borderRadius: BorderRadius.all(Radius.circular(8)),
+      decoration: BoxDecoration(
+        color: SecondaryBg.beige(context),
+        borderRadius: const BorderRadius.all(Radius.circular(8)),
       ),
       child: const Icon(
         Icons.photo_outlined,
