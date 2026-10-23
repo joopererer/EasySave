@@ -178,7 +178,7 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
       });
     }
     try {
-      final records = await HistoryDb.instance().then((db) => db.recent());
+      final records = await HistoryDb.instance().then((db) => db.recent(limit: 10000));
       if (!mounted) return;
       setState(() {
         _records = records;

@@ -11,6 +11,7 @@ import '../services/backup/saf_service.dart';
 import '../services/bubble_service.dart';
 import '../services/download_manager.dart';
 import '../services/history_rebuild_service.dart';
+import '../services/host_bridge.dart';
 import '../services/settings.dart';
 import '../widgets/restore_preview_sheet.dart';
 
@@ -321,6 +322,7 @@ class _BackupRestorePageState extends State<BackupRestorePage> with WidgetsBindi
       );
 
       await _loadState();
+      HostBridge.historyRevision.value = HostBridge.historyRevision.value + 1;
       if (!mounted) return;
 
       // 7. Show Result

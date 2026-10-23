@@ -660,7 +660,7 @@ class HistoryDb {
     final rows = await _db.query(
       'history_records',
       where: 'is_deleted = 0',
-      orderBy: 'created_at DESC',
+      orderBy: 'created_at DESC, id DESC',
       limit: limit,
     );
     return rows.map(HistoryRecord.fromMap).toList();
@@ -697,7 +697,7 @@ class HistoryDb {
       final rows = await txn.query(
         'history_records',
         where: 'is_deleted = 0',
-        orderBy: 'created_at ASC',
+        orderBy: 'created_at ASC, id ASC',
       );
       return rows.map(HistoryRecord.fromMap).toList();
     });

@@ -159,6 +159,12 @@ class ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
     DevLog.write('HIST', 'recent refreshed shown=${records.length} known=${all.length}'); // i18n:ignore 日志
   }
 
+  /// Reload recent from DB; called by the shell every time the tab becomes visible.
+  Future<void> reload() async {
+    if (!mounted) return;
+    await _reloadRecent();
+  }
+
   Future<void> _reloadRecent() async {
     await _refreshRecentList();
     final locator = GalleryLocatorService.instance;

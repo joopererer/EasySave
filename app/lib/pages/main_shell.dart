@@ -138,6 +138,7 @@ class _MainShellState extends State<MainShell> with WidgetsBindingObserver {
 
   void _select(int i) {
     setState(() => _index = i);
+    if (i == 0) _parseKey.currentState?.reload();
     if (i == 1) _historyKey.currentState?.reload();
   }
 
