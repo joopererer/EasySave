@@ -234,8 +234,9 @@ class HistoryRebuildService {
         merged++;
         DevLog.write(_logTag, 'Merged record: $platform:$sourceId'); // i18n:ignore 日志
       } else {
-        // Create new record
-        final firstProv = assetsWithXmp.first.provenance;
+        final firstAwx = assetsWithXmp.first;
+        final firstProv = firstAwx.provenance;
+        final recordCreatedAt = firstProv.capturedAt ?? firstAwx.asset.createDateTime;
         final record = HistoryRecord(
           platform: platform,
           postId: sourceId,
@@ -245,7 +246,7 @@ class HistoryRebuildService {
           thumbnailUrl: null, // Will be populated by history page
           postUrl: firstProv.sourceUrl ?? 'https://unknown',
           fileCount: files.length,
-          createdAt: DateTime.now(),
+          createdAt: recordCreatedAt,
           files: files,
         );
 

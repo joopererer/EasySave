@@ -606,5 +606,70 @@ void main() {
       expect(newDeviceSettings.bubbleEnabled, isTrue);
       expect(result2.overlayNotice, isFalse);
     });
+
+    test('Restore preserving chronological order: newly downloaded post stays on top of older restored posts', () async {
+      final now = DateTime.now();
+      final todayMorning = DateTime(now.year, now.month, now.day, now.hour, now.minute, now.second).subtract(const Duration(hours: 2));
+      final todayLater = DateTime(now.year, now.month, now.day, now.hour, now.minute, now.second).subtract(const Duration(minutes: 10));
+
+      // 1. Old post exported in backup
+      final oldPost = HistoryRecord(
+        platform: 'xhs',
+        postId: 'old_post_1',
+        authorName: 'Author',
+        title: 'Old Post',
+        caption: 'Old Post',
+        postUrl: 'https://test.com/old',
+        fileCount: 1,
+        createdAt: todayMorning,
+        files: [
+          HistoryFile(
+            filename: 'old.jpg',
+            savedAt: todayMorning.millisecondsSinceEpoch,
+            itemIndex: 1,
+            isImage: true,
+          ),
+        ],
+      );
+      await db.upsert(oldPost);
+
+      final exported = await BackupService.exportBackup(db: db);
+
+      // User soft-deletes old post (is_deleted = 1)
+      final recordInDb = await db.getByPostId('old_post_1');
+      await db.delete(recordInDb!.id!);
+
+      // 2. User downloads a new post today (later than the old post)
+      final newPost = HistoryRecord(
+        platform: 'xhs',
+        postId: 'new_post_2',
+        authorName: 'Author',
+        title: 'New Post',
+        caption: 'New Post',
+        postUrl: 'https://test.com/new',
+        fileCount: 1,
+        createdAt: todayLater,
+        files: [
+          HistoryFile(
+            filename: 'new.jpg',
+            savedAt: todayLater.millisecondsSinceEpoch,
+            itemIndex: 1,
+            isImage: true,
+          ),
+        ],
+      );
+      await db.upsert(newPost);
+
+      // 3. User restores old backup data
+      await BackupService.importBackup(exported, db: db);
+
+      // 4. Query recent sorted by created_at DESC (as used by HistoryPage)
+      final all = await db.recent();
+      expect(all.length, 2);
+      expect(all[0].postId, 'new_post_2', reason: 'New download must stay on top of older restored post');
+      expect(all[1].postId, 'old_post_1');
+      expect(all[1].createdAt.millisecondsSinceEpoch, todayMorning.millisecondsSinceEpoch,
+          reason: 'Restored post must keep its original createdAt and not be set to DateTime.now()');
+    });
   });
 }

@@ -28,6 +28,8 @@ class _BackupRestorePageState extends State<BackupRestorePage> with WidgetsBindi
   bool _backingUp = false;
 
   String? _folderDisplayName;
+  bool _isPickingFolder = false;
+  int _loadStateVersion = 0;
 
   @override
   void initState() {
@@ -44,12 +46,13 @@ class _BackupRestorePageState extends State<BackupRestorePage> with WidgetsBindi
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.resumed) {
+    if (state == AppLifecycleState.resumed && !_isPickingFolder) {
       _loadState();
     }
   }
 
   Future<void> _loadState() async {
+    final version = ++_loadStateVersion;
     final settings = await AppSettings.load();
     bool hasAccess = true;
     String? folderDisplay;
@@ -68,7 +71,7 @@ class _BackupRestorePageState extends State<BackupRestorePage> with WidgetsBindi
         hasAccess = false;
       }
     }
-    if (!mounted) return;
+    if (!mounted || version != _loadStateVersion) return;
     setState(() {
       _settings = settings;
       _hasFolderAccess = hasAccess;
@@ -91,11 +94,16 @@ class _BackupRestorePageState extends State<BackupRestorePage> with WidgetsBindi
     return _folderDisplayName ?? SafService.formatReadableDirectoryPath(uri);
   }
 
-  Future<String?> _pickFolder() async {
+  Future<String?> _pickFolder({bool enableAutoBackupOnSuccess = false}) async {
+    _isPickingFolder = true;
     try {
       final uri = await SafService.pickDirectory();
       if (uri != null && mounted) {
         _settings.backupTreeUri = uri;
+        if (enableAutoBackupOnSuccess) {
+          _settings.autoFolderBackupEnabled = true;
+          _settings.backupFolderHintDismissed = true;
+        }
         await _settings.save();
         await _loadState();
         if (mounted) {
@@ -113,6 +121,8 @@ class _BackupRestorePageState extends State<BackupRestorePage> with WidgetsBindi
         );
       }
       return null;
+    } finally {
+      _isPickingFolder = false;
     }
   }
 
@@ -469,14 +479,7 @@ class _BackupRestorePageState extends State<BackupRestorePage> with WidgetsBindi
                   onChanged: (enabled) async {
                     if (enabled) {
                       if (_settings.backupTreeUri == null || _settings.backupTreeUri!.isEmpty) {
-                        final picked = await _pickFolder();
-                        if (picked != null && mounted) {
-                          setState(() {
-                            _settings.autoFolderBackupEnabled = true;
-                            _settings.backupFolderHintDismissed = true;
-                          });
-                          await _settings.save();
-                        }
+                        await _pickFolder(enableAutoBackupOnSuccess: true);
                       } else {
                         setState(() {
                           _settings.autoFolderBackupEnabled = true;

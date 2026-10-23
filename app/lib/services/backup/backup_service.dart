@@ -227,6 +227,16 @@ abstract final class BackupService {
         itemsJson = jsonEncode(post.items);
       }
 
+      DateTime? resolvedCreatedAt = DateTime.tryParse(post.createdAt);
+      if (resolvedCreatedAt == null && files.isNotEmpty) {
+        final validSavedAts = files.map((f) => f.savedAt).where((s) => s > 0).toList();
+        if (validSavedAts.isNotEmpty) {
+          validSavedAts.sort();
+          resolvedCreatedAt = DateTime.fromMillisecondsSinceEpoch(validSavedAts.first);
+        }
+      }
+      resolvedCreatedAt ??= DateTime.now();
+
       final record = HistoryRecord(
         platform: appPlatform,
         postId: post.sourceId,
@@ -236,7 +246,7 @@ abstract final class BackupService {
         thumbnailUrl: null,
         postUrl: post.originalUrl,
         fileCount: files.length,
-        createdAt: DateTime.tryParse(post.createdAt) ?? DateTime.now(),
+        createdAt: resolvedCreatedAt,
         itemsJson: itemsJson,
         files: files,
         isDeleted: false,

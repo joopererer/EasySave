@@ -664,11 +664,17 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
       case HistorySort.latest:
       case HistorySort.earliest:
         final sorted = [...posts]
-          ..sort(
-            (a, b) => _sort == HistorySort.latest
+          ..sort((a, b) {
+            final cmp = _sort == HistorySort.latest
                 ? b.createdAt.compareTo(a.createdAt)
-                : a.createdAt.compareTo(b.createdAt),
-          );
+                : a.createdAt.compareTo(b.createdAt);
+            if (cmp != 0) return cmp;
+            final aId = a.id ?? 0;
+            final bId = b.id ?? 0;
+            return _sort == HistorySort.latest
+                ? bId.compareTo(aId)
+                : aId.compareTo(bId);
+          });
         final groups = <_PostGroup>[];
         for (final r in sorted) {
           final title = _dateGroupTitle(r.createdAt);

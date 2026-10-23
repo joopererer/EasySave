@@ -47,12 +47,12 @@ class BackupFile {
   factory BackupFile.fromMap(Map<String, dynamic> map) {
     return BackupFile(
       filename: map['filename'] as String? ?? '',
-      relativePath: map['relativePath'] as String?,
-      savedAt: map['savedAt'] as String? ?? '',
-      mediaType: map['mediaType'] as String? ?? 'image',
-      mediaId: map['mediaId'] as String?,
-      itemIndex: (map['itemIndex'] as num?)?.toInt() ?? 1,
-      assetId: map['assetId'] as String?,
+      relativePath: map['relativePath'] as String? ?? map['relative_path'] as String?,
+      savedAt: map['savedAt'] as String? ?? map['saved_at'] as String? ?? '',
+      mediaType: map['mediaType'] as String? ?? map['media_type'] as String? ?? 'image',
+      mediaId: map['mediaId'] as String? ?? map['media_id'] as String?,
+      itemIndex: (map['itemIndex'] as num?)?.toInt() ?? (map['item_index'] as num?)?.toInt() ?? 1,
+      assetId: map['assetId'] as String? ?? map['asset_id'] as String?,
       provenance: (map['provenance'] as Map?)?.cast<String, dynamic>(),
     );
   }
@@ -115,12 +115,12 @@ class BackupPost {
 
     return BackupPost(
       platform: map['platform'] as String? ?? '',
-      sourceId: map['sourceId'] as String? ?? '',
-      originalUrl: map['originalUrl'] as String? ?? '',
+      sourceId: map['sourceId'] as String? ?? map['source_id'] as String? ?? '',
+      originalUrl: map['originalUrl'] as String? ?? map['original_url'] as String? ?? '',
       title: map['title'] as String?,
-      authorName: map['authorName'] as String?,
+      authorName: map['authorName'] as String? ?? map['author_name'] as String?,
       caption: map['caption'] as String?,
-      createdAt: map['createdAt'] as String? ?? '',
+      createdAt: map['createdAt'] as String? ?? map['created_at'] as String? ?? '',
       items: resolvedItems,
       files: resolvedFiles,
     );

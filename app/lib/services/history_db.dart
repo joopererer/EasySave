@@ -541,22 +541,26 @@ class HistoryDb {
             return (a.isImage ? 0 : 1).compareTo(b.isImage ? 0 : 1);
           });
 
+        final resolvedCreatedAt = record.createdAt.isBefore(existing.createdAt)
+            ? record.createdAt
+            : existing.createdAt;
+
         final mergedRecord = HistoryRecord(
           id: existing.id,
           platform: record.platform,
           postId: record.postId,
           authorName: record.authorName ?? existing.authorName,
-        title: (record.title?.isNotEmpty == true) ? record.title : existing.title,
-        caption: (record.caption?.isNotEmpty == true) ? record.caption : existing.caption,
-        thumbnailUrl: record.thumbnailUrl ?? existing.thumbnailUrl,
-        postUrl: record.postUrl,
-        fileCount: mergedFiles.length,
-        createdAt: DateTime.now(),
-        itemsJson: record.itemsJson ?? existing.itemsJson,
-        files: mergedFiles,
-        // Only restore deleted records when explicitly requested (rebuild flow)
-        isDeleted: restoreDeleted ? false : existing.isDeleted,
-      );
+          title: (record.title?.isNotEmpty == true) ? record.title : existing.title,
+          caption: (record.caption?.isNotEmpty == true) ? record.caption : existing.caption,
+          thumbnailUrl: record.thumbnailUrl ?? existing.thumbnailUrl,
+          postUrl: record.postUrl,
+          fileCount: mergedFiles.length,
+          createdAt: resolvedCreatedAt,
+          itemsJson: record.itemsJson ?? existing.itemsJson,
+          files: mergedFiles,
+          // Only restore deleted records when explicitly requested (rebuild flow)
+          isDeleted: restoreDeleted ? false : existing.isDeleted,
+        );
         await txn.update(
           'history_records',
           mergedRecord.toMap(),

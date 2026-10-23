@@ -341,6 +341,42 @@ void main() {
       expect(reloaded.autoFolderBackupEnabled, isFalse);
     });
 
+    testWidgets('autoFolderBackupEnabled switch: opening when no folder set triggers picker and turns ON when picked', (tester) async {
+      final settings = await AppSettings.load();
+      settings.backupTreeUri = null;
+      settings.autoFolderBackupEnabled = false;
+      await settings.save();
+
+      const safChannel = MethodChannel('easysave/saf');
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(safChannel, (call) async {
+        if (call.method == 'pickDirectory') {
+          // Simulate lifecycle resume that occurs when returning from system SAF picker
+          tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+          return 'content://com.android.externalstorage.documents/tree/primary%3ADocuments%2FEasySave';
+        }
+        if (call.method == 'checkDirectoryAccess') return true;
+        return null;
+      });
+
+      await tester.pumpWidget(
+        const MaterialApp(home: BackupRestorePage()),
+      );
+      await tester.pumpAndSettle();
+
+      final switchFinder = find.byKey(const Key('auto_folder_backup_switch'));
+      expect(tester.widget<SwitchListTile>(switchFinder).value, isFalse);
+
+      await tester.tap(switchFinder);
+      await tester.pumpAndSettle();
+
+      expect(tester.widget<SwitchListTile>(switchFinder).value, isTrue);
+      final reloaded = await AppSettings.load();
+      expect(reloaded.autoFolderBackupEnabled, isTrue);
+      expect(reloaded.backupTreeUri, isNotNull);
+      expect(reloaded.backupFolderHintDismissed, isTrue);
+    });
+
     testWidgets('closing switch preserves backupTreeUri; re-opening does not prompt picker', (tester) async {
       final settings = await AppSettings.load();
       settings.backupTreeUri = 'content://com.android.externalstorage.documents/tree/primary%3ADocuments%2FEasySave';
