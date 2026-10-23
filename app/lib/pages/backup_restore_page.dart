@@ -641,17 +641,22 @@ class _BackupRestorePageState extends State<BackupRestorePage> with WidgetsBindi
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    '· 第 2 层系统备份：Android Auto Backup 自动将私有备份同步至云端与换机迁移。',
+                    '· 系统备份：手机支持时，备份会随系统云备份或换机迁移一起保存。',
                     style: TextStyle(fontSize: 13, height: 1.5),
                   ),
                   SizedBox(height: 6),
                   Text(
-                    '· 第 3 层外部归档：自选外部文件夹自动保存快照，严格保留最新 7 份。',
+                    '· 系统备份需在手机设置中开启（如"设置 → Google → 备份"），开启后由系统自动完成。',
                     style: TextStyle(fontSize: 13, height: 1.5),
                   ),
                   SizedBox(height: 6),
                   Text(
-                    '· 空历史安全保护：本地记录为空时自动备份不执行，杜绝误覆盖或清空已有备份。',
+                    '· 文件夹备份：每次下载完成后（最多每小时一次）及每天首次打开时，自动保存到所选文件夹，保留最近 7 份。',
+                    style: TextStyle(fontSize: 13, height: 1.5),
+                  ),
+                  SizedBox(height: 6),
+                  Text(
+                    '· 没有任何记录时不会自动备份，避免覆盖已有备份。',
                     style: TextStyle(fontSize: 13, height: 1.5),
                   ),
                 ],
