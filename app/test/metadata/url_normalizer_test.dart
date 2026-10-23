@@ -69,5 +69,20 @@ void main() {
         expect(toSpecPlatform(toAppPlatform(specName)), specName);
       }
     });
+
+    test('toSpecPlatform is idempotent and handles unknown platforms', () {
+      expect(toSpecPlatform('xiaohongshu'), 'xiaohongshu');
+      expect(toSpecPlatform('instagram'), 'instagram');
+      expect(toSpecPlatform('x'), 'x');
+      expect(toSpecPlatform('unknown_platform'), 'unknown_platform');
+    });
+
+    test('platformDisplayName maps platforms to localized names correctly', () {
+      expect(platformDisplayName('xhs'), '小红书');
+      expect(platformDisplayName('xiaohongshu'), '小红书');
+      expect(platformDisplayName('instagram'), 'Instagram');
+      expect(platformDisplayName('x'), 'X');
+      expect(platformDisplayName('unknown'), 'unknown');
+    });
   });
 }
