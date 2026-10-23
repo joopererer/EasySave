@@ -27,6 +27,8 @@ class _BackupRestorePageState extends State<BackupRestorePage> {
   bool _hasFolderAccess = true;
   bool _backingUp = false;
 
+  String? _folderDisplayName;
+
   @override
   void initState() {
     super.initState();
@@ -36,9 +38,18 @@ class _BackupRestorePageState extends State<BackupRestorePage> {
   Future<void> _loadState() async {
     final settings = await AppSettings.load();
     bool hasAccess = true;
+    String? folderDisplay;
     if (settings.backupTreeUri != null && settings.backupTreeUri!.isNotEmpty) {
+      final tree = settings.backupTreeUri!;
+      final parsed = parseTreeDocumentPath(tree);
+      if (parsed != null && parsed.isNotEmpty) {
+        folderDisplay = parsed;
+      } else {
+        final docName = await SafService.getDirectoryDisplayName(tree);
+        folderDisplay = SafService.formatReadableDirectoryPath(tree, fallbackName: docName);
+      }
       try {
-        hasAccess = await SafService.checkDirectoryAccess(settings.backupTreeUri!);
+        hasAccess = await SafService.checkDirectoryAccess(tree);
       } catch (_) {
         hasAccess = false;
       }
@@ -47,6 +58,7 @@ class _BackupRestorePageState extends State<BackupRestorePage> {
     setState(() {
       _settings = settings;
       _hasFolderAccess = hasAccess;
+      _folderDisplayName = folderDisplay;
       _loading = false;
     });
   }
@@ -62,17 +74,7 @@ class _BackupRestorePageState extends State<BackupRestorePage> {
   }
 
   String _displayPath(String uri) {
-    try {
-      final decoded = Uri.decodeComponent(uri);
-      final colonIdx = decoded.indexOf(':');
-      if (colonIdx != -1 && colonIdx < decoded.length - 1) {
-        final sub = decoded.substring(colonIdx + 1);
-        if (sub.isNotEmpty) return sub;
-      }
-      return decoded;
-    } catch (_) {
-      return uri;
-    }
+    return _folderDisplayName ?? SafService.formatReadableDirectoryPath(uri);
   }
 
   Future<void> _pickFolder() async {

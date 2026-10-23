@@ -314,6 +314,14 @@ class MainActivity : FlutterActivity() {
                             result.error("INVALID_ARGS", "Missing treeUri argument", null)
                         }
                     }
+                    "getDirectoryDisplayName" -> {
+                        val treeUri = call.argument<String>("treeUri")
+                        if (treeUri != null) {
+                            getDirectoryDisplayName(treeUri, result)
+                        } else {
+                            result.success(null)
+                        }
+                    }
                     else -> result.notImplemented()
                 }
             }
@@ -807,6 +815,17 @@ class MainActivity : FlutterActivity() {
         } catch (e: Exception) {
             Log.e("EasySaveSAF", "Unexpected error reading $uriString: ${e.message}", e)
             result.error("IO_ERROR", e.message, null)
+        }
+    }
+
+    private fun getDirectoryDisplayName(treeUriString: String, result: MethodChannel.Result) {
+        try {
+            val uri = Uri.parse(treeUriString)
+            val treeDoc = DocumentFile.fromTreeUri(this, uri)
+            result.success(treeDoc?.name)
+        } catch (e: Exception) {
+            Log.w("EasySaveSAF", "getDirectoryDisplayName error: ${e.message}", e)
+            result.success(null)
         }
     }
 }

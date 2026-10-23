@@ -152,6 +152,54 @@ bool isBackupContentEquivalent(String jsonA, String jsonB) {
   }
 }
 
+/// Parses a human-readable directory path from a SAF tree URI string.
+/// - "primary:Documents/EasySave" -> "内部存储/Documents/EasySave"
+/// - "1234-5678:MyBackups" -> "SD 卡/MyBackups"
+/// Returns null if the tree URI cannot be parsed into volume:path.
+String? parseTreeDocumentPath(String treeUriString) {
+  try {
+    final uri = Uri.parse(treeUriString);
+    final segments = uri.pathSegments;
+    final treeIdx = segments.indexOf('tree');
+    String rawDocId;
+    if (treeIdx != -1 && treeIdx + 1 < segments.length) {
+      rawDocId = Uri.decodeComponent(segments[treeIdx + 1]);
+    } else if (segments.isNotEmpty) {
+      rawDocId = Uri.decodeComponent(segments.last);
+    } else {
+      return null;
+    }
+
+    if (rawDocId.startsWith('raw:/storage/emulated/0/')) {
+      final sub = rawDocId.substring('raw:/storage/emulated/0/'.length);
+      return sub.isNotEmpty ? '内部存储/$sub' : '内部存储';
+    }
+    if (rawDocId.startsWith('/storage/emulated/0/')) {
+      final sub = rawDocId.substring('/storage/emulated/0/'.length);
+      return sub.isNotEmpty ? '内部存储/$sub' : '内部存储';
+    }
+
+    final colonIdx = rawDocId.indexOf(':');
+    if (colonIdx != -1) {
+      final volume = rawDocId.substring(0, colonIdx);
+      final path = rawDocId.substring(colonIdx + 1).replaceFirst(RegExp(r'^/+'), '');
+      if (volume.toLowerCase() == 'primary') {
+        return path.isNotEmpty ? '内部存储/$path' : '内部存储';
+      } else {
+        return path.isNotEmpty ? 'SD 卡/$path' : 'SD 卡';
+      }
+    }
+
+    if (rawDocId.toLowerCase() == 'primary') {
+      return '内部存储';
+    }
+
+    return null;
+  } catch (_) {
+    return null;
+  }
+}
+
 /// Representation of a backup file found in the SAF directory.
 class SafBackupFile {
   final String name;
@@ -186,6 +234,39 @@ abstract final class SafService {
   /// Resets throttling state (for unit testing).
   static void resetThrottleForTest() {
     _lastSafBackupTimestampMs = null;
+  }
+
+  /// Formats a user-readable folder display path from a tree URI.
+  /// Falls back to [fallbackName] (e.g. DocumentFile.name) or "外部备份文件夹" if unparseable.
+  /// Strictly never returns raw content:// URI.
+  static String formatReadableDirectoryPath(String treeUri, {String? fallbackName}) {
+    final parsed = parseTreeDocumentPath(treeUri);
+    if (parsed != null && parsed.isNotEmpty) {
+      return parsed;
+    }
+    if (fallbackName != null &&
+        fallbackName.trim().isNotEmpty &&
+        !fallbackName.startsWith('content://')) {
+      return fallbackName.trim();
+    }
+    return '外部备份文件夹';
+  }
+
+  /// Queries the system DocumentFile display name for a given tree URI.
+  /// Returns null if not accessible or on error.
+  static Future<String?> getDirectoryDisplayName(
+    String treeUri, {
+    MethodChannel? channelOverride,
+  }) async {
+    final ch = channelOverride ?? _channel;
+    try {
+      final name = await ch.invokeMethod<String>('getDirectoryDisplayName', {
+        'treeUri': treeUri,
+      });
+      return name;
+    } catch (_) {
+      return null;
+    }
   }
 
   /// Launch system folder picker (ACTION_OPEN_DOCUMENT_TREE) with persistable flags.

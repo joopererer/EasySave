@@ -672,4 +672,94 @@ void main() {
       expect(settings.lastBackupTime, time4.millisecondsSinceEpoch);
     });
   });
+
+  group('Feedback 2: Readable Directory Path Parsing & Fallback', () {
+    test('parseTreeDocumentPath handles primary internal storage paths', () {
+      expect(
+        parseTreeDocumentPath('content://com.android.externalstorage.documents/tree/primary%3ADocuments%2FEasySave'),
+        '内部存储/Documents/EasySave',
+      );
+      expect(
+        parseTreeDocumentPath('content://com.android.externalstorage.documents/tree/primary%3A'),
+        '内部存储',
+      );
+      expect(
+        parseTreeDocumentPath('content://com.android.externalstorage.documents/tree/primary'),
+        '内部存储',
+      );
+      expect(
+        parseTreeDocumentPath('content://com.android.providers.downloads.documents/tree/raw%3A%2Fstorage%2Femulated%2F0%2FDownload'),
+        '内部存储/Download',
+      );
+    });
+
+    test('parseTreeDocumentPath handles secondary SD card volumes', () {
+      expect(
+        parseTreeDocumentPath('content://com.android.externalstorage.documents/tree/1234-5678%3AMyBackups%2FEasySave'),
+        'SD 卡/MyBackups/EasySave',
+      );
+      expect(
+        parseTreeDocumentPath('content://com.android.externalstorage.documents/tree/0000-0000%3A'),
+        'SD 卡',
+      );
+    });
+
+    test('parseTreeDocumentPath returns null for opaque or non-volume URIs', () {
+      expect(
+        parseTreeDocumentPath('content://com.android.providers.downloads.documents/tree/downloads'),
+        isNull,
+      );
+      expect(
+        parseTreeDocumentPath('content://custom.provider/opaque/12345'),
+        isNull,
+      );
+    });
+
+    test('formatReadableDirectoryPath falls back to DocumentFile name or generic title, never raw URI', () {
+      // 1. Parsable returns parsed string
+      expect(
+        SafService.formatReadableDirectoryPath('content://com.android.externalstorage.documents/tree/primary%3ADocuments%2FEasySave'),
+        '内部存储/Documents/EasySave',
+      );
+
+      // 2. Unparsable with fallback DocumentFile name
+      expect(
+        SafService.formatReadableDirectoryPath(
+          'content://com.android.providers.downloads.documents/tree/downloads',
+          fallbackName: 'Downloads',
+        ),
+        'Downloads',
+      );
+
+      // 3. Unparsable with null or raw URI fallback
+      expect(
+        SafService.formatReadableDirectoryPath('content://com.android.providers.downloads.documents/tree/downloads'),
+        '外部备份文件夹',
+      );
+      expect(
+        SafService.formatReadableDirectoryPath(
+          'content://com.android.providers.downloads.documents/tree/downloads',
+          fallbackName: 'content://com.android.providers.downloads.documents/tree/downloads',
+        ),
+        '外部备份文件夹',
+      );
+    });
+
+    test('getDirectoryDisplayName invokes platform channel', () async {
+      final channel = MethodChannel('mock_display_name_channel');
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(channel, (call) async {
+        if (call.method == 'getDirectoryDisplayName') {
+          return 'EasySave';
+        }
+        return null;
+      });
+
+      final name = await SafService.getDirectoryDisplayName(
+        'content://tree/target',
+        channelOverride: channel,
+      );
+      expect(name, 'EasySave');
+    });
+  });
 }

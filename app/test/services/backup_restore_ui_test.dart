@@ -281,5 +281,28 @@ void main() {
         DownloadManager.instance.clearBatchesForTesting();
       }
     });
+
+    testWidgets('renders readable folder path in UI, never raw URI', (tester) async {
+      final settings = await AppSettings.load();
+      settings.backupTreeUri = 'content://com.android.externalstorage.documents/tree/primary%3ADocuments%2FEasySave';
+      await settings.save();
+
+      const safChannel = MethodChannel('easysave/saf');
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(safChannel, (call) async {
+        if (call.method == 'checkDirectoryAccess') return true;
+        return null;
+      });
+
+      await tester.pumpWidget(
+        const MaterialApp(
+          home: BackupRestorePage(),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.text('内部存储/Documents/EasySave'), findsOneWidget);
+      expect(find.textContaining('content://'), findsNothing);
+    });
   });
 }
