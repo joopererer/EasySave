@@ -137,6 +137,89 @@ Uint8List simulateNativeWebpRead(Uint8List bytes) {
   return Uint8List(0);
 }
 
+/// Simulates native MediaHeaderReader.readMp4:
+/// - Checks 8-byte 'ftyp' box
+/// - Walks top-level boxes (handles 32-bit, 64-bit largesize, size 0)
+/// - Truncation stops and keeps prior complete boxes
+/// - Extracts complete XMP uuid boxes (UUID BE7ACFCB-97A9-42E8-9C71-999491E3AFAC)
+/// - Skips boxes with payload > 16MB (maxMp4XmpBytes)
+/// - Returns concatenated complete XMP uuid boxes, or null if none
+Uint8List? simulateNativeMp4Read(Uint8List bytes) {
+  if (bytes.length < 8) return null;
+  if (bytes[4] != 0x66 || bytes[5] != 0x74 || bytes[6] != 0x79 || bytes[7] != 0x70) {
+    return null;
+  }
+
+  const maxMp4XmpBytes = 16 * 1024 * 1024;
+  final xmpUuid = [
+    0xBE, 0x7A, 0xCF, 0xCB, 0x97, 0xA9, 0x42, 0xE8, //
+    0x9C, 0x71, 0x99, 0x94, 0x91, 0xE3, 0xAF, 0xAC,
+  ];
+
+  final fileSize = bytes.length;
+  var pos = 0;
+  final xmpBoxes = <Uint8List>[];
+
+  while (pos + 8 <= fileSize) {
+    final size32 = (bytes[pos] << 24) |
+        (bytes[pos + 1] << 16) |
+        (bytes[pos + 2] << 8) |
+        bytes[pos + 3];
+    final type = String.fromCharCodes(bytes.sublist(pos + 4, pos + 8));
+
+    int headerSize;
+    int totalBoxSize;
+
+    if (size32 == 1) {
+      if (pos + 16 > fileSize) break;
+      int largeSize = 0;
+      for (int i = 0; i < 8; i++) {
+        largeSize = (largeSize << 8) | bytes[pos + 8 + i];
+      }
+      if (largeSize < 16) break;
+      headerSize = 16;
+      totalBoxSize = largeSize;
+    } else if (size32 == 0) {
+      headerSize = 8;
+      totalBoxSize = fileSize - pos;
+    } else if (size32 < 8) {
+      break;
+    } else {
+      headerSize = 8;
+      totalBoxSize = size32;
+    }
+
+    if (totalBoxSize <= 0 || pos + totalBoxSize > fileSize) {
+      break;
+    }
+
+    if (type == 'uuid' && totalBoxSize >= headerSize + 16) {
+      bool isMatch = true;
+      for (int i = 0; i < 16; i++) {
+        if (bytes[pos + headerSize + i] != xmpUuid[i]) {
+          isMatch = false;
+          break;
+        }
+      }
+      if (isMatch) {
+        final payloadSize = totalBoxSize - headerSize;
+        if (payloadSize > 0 && payloadSize <= maxMp4XmpBytes) {
+          xmpBoxes.add(bytes.sublist(pos, pos + totalBoxSize));
+        }
+      }
+    }
+
+    pos += totalBoxSize;
+  }
+
+  if (xmpBoxes.isEmpty) return null;
+  final builder = BytesBuilder(copy: false);
+  for (final box in xmpBoxes) {
+    builder.add(box);
+  }
+  return builder.toBytes();
+}
+
 final List<int> _crcTable = () {
   final table = List<int>.filled(256, 0);
   for (int n = 0; n < 256; n++) {
@@ -366,5 +449,66 @@ void main() {
       final truncated = simulateNativePngRead(pngNoXmp);
       expect(truncated.isEmpty, isTrue);
     });
+
+    test('All 12 spec MP4/MOV test vectors parse identically from native extracted bytes', () {
+      final specDir = Directory(p.join(Directory.current.path, '..', 'docs', 'provenance-spec', 'test-vectors'));
+      expect(specDir.existsSync(), isTrue, reason: 'test-vectors dir must exist');
+
+      final videoFiles = [
+        'local-video.mp4',
+        'mov-no-xmp.mov',
+        'mov-xmp-uuid.mov',
+        'mp4-64bit-box.mp4',
+        'mp4-interrupted-append.mp4',
+        'mp4-mdat-uuid-noise.mp4',
+        'mp4-multiple-xmp.mp4',
+        'mp4-no-xmp.mp4',
+        'mp4-size-zero-mdat.mp4',
+        'mp4-truncated-mdat.mp4',
+        'mp4-truncated-xmp.mp4',
+        'mp4-xmp-uuid.mp4',
+      ];
+
+      for (final filename in videoFiles) {
+        final file = File(p.join(specDir.path, filename));
+        expect(file.existsSync(), isTrue, reason: '$filename must exist');
+        final fullBytes = file.readAsBytesSync();
+
+        final expFile = File(p.join(specDir.path, '$filename.expected.json'));
+        final expJson = jsonDecode(expFile.readAsStringSync()) as Map<String, dynamic>;
+        final expectNoXmp = expJson.containsKey('_none') || filename == 'local-video.mp4';
+
+        final extractedBytes = simulateNativeMp4Read(fullBytes);
+
+        if (expectNoXmp) {
+          expect(extractedBytes, isNull, reason: '$filename should return null extracted bytes');
+          final parsed = readMp4Xmp(extractedBytes ?? Uint8List(0));
+          expect(parsed, isNull, reason: '$filename should have no XMP');
+        } else {
+          expect(extractedBytes, isNotNull, reason: '$filename should extract XMP boxes');
+          final extractedProvenance = readMp4Xmp(extractedBytes!);
+          expect(extractedProvenance, isNotNull, reason: '$filename extracted bytes must parse into XmpProvenance');
+
+          final fullFileProvenance = readMp4Xmp(fullBytes);
+          _assertProvenanceEquals(extractedProvenance, fullFileProvenance, file: filename);
+
+          if (expJson.containsKey('assetId')) {
+            expect(extractedProvenance!.assetId, equals(expJson['assetId']));
+          }
+          if (expJson.containsKey('title')) {
+            expect(extractedProvenance!.title, equals(expJson['title']));
+          }
+        }
+      }
+    });
+
+    test('MP4 non-ftyp headers return null', () {
+      final nonMp4 = Uint8List(32);
+      expect(simulateNativeMp4Read(nonMp4), isNull);
+
+      final pngHeader = Uint8List.fromList([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]);
+      expect(simulateNativeMp4Read(pngHeader), isNull);
+    });
   });
 }
+

@@ -529,10 +529,15 @@ class MainActivity : FlutterActivity() {
         }
         val mimeType = call.argument<String>("mimeType")
         try {
-            val uri = ContentUris.withAppendedId(
-                MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
-                mediaId,
-            )
+            val isVideo = mimeType?.startsWith("video/") == true ||
+                mimeType?.contains("mp4") == true ||
+                mimeType?.contains("quicktime") == true
+            val collection = if (isVideo) {
+                MediaStore.Video.Media.EXTERNAL_CONTENT_URI
+            } else {
+                MediaStore.Images.Media.EXTERNAL_CONTENT_URI
+            }
+            val uri = ContentUris.withAppendedId(collection, mediaId)
             result.success(MediaHeaderReader.readHeader(contentResolver, uri, mimeType))
         } catch (e: Exception) {
             result.error("read_failed", e.message, null)
@@ -552,7 +557,7 @@ class MainActivity : FlutterActivity() {
         }
         try {
             val uri = ContentUris.withAppendedId(
-                MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
+                MediaStore.Files.getContentUri("external"),
                 mediaId,
             )
             result.success(MediaHeaderReader.queryAlbum(contentResolver, uri))
