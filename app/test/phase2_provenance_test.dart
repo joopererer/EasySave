@@ -7,6 +7,7 @@
 import 'dart:io';
 import 'dart:typed_data';
 
+import 'package:easysave/core/app_version.dart';
 import 'package:easysave/metadata/metadata_service.dart';
 import 'package:easysave/metadata/provenance_version.dart';
 import 'package:easysave/metadata/url_normalizer.dart';
@@ -44,6 +45,18 @@ void main() {
         equals(changelogVersion),
         reason: 'Local provenanceSpecVersion must match latest docs/provenance-spec version',
       );
+    });
+
+    test('capturedBy reads EasySave/1.8.1 matching pubspec.yaml version', () {
+      final pubspecFile = File('pubspec.yaml');
+      final content = pubspecFile.readAsStringSync();
+      final match = RegExp(r'^version:\s*(\d+\.\d+\.\d+)\+(\d+)', multiLine: true).firstMatch(content);
+      expect(match, isNotNull);
+      final pubspecVersion = match!.group(1);
+      final buildNumber = match!.group(2);
+      expect(pubspecVersion, equals('1.8.1'));
+      expect(buildNumber, equals('6'));
+      expect(AppVersion.capturedBy, equals('EasySave/1.8.1'));
     });
   });
 
