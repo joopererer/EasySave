@@ -8,7 +8,6 @@ import 'package:photo_manager/photo_manager.dart';
 
 import '../core/dev_log.dart';
 import '../metadata/metadata_service.dart';
-import '../metadata/xmp_model.dart';
 import 'gallery_locator_service.dart';
 import 'history_db.dart';
 import 'media_header_service.dart';
@@ -173,19 +172,49 @@ class HistoryRebuildService {
       final (platform, sourceId) = _parseKey(entry.key);
       final assetsWithXmp = entry.value;
 
-      // Sort by itemIndex
-      assetsWithXmp.sort((a, b) {
-        final ai = a.provenance.itemIndex ?? 0;
-        final bi = b.provenance.itemIndex ?? 0;
-        return ai.compareTo(bi);
-      });
+      // SPEC §6: When the same item has multiple candidate assets (e.g. from different devices),
+      // the asset with chronologically earlier capturedAt wins.
+      final itemMap = <String, _AssetWithXmp>{};
+      for (final awx in assetsWithXmp) {
+        final itemIndex = awx.provenance.itemIndex ?? 1;
+        final isImage = awx.asset.type == AssetType.image;
+        final key = '${itemIndex}_$isImage';
+        final existingItem = itemMap[key];
+        if (existingItem == null) {
+          itemMap[key] = awx;
+        } else {
+          final tExisting = existingItem.provenance.capturedAt ?? existingItem.asset.createDateTime;
+          final tCurrent = awx.provenance.capturedAt ?? awx.asset.createDateTime;
+          if (tCurrent.isBefore(tExisting)) {
+            itemMap[key] = awx;
+          }
+        }
+      }
+
+      final resolvedAssets = itemMap.values.toList()
+        ..sort((a, b) {
+          final ai = a.provenance.itemIndex ?? 0;
+          final bi = b.provenance.itemIndex ?? 0;
+          return ai.compareTo(bi);
+        });
+
+      // Find the earliest captured asset across the group for the record header
+      _AssetWithXmp earliestAwx = resolvedAssets.first;
+      for (final awx in resolvedAssets.skip(1)) {
+        final tEarliest = earliestAwx.provenance.capturedAt ?? earliestAwx.asset.createDateTime;
+        final tCurrent = awx.provenance.capturedAt ?? awx.asset.createDateTime;
+        if (tCurrent.isBefore(tEarliest)) {
+          earliestAwx = awx;
+        }
+      }
 
       // Build history files
       final files = <HistoryFile>[];
-      for (final awx in assetsWithXmp) {
+      for (final awx in resolvedAssets) {
+        final savedAtTime = awx.provenance.capturedAt ?? awx.asset.createDateTime;
         files.add(HistoryFile(
           filename: awx.asset.title ?? '',
-          savedAt: awx.asset.createDateTime.millisecondsSinceEpoch,
+          savedAt: savedAtTime.millisecondsSinceEpoch,
           mediaId: awx.asset.id,
           itemIndex: awx.provenance.itemIndex ?? 1,
           isImage: awx.asset.type == AssetType.image,
@@ -199,13 +228,17 @@ class HistoryRebuildService {
       final existing = await db.getByPostId(sourceId);
 
       if (existing != null) {
-        // Merge: update existing record with new file info
+        // Merge: update existing record with new file info, preferring earlier capturedAt
         final mergedFiles = <String, HistoryFile>{};
         for (final f in existing.files) {
           mergedFiles['${f.itemIndex}_${f.isImage}'] = f;
         }
         for (final f in files) {
-          mergedFiles['${f.itemIndex}_${f.isImage}'] = f;
+          final key = '${f.itemIndex}_${f.isImage}';
+          final existingF = mergedFiles[key];
+          if (existingF == null || f.savedAt < existingF.savedAt) {
+            mergedFiles[key] = f;
+          }
         }
 
         final mergedList = mergedFiles.values.toList()
@@ -214,6 +247,9 @@ class HistoryRebuildService {
             if (cmp != 0) return cmp;
             return (a.isImage ? 0 : 1).compareTo(b.isImage ? 0 : 1);
           });
+
+        final earliestTime = earliestAwx.provenance.capturedAt ?? earliestAwx.asset.createDateTime;
+        final recordCreatedAt = earliestTime.isBefore(existing.createdAt) ? earliestTime : existing.createdAt;
 
         final mergedRecord = HistoryRecord(
           id: existing.id,
@@ -225,7 +261,7 @@ class HistoryRebuildService {
           thumbnailUrl: existing.thumbnailUrl,
           postUrl: existing.postUrl,
           fileCount: mergedList.length,
-          createdAt: existing.createdAt,
+          createdAt: recordCreatedAt,
           itemsJson: existing.itemsJson,
           files: mergedList,
         );
@@ -234,9 +270,8 @@ class HistoryRebuildService {
         merged++;
         DevLog.write(_logTag, 'Merged record: $platform:$sourceId'); // i18n:ignore 日志
       } else {
-        final firstAwx = assetsWithXmp.first;
-        final firstProv = firstAwx.provenance;
-        final recordCreatedAt = firstProv.capturedAt ?? firstAwx.asset.createDateTime;
+        final firstProv = earliestAwx.provenance;
+        final recordCreatedAt = firstProv.capturedAt ?? earliestAwx.asset.createDateTime;
         final record = HistoryRecord(
           platform: platform,
           postId: sourceId,

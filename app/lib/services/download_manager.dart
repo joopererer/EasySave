@@ -13,10 +13,11 @@ import 'package:gal/gal.dart';
 import 'package:photo_manager/photo_manager.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../core/app_version.dart';
 import '../core/dev_log.dart';
 import '../core/models.dart';
 import '../metadata/metadata_service.dart';
-import '../metadata/xmp_model.dart';
+import '../metadata/url_normalizer.dart';
 import 'backup/local_auto_backup.dart';
 import 'backup/saf_service.dart';
 import 'gallery_locator_service.dart';
@@ -365,20 +366,30 @@ XmpProvenance provenanceForBatchItem(
   DownloadBatch batch, {
   required int itemIndex,
   String? existingAssetId,
+  String? capturedBy,
 }) {
+  final authorId = _shouldWriteAuthorId(batch.platform, batch.authorId) ? batch.authorId : null;
   return ProvenanceBuilder(
-    platform: batch.platform,
-    postId: batch.postId,
-    postUrl: batch.postUrl,
+    platform: toSpecPlatform(batch.platform),
+    capturedBy: capturedBy ?? AppVersion.capturedBy,
+    sourceId: batch.postId,
+    sourceUrl: batch.postUrl,
     authorName: batch.authorName,
     title: batch.title,
     caption: batch.caption,
-    authorId: batch.authorId,
+    authorId: authorId,
+    creditPlatformName: platformDisplayName(batch.platform),
     publishedAt: batch.publishedAt,
     itemIndex: itemIndex,
     itemCount: batch.totalItems,
     existingAssetId: existingAssetId,
   ).build();
+}
+
+bool _shouldWriteAuthorId(String platform, String? authorId) {
+  if (authorId == null || authorId.isEmpty) return false;
+  if (platform != 'x') return true;
+  return RegExp(r'^\d+$').hasMatch(authorId);
 }
 
 /// Extracts the first image from the itemsJson of a batch for the thumbnail.
@@ -962,7 +973,7 @@ class DownloadManager extends ChangeNotifier {
         checkC2pa: true,
       );
       
-      if (result.skippedC2pa) {
+      if (result.errorCode == EmbedErrorCode.c2paDetected) {
         _log('provenance skipped (C2PA detected): ${job.filename}');
       } else if (result.success) {
         _log('provenance embedded: ${job.filename}');

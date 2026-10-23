@@ -11,7 +11,6 @@ import '../core/dev_log.dart';
 import '../core/models.dart';
 import '../metadata/metadata_service.dart';
 import '../metadata/url_normalizer.dart';
-import '../metadata/xmp_model.dart';
 import 'history_db.dart';
 import 'media_header_service.dart';
 import 'settings.dart';
