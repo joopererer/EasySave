@@ -200,6 +200,17 @@ String? parseTreeDocumentPath(String treeUriString) {
   }
 }
 
+/// Representation of a document entry returned when listing a SAF directory.
+class SafDirectoryEntry {
+  final String name;
+  final String uri;
+
+  const SafDirectoryEntry({
+    required this.name,
+    required this.uri,
+  });
+}
+
 /// Representation of a backup file found in the SAF directory.
 class SafBackupFile {
   final String name;
@@ -356,20 +367,116 @@ abstract final class SafService {
     }
   }
 
-  /// Prune old backups in the directory via platform channel.
-  static Future<int> rotateBackups(
+  /// List all files in the given tree URI directory without filtering.
+  /// Returns a list of [SafDirectoryEntry] ({name, uri}).
+  static Future<List<SafDirectoryEntry>> listBackupDirectory(
     String treeUri, {
     MethodChannel? channelOverride,
   }) async {
     final ch = channelOverride ?? _channel;
     try {
-      final pruned = await ch.invokeMethod<int>('rotateBackups', {
+      final list = await ch.invokeListMethod<dynamic>('listBackupDirectory', {
         'treeUri': treeUri,
       });
-      return pruned ?? 0;
+      if (list == null) return const [];
+      final entries = <SafDirectoryEntry>[];
+      for (final item in list) {
+        if (item is Map) {
+          final name = item['name'] as String?;
+          final uri = item['uri'] as String?;
+          if (name != null && uri != null) {
+            entries.add(SafDirectoryEntry(name: name, uri: uri));
+          }
+        }
+      }
+      return entries;
     } on PlatformException catch (e) {
-      DevLog.write('SAF', 'rotateBackups error: ${e.message}', level: DevLogLevel.warn);
+      DevLog.write('SAF', 'listBackupDirectory error: ${e.message}', level: DevLogLevel.warn);
       throw _mapPlatformException(e);
+    } catch (e) {
+      DevLog.write('SAF', 'listBackupDirectory error: $e', level: DevLogLevel.warn);
+      return const [];
+    }
+  }
+
+  /// Delete specified document URIs.
+  /// Returns a map of URI -> deletion success status.
+  static Future<Map<String, bool>> deleteDocuments(
+    List<String> uris, {
+    MethodChannel? channelOverride,
+  }) async {
+    if (uris.isEmpty) return const {};
+    final ch = channelOverride ?? _channel;
+    try {
+      final map = await ch.invokeMapMethod<dynamic, dynamic>('deleteDocuments', {
+        'uris': uris,
+      });
+      if (map == null) return const {};
+      return map.map((key, value) => MapEntry(key.toString(), value == true));
+    } on PlatformException catch (e) {
+      DevLog.write('SAF', 'deleteDocuments error: ${e.message}', level: DevLogLevel.warn);
+      throw _mapPlatformException(e);
+    } catch (e) {
+      DevLog.write('SAF', 'deleteDocuments error: $e', level: DevLogLevel.warn);
+      return const {};
+    }
+  }
+
+  /// Prune old backups in the directory via pure Dart filename matching and sorting.
+  /// 1. Lists directory via [listBackupDirectory] (no filtering on native side).
+  /// 2. Computes prune candidates via [getPruneCandidates] (strictly matches pattern, keeps 7).
+  /// 3. Deletes candidates via [deleteDocuments].
+  /// Logs errors on any deletion failures without rethrowing or breaking callers.
+  static Future<int> rotateBackups(
+    String treeUri, {
+    int keepCount = 7,
+    MethodChannel? channelOverride,
+  }) async {
+    try {
+      final entries = await listBackupDirectory(treeUri, channelOverride: channelOverride);
+      if (entries.isEmpty) return 0;
+
+      final fileNames = entries.map((e) => e.name).toList();
+      final candidates = getPruneCandidates(fileNames, keepCount: keepCount);
+      if (candidates.isEmpty) return 0;
+
+      final nameToUri = <String, String>{};
+      for (final entry in entries) {
+        nameToUri[entry.name] = entry.uri;
+      }
+
+      final urisToDelete = <String>[];
+      for (final name in candidates) {
+        final uri = nameToUri[name];
+        if (uri != null) {
+          urisToDelete.add(uri);
+        }
+      }
+
+      if (urisToDelete.isEmpty) return 0;
+
+      final deletionResults = await deleteDocuments(
+        urisToDelete,
+        channelOverride: channelOverride,
+      );
+
+      var deletedCount = 0;
+      for (final uri in urisToDelete) {
+        final success = deletionResults[uri] ?? false;
+        if (success) {
+          deletedCount++;
+        } else {
+          DevLog.write(
+            'SAF',
+            'Failed to delete rotated backup document: $uri',
+            level: DevLogLevel.warn,
+          );
+        }
+      }
+      return deletedCount;
+    } catch (e) {
+      DevLog.write('SAF', 'rotateBackups error: $e', level: DevLogLevel.warn);
+      return 0;
     }
   }
 
@@ -432,21 +539,44 @@ abstract final class SafService {
   }
 
   /// Read the latest backup file (name, uri, and content) from the target directory.
+  /// Finds all files matching [kBackupFilenameRegExp], sorts descending by
+  /// timestamp, and reads the content of the newest one.
   /// Returns null if no valid backups exist or on error.
   static Future<SafBackupFile?> getLatestBackup(
     String treeUri, {
     MethodChannel? channelOverride,
   }) async {
-    final ch = channelOverride ?? _channel;
     try {
-      final map = await ch.invokeMapMethod<String, dynamic>('getLatestBackup', {
-        'treeUri': treeUri,
+      final entries = await listBackupDirectory(
+        treeUri,
+        channelOverride: channelOverride,
+      );
+      if (entries.isEmpty) return null;
+
+      final matching = <MapEntry<DateTime, SafDirectoryEntry>>[];
+      for (final entry in entries) {
+        final dt = parseBackupTimestamp(entry.name);
+        if (dt != null) {
+          matching.add(MapEntry(dt, entry));
+        }
+      }
+      if (matching.isEmpty) return null;
+
+      matching.sort((a, b) {
+        final cmp = b.key.compareTo(a.key);
+        if (cmp != 0) return cmp;
+        return b.value.name.compareTo(a.value.name);
       });
-      if (map == null) return null;
+
+      final latest = matching.first.value;
+      final content = await readDocumentContent(
+        latest.uri,
+        channelOverride: channelOverride,
+      );
       return SafBackupFile(
-        name: map['name'] as String? ?? '',
-        uri: map['uri'] as String? ?? '',
-        content: map['content'] as String? ?? '',
+        name: latest.name,
+        uri: latest.uri,
+        content: content,
       );
     } catch (e) {
       DevLog.write('SAF', 'getLatestBackup error: $e', level: DevLogLevel.warn);

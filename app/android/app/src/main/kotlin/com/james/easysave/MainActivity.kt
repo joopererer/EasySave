@@ -15,8 +15,8 @@ import android.provider.MediaStore
 import android.provider.Settings
 import androidx.core.content.ContextCompat
 import androidx.documentfile.provider.DocumentFile
+import android.provider.DocumentsContract
 import java.io.IOException
-import java.util.regex.Pattern
 import android.util.Log
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
@@ -54,7 +54,6 @@ class MainActivity : FlutterActivity() {
     private var pendingWriteResult: MethodChannel.Result? = null
     private var pendingPickDirectoryResult: MethodChannel.Result? = null
     private var pendingPickFileResult: MethodChannel.Result? = null
-    private val BACKUP_FILE_PATTERN = Pattern.compile("^easysave-backup-(\\d{8}-\\d{4}(?:\\d{2})?)\\.json$")
 
     private var hostChannel: MethodChannel? = null
     private var receiverRegistered = false
@@ -298,20 +297,20 @@ class MainActivity : FlutterActivity() {
                             result.error("INVALID_ARGS", "Missing URI argument", null)
                         }
                     }
-                    "rotateBackups" -> {
+                    "listBackupDirectory" -> {
                         val treeUri = call.argument<String>("treeUri")
                         if (treeUri != null) {
-                            rotateBackupsInDirectory(treeUri, result)
+                            listBackupDirectory(treeUri, result)
                         } else {
                             result.error("INVALID_ARGS", "Missing treeUri argument", null)
                         }
                     }
-                    "getLatestBackup" -> {
-                        val treeUri = call.argument<String>("treeUri")
-                        if (treeUri != null) {
-                            getLatestBackup(treeUri, result)
+                    "deleteDocuments" -> {
+                        val uris = call.argument<List<String>>("uris")
+                        if (uris != null) {
+                            deleteDocuments(uris, result)
                         } else {
-                            result.error("INVALID_ARGS", "Missing treeUri argument", null)
+                            result.error("INVALID_ARGS", "Missing uris argument", null)
                         }
                     }
                     "getDirectoryDisplayName" -> {
@@ -703,109 +702,48 @@ class MainActivity : FlutterActivity() {
         }
     }
 
-    private fun rotateBackupsInDirectory(treeUriString: String, result: MethodChannel.Result) {
-        try {
-            val uri = Uri.parse(treeUriString)
-            val treeDoc = DocumentFile.fromTreeUri(this, uri)
-            if (treeDoc != null && treeDoc.exists() && treeDoc.isDirectory) {
-                val deleted = rotateBackups(treeDoc)
-                result.success(deleted)
-            } else {
-                result.success(0)
-            }
-        } catch (e: Exception) {
-            Log.w("EasySaveSAF", "rotateBackupsInDirectory error: ${e.message}", e)
-            result.success(0)
-        }
-    }
-
-    private fun parseBackupTime(name: String): Long? {
-        val matcher = BACKUP_FILE_PATTERN.matcher(name)
-        if (!matcher.matches()) return null
-        val ts = matcher.group(1) ?: return null
-        return try {
-            val y = ts.substring(0, 4).toInt()
-            val m = ts.substring(4, 6).toInt()
-            val d = ts.substring(6, 8).toInt()
-            val h = ts.substring(9, 11).toInt()
-            val min = ts.substring(11, 13).toInt()
-            val s = if (ts.length >= 15) ts.substring(13, 15).toInt() else 0
-            val cal = java.util.Calendar.getInstance()
-            cal.set(y, m - 1, d, h, min, s)
-            cal.set(java.util.Calendar.MILLISECOND, 0)
-            cal.timeInMillis
-        } catch (_: Exception) {
-            null
-        }
-    }
-
-    private fun rotateBackups(treeDoc: DocumentFile): Int {
-        var deletedCount = 0
-        try {
-            val files = treeDoc.listFiles()
-            val matchingBackups = mutableListOf<Pair<Long, DocumentFile>>()
-
-            for (file in files) {
-                val name = file.name ?: continue
-                val timeMs = parseBackupTime(name) ?: continue
-                matchingBackups.add(Pair(timeMs, file))
-            }
-
-            // Sort descending by parsed timestamp
-            matchingBackups.sortByDescending { it.first }
-
-            if (matchingBackups.size > 7) {
-                for (i in 7 until matchingBackups.size) {
-                    val oldFile = matchingBackups[i].second
-                    try {
-                        if (oldFile.delete()) {
-                            deletedCount++
-                        }
-                    } catch (e: Exception) {
-                        Log.w("EasySaveSAF", "Failed to delete rotated backup: ${oldFile.name}", e)
-                    }
-                }
-            }
-        } catch (e: Exception) {
-            Log.w("EasySaveSAF", "Rotation error: ${e.message}", e)
-        }
-        return deletedCount
-    }
-
-    private fun getLatestBackup(treeUriString: String, result: MethodChannel.Result) {
+    private fun listBackupDirectory(treeUriString: String, result: MethodChannel.Result) {
         try {
             val uri = Uri.parse(treeUriString)
             val treeDoc = DocumentFile.fromTreeUri(this, uri)
             if (treeDoc == null || !treeDoc.exists() || !treeDoc.isDirectory) {
-                result.success(null)
+                result.success(emptyList<Map<String, String>>())
                 return
             }
             val files = treeDoc.listFiles()
-            var latestTime = -1L
-            var latestDoc: DocumentFile? = null
+            val list = mutableListOf<Map<String, String>>()
             for (file in files) {
                 val name = file.name ?: continue
-                val t = parseBackupTime(name) ?: continue
-                if (t > latestTime) {
-                    latestTime = t
-                    latestDoc = file
+                list.add(mapOf(
+                    "name" to name,
+                    "uri" to file.uri.toString()
+                ))
+            }
+            result.success(list)
+        } catch (e: Exception) {
+            Log.w("EasySaveSAF", "listBackupDirectory error: ${e.message}", e)
+            result.success(emptyList<Map<String, String>>())
+        }
+    }
+
+    private fun deleteDocuments(uris: List<String>, result: MethodChannel.Result) {
+        val results = mutableMapOf<String, Boolean>()
+        for (uriStr in uris) {
+            var deleted = false
+            try {
+                val uri = Uri.parse(uriStr)
+                deleted = DocumentsContract.deleteDocument(contentResolver, uri)
+            } catch (e: Exception) {
+                try {
+                    val doc = DocumentFile.fromSingleUri(this, Uri.parse(uriStr))
+                    deleted = doc?.delete() ?: false
+                } catch (e2: Exception) {
+                    Log.w("EasySaveSAF", "Failed to delete document $uriStr: ${e2.message}")
                 }
             }
-            if (latestDoc == null) {
-                result.success(null)
-                return
-            }
-            val inputStream = contentResolver.openInputStream(latestDoc.uri)
-            val text = inputStream?.bufferedReader(Charsets.UTF_8)?.use { it.readText() }
-            result.success(mapOf(
-                "name" to (latestDoc.name ?: ""),
-                "uri" to latestDoc.uri.toString(),
-                "content" to (text ?: "")
-            ))
-        } catch (e: Exception) {
-            Log.w("EasySaveSAF", "getLatestBackup error: ${e.message}", e)
-            result.success(null)
+            results[uriStr] = deleted
         }
+        result.success(results)
     }
 
     private fun readDocumentContent(uriString: String, result: MethodChannel.Result) {

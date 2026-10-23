@@ -215,9 +215,13 @@ void main() {
           return 'content://uri/$writtenFileName';
         } else if (call.method == 'readDocumentContent') {
           return writtenContent;
-        } else if (call.method == 'rotateBackups') {
-          rotated = true;
-          return 0;
+        } else if (call.method == 'listBackupDirectory') {
+          if (writtenFileName.isNotEmpty) {
+            rotated = true;
+          }
+          return [];
+        } else if (call.method == 'deleteDocuments') {
+          return {};
         } else if (call.method == 'checkDirectoryAccess') {
           return true;
         }
@@ -432,9 +436,9 @@ void main() {
           return 'content://uri/easysave-backup-20261022-1000.json';
         } else if (call.method == 'readDocumentContent') {
           return validJson;
-        } else if (call.method == 'rotateBackups') {
+        } else if (call.method == 'listBackupDirectory') {
           rotateCalled = true;
-          return 1;
+          return [];
         }
         return null;
       });
@@ -461,10 +465,10 @@ void main() {
           .setMockMethodCallHandler(channel, (call) async {
         if (call.method == 'writeBackupToDirectory') {
           throw PlatformException(code: 'IO_ERROR', message: 'Disk failure');
-        } else if (call.method == 'rotateBackups') {
+        } else if (call.method == 'listBackupDirectory') {
           rotateCalled = true;
           existingBackupsCount--;
-          return 1;
+          return [];
         }
         return null;
       });
@@ -497,10 +501,10 @@ void main() {
           return 'content://uri/easysave-backup-20261022-1000.json';
         } else if (call.method == 'readDocumentContent') {
           return jsonWithOnePost;
-        } else if (call.method == 'rotateBackups') {
+        } else if (call.method == 'listBackupDirectory') {
           rotateCalled = true;
           existingBackupsCount--;
-          return 1;
+          return [];
         }
         return null;
       });
@@ -532,10 +536,10 @@ void main() {
           return 'content://uri/file';
         } else if (call.method == 'readDocumentContent') {
           return invalidFormatJson;
-        } else if (call.method == 'rotateBackups') {
+        } else if (call.method == 'listBackupDirectory') {
           rotateCalled = true;
           existingBackupsCount--;
-          return 1;
+          return [];
         }
         return null;
       });
@@ -622,8 +626,16 @@ void main() {
       final channel = MethodChannel('mock_dedup_channel');
       TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
           .setMockMethodCallHandler(channel, (call) async {
-        if (call.method == 'getLatestBackup') {
-          return latestBackupInFolder;
+        if (call.method == 'listBackupDirectory') {
+          if (latestBackupInFolder != null) {
+            return [
+              {
+                'name': latestBackupInFolder!['name'],
+                'uri': latestBackupInFolder!['uri'],
+              }
+            ];
+          }
+          return [];
         } else if (call.method == 'writeBackupToDirectory') {
           final name = call.arguments['fileName'] as String;
           final content = call.arguments['content'] as String;
@@ -633,12 +645,12 @@ void main() {
             'uri': 'content://uri/$name',
             'content': content,
           };
+          rotateCount++;
           return 'content://uri/$name';
         } else if (call.method == 'readDocumentContent') {
           return latestBackupInFolder?['content'] as String? ?? '';
-        } else if (call.method == 'rotateBackups') {
-          rotateCount++;
-          return 0;
+        } else if (call.method == 'deleteDocuments') {
+          return {};
         } else if (call.method == 'checkDirectoryAccess') {
           return true;
         }
@@ -809,6 +821,113 @@ void main() {
         channelOverride: channel,
       );
       expect(name, 'EasySave');
+    });
+  });
+
+  group('Pure Dart SAF Rotation & Channel Integration', () {
+    test('rotateBackups: passes ONLY matching backup files exceeding 7 to deleteDocuments, never non-matching files', () async {
+      final directoryFiles = [
+        // 9 matching backup files with timestamps
+        {'name': 'easysave-backup-20261023-180000.json', 'uri': 'content://doc/bk8'}, // newest #1
+        {'name': 'easysave-backup-20261023-170000.json', 'uri': 'content://doc/bk7'}, // #2
+        {'name': 'easysave-backup-20261023-160000.json', 'uri': 'content://doc/bk6'}, // #3
+        {'name': 'easysave-backup-20261023-150000.json', 'uri': 'content://doc/bk5'}, // #4
+        {'name': 'easysave-backup-20261023-140000.json', 'uri': 'content://doc/bk4'}, // #5
+        {'name': 'easysave-backup-20261023-130000.json', 'uri': 'content://doc/bk3'}, // #6
+        {'name': 'easysave-backup-20261023-120000.json', 'uri': 'content://doc/bk2'}, // #7 (7th newest, kept)
+        {'name': 'easysave-backup-20261023-110000.json', 'uri': 'content://doc/bk1'}, // #8 (exceeds 7 -> prune)
+        {'name': 'easysave-backup-20261022-1000.json', 'uri': 'content://doc/bk0'},   // #9 (legacy format -> prune)
+        // Non-matching files that must NEVER appear in deletion candidates
+        {'name': 'notes.txt', 'uri': 'content://doc/notes'},
+        {'name': 'easysave-backup.json', 'uri': 'content://doc/tier2'},
+        {'name': 'photo.jpg', 'uri': 'content://doc/photo'},
+        {'name': 'easysave-backup-invalid.json', 'uri': 'content://doc/invalid'},
+      ];
+
+      List<String>? deletedUris;
+      final channel = MethodChannel('mock_rotation_channel');
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(channel, (call) async {
+        if (call.method == 'listBackupDirectory') {
+          return directoryFiles;
+        } else if (call.method == 'deleteDocuments') {
+          deletedUris = List<String>.from(call.arguments['uris'] as List);
+          return {for (final u in deletedUris!) u: true};
+        }
+        return null;
+      });
+
+      final prunedCount = await SafService.rotateBackups('content://tree/target', channelOverride: channel);
+
+      expect(prunedCount, 2);
+      expect(deletedUris, isNotNull);
+      // Verify exactly bk1 and bk0 are passed for deletion
+      expect(deletedUris, containsAll(['content://doc/bk1', 'content://doc/bk0']));
+      expect(deletedUris?.length, 2);
+
+      // Verify none of the top 7 newest or non-matching files are in the delete list
+      expect(deletedUris, isNot(contains('content://doc/bk8')));
+      expect(deletedUris, isNot(contains('content://doc/bk7')));
+      expect(deletedUris, isNot(contains('content://doc/bk6')));
+      expect(deletedUris, isNot(contains('content://doc/bk5')));
+      expect(deletedUris, isNot(contains('content://doc/bk4')));
+      expect(deletedUris, isNot(contains('content://doc/bk3')));
+      expect(deletedUris, isNot(contains('content://doc/bk2')));
+      expect(deletedUris, isNot(contains('content://doc/notes')));
+      expect(deletedUris, isNot(contains('content://doc/tier2')));
+      expect(deletedUris, isNot(contains('content://doc/photo')));
+      expect(deletedUris, isNot(contains('content://doc/invalid')));
+    });
+
+    test('rotateBackups: when matching count <= 7, deleteDocuments is never called', () async {
+      final directoryFiles = [
+        {'name': 'easysave-backup-20261023-140000.json', 'uri': 'content://doc/bk1'},
+        {'name': 'easysave-backup-20261023-130000.json', 'uri': 'content://doc/bk2'},
+        {'name': 'other_file.txt', 'uri': 'content://doc/other'},
+      ];
+
+      var deleteCalled = false;
+      final channel = MethodChannel('mock_rotation_channel_noop');
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(channel, (call) async {
+        if (call.method == 'listBackupDirectory') {
+          return directoryFiles;
+        } else if (call.method == 'deleteDocuments') {
+          deleteCalled = true;
+          return {};
+        }
+        return null;
+      });
+
+      final prunedCount = await SafService.rotateBackups('content://tree/target', channelOverride: channel);
+      expect(prunedCount, 0);
+      expect(deleteCalled, isFalse);
+    });
+
+    test('rotateBackups: partial deletion failure logs warning and does not throw', () async {
+      final directoryFiles = [
+        for (int i = 8; i >= 0; i--)
+          {'name': 'easysave-backup-20261023-1${i}0000.json', 'uri': 'content://doc/bk$i'}
+      ];
+
+      final channel = MethodChannel('mock_rotation_partial_fail_channel');
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(channel, (call) async {
+        if (call.method == 'listBackupDirectory') {
+          return directoryFiles;
+        } else if (call.method == 'deleteDocuments') {
+          final uris = List<String>.from(call.arguments['uris'] as List);
+          // First URI succeeds, second fails
+          return {
+            uris[0]: true,
+            if (uris.length > 1) uris[1]: false,
+          };
+        }
+        return null;
+      });
+
+      final prunedCount = await SafService.rotateBackups('content://tree/target', channelOverride: channel);
+      expect(prunedCount, 1);
     });
   });
 }
