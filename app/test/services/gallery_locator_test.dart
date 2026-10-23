@@ -3,8 +3,7 @@
 import 'dart:io';
 import 'dart:typed_data';
 
-import 'package:easysave/metadata/xmp_jpeg.dart';
-import 'package:easysave/metadata/xmp_model.dart';
+import 'package:provenance_dart/provenance_dart.dart';
 import 'package:easysave/services/gallery_locator_service.dart';
 import 'package:easysave/services/history_db.dart';
 import 'package:easysave/services/media_header_service.dart';

@@ -4,7 +4,7 @@
 import 'dart:async';
 import 'dart:convert';
 
-import '../../metadata/date_formatter.dart';
+import 'package:provenance_dart/provenance_dart.dart';
 import '../../metadata/url_normalizer.dart';
 import '../history_db.dart';
 import '../settings.dart';

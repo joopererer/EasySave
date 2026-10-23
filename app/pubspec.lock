@@ -568,6 +568,15 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "2.1.8"
+  provenance_dart:
+    dependency: "direct main"
+    description:
+      path: "."
+      ref: "v0.1.1"
+      resolved-ref: c26cbc8314e09e6da34d0e1812b6a0760aa9edc1
+      url: "https://github.com/joopererer/provenance_dart"
+    source: git
+    version: "0.1.1"
   pub_semver:
     dependency: transitive
     description:

@@ -4,13 +4,15 @@
 
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:photo_manager/photo_manager.dart';
 
+import '../core/app_version.dart';
 import '../core/dev_log.dart';
 import '../core/models.dart';
 import '../metadata/metadata_service.dart';
-import '../metadata/xmp_model.dart';
+import '../metadata/url_normalizer.dart';
 import 'gallery_locator_service.dart';
 import 'history_db.dart';
 import 'media_delete_service.dart';
@@ -191,8 +193,8 @@ class HistoryBackfillService {
 
         // Check if file already has provenance metadata (real check)
         try {
-          final existing = MetadataService.readProvenance(filePath.path);
-          if (existing != null && existing.sourceUrl != null) {
+          final existing = await MetadataService.readProvenance(filePath.path);
+          if (existing != null && existing.assetId.isNotEmpty) {
             alreadyHasMetadata++;
             DevLog.write(_logTag, 'Already has metadata: ${asset.title}');
             continue;
@@ -272,70 +274,98 @@ class HistoryBackfillService {
       return _BackfillStatusResult(_BackfillStatus.otherError);
     }
 
-    // Try to write directly
+    final targetFile = File(item.filePath);
+    if (!await targetFile.exists()) {
+      return _BackfillStatusResult(_BackfillStatus.fileNotFound);
+    }
+
+    Uint8List originalBytes;
     try {
-      final result = await MetadataService.embedProvenance(
-        filePath: item.filePath,
-        provenance: provenance,
-        checkC2pa: true,
-      );
+      originalBytes = await targetFile.readAsBytes();
+    } catch (e) {
+      DevLog.write(_logTag, 'Failed to read ${asset.title}: $e');
+      return _BackfillStatusResult(_BackfillStatus.otherError);
+    }
 
-      if (result.success) {
-        // Update assetId in HistoryDb
-        await _updateAssetId(record, file, provenance.assetId);
-        DevLog.write(_logTag, 'Wrote provenance to ${asset.title}');
-        return _BackfillStatusResult(_BackfillStatus.success);
-      }
+    final format = detectFormat(originalBytes);
+    if (format == MediaFormat.other) {
+      DevLog.write(_logTag, 'Format not supported: ${asset.title}');
+      return _BackfillStatusResult(_BackfillStatus.formatNotSupported);
+    }
 
-      // Categorize error by code
-      switch (result.errorCode) {
-        case EmbedErrorCode.formatNotRecognized:
-        case EmbedErrorCode.formatUnsupported:
-          DevLog.write(_logTag, 'Format not supported: ${asset.title} (${result.errorMessage})');
+    if (detectC2pa(originalBytes, format) == C2paStatus.detected) {
+      DevLog.write(_logTag, 'Skipped C2PA: ${asset.title}');
+      return _BackfillStatusResult(_BackfillStatus.otherError);
+    }
+
+    Uint8List newBytes;
+    try {
+      switch (format) {
+        case MediaFormat.jpeg:
+          newBytes = writeJpegXmp(originalBytes, provenance);
+        case MediaFormat.png:
+          newBytes = writePngXmp(originalBytes, provenance);
+        case MediaFormat.webp:
+          newBytes = writeWebpXmp(originalBytes, provenance);
+        case MediaFormat.other:
           return _BackfillStatusResult(_BackfillStatus.formatNotSupported);
-
-        case EmbedErrorCode.fileNotFound:
-          DevLog.write(_logTag, 'File not found: ${asset.title}');
-          return _BackfillStatusResult(_BackfillStatus.fileNotFound);
-
-        case EmbedErrorCode.c2paDetected:
-          // C2PA is success=true, but treat as skip for backfill
-          DevLog.write(_logTag, 'Skipped C2PA: ${asset.title}');
-          return _BackfillStatusResult(_BackfillStatus.otherError);
-
-        case EmbedErrorCode.writeFailed:
-        default:
-          // Check if it's a permission error by inspecting the message
-          final msg = result.errorMessage ?? '';
-          if (msg.contains('Permission denied') || msg.contains('denied')) {
-            // Try to request permission
-            final granted = await MediaDeleteService.instance.requestWriteAccess([
-              MediaRef(mediaId: asset.id, isImage: asset.type == AssetType.image),
-            ]);
-
-            if (granted) {
-              // Retry write after permission granted
-              final retryResult = await MetadataService.embedProvenance(
-                filePath: item.filePath,
-                provenance: provenance,
-                checkC2pa: true,
-              );
-
-              if (retryResult.success) {
-                await _updateAssetId(record, file, provenance.assetId);
-                DevLog.write(_logTag, 'Wrote provenance after auth: ${asset.title}');
-                return _BackfillStatusResult(_BackfillStatus.success);
-              }
-            }
-
-            return _BackfillStatusResult(_BackfillStatus.authRequired);
-          }
-
-          DevLog.write(_logTag, 'Write failed for ${asset.title}: $msg');
-          return _BackfillStatusResult(_BackfillStatus.otherError);
       }
     } catch (e) {
-      DevLog.write(_logTag, 'Error writing provenance to ${asset.title}: $e');
+      DevLog.write(_logTag, 'Failed to write XMP into bytes for ${asset.title}: $e');
+      return _BackfillStatusResult(_BackfillStatus.otherError);
+    }
+
+    // Write back directly via File.writeAsBytes without rewriteFile or temp files
+    try {
+      await targetFile.writeAsBytes(newBytes, flush: true);
+      await _updateAssetId(record, file, provenance.assetId);
+      DevLog.write(_logTag, 'Wrote provenance to ${asset.title}');
+      return _BackfillStatusResult(_BackfillStatus.success);
+    } on FileSystemException catch (e) {
+      final msg = e.message;
+      if (e.osError?.errorCode == 13 || msg.contains('Permission denied') || msg.contains('denied')) {
+        final granted = await MediaDeleteService.instance.requestWriteAccess([
+          MediaRef(mediaId: asset.id, isImage: asset.type == AssetType.image),
+        ]);
+
+        if (granted) {
+          try {
+            await targetFile.writeAsBytes(newBytes, flush: true);
+            await _updateAssetId(record, file, provenance.assetId);
+            DevLog.write(_logTag, 'Wrote provenance after auth: ${asset.title}');
+            return _BackfillStatusResult(_BackfillStatus.success);
+          } catch (retryError) {
+            DevLog.write(_logTag, 'Retry write failed: $retryError');
+          }
+        }
+
+        return _BackfillStatusResult(_BackfillStatus.authRequired);
+      }
+
+      DevLog.write(_logTag, 'Write failed for ${asset.title}: $e');
+      return _BackfillStatusResult(_BackfillStatus.otherError);
+    } catch (e) {
+      final msg = '$e';
+      if (msg.contains('Permission denied') || msg.contains('denied')) {
+        final granted = await MediaDeleteService.instance.requestWriteAccess([
+          MediaRef(mediaId: asset.id, isImage: asset.type == AssetType.image),
+        ]);
+
+        if (granted) {
+          try {
+            await targetFile.writeAsBytes(newBytes, flush: true);
+            await _updateAssetId(record, file, provenance.assetId);
+            DevLog.write(_logTag, 'Wrote provenance after auth: ${asset.title}');
+            return _BackfillStatusResult(_BackfillStatus.success);
+          } catch (retryError) {
+            DevLog.write(_logTag, 'Retry write failed: $retryError');
+          }
+        }
+
+        return _BackfillStatusResult(_BackfillStatus.authRequired);
+      }
+
+      DevLog.write(_logTag, 'Write failed for ${asset.title}: $e');
       return _BackfillStatusResult(_BackfillStatus.otherError);
     }
   }
@@ -376,13 +406,15 @@ class HistoryBackfillService {
     final capturedAt = DateTime.fromMillisecondsSinceEpoch(file.savedAt);
 
     return ProvenanceBuilder(
-      platform: record.platform,
-      postId: record.postId,
-      postUrl: record.postUrl,
+      platform: toSpecPlatform(record.platform),
+      capturedBy: AppVersion.capturedBy,
+      sourceId: record.postId,
+      sourceUrl: record.postUrl,
       authorName: record.authorName,
       title: record.title,
       caption: record.caption,
       authorId: null, // Don't have authorId from history
+      creditPlatformName: platformDisplayName(record.platform),
       publishedAt: null, // Don't have from history
       itemIndex: itemIndex,
       itemCount: itemCount > 1 ? itemCount : 1,

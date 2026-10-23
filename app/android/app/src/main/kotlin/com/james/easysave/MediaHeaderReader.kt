@@ -44,11 +44,11 @@ object MediaHeaderReader {
     }
 
     /**
-     * Read the header bytes of [uri]. Returns an empty array for unsupported
-     * types or unreadable files.
+     * Read the header bytes of [uri]. Returns null for unsupported
+     * types, unreadable files, or when no XMP metadata is found.
      */
-    fun readHeader(resolver: ContentResolver, uri: Uri, mimeType: String?): ByteArray {
-        val mime = mimeType?.lowercase() ?: return ByteArray(0)
+    fun readHeader(resolver: ContentResolver, uri: Uri, mimeType: String?): ByteArray? {
+        val mime = mimeType?.lowercase() ?: return null
         return try {
             resolver.openInputStream(uri)?.use { input ->
                 when {
@@ -56,11 +56,11 @@ object MediaHeaderReader {
                         readJpeg(input)
                     mime.contains("png") -> readPng(input)
                     mime.contains("webp") -> readWebp(input)
-                    else -> ByteArray(0)
+                    else -> null
                 }
-            } ?: ByteArray(0)
+            }
         } catch (_: Exception) {
-            ByteArray(0)
+            null
         }
     }
 
@@ -75,39 +75,59 @@ object MediaHeaderReader {
         return if (total == buffer.size) buffer else buffer.copyOf(total)
     }
 
-    private fun readPng(input: InputStream): ByteArray {
+    private fun readPng(input: InputStream): ByteArray? {
         val signature = ByteArray(PNG_SIGNATURE)
-        if (!readFully(input, signature)) return ByteArray(0)
+        if (!readFully(input, signature)) return null
 
         var walked = 0
         while (walked < MAX_WALK_BYTES) {
             val header = ByteArray(8)
             if (!readFully(input, header)) break
             val length = readU32BigEndian(header, 0)
+            if (length < 0) break
             val type = String(header, 4, 4, Charsets.US_ASCII)
-            if (type == "iTXt") {
-                // The XMP chunk: return it whole so the Dart reader can parse
-                // the keyword and the payload.
-                val data = ByteArray(length)
-                if (!readFully(input, data)) break
-                return signature + header + data
+
+            if (type == "IDAT" || type == "IEND") {
+                return null
             }
+
+            if (type == "iTXt") {
+                // Read full chunk payload + 4 bytes CRC
+                val dataAndCrc = ByteArray(length + 4)
+                if (!readFully(input, dataAndCrc)) break
+                if (isXmpKeyword(dataAndCrc)) {
+                    return signature + header + dataAndCrc
+                }
+                walked += 8 + length + 4
+                continue
+            }
+
             // Skip the chunk payload and its CRC.
             if (!skipFully(input, length.toLong() + 4)) break
             walked += 8 + length + 4
         }
-        return ByteArray(0)
+        return null
     }
 
-    private fun readWebp(input: InputStream): ByteArray {
+    private fun isXmpKeyword(dataAndCrc: ByteArray): Boolean {
+        val keywordBytes = "XML:com.adobe.xmp".toByteArray(Charsets.US_ASCII)
+        if (dataAndCrc.size < keywordBytes.size + 1) return false
+        for (i in keywordBytes.indices) {
+            if (dataAndCrc[i] != keywordBytes[i]) return false
+        }
+        return dataAndCrc[keywordBytes.size] == 0.toByte()
+    }
+
+    private fun readWebp(input: InputStream): ByteArray? {
         val header = ByteArray(WEBP_HEADER)
-        if (!readFully(input, header)) return ByteArray(0)
+        if (!readFully(input, header)) return null
 
         var walked = 0
         while (walked < MAX_WALK_BYTES) {
             val chunkHeader = ByteArray(8)
             if (!readFully(input, chunkHeader)) break
             val size = readU32LittleEndian(chunkHeader, 4)
+            if (size < 0) break
             val fourCc = String(chunkHeader, 0, 4, Charsets.US_ASCII)
             if (fourCc == "XMP ") {
                 val data = ByteArray(size)
@@ -119,7 +139,7 @@ object MediaHeaderReader {
             if (!skipFully(input, size.toLong() + padding)) break
             walked += 8 + size + padding
         }
-        return ByteArray(0)
+        return null
     }
 
     /**
