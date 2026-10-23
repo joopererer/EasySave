@@ -56,6 +56,9 @@ class AppSettings {
   /// User-chosen directory tree URI for external automatic backups (v1.8).
   String? backupTreeUri;
 
+  /// Whether automatic backup to external SAF folder is enabled (v1.8).
+  bool autoFolderBackupEnabled = false;
+
   /// Timestamp (ms) of the last successful backup (v1.8).
   int? lastBackupTime;
 
@@ -93,6 +96,7 @@ class AppSettings {
         prefs.getStringList('usedAlbumNames') ?? const <String>[],
       )
       ..backupTreeUri = prefs.getString('backupTreeUri')
+      ..autoFolderBackupEnabled = prefs.getBool('autoFolderBackupEnabled') ?? false
       ..lastBackupTime = prefs.getInt('lastBackupTime')
       ..skipRestoreHint = prefs.getBool('skipRestoreHint') ?? false;
   }
@@ -117,6 +121,7 @@ class AppSettings {
     } else {
       await prefs.remove('backupTreeUri');
     }
+    await prefs.setBool('autoFolderBackupEnabled', autoFolderBackupEnabled);
     if (lastBackupTime != null) {
       await prefs.setInt('lastBackupTime', lastBackupTime!);
     } else {

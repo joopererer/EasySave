@@ -77,7 +77,7 @@ class _BackupRestorePageState extends State<BackupRestorePage> {
     return _folderDisplayName ?? SafService.formatReadableDirectoryPath(uri);
   }
 
-  Future<void> _pickFolder() async {
+  Future<String?> _pickFolder() async {
     try {
       final uri = await SafService.pickDirectory();
       if (uri != null && mounted) {
@@ -89,13 +89,16 @@ class _BackupRestorePageState extends State<BackupRestorePage> {
             const SnackBar(content: Text('已设置外部备份文件夹')),
           );
         }
+        return uri;
       }
+      return null;
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('选择文件夹失败：$e')),
         );
       }
+      return null;
     }
   }
 
@@ -440,9 +443,37 @@ class _BackupRestorePageState extends State<BackupRestorePage> {
             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
             child: Column(
               children: [
+                SwitchListTile(
+                  key: const Key('auto_folder_backup_switch'),
+                  title: const Text('自动备份到文件夹'),
+                  subtitle: Text(
+                    _settings.autoFolderBackupEnabled
+                        ? '下载完成后及每天打开时自动保存到所选文件夹'
+                        : '已关闭（关闭期间仍可手动立即备份）',
+                  ),
+                  value: _settings.autoFolderBackupEnabled,
+                  onChanged: (enabled) async {
+                    if (enabled) {
+                      if (_settings.backupTreeUri == null || _settings.backupTreeUri!.isEmpty) {
+                        final picked = await _pickFolder();
+                        if (picked != null && mounted) {
+                          setState(() => _settings.autoFolderBackupEnabled = true);
+                          await _settings.save();
+                        }
+                      } else {
+                        setState(() => _settings.autoFolderBackupEnabled = true);
+                        await _settings.save();
+                      }
+                    } else {
+                      setState(() => _settings.autoFolderBackupEnabled = false);
+                      await _settings.save();
+                    }
+                  },
+                ),
+                const Divider(height: 1),
                 ListTile(
                   leading: const Icon(Icons.folder_outlined),
-                  title: const Text('当前外部文件夹'),
+                  title: const Text('备份文件夹'),
                   subtitle: Text(
                     hasTreeUri ? _displayPath(_settings.backupTreeUri!) : '未设置',
                     maxLines: 2,
@@ -480,7 +511,7 @@ class _BackupRestorePageState extends State<BackupRestorePage> {
                               ),
                               const SizedBox(height: 4),
                               Text(
-                                '自动备份已停止，请重新授权文件夹。',
+                                '自动备份已暂停，请重新授权文件夹。',
                                 style: TextStyle(
                                   fontSize: 12,
                                   color: theme.colorScheme.onErrorContainer,
@@ -496,7 +527,7 @@ class _BackupRestorePageState extends State<BackupRestorePage> {
                       ],
                     ),
                   ),
-                ] else if (hasTreeUri && _hasFolderAccess) ...[
+                ] else if (hasTreeUri && _hasFolderAccess && _settings.autoFolderBackupEnabled) ...[
                   const Divider(height: 1),
                   Padding(
                     padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
@@ -506,7 +537,7 @@ class _BackupRestorePageState extends State<BackupRestorePage> {
                         const SizedBox(width: 8),
                         Expanded(
                           child: Text(
-                            '文件夹权限正常，下载完成或冷启动时自动归档（轮转保留最新 7 份）',
+                            '文件夹权限正常，自动备份已就绪（保留最新 7 份）',
                             style: TextStyle(fontSize: 12, color: theme.colorScheme.outline),
                           ),
                         ),

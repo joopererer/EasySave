@@ -464,8 +464,19 @@ abstract final class SafService {
     MethodChannel? channelOverride,
   }) async {
     final currentSettings = settings ?? await AppSettings.load();
+    // Auto-backup trigger condition (§3):
+    // Toggle enabled + folder accessible + history non-empty
+    if (!currentSettings.autoFolderBackupEnabled) {
+      return false;
+    }
+
     final treeUri = currentSettings.backupTreeUri;
     if (treeUri == null || treeUri.isEmpty) {
+      return false;
+    }
+
+    final hasAccess = await checkDirectoryAccess(treeUri, channelOverride: channelOverride);
+    if (!hasAccess) {
       return false;
     }
 

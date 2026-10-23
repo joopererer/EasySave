@@ -174,7 +174,7 @@ void main() {
       await tester.pump(const Duration(milliseconds: 100));
 
       expect(find.text('备份与恢复'), findsOneWidget);
-      expect(find.text('当前外部文件夹'), findsOneWidget);
+      expect(find.text('备份文件夹'), findsOneWidget);
       expect(find.text('未设置'), findsOneWidget);
       expect(find.text('选择文件夹'), findsOneWidget);
     });
@@ -303,6 +303,88 @@ void main() {
 
       expect(find.text('内部存储/Documents/EasySave'), findsOneWidget);
       expect(find.textContaining('content://'), findsNothing);
+    });
+
+    testWidgets('autoFolderBackupEnabled switch: opening when no folder set triggers picker; cancelling keeps it OFF', (tester) async {
+      final settings = await AppSettings.load();
+      settings.backupTreeUri = null;
+      settings.autoFolderBackupEnabled = false;
+      await settings.save();
+
+      var pickCalled = false;
+      const safChannel = MethodChannel('easysave/saf');
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(safChannel, (call) async {
+        if (call.method == 'pickDirectory') {
+          pickCalled = true;
+          return null; // User cancelled
+        }
+        if (call.method == 'checkDirectoryAccess') return true;
+        return null;
+      });
+
+      await tester.pumpWidget(
+        const MaterialApp(home: BackupRestorePage()),
+      );
+      await tester.pumpAndSettle();
+
+      final switchFinder = find.byKey(const Key('auto_folder_backup_switch'));
+      expect(switchFinder, findsOneWidget);
+      expect(tester.widget<SwitchListTile>(switchFinder).value, isFalse);
+
+      await tester.tap(switchFinder);
+      await tester.pumpAndSettle();
+
+      expect(pickCalled, isTrue);
+      expect(tester.widget<SwitchListTile>(switchFinder).value, isFalse);
+      final reloaded = await AppSettings.load();
+      expect(reloaded.autoFolderBackupEnabled, isFalse);
+    });
+
+    testWidgets('closing switch preserves backupTreeUri; re-opening does not prompt picker', (tester) async {
+      final settings = await AppSettings.load();
+      settings.backupTreeUri = 'content://com.android.externalstorage.documents/tree/primary%3ADocuments%2FEasySave';
+      settings.autoFolderBackupEnabled = true;
+      await settings.save();
+
+      var pickCalled = false;
+      const safChannel = MethodChannel('easysave/saf');
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(safChannel, (call) async {
+        if (call.method == 'pickDirectory') {
+          pickCalled = true;
+          return null;
+        }
+        if (call.method == 'checkDirectoryAccess') return true;
+        return null;
+      });
+
+      await tester.pumpWidget(
+        const MaterialApp(home: BackupRestorePage()),
+      );
+      await tester.pumpAndSettle();
+
+      final switchFinder = find.byKey(const Key('auto_folder_backup_switch'));
+      expect(tester.widget<SwitchListTile>(switchFinder).value, isTrue);
+
+      // 1. Turn switch OFF
+      await tester.tap(switchFinder);
+      await tester.pumpAndSettle();
+
+      expect(tester.widget<SwitchListTile>(switchFinder).value, isFalse);
+      var reloaded = await AppSettings.load();
+      expect(reloaded.autoFolderBackupEnabled, isFalse);
+      expect(reloaded.backupTreeUri, isNotNull, reason: 'backupTreeUri must be preserved when switch is closed');
+
+      // 2. Turn switch back ON: must NOT call pickDirectory
+      await tester.tap(switchFinder);
+      await tester.pumpAndSettle();
+
+      expect(tester.widget<SwitchListTile>(switchFinder).value, isTrue);
+      expect(pickCalled, isFalse, reason: 'Re-opening switch must not re-prompt folder picker if treeUri is set');
+      reloaded = await AppSettings.load();
+      expect(reloaded.autoFolderBackupEnabled, isTrue);
+      expect(reloaded.backupTreeUri, 'content://com.android.externalstorage.documents/tree/primary%3ADocuments%2FEasySave');
     });
   });
 }

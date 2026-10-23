@@ -218,11 +218,15 @@ void main() {
         } else if (call.method == 'rotateBackups') {
           rotated = true;
           return 0;
+        } else if (call.method == 'checkDirectoryAccess') {
+          return true;
         }
         return null;
       });
 
-      final settings = AppSettings()..backupTreeUri = 'content://tree/target';
+      final settings = AppSettings()
+        ..backupTreeUri = 'content://tree/target'
+        ..autoFolderBackupEnabled = true;
       final backupTime = DateTime(2026, 10, 22, 16, 30);
 
       final result = await SafService.performAutoBackupToDirectory(
@@ -237,6 +241,43 @@ void main() {
       expect(writtenFileName, 'easysave-backup-20261022-163000.json');
       expect(writtenContent.contains('easysave-backup'), isTrue);
       expect(settings.lastBackupTime, backupTime.millisecondsSinceEpoch);
+    });
+
+    test('performAutoBackupToDirectory: autoFolderBackupEnabled false skips auto-backup without writing', () async {
+      await db.upsert(
+        HistoryRecord(
+          platform: 'xhs',
+          postId: 'post_disabled',
+          postUrl: 'https://example.com/pd',
+          title: 'Post Disabled',
+          fileCount: 0,
+          createdAt: DateTime.now(),
+          files: [],
+        ),
+      );
+
+      var writeCalled = false;
+      final channel = MethodChannel('mock_channel');
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(channel, (call) async {
+        if (call.method == 'writeBackupToDirectory') {
+          writeCalled = true;
+        }
+        return null;
+      });
+
+      final settings = AppSettings()
+        ..backupTreeUri = 'content://tree/target'
+        ..autoFolderBackupEnabled = false;
+
+      final result = await SafService.performAutoBackupToDirectory(
+        db: db,
+        settings: settings,
+        channelOverride: channel,
+      );
+
+      expect(result, isFalse);
+      expect(writeCalled, isFalse);
     });
 
     test('performAutoBackupToDirectory: throttles within 1 hour unless forced', () async {
@@ -265,11 +306,15 @@ void main() {
           return lastWritten;
         } else if (call.method == 'rotateBackups') {
           return 0;
+        } else if (call.method == 'checkDirectoryAccess') {
+          return true;
         }
         return null;
       });
 
-      final settings = AppSettings()..backupTreeUri = 'content://tree/target';
+      final settings = AppSettings()
+        ..backupTreeUri = 'content://tree/target'
+        ..autoFolderBackupEnabled = true;
       final t1 = DateTime(2026, 10, 22, 12, 0);
       final first = await SafService.performAutoBackupToDirectory(
         db: db,
@@ -567,7 +612,9 @@ void main() {
         ),
       );
 
-      final settings = AppSettings()..backupTreeUri = 'content://tree/target';
+      final settings = AppSettings()
+        ..backupTreeUri = 'content://tree/target'
+        ..autoFolderBackupEnabled = true;
       Map<String, dynamic>? latestBackupInFolder;
       final writes = <String>[];
       var rotateCount = 0;
@@ -592,6 +639,8 @@ void main() {
         } else if (call.method == 'rotateBackups') {
           rotateCount++;
           return 0;
+        } else if (call.method == 'checkDirectoryAccess') {
+          return true;
         }
         return null;
       });
