@@ -20,11 +20,20 @@ void main() {
   });
 
   group('Step 4: Backup Filename Formatting & Timestamp Extraction', () {
-    test('formatBackupFileName formats exactly to easysave-backup-YYYYMMDD-HHmm.json', () {
-      final dt = DateTime(2026, 10, 22, 14, 5);
+    test('formatBackupFileName formats exactly to easysave-backup-YYYYMMDD-HHmmss.json', () {
+      final dt = DateTime(2026, 10, 22, 14, 5, 30);
       final filename = formatBackupFileName(dt);
-      expect(filename, 'easysave-backup-20261022-1405.json');
-      expect(extractBackupTimestamp(filename), '20261022-1405');
+      expect(filename, 'easysave-backup-20261022-140530.json');
+      expect(extractBackupTimestamp(filename), '20261022-140530');
+      expect(parseBackupTimestamp(filename), dt);
+    });
+
+    test('parseBackupTimestamp parses both legacy HHmm and new HHmmss format', () {
+      final legacy = parseBackupTimestamp('easysave-backup-20261022-1405.json');
+      expect(legacy, DateTime(2026, 10, 22, 14, 5, 0));
+
+      final withSeconds = parseBackupTimestamp('easysave-backup-20261022-140530.json');
+      expect(withSeconds, DateTime(2026, 10, 22, 14, 5, 30));
     });
 
     test('extractBackupTimestamp returns null for non-matching files', () {
@@ -86,6 +95,27 @@ void main() {
 
       final pruneCandidates = getPruneCandidates(fileList, keepCount: 7);
       expect(pruneCandidates, isEmpty);
+    });
+
+    test('mixed old (HHmm) and new (HHmmss) format files are sorted chronologically by time, not string', () {
+      final fileList = [
+        'easysave-backup-20261022-1401.json',   // 14:01:00 (old) -> 9th (pruned)
+        'easysave-backup-20261022-140530.json', // 14:05:30 (new) -> 2nd
+        'easysave-backup-20261022-1404.json',   // 14:04:00 (old) -> 5th
+        'easysave-backup-20261022-140600.json', // 14:06:00 (new) -> 1st (newest)
+        'easysave-backup-20261022-140459.json', // 14:04:59 (new) -> 4th
+        'easysave-backup-20261022-1402.json',   // 14:02:00 (old) -> 7th (kept boundary)
+        'easysave-backup-20261022-1405.json',   // 14:05:00 (old) -> 3rd
+        'easysave-backup-20261022-140159.json', // 14:01:59 (new) -> 8th (pruned)
+        'easysave-backup-20261022-140300.json', // 14:03:00 (new) -> 6th
+      ];
+
+      final pruneCandidates = getPruneCandidates(fileList, keepCount: 7);
+
+      expect(pruneCandidates, [
+        'easysave-backup-20261022-140159.json',
+        'easysave-backup-20261022-1401.json',
+      ]);
     });
   });
 
@@ -204,7 +234,7 @@ void main() {
 
       expect(result, isTrue);
       expect(rotated, isTrue);
-      expect(writtenFileName, 'easysave-backup-20261022-1630.json');
+      expect(writtenFileName, 'easysave-backup-20261022-163000.json');
       expect(writtenContent.contains('easysave-backup'), isTrue);
       expect(settings.lastBackupTime, backupTime.millisecondsSinceEpoch);
     });
@@ -478,6 +508,168 @@ void main() {
 
       expect(rotateCalled, isFalse);
       expect(existingBackupsCount, 5);
+    });
+  });
+
+  group('Step 4 / Feedback 1: Content Deduplication and Equivalence', () {
+    test('isBackupContentEquivalent ignores exportedAt but detects data changes', () {
+      const baseJson = '''
+      {
+        "format": "easysave-backup",
+        "formatVersion": 1,
+        "exportedAt": "2026-10-23T10:00:00.000Z",
+        "settings": {"autoDownload": true},
+        "posts": [{"platform": "xhs", "postId": "p1"}]
+      }
+      ''';
+
+      const diffTimestampJson = '''
+      {
+        "format": "easysave-backup",
+        "formatVersion": 1,
+        "exportedAt": "2026-10-23T11:00:00.000Z",
+        "settings": {"autoDownload": true},
+        "posts": [{"platform": "xhs", "postId": "p1"}]
+      }
+      ''';
+
+      const diffPostsJson = '''
+      {
+        "format": "easysave-backup",
+        "formatVersion": 1,
+        "exportedAt": "2026-10-23T10:00:00.000Z",
+        "settings": {"autoDownload": true},
+        "posts": [{"platform": "xhs", "postId": "p2"}]
+      }
+      ''';
+
+      expect(isBackupContentEquivalent(baseJson, diffTimestampJson), isTrue);
+      expect(isBackupContentEquivalent(baseJson, diffPostsJson), isFalse);
+      expect(isBackupContentEquivalent('not-json', baseJson), isFalse);
+    });
+
+    test('deduplication: identical content skips write & rotation, modified content writes & rotates', () async {
+      final tempDir = await Directory.systemTemp.createTemp('saf_dedup_test_');
+      final dbPath = '${tempDir.path}/test_history_dedup.db';
+      final db = await HistoryDb.instance(dbPath: dbPath);
+      await db.clear();
+      SafService.resetThrottleForTest();
+
+      await db.upsert(
+        HistoryRecord(
+          platform: 'xhs',
+          postId: 'post_first',
+          postUrl: 'https://example.com/p1',
+          title: 'Post 1',
+          fileCount: 0,
+          createdAt: DateTime.now(),
+          files: [],
+        ),
+      );
+
+      final settings = AppSettings()..backupTreeUri = 'content://tree/target';
+      Map<String, dynamic>? latestBackupInFolder;
+      final writes = <String>[];
+      var rotateCount = 0;
+
+      final channel = MethodChannel('mock_dedup_channel');
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(channel, (call) async {
+        if (call.method == 'getLatestBackup') {
+          return latestBackupInFolder;
+        } else if (call.method == 'writeBackupToDirectory') {
+          final name = call.arguments['fileName'] as String;
+          final content = call.arguments['content'] as String;
+          writes.add(name);
+          latestBackupInFolder = {
+            'name': name,
+            'uri': 'content://uri/$name',
+            'content': content,
+          };
+          return 'content://uri/$name';
+        } else if (call.method == 'readDocumentContent') {
+          return latestBackupInFolder?['content'] as String? ?? '';
+        } else if (call.method == 'rotateBackups') {
+          rotateCount++;
+          return 0;
+        }
+        return null;
+      });
+
+      // 1. First manual backup: folder is empty, should write and rotate
+      final time1 = DateTime(2026, 10, 23, 10, 0, 0);
+      final res1 = await SafService.performManualBackupToDirectory(
+        'content://tree/target',
+        db: db,
+        settings: settings,
+        now: time1,
+        channelOverride: channel,
+      );
+
+      expect(res1.isIdentical, isFalse);
+      expect(writes.length, 1);
+      expect(writes.first, 'easysave-backup-20261023-100000.json');
+      expect(rotateCount, 1);
+      expect(settings.lastBackupTime, time1.millisecondsSinceEpoch);
+
+      // 2. Second manual backup immediately without history change:
+      // must detect identical content, NOT create new file, NOT rotate, but update lastBackupTime
+      final time2 = DateTime(2026, 10, 23, 10, 5, 0);
+      final res2 = await SafService.performManualBackupToDirectory(
+        'content://tree/target',
+        db: db,
+        settings: settings,
+        now: time2,
+        channelOverride: channel,
+      );
+
+      expect(res2.isIdentical, isTrue);
+      expect(writes.length, 1, reason: 'No new file should be written when content is identical');
+      expect(rotateCount, 1, reason: 'No rotation should occur when content is identical');
+      expect(settings.lastBackupTime, time2.millisecondsSinceEpoch, reason: 'lastBackupTime must be updated');
+
+      // 3. Auto-backup with same content: skips write and rotation
+      final time3 = DateTime(2026, 10, 23, 11, 30, 0); // After throttle duration
+      final autoRes = await SafService.performAutoBackupToDirectory(
+        db: db,
+        settings: settings,
+        now: time3,
+        channelOverride: channel,
+      );
+
+      expect(autoRes, isTrue);
+      expect(writes.length, 1);
+      expect(rotateCount, 1);
+      expect(settings.lastBackupTime, time3.millisecondsSinceEpoch);
+
+      // 4. Modify history (add a second post)
+      await db.upsert(
+        HistoryRecord(
+          platform: 'xhs',
+          postId: 'post_second',
+          postUrl: 'https://example.com/p2',
+          title: 'Post 2',
+          fileCount: 0,
+          createdAt: DateTime.now(),
+          files: [],
+        ),
+      );
+
+      // 5. Third manual backup with changed content: writes new file and rotates
+      final time4 = DateTime(2026, 10, 23, 12, 0, 0);
+      final res3 = await SafService.performManualBackupToDirectory(
+        'content://tree/target',
+        db: db,
+        settings: settings,
+        now: time4,
+        channelOverride: channel,
+      );
+
+      expect(res3.isIdentical, isFalse);
+      expect(writes.length, 2, reason: 'New file must be written when content changes');
+      expect(writes.last, 'easysave-backup-20261023-120000.json');
+      expect(rotateCount, 2, reason: 'Rotation must occur when content changes');
+      expect(settings.lastBackupTime, time4.millisecondsSinceEpoch);
     });
   });
 }

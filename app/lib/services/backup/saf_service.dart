@@ -46,49 +46,136 @@ class SafIOException extends SafException {
   const SafIOException([super.message = 'I/O failure during SAF operation']);
 }
 
-/// Strict regex matching backup filenames: easysave-backup-YYYYMMDD-HHmm.json
-final RegExp kBackupFilenameRegExp = RegExp(r'^easysave-backup-(\d{8}-\d{4})\.json$');
+/// Strict regex matching backup filenames:
+/// - New format: easysave-backup-YYYYMMDD-HHmmss.json (with seconds)
+/// - Old format: easysave-backup-YYYYMMDD-HHmm.json (backward-compatible)
+final RegExp kBackupFilenameRegExp = RegExp(r'^easysave-backup-(\d{8}-\d{4}(?:\d{2})?)\.json$');
 
-/// Extracts the timestamp string YYYYMMDD-HHmm if the filename strictly matches.
-/// Returns null for any non-matching files (e.g. photos, other backups).
+/// Extracts the timestamp string if the filename strictly matches.
+/// Returns null for any non-matching files.
 String? extractBackupTimestamp(String fileName) {
   final match = kBackupFilenameRegExp.firstMatch(fileName);
   return match?.group(1);
 }
 
+/// Parses a backup filename into a DateTime.
+/// Supports both YYYYMMDD-HHmm (legacy, seconds=0) and YYYYMMDD-HHmmss.
+DateTime? parseBackupTimestamp(String fileName) {
+  final match = kBackupFilenameRegExp.firstMatch(fileName);
+  if (match == null) return null;
+  final ts = match.group(1);
+  if (ts == null) return null;
+  try {
+    final y = int.parse(ts.substring(0, 4));
+    final m = int.parse(ts.substring(4, 6));
+    final d = int.parse(ts.substring(6, 8));
+    final h = int.parse(ts.substring(9, 11));
+    final min = int.parse(ts.substring(11, 13));
+    final s = ts.length >= 15 ? int.parse(ts.substring(13, 15)) : 0;
+    return DateTime(y, m, d, h, min, s);
+  } catch (_) {
+    return null;
+  }
+}
+
 /// Formats a DateTime into a strict backup filename:
-/// `easysave-backup-YYYYMMDD-HHmm.json`
+/// `easysave-backup-YYYYMMDD-HHmmss.json` (exact to seconds).
 String formatBackupFileName(DateTime time) {
   final y = time.year.toString().padLeft(4, '0');
   final m = time.month.toString().padLeft(2, '0');
   final d = time.day.toString().padLeft(2, '0');
   final h = time.hour.toString().padLeft(2, '0');
   final min = time.minute.toString().padLeft(2, '0');
-  return 'easysave-backup-$y$m$d-$h$min.json';
+  final s = time.second.toString().padLeft(2, '0');
+  return 'easysave-backup-$y$m$d-$h$min$s.json';
 }
 
 /// Pure helper to determine which files should be pruned during rotation.
 /// - Only files matching [kBackupFilenameRegExp] are considered.
-/// - Sorts descending by timestamp.
+/// - Sorts descending by parsed chronological [DateTime], NOT string comparison.
 /// - Returns candidate filenames beyond [keepCount] (default 7).
 /// - Non-matching files are NEVER included.
 List<String> getPruneCandidates(List<String> fileNames, {int keepCount = 7}) {
-  final matching = <MapEntry<String, String>>[];
+  final matching = <MapEntry<DateTime, String>>[];
   for (final name in fileNames) {
-    final ts = extractBackupTimestamp(name);
-    if (ts != null) {
-      matching.add(MapEntry(ts, name));
+    final dt = parseBackupTimestamp(name);
+    if (dt != null) {
+      matching.add(MapEntry(dt, name));
     }
   }
 
-  // Sort descending by timestamp string
-  matching.sort((a, b) => b.key.compareTo(a.key));
+  // Sort descending by parsed time; tie-break deterministically by name
+  matching.sort((a, b) {
+    final cmp = b.key.compareTo(a.key);
+    if (cmp != 0) return cmp;
+    return b.value.compareTo(a.value);
+  });
 
   if (matching.length <= keepCount) {
     return const [];
   }
 
   return matching.sublist(keepCount).map((e) => e.value).toList();
+}
+
+bool _deepEquals(dynamic a, dynamic b) {
+  if (identical(a, b)) return true;
+  if (a is Map && b is Map) {
+    if (a.length != b.length) return false;
+    for (final key in a.keys) {
+      if (!b.containsKey(key)) return false;
+      if (!_deepEquals(a[key], b[key])) return false;
+    }
+    return true;
+  }
+  if (a is List && b is List) {
+    if (a.length != b.length) return false;
+    for (int i = 0; i < a.length; i++) {
+      if (!_deepEquals(a[i], b[i])) return false;
+    }
+    return true;
+  }
+  return a == b;
+}
+
+/// Checks whether two backup JSON contents are identical, ignoring `exportedAt`.
+bool isBackupContentEquivalent(String jsonA, String jsonB) {
+  try {
+    final mapA = jsonDecode(jsonA);
+    final mapB = jsonDecode(jsonB);
+    if (mapA is! Map || mapB is! Map) return false;
+    final copyA = Map<dynamic, dynamic>.from(mapA)..remove('exportedAt');
+    final copyB = Map<dynamic, dynamic>.from(mapB)..remove('exportedAt');
+    return _deepEquals(copyA, copyB);
+  } catch (_) {
+    return false;
+  }
+}
+
+/// Representation of a backup file found in the SAF directory.
+class SafBackupFile {
+  final String name;
+  final String uri;
+  final String content;
+
+  const SafBackupFile({
+    required this.name,
+    required this.uri,
+    required this.content,
+  });
+}
+
+/// Result of a manual or automatic SAF backup operation.
+class SafBackupResult {
+  final bool isIdentical;
+  final String fileUri;
+  final String fileName;
+
+  const SafBackupResult({
+    required this.isIdentical,
+    required this.fileUri,
+    required this.fileName,
+  });
 }
 
 abstract final class SafService {
@@ -263,8 +350,31 @@ abstract final class SafService {
     return fileUri;
   }
 
+  /// Read the latest backup file (name, uri, and content) from the target directory.
+  /// Returns null if no valid backups exist or on error.
+  static Future<SafBackupFile?> getLatestBackup(
+    String treeUri, {
+    MethodChannel? channelOverride,
+  }) async {
+    final ch = channelOverride ?? _channel;
+    try {
+      final map = await ch.invokeMapMethod<String, dynamic>('getLatestBackup', {
+        'treeUri': treeUri,
+      });
+      if (map == null) return null;
+      return SafBackupFile(
+        name: map['name'] as String? ?? '',
+        uri: map['uri'] as String? ?? '',
+        content: map['content'] as String? ?? '',
+      );
+    } catch (e) {
+      DevLog.write('SAF', 'getLatestBackup error: $e', level: DevLogLevel.warn);
+      return null;
+    }
+  }
+
   /// Perform automatic backup to the user's selected SAF folder.
-  /// Returns true if written, false if skipped (e.g. not configured, throttled, or empty history).
+  /// Returns true if written or deduplicated, false if skipped (e.g. not configured, throttled, or empty history).
   static Future<bool> performAutoBackupToDirectory({
     HistoryDb? db,
     AppSettings? settings,
@@ -301,6 +411,22 @@ abstract final class SafService {
       settings: currentSettings,
       now: currentTime,
     );
+
+    // Content deduplication (§1):
+    // If backup content (ignoring exportedAt) is identical to the latest backup in folder,
+    // do not create a new file or rotate; just update lastBackupTime.
+    final latest = await getLatestBackup(treeUri, channelOverride: channelOverride);
+    if (latest != null && isBackupContentEquivalent(jsonContent, latest.content)) {
+      _lastSafBackupTimestampMs = currentTime.millisecondsSinceEpoch;
+      try {
+        currentSettings.lastBackupTime = currentTime.millisecondsSinceEpoch;
+        await currentSettings.save();
+      } catch (_) {
+        // Best effort saving lastBackupTime
+      }
+      return true;
+    }
+
     final decoded = jsonDecode(jsonContent) as Map<String, dynamic>;
     final expectedPostCount = (decoded['posts'] as List).length;
 
@@ -324,7 +450,8 @@ abstract final class SafService {
   }
 
   /// Manual "立即备份" action to target SAF directory.
-  static Future<String> performManualBackupToDirectory(
+  /// Returns [SafBackupResult] indicating whether it was deduplicated or newly written.
+  static Future<SafBackupResult> performManualBackupToDirectory(
     String treeUri, {
     HistoryDb? db,
     AppSettings? settings,
@@ -340,6 +467,24 @@ abstract final class SafService {
       settings: currentSettings,
       now: currentTime,
     );
+
+    // Content deduplication: check if identical to latest backup
+    final latest = await getLatestBackup(treeUri, channelOverride: channelOverride);
+    if (latest != null && isBackupContentEquivalent(jsonContent, latest.content)) {
+      _lastSafBackupTimestampMs = currentTime.millisecondsSinceEpoch;
+      try {
+        currentSettings.lastBackupTime = currentTime.millisecondsSinceEpoch;
+        await currentSettings.save();
+      } catch (_) {
+        // Best effort saving lastBackupTime
+      }
+      return SafBackupResult(
+        isIdentical: true,
+        fileUri: latest.uri,
+        fileName: latest.name,
+      );
+    }
+
     final decoded = jsonDecode(jsonContent) as Map<String, dynamic>;
     final expectedPostCount = (decoded['posts'] as List).length;
 
@@ -359,7 +504,11 @@ abstract final class SafService {
     } catch (_) {
       // Best effort saving lastBackupTime
     }
-    return fileUri;
+    return SafBackupResult(
+      isIdentical: false,
+      fileUri: fileUri,
+      fileName: fileName,
+    );
   }
 
   static SafException _mapPlatformException(PlatformException e) {

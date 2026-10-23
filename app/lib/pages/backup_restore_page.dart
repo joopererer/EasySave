@@ -160,15 +160,21 @@ class _BackupRestorePageState extends State<BackupRestorePage> {
 
     setState(() => _backingUp = true);
     try {
-      await SafService.performManualBackupToDirectory(
+      final result = await SafService.performManualBackupToDirectory(
         treeUri,
         settings: _settings,
       );
       await _loadState();
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('备份成功，已写入外部文件夹')),
-        );
+        if (result.isIdentical) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('与上一份备份相同，未新建文件')),
+          );
+        } else {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('备份成功，已写入外部文件夹')),
+          );
+        }
       }
     } catch (e) {
       if (mounted) {

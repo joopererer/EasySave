@@ -54,7 +54,7 @@ class MainActivity : FlutterActivity() {
     private var pendingWriteResult: MethodChannel.Result? = null
     private var pendingPickDirectoryResult: MethodChannel.Result? = null
     private var pendingPickFileResult: MethodChannel.Result? = null
-    private val BACKUP_FILE_PATTERN = Pattern.compile("^easysave-backup-(\\d{8}-\\d{4})\\.json$")
+    private val BACKUP_FILE_PATTERN = Pattern.compile("^easysave-backup-(\\d{8}-\\d{4}(?:\\d{2})?)\\.json$")
 
     private var hostChannel: MethodChannel? = null
     private var receiverRegistered = false
@@ -302,6 +302,14 @@ class MainActivity : FlutterActivity() {
                         val treeUri = call.argument<String>("treeUri")
                         if (treeUri != null) {
                             rotateBackupsInDirectory(treeUri, result)
+                        } else {
+                            result.error("INVALID_ARGS", "Missing treeUri argument", null)
+                        }
+                    }
+                    "getLatestBackup" -> {
+                        val treeUri = call.argument<String>("treeUri")
+                        if (treeUri != null) {
+                            getLatestBackup(treeUri, result)
                         } else {
                             result.error("INVALID_ARGS", "Missing treeUri argument", null)
                         }
@@ -694,22 +702,39 @@ class MainActivity : FlutterActivity() {
         }
     }
 
+    private fun parseBackupTime(name: String): Long? {
+        val matcher = BACKUP_FILE_PATTERN.matcher(name)
+        if (!matcher.matches()) return null
+        val ts = matcher.group(1) ?: return null
+        return try {
+            val y = ts.substring(0, 4).toInt()
+            val m = ts.substring(4, 6).toInt()
+            val d = ts.substring(6, 8).toInt()
+            val h = ts.substring(9, 11).toInt()
+            val min = ts.substring(11, 13).toInt()
+            val s = if (ts.length >= 15) ts.substring(13, 15).toInt() else 0
+            val cal = java.util.Calendar.getInstance()
+            cal.set(y, m - 1, d, h, min, s)
+            cal.set(java.util.Calendar.MILLISECOND, 0)
+            cal.timeInMillis
+        } catch (_: Exception) {
+            null
+        }
+    }
+
     private fun rotateBackups(treeDoc: DocumentFile): Int {
         var deletedCount = 0
         try {
             val files = treeDoc.listFiles()
-            val matchingBackups = mutableListOf<Pair<String, DocumentFile>>()
+            val matchingBackups = mutableListOf<Pair<Long, DocumentFile>>()
 
             for (file in files) {
                 val name = file.name ?: continue
-                val matcher = BACKUP_FILE_PATTERN.matcher(name)
-                if (matcher.matches()) {
-                    val timestampStr = matcher.group(1) ?: continue
-                    matchingBackups.add(Pair(timestampStr, file))
-                }
+                val timeMs = parseBackupTime(name) ?: continue
+                matchingBackups.add(Pair(timeMs, file))
             }
 
-            // Sort descending by timestamp string YYYYMMDD-HHmm
+            // Sort descending by parsed timestamp
             matchingBackups.sortByDescending { it.first }
 
             if (matchingBackups.size > 7) {
@@ -728,6 +753,42 @@ class MainActivity : FlutterActivity() {
             Log.w("EasySaveSAF", "Rotation error: ${e.message}", e)
         }
         return deletedCount
+    }
+
+    private fun getLatestBackup(treeUriString: String, result: MethodChannel.Result) {
+        try {
+            val uri = Uri.parse(treeUriString)
+            val treeDoc = DocumentFile.fromTreeUri(this, uri)
+            if (treeDoc == null || !treeDoc.exists() || !treeDoc.isDirectory) {
+                result.success(null)
+                return
+            }
+            val files = treeDoc.listFiles()
+            var latestTime = -1L
+            var latestDoc: DocumentFile? = null
+            for (file in files) {
+                val name = file.name ?: continue
+                val t = parseBackupTime(name) ?: continue
+                if (t > latestTime) {
+                    latestTime = t
+                    latestDoc = file
+                }
+            }
+            if (latestDoc == null) {
+                result.success(null)
+                return
+            }
+            val inputStream = contentResolver.openInputStream(latestDoc.uri)
+            val text = inputStream?.bufferedReader(Charsets.UTF_8)?.use { it.readText() }
+            result.success(mapOf(
+                "name" to (latestDoc.name ?: ""),
+                "uri" to latestDoc.uri.toString(),
+                "content" to (text ?: "")
+            ))
+        } catch (e: Exception) {
+            Log.w("EasySaveSAF", "getLatestBackup error: ${e.message}", e)
+            result.success(null)
+        }
     }
 
     private fun readDocumentContent(uriString: String, result: MethodChannel.Result) {
