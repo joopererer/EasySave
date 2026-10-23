@@ -3,7 +3,7 @@ import 'package:package_info_plus/package_info_plus.dart';
 
 /// Centralized app version provider.
 class AppVersion {
-  static const String defaultVersion = '1.8.1';
+  static const String defaultVersion = '1.8.2';
   static String? _cachedVersion;
 
   /// Test override for version string.
