@@ -164,15 +164,21 @@ class ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
     final locator = GalleryLocatorService.instance;
     await locator.checkPermission();
     if (locator.hasAccess) {
-      if (!locator.scanned) {
-        await locator.scanAlbum();
-      } else {
-        await locator.preloadMediaIds(_recent);
-      }
+      // 1. Immediately preload known mediaIds so thumbnails render without delay
+      await locator.preloadMediaIds(_recent);
       if (mounted) setState(() {});
-      await locator.syncAll(_recent);
-      if (mounted) setState(() {});
+      // 2. Perform whole-album scan and status sync silently in background
+      unawaited(_backgroundScanAndSync());
     }
+  }
+
+  Future<void> _backgroundScanAndSync() async {
+    final locator = GalleryLocatorService.instance;
+    await locator.scanAlbum();
+    if (_recent.isNotEmpty) {
+      await locator.syncAll(_recent);
+    }
+    if (mounted) setState(() {});
   }
 
   /// Single entry for clipboard dialog, paste button and share intents:
@@ -929,7 +935,7 @@ class ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
                 padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
                 child: Card(
                   child: ListTile(
-                    onTap: () => _openRecord(record),
+                    onTap: _openingRecordId != null ? null : () => _openRecord(record),
                     leading: _thumbOf(context, record),
                     title: Text(
                       (record.title?.isNotEmpty == true)
@@ -941,7 +947,13 @@ class ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
                     subtitle: Text(
                       '${record.authorName ?? ''} · ${record.fileCount} 个文件',
                     ),
-                    trailing: PlatformTag(platform: record.platform),
+                    trailing: _openingRecordId == (record.id ?? -1)
+                        ? const SizedBox(
+                            width: 20,
+                            height: 20,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : PlatformTag(platform: record.platform),
                   ),
                 ),
               ),
@@ -950,7 +962,7 @@ class ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
     );
   }
 
-  bool _openingRecord = false;
+  int? _openingRecordId;
 
   /// Re-parse a record from the recent list (mirrors HistoryPage._reparse).
   Future<void> _reparseRecord(HistoryRecord record) async {
@@ -1060,104 +1072,121 @@ class ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
     }
   }
 
-  void _openRecord(HistoryRecord record) {
+  Future<void> _openRecord(HistoryRecord record) async {
     // Guard against tap storms: a second push while the transition is
     // still running stacks identical routes and makes "back" look dead.
-    if (_openingRecord) return;
-    _openingRecord = true;
+    if (_openingRecordId != null) return;
+    setState(() => _openingRecordId = record.id ?? -1);
 
-    final post = PreviewPage.postFromRecord(record);
-    final locator = GalleryLocatorService.instance;
+    try {
+      final post = PreviewPage.postFromRecord(record);
+      final locator = GalleryLocatorService.instance;
 
-    final files = [...record.files]..sort((a, b) => a.itemIndex.compareTo(b.itemIndex));
-    final items = <GalleryBrowserItem>[];
+      final files = [...record.files]..sort((a, b) => a.itemIndex.compareTo(b.itemIndex));
+      final items = <GalleryBrowserItem>[];
 
-    if (files.isNotEmpty) {
-      final is1Based = files.every((f) => f.itemIndex > 0);
-      for (final f in files) {
-        final zeroBasedIdx = is1Based ? f.itemIndex - 1 : f.itemIndex;
-        MediaItem? postItem;
-        if (zeroBasedIdx >= 0 && zeroBasedIdx < post.items.length) {
-          postItem = post.items[zeroBasedIdx];
-        } else if (f.itemIndex >= 0 && f.itemIndex < post.items.length) {
-          postItem = post.items[f.itemIndex];
-        }
+      if (files.isNotEmpty) {
+        final is1Based = files.every((f) => f.itemIndex > 0);
+        for (final f in files) {
+          final zeroBasedIdx = is1Based ? f.itemIndex - 1 : f.itemIndex;
+          MediaItem? postItem;
+          if (zeroBasedIdx >= 0 && zeroBasedIdx < post.items.length) {
+            postItem = post.items[zeroBasedIdx];
+          } else if (f.itemIndex >= 0 && f.itemIndex < post.items.length) {
+            postItem = post.items[f.itemIndex];
+          }
 
-        final asset = locator.getAssetById(f.mediaId) ??
-            locator.locateAsset(f, record.postId);
-
-        items.add(
-          GalleryBrowserItem(
-            index: zeroBasedIdx,
-            type: postItem?.type ?? (f.isImage ? 'image' : 'video'),
-            url: postItem?.url ?? '',
-            videoUrl: postItem?.videoUrl,
-            posterUrl: postItem?.posterUrl,
-            fallbacks: postItem?.fallbacks ?? const [],
-            isGif: postItem?.isGif ?? false,
-            asset: asset,
-            status: f.status,
-            filename: f.filename,
-          ),
-        );
-      }
-    }
-
-    if (items.isEmpty && post.items.isNotEmpty) {
-      for (var i = 0; i < post.items.length; i++) {
-        final postItem = post.items[i];
-        items.add(
-          GalleryBrowserItem(
-            index: i,
-            type: postItem.type,
-            url: postItem.url,
-            videoUrl: postItem.videoUrl,
-            posterUrl: postItem.posterUrl,
-            fallbacks: postItem.fallbacks,
-            isGif: postItem.isGif ?? false,
-            status: FileStatus.unknown,
-          ),
-        );
-      }
-    }
-
-    if (items.isEmpty) {
-      _openingRecord = false;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('未找到可查看的媒体文件')),
-      );
-      return;
-    }
-
-    Navigator.of(context)
-        .push(
-          MaterialPageRoute<void>(
-            builder: (_) => GalleryBrowserPage(
-              items: items,
-              authorName: record.authorName ?? '',
-              title: (record.title?.isNotEmpty == true)
-                  ? record.title!
-                  : record.postId,
+          AssetEntity? asset = locator.getAssetById(f.mediaId) ??
+              locator.locateAsset(f, record.postId);
+          if (asset == null && locator.hasAccess) {
+            asset = await locator.locateAssetAsync(
+              f,
+              record.postId,
               platform: record.platform,
-              postUrl: record.postUrl,
-              onReparse: () {
-                // Pop GalleryBrowser first, then reparse with feedback.
-                Navigator.of(context).pop();
-                _reparseRecord(record);
-              },
-              onRedownload: (index) async {
-                await DownloadSheet.show(context, post, [index]);
-                await locator.scanAlbum(force: true);
-                await locator.syncRecord(record);
-                if (mounted) setState(() {});
-              },
+            );
+          }
+
+          final status = (asset != null)
+              ? FileStatus.found
+              : (locator.scanned ? f.status : FileStatus.unknown);
+
+          items.add(
+            GalleryBrowserItem(
+              index: zeroBasedIdx,
+              type: postItem?.type ?? (f.isImage ? 'image' : 'video'),
+              url: postItem?.url ?? '',
+              videoUrl: postItem?.videoUrl,
+              posterUrl: postItem?.posterUrl,
+              fallbacks: postItem?.fallbacks ?? const [],
+              isGif: postItem?.isGif ?? false,
+              asset: asset,
+              status: status,
+              filename: f.filename,
             ),
+          );
+        }
+      }
+
+      if (items.isEmpty && post.items.isNotEmpty) {
+        for (var i = 0; i < post.items.length; i++) {
+          final postItem = post.items[i];
+          items.add(
+            GalleryBrowserItem(
+              index: i,
+              type: postItem.type,
+              url: postItem.url,
+              videoUrl: postItem.videoUrl,
+              posterUrl: postItem.posterUrl,
+              fallbacks: postItem.fallbacks,
+              isGif: postItem.isGif ?? false,
+              status: FileStatus.unknown,
+            ),
+          );
+        }
+      }
+
+      if (items.isEmpty) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('未找到可查看的媒体文件')),
+          );
+        }
+        return;
+      }
+
+      if (!mounted) return;
+      await Navigator.of(context).push(
+        MaterialPageRoute<void>(
+          builder: (_) => GalleryBrowserPage(
+            items: items,
+            authorName: record.authorName ?? '',
+            title: (record.title?.isNotEmpty == true)
+                ? record.title!
+                : record.postId,
+            platform: record.platform,
+            postUrl: record.postUrl,
+            onReparse: () {
+              // Pop GalleryBrowser first, then reparse with feedback.
+              Navigator.of(context).pop();
+              _reparseRecord(record);
+            },
+            onRedownload: (index) async {
+              await DownloadSheet.show(context, post, [index]);
+              await locator.scanAlbum(force: true);
+              await locator.syncRecord(record);
+              if (mounted) setState(() {});
+            },
           ),
-        )
-        .then((_) {
-          _openingRecord = false;
-          _reloadRecent();
-        });
+        ),
+      );
+      _reloadRecent();
+    } finally {
+      if (mounted) {
+        setState(() => _openingRecordId = null);
+      } else {
+        _openingRecordId = null;
+      }
+    }
   }
 
   /// 48px leading thumbnail; reads local album asset without CDN requests.
@@ -1188,11 +1217,9 @@ class ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
       );
     }
 
-    // Show shimmering loading box while preloading known mediaIds or scanning album
-    final hasPendingFiles = record.files.any(
-      (f) => f.status != FileStatus.notFound,
-    );
-    if (hasPendingFiles && (locator.isScanning || !locator.scanned)) {
+    // While scanning album or preloading, show shimmering placeholder rather than
+    // a premature broken image icon.
+    if (locator.isScanning || !locator.scanned) {
       return const ShimmerBox(width: 48, height: 48);
     }
 
@@ -1200,7 +1227,7 @@ class ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
         record.files.isNotEmpty &&
         record.files.every((f) => f.status == FileStatus.notFound);
 
-    if (locator.isFullyAuthorized && allNotFound) {
+    if (locator.isFullyAuthorized && locator.scanned && allNotFound) {
       return Container(
         width: 48,
         height: 48,

@@ -123,7 +123,7 @@ class HistoryThumb extends StatelessWidget {
     final allNotFound =
         record.files.isNotEmpty &&
         record.files.every((f) => f.status == FileStatus.notFound);
-    final missing = locator.isFullyAuthorized && allNotFound;
+    final missing = locator.isFullyAuthorized && locator.scanned && allNotFound;
 
     return ColoredBox(
       color: missing

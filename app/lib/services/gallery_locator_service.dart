@@ -55,6 +55,24 @@ class GalleryLocatorService extends ChangeNotifier {
     return _idMap[mediaId];
   }
 
+  /// Asynchronously retrieve AssetEntity by mediaId, querying MediaStore if not cached.
+  Future<AssetEntity?> getAssetByIdAsync(String? mediaId) async {
+    if (mediaId == null || mediaId.isEmpty) return null;
+    if (_idMap.containsKey(mediaId)) return _idMap[mediaId];
+    if (!hasAccess) return null;
+    try {
+      final asset = await AssetEntity.fromId(mediaId);
+      if (asset != null) {
+        _idMap[mediaId] = asset;
+        if (asset.title != null && asset.title!.isNotEmpty) {
+          _exactMap[asset.title!.toLowerCase()] = asset;
+        }
+        return asset;
+      }
+    } catch (_) {}
+    return null;
+  }
+
   /// Preload AssetEntities for known mediaIds without scanning entire album.
   Future<void> preloadMediaIds(List<HistoryRecord> records) async {
     if (!_permission.hasAccess) {
@@ -425,14 +443,38 @@ class GalleryLocatorService extends ChangeNotifier {
     String postId, {
     String? platform,
   }) async {
-    // 0. If mediaId is known and cached, check if valid
-    if (file.mediaId != null && _idMap.containsKey(file.mediaId)) {
-      final cached = _idMap[file.mediaId]!;
-      final title = (cached.title ?? '').trim().toLowerCase();
-      final baseName = title.split('/').last.split('\\').last;
-      final targetName = file.filename.trim().toLowerCase();
-      if (targetName.isEmpty || title == targetName || baseName == targetName) {
-        return cached;
+    // 0. If mediaId is known, check cached or fetch fromId directly
+    if (file.mediaId != null && file.mediaId!.isNotEmpty) {
+      var cached = _idMap[file.mediaId];
+      if (cached == null && hasAccess) {
+        try {
+          cached = await AssetEntity.fromId(file.mediaId!);
+          if (cached != null) {
+            _idMap[file.mediaId!] = cached;
+            if (cached.title != null && cached.title!.isNotEmpty) {
+              _exactMap[cached.title!.toLowerCase()] = cached;
+            }
+          }
+        } catch (_) {}
+      }
+      if (cached != null) {
+        bool exists = true;
+        try {
+          exists = await cached.exists;
+        } catch (_) {}
+        if (exists) {
+          final title = (cached.title ?? '').trim().toLowerCase();
+          final baseName = title.split('/').last.split('\\').last;
+          final targetName = file.filename.trim().toLowerCase();
+          if (targetName.isEmpty ||
+              title == targetName ||
+              baseName == targetName ||
+              _matchesDoubleExtension(baseName, targetName)) {
+            return cached;
+          }
+        } else {
+          evictMediaIds([cached.id]);
+        }
       }
     }
 
