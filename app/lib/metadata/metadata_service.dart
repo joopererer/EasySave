@@ -13,6 +13,14 @@ import 'url_normalizer.dart';
 
 /// Metadata service for EasySave, bridging to package:provenance_dart.
 class MetadataService {
+  /// Test override for embedProvenance.
+  static Future<pkg.EmbedResult> Function({
+    required String filePath,
+    required pkg.XmpProvenance provenance,
+    bool checkC2pa,
+    pkg.Mp4WriteMode mp4WriteMode,
+  })? embedOverride;
+
   /// Embed provenance into a file in App private storage.
   /// Uses provenance_dart's file rewrite (.tmp + rename) or inPlace mode.
   static Future<pkg.EmbedResult> embedProvenance({
@@ -21,6 +29,15 @@ class MetadataService {
     bool checkC2pa = true,
     pkg.Mp4WriteMode mp4WriteMode = pkg.Mp4WriteMode.rewrite,
   }) {
+    final override = embedOverride;
+    if (override != null) {
+      return override(
+        filePath: filePath,
+        provenance: provenance,
+        checkC2pa: checkC2pa,
+        mp4WriteMode: mp4WriteMode,
+      );
+    }
     return pkg.MetadataService.embedProvenance(
       filePath: filePath,
       provenance: provenance,
@@ -37,6 +54,11 @@ class MetadataService {
   /// Check if a file has C2PA content credentials.
   static Future<bool> hasC2pa(String filePath) async {
     return pkg.MetadataService.hasC2pa(filePath);
+  }
+
+  /// Detect container format from a file path.
+  static Future<pkg.MediaFormat> detectFormat(String filePath) {
+    return pkg.MetadataService.detectFormat(filePath);
   }
 
   /// Read provenance from header bytes (used by rebuild and gallery locator).

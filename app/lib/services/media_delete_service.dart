@@ -60,6 +60,10 @@ class MediaDeleteService {
     }
   }
 
+  /// Test override for requestWriteAccess.
+  @visibleForTesting
+  Future<bool> Function(List<MediaRef> media)? requestWriteAccessOverride;
+
   /// Request write access for media files through the OS confirmation flow.
   /// On Android 11+ (API 30+), apps can only modify media files they created.
   /// This method requests permission to write to existing files via
@@ -67,6 +71,9 @@ class MediaDeleteService {
   ///
   /// Returns true if user grants permission, false otherwise.
   Future<bool> requestWriteAccess(List<MediaRef> media) async {
+    final override = requestWriteAccessOverride;
+    if (override != null) return override(media);
+
     if (!isSupported) return true; // iOS/non-Android has no restriction
 
     final ids = <String>[];

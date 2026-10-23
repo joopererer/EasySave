@@ -6,6 +6,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
+import 'package:flutter/foundation.dart';
 import 'package:photo_manager/photo_manager.dart';
 
 import '../core/app_version.dart';
@@ -16,6 +17,7 @@ import '../metadata/url_normalizer.dart';
 import 'gallery_locator_service.dart';
 import 'history_db.dart';
 import 'media_delete_service.dart';
+import 'media_header_service.dart';
 
 /// Result of a backfill operation.
 ///
@@ -99,6 +101,16 @@ class HistoryBackfillService {
 
   static const _logTag = 'HistoryBackfill';
 
+  /// Test override for resolving asset.file.
+  @visibleForTesting
+  static Future<File?> Function(AssetEntity asset)? assetFileResolver;
+
+  static Future<File?> _resolveAssetFile(AssetEntity asset) {
+    final override = assetFileResolver;
+    if (override != null) return override(asset);
+    return asset.file;
+  }
+
   /// Backfill provenance metadata to files that don't have it.
   /// 
   /// Algorithm:
@@ -107,7 +119,6 @@ class HistoryBackfillService {
   ///    - Try to locate asset by mediaId first
   ///    - If no mediaId or asset not found, use GalleryLocatorService to locate by filename/postId
   ///    - Check if file already has XMP provenance (real check, not just assetId presence)
-  ///    - Skip video files (only process images)
   ///    - If not: try to write metadata directly
   ///    - If not writable, request permission via MediaStore.createWriteRequest
   /// 3. Show result summary with breakdown by skip reason, logging every file
@@ -144,13 +155,6 @@ class HistoryBackfillService {
     for (final record in records) {
       for (final file in record.files) {
         totalFiles++;
-        
-        // Skip video files - only process images
-        if (!file.isImage) {
-          skippedVideo++;
-          DevLog.write(_logTag, 'Skipped (video): ${file.filename}');
-          continue;
-        }
 
         // Try to get asset by mediaId first
         AssetEntity? asset = file.mediaId != null 
@@ -178,7 +182,7 @@ class HistoryBackfillService {
         // Get file path
         File? filePath;
         try {
-          filePath = await asset.file;
+          filePath = await _resolveAssetFile(asset);
         } catch (e) {
           fileNotFound++;
           DevLog.write(_logTag, 'Failed to get file path for ${file.filename}: $e');
@@ -279,22 +283,85 @@ class HistoryBackfillService {
       return _BackfillStatusResult(_BackfillStatus.fileNotFound);
     }
 
-    Uint8List originalBytes;
-    try {
-      originalBytes = await targetFile.readAsBytes();
-    } catch (e) {
-      DevLog.write(_logTag, 'Failed to read ${asset.title}: $e');
-      return _BackfillStatusResult(_BackfillStatus.otherError);
-    }
-
-    final format = detectFormat(originalBytes);
+    final format = await MetadataService.detectFormat(targetFile.path);
     if (format == MediaFormat.other) {
       DevLog.write(_logTag, 'Format not supported: ${asset.title}');
       return _BackfillStatusResult(_BackfillStatus.formatNotSupported);
     }
 
-    if (detectC2pa(originalBytes, format) == C2paStatus.detected) {
+    if (await MetadataService.hasC2pa(targetFile.path)) {
       DevLog.write(_logTag, 'Skipped C2PA: ${asset.title}');
+      return _BackfillStatusResult(_BackfillStatus.otherError);
+    }
+
+    // Video path: use inPlace append, scanFile, and media URI re-read verification
+    if (format == MediaFormat.mp4) {
+      EmbedResult result = await MetadataService.embedProvenance(
+        filePath: targetFile.path,
+        provenance: provenance,
+        checkC2pa: false,
+        mp4WriteMode: Mp4WriteMode.inPlace,
+      );
+
+      if (!result.success) {
+        final cause = result.cause;
+        final isPermissionError = result.isWriteError &&
+            cause is FileSystemException &&
+            (cause.osError?.errorCode == 13 ||
+                cause.message.contains('Permission denied'));
+
+        if (isPermissionError) {
+          final granted = await MediaDeleteService.instance.requestWriteAccess([
+            MediaRef(mediaId: asset.id, isImage: asset.type == AssetType.image),
+          ]);
+
+          if (granted) {
+            result = await MetadataService.embedProvenance(
+              filePath: targetFile.path,
+              provenance: provenance,
+              checkC2pa: false,
+              mp4WriteMode: Mp4WriteMode.inPlace,
+            );
+          } else {
+            return _BackfillStatusResult(_BackfillStatus.authRequired);
+          }
+        }
+
+        if (!result.success) {
+          DevLog.write(_logTag, 'Video write failed for ${asset.title}: ${result.errorMessage}');
+          if (result.isFormatError) {
+            return _BackfillStatusResult(_BackfillStatus.formatNotSupported);
+          }
+          return _BackfillStatusResult(_BackfillStatus.otherError);
+        }
+      }
+
+      final mime = asset.mimeType ?? 'video/mp4';
+      // a) Trigger MediaScannerConnection.scanFile
+      await MediaHeaderService.scanFile(targetFile.path, mime);
+
+      // b) Re-read through native layer via media URI
+      final headerBytes = await MediaHeaderService.readHeader(asset.id, mime);
+      final reReadProvenance = MetadataService.readProvenanceFromBytes(headerBytes);
+      if (reReadProvenance?.assetId != provenance.assetId) {
+        DevLog.write(
+          _logTag,
+          'Verification failed (写入了副本): expected ${provenance.assetId}, read ${reReadProvenance?.assetId}',
+        );
+        return _BackfillStatusResult(_BackfillStatus.otherError);
+      }
+
+      await _updateAssetId(record, file, provenance.assetId);
+      DevLog.write(_logTag, 'Wrote provenance to video ${asset.title}');
+      return _BackfillStatusResult(_BackfillStatus.success);
+    }
+
+    // Image path: memory modification + writeAsBytes to preserve album stability
+    Uint8List originalBytes;
+    try {
+      originalBytes = await targetFile.readAsBytes();
+    } catch (e) {
+      DevLog.write(_logTag, 'Failed to read ${asset.title}: $e');
       return _BackfillStatusResult(_BackfillStatus.otherError);
     }
 
@@ -307,9 +374,7 @@ class HistoryBackfillService {
           newBytes = writePngXmp(originalBytes, provenance);
         case MediaFormat.webp:
           newBytes = writeWebpXmp(originalBytes, provenance);
-        case MediaFormat.mp4:
-          newBytes = writeMp4Xmp(originalBytes, provenance);
-        case MediaFormat.other:
+        default:
           return _BackfillStatusResult(_BackfillStatus.formatNotSupported);
       }
     } catch (e) {
@@ -320,6 +385,7 @@ class HistoryBackfillService {
     // Write back directly via File.writeAsBytes without rewriteFile or temp files
     try {
       await targetFile.writeAsBytes(newBytes, flush: true);
+      await MediaHeaderService.scanFile(targetFile.path, asset.mimeType);
       await _updateAssetId(record, file, provenance.assetId);
       DevLog.write(_logTag, 'Wrote provenance to ${asset.title}');
       return _BackfillStatusResult(_BackfillStatus.success);
@@ -333,6 +399,7 @@ class HistoryBackfillService {
         if (granted) {
           try {
             await targetFile.writeAsBytes(newBytes, flush: true);
+            await MediaHeaderService.scanFile(targetFile.path, asset.mimeType);
             await _updateAssetId(record, file, provenance.assetId);
             DevLog.write(_logTag, 'Wrote provenance after auth: ${asset.title}');
             return _BackfillStatusResult(_BackfillStatus.success);
@@ -356,6 +423,7 @@ class HistoryBackfillService {
         if (granted) {
           try {
             await targetFile.writeAsBytes(newBytes, flush: true);
+            await MediaHeaderService.scanFile(targetFile.path, asset.mimeType);
             await _updateAssetId(record, file, provenance.assetId);
             DevLog.write(_logTag, 'Wrote provenance after auth: ${asset.title}');
             return _BackfillStatusResult(_BackfillStatus.success);
@@ -400,9 +468,15 @@ class HistoryBackfillService {
       ),
     ];
 
-    // Calculate itemCount (images only for provenance)
+    // Calculate itemCount
     final itemCount = items.where((it) => it.type != 'video' || it.videoUrl != null).length;
     final itemIndex = file.itemIndex;
+
+    // Live Photo pairId check: only Live Photos write pairId
+    final isLivePhoto = (items.length > itemIndex && items[itemIndex].videoUrl != null) ||
+        (record.files.any((f) => f.itemIndex == itemIndex && f.isImage) &&
+            record.files.any((f) => f.itemIndex == itemIndex && !f.isImage));
+    final pairId = isLivePhoto ? '${record.postId}#$itemIndex' : null;
 
     // Use savedAt from files_json as capturedAt (spec §7.2)
     final capturedAt = DateTime.fromMillisecondsSinceEpoch(file.savedAt);
@@ -422,7 +496,7 @@ class HistoryBackfillService {
       itemCount: itemCount > 1 ? itemCount : 1,
       existingAssetId: file.assetId,
       capturedAt: capturedAt,
-    ).build();
+    ).build().copyWith(pairId: pairId);
   }
 
   Future<void> _updateAssetId(
