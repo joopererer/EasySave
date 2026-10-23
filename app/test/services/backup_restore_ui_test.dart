@@ -386,5 +386,39 @@ void main() {
       expect(reloaded.autoFolderBackupEnabled, isTrue);
       expect(reloaded.backupTreeUri, 'content://com.android.externalstorage.documents/tree/primary%3ADocuments%2FEasySave');
     });
+
+    testWidgets('rechecks directory access on AppLifecycleState.resumed', (tester) async {
+      final settings = await AppSettings.load();
+      settings.backupTreeUri = 'content://com.android.externalstorage.documents/tree/primary%3ADocuments%2FEasySave';
+      settings.autoFolderBackupEnabled = true;
+      await settings.save();
+
+      var hasAccess = true;
+      const safChannel = MethodChannel('easysave/saf');
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(safChannel, (call) async {
+        if (call.method == 'checkDirectoryAccess') return hasAccess;
+        return null;
+      });
+
+      await tester.pumpWidget(
+        const MaterialApp(home: BackupRestorePage()),
+      );
+      await tester.pumpAndSettle();
+
+      // Initially valid, no warning
+      expect(find.text('文件夹权限失效或文件夹已被删除'), findsNothing);
+
+      // Access is revoked externally (e.g. folder deleted)
+      hasAccess = false;
+
+      // App resumes
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+      await tester.pumpAndSettle();
+
+      // Warning and re-select button appear
+      expect(find.text('文件夹权限失效或文件夹已被删除'), findsOneWidget);
+      expect(find.text('重新选择文件夹'), findsOneWidget);
+    });
   });
 }

@@ -21,7 +21,7 @@ class BackupRestorePage extends StatefulWidget {
   State<BackupRestorePage> createState() => _BackupRestorePageState();
 }
 
-class _BackupRestorePageState extends State<BackupRestorePage> {
+class _BackupRestorePageState extends State<BackupRestorePage> with WidgetsBindingObserver {
   AppSettings _settings = AppSettings();
   bool _loading = true;
   bool _hasFolderAccess = true;
@@ -32,7 +32,21 @@ class _BackupRestorePageState extends State<BackupRestorePage> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _loadState();
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _loadState();
+    }
   }
 
   Future<void> _loadState() async {

@@ -621,12 +621,21 @@ class MainActivity : FlutterActivity() {
     private fun checkDirectoryAccess(treeUriString: String, result: MethodChannel.Result) {
         try {
             val uri = Uri.parse(treeUriString)
-            val hasPersisted = contentResolver.persistedUriPermissions.any {
-                it.uri == uri && it.isWritePermission && it.isReadPermission
+            // 1. persistedUriPermissions 中仍包含该 URI 且可写
+            val hasPersistedWrite = contentResolver.persistedUriPermissions.any {
+                it.uri == uri && it.isWritePermission
             }
+            if (!hasPersistedWrite) {
+                result.success(false)
+                return
+            }
+            // 2. DocumentFile 存在; 3. 是目录; 4. canWrite
             val treeDoc = DocumentFile.fromTreeUri(this, uri)
-            val canWrite = treeDoc != null && treeDoc.exists() && treeDoc.canWrite() && treeDoc.isDirectory
-            result.success(hasPersisted && canWrite)
+            val isValid = treeDoc != null &&
+                    treeDoc.exists() &&
+                    treeDoc.isDirectory &&
+                    treeDoc.canWrite()
+            result.success(isValid)
         } catch (e: Exception) {
             Log.w("EasySaveSAF", "checkDirectoryAccess error for $treeUriString: ${e.message}")
             result.success(false)
