@@ -53,7 +53,33 @@ class HistoryRebuildService {
     'image/jpeg',
     'image/png',
     'image/webp',
+    'video/mp4',
+    'video/quicktime',
   };
+
+  static String _fileStem(String filename) {
+    final base = filename.split('/').last.split('\\').last;
+    final dot = base.lastIndexOf('.');
+    return (dot > 0 ? base.substring(0, dot) : base).toLowerCase();
+  }
+
+  static bool _isVideoAsset(AssetEntity asset) {
+    if (asset.type == AssetType.video) return true;
+    final mime = asset.mimeType?.toLowerCase();
+    if (mime == 'video/mp4' || mime == 'video/quicktime') return true;
+    final title = (asset.title ?? '').toLowerCase();
+    return title.endsWith('.mp4') || title.endsWith('.mov');
+  }
+
+  static Future<bool> _isSameAlbum(AssetEntity a, AssetEntity b) async {
+    final pathA = await GalleryLocatorService.instance.getRelativePath(a);
+    final pathB = await GalleryLocatorService.instance.getRelativePath(b);
+    if (pathA != null && pathB != null) {
+      return GalleryLocatorService.normalizePath(pathA) ==
+          GalleryLocatorService.normalizePath(pathB);
+    }
+    return pathA == pathB;
+  }
 
   /// Rebuild history records from gallery files.
   ///
@@ -109,8 +135,9 @@ class HistoryRebuildService {
     var skipped = 0;
     var cancelled = false;
 
-    // Group assets by (platform, sourceId)
-    final groups = <String, List<_AssetWithXmp>>{};
+    final identifiedImages = <_AssetWithXmp>[];
+    final identifiedVideos = <_AssetWithXmp>[];
+    final unidentifiedVideos = <AssetEntity>[];
 
     for (final asset in assets) {
       if (isCancelled?.call() == true) {
@@ -120,51 +147,151 @@ class HistoryRebuildService {
       processed++;
       onProgress?.call(processed, total, asset.title ?? 'unknown');
 
-      // Only the formats the XMP readers understand are worth opening.
       final mime = asset.mimeType?.toLowerCase();
-      if (mime == null || !supportedMimes.contains(mime)) {
+      final isVideo = _isVideoAsset(asset);
+
+      // Only the formats the XMP readers understand are worth opening.
+      if (mime != null && !supportedMimes.contains(mime)) {
         skipped++;
         continue;
       }
 
-      // Read only the file header: the XMP lives there, and copying the
-      // whole file out of the album was what made a rebuild slow.
-      Uint8List bytes;
+      final queryMime = mime ?? (isVideo ? 'video/mp4' : 'image/jpeg');
+
+      // Read only the file header: the XMP lives there.
+      Uint8List bytes = Uint8List(0);
       try {
-        bytes = await reader(asset.id, mime);
+        bytes = await reader(asset.id, queryMime);
       } catch (e) {
         DevLog.write(_logTag, 'Failed to read header of ${asset.title}: $e'); // i18n:ignore 日志
-        skipped++;
-        continue;
-      }
-      if (bytes.isEmpty) {
-        skipped++;
-        continue;
       }
 
       // Parse XMP from the header bytes.
       XmpProvenance? provenance;
-      try {
-        provenance = MetadataService.readProvenanceFromBytes(bytes);
-      } catch (e) {
-        DevLog.write(_logTag, 'Failed to parse XMP of ${asset.title}: $e'); // i18n:ignore 日志
-        skipped++;
-        continue;
+      if (bytes.isNotEmpty) {
+        try {
+          provenance = MetadataService.readProvenanceFromBytes(bytes);
+        } catch (e) {
+          DevLog.write(_logTag, 'Failed to parse XMP of ${asset.title}: $e'); // i18n:ignore 日志
+        }
       }
 
-      if (provenance == null) {
-        skipped++;
-        continue;
+      if (provenance != null &&
+          provenance.platform != null &&
+          provenance.sourceId != null) {
+        if (isVideo) {
+          identifiedVideos.add(_AssetWithXmp(asset, '', provenance));
+        } else {
+          identifiedImages.add(_AssetWithXmp(asset, '', provenance));
+        }
+      } else {
+        if (isVideo) {
+          unidentifiedVideos.add(asset);
+        } else {
+          skipped++;
+        }
+      }
+    }
+
+    // Group assets by (platform, sourceId)
+    final groups = <String, List<_AssetWithXmp>>{};
+    final pairedVideoAssets = <String>{};
+    final pairedImageIds = <String>{};
+
+    // Add all identified images to their groups
+    for (final img in identifiedImages) {
+      final key = '${img.provenance.platform!}:${img.provenance.sourceId!}';
+      groups.putIfAbsent(key, () => []).add(img);
+    }
+
+    // 1. Pair by pairId
+    for (final vid in identifiedVideos) {
+      final pairId = vid.provenance.pairId;
+      if (pairId != null && pairId.isNotEmpty) {
+        _AssetWithXmp? matchingImage;
+        for (final img in identifiedImages) {
+          if (img.provenance.pairId == pairId) {
+            matchingImage = img;
+            break;
+          }
+        }
+        if (matchingImage != null) {
+          pairedVideoAssets.add(vid.asset.id);
+          pairedImageIds.add(matchingImage.asset.id);
+          final key = '${matchingImage.provenance.platform!}:${matchingImage.provenance.sourceId!}';
+          final alignedVid = _AssetWithXmp(
+            vid.asset,
+            vid.path,
+            vid.provenance.copyWith(itemIndex: matchingImage.provenance.itemIndex),
+          );
+          groups.putIfAbsent(key, () => []).add(alignedVid);
+        }
+      }
+    }
+
+    // 2. Fallback pairing for videos without pairId
+    for (final img in identifiedImages) {
+      if (pairedImageIds.contains(img.asset.id)) continue;
+
+      final imgStem = _fileStem(img.asset.title ?? '');
+      if (imgStem.isEmpty) continue;
+
+      final matchingCandidates = <_CandidateVideo>[];
+
+      // Check identified videos without pairId
+      for (final vid in identifiedVideos) {
+        if (pairedVideoAssets.contains(vid.asset.id)) continue;
+        if (vid.provenance.pairId != null && vid.provenance.pairId!.isNotEmpty) continue;
+        if (_fileStem(vid.asset.title ?? '') != imgStem) continue;
+        if (!await _isSameAlbum(img.asset, vid.asset)) continue;
+        // Verify XMP consistency: if video has XMP, it must match the image
+        if (vid.provenance.platform != img.provenance.platform ||
+            vid.provenance.sourceId != img.provenance.sourceId) {
+          continue;
+        }
+        matchingCandidates.add(_CandidateVideo(vid.asset, vid.provenance));
       }
 
-      // Check for required fields
-      if (provenance.platform == null || provenance.sourceId == null) {
-        skipped++;
-        continue;
+      // Check unidentified videos
+      for (final vidAsset in unidentifiedVideos) {
+        if (pairedVideoAssets.contains(vidAsset.id)) continue;
+        if (_fileStem(vidAsset.title ?? '') != imgStem) continue;
+        if (!await _isSameAlbum(img.asset, vidAsset)) continue;
+        matchingCandidates.add(_CandidateVideo(vidAsset, null));
       }
 
-      final key = '${provenance.platform!}:${provenance.sourceId!}';
-      groups.putIfAbsent(key, () => []).add(_AssetWithXmp(asset, '', provenance));
+      // Pair only when exactly one candidate matches
+      if (matchingCandidates.length == 1) {
+        final cand = matchingCandidates.first;
+        pairedVideoAssets.add(cand.asset.id);
+        pairedImageIds.add(img.asset.id);
+
+        final key = '${img.provenance.platform!}:${img.provenance.sourceId!}';
+        final vidProv = cand.provenance ??
+            img.provenance.copyWith(itemIndex: img.provenance.itemIndex);
+
+        final alignedVid = _AssetWithXmp(
+          cand.asset,
+          '',
+          vidProv.copyWith(itemIndex: img.provenance.itemIndex),
+        );
+        groups.putIfAbsent(key, () => []).add(alignedVid);
+      }
+    }
+
+    // 3. Standalone identified videos (not paired with any image)
+    for (final vid in identifiedVideos) {
+      if (!pairedVideoAssets.contains(vid.asset.id)) {
+        final key = '${vid.provenance.platform!}:${vid.provenance.sourceId!}';
+        groups.putIfAbsent(key, () => []).add(vid);
+      }
+    }
+
+    // Count skipped for unidentified videos that were not paired
+    for (final vidAsset in unidentifiedVideos) {
+      if (!pairedVideoAssets.contains(vidAsset.id)) {
+        skipped++;
+      }
     }
 
     // Process each group
@@ -323,4 +450,11 @@ class _AssetWithXmp {
   final XmpProvenance provenance;
 
   _AssetWithXmp(this.asset, this.path, this.provenance);
+}
+
+class _CandidateVideo {
+  final AssetEntity asset;
+  final XmpProvenance? provenance;
+
+  _CandidateVideo(this.asset, this.provenance);
 }

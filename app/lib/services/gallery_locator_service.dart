@@ -961,10 +961,11 @@ class GalleryLocatorService extends ChangeNotifier {
     if (wanted.isEmpty) return const [];
     try {
       final paths = await PhotoManager.getAssetPathList(
-        type: RequestType.image,
+        type: RequestType.common,
         hasAll: false,
         filterOption: FilterOptionGroup(
           imageOption: const FilterOption(needTitle: true),
+          videoOption: const FilterOption(needTitle: true),
         ),
       );
       final assets = <AssetEntity>[];
@@ -986,7 +987,7 @@ class GalleryLocatorService extends ChangeNotifier {
     }
   }
 
-  /// Every image on the device (explicit "全部相册" rebuild only).
+  /// Every media item on the device (explicit "全部相册" rebuild only).
   Future<List<AssetEntity>> allImages() async {
     if (!_permission.hasAccess) {
       await checkPermission();
@@ -994,10 +995,11 @@ class GalleryLocatorService extends ChangeNotifier {
     }
     try {
       final paths = await PhotoManager.getAssetPathList(
-        type: RequestType.image,
+        type: RequestType.common,
         hasAll: true,
         filterOption: FilterOptionGroup(
           imageOption: const FilterOption(needTitle: true),
+          videoOption: const FilterOption(needTitle: true),
         ),
       );
       for (final path in paths) {
