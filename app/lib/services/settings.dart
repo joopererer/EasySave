@@ -65,6 +65,9 @@ class AppSettings {
   /// Whether user clicked 'Skip' on the initial restore prompt (v1.8).
   bool skipRestoreHint = false;
 
+  /// Whether user has dismissed the gentle reminder to set up backup folder (v1.8).
+  bool backupFolderHintDismissed = false;
+
   static Future<AppSettings> load() async {
     final prefs = await SharedPreferences.getInstance();
     return AppSettings()
@@ -98,7 +101,8 @@ class AppSettings {
       ..backupTreeUri = prefs.getString('backupTreeUri')
       ..autoFolderBackupEnabled = prefs.getBool('autoFolderBackupEnabled') ?? false
       ..lastBackupTime = prefs.getInt('lastBackupTime')
-      ..skipRestoreHint = prefs.getBool('skipRestoreHint') ?? false;
+      ..skipRestoreHint = prefs.getBool('skipRestoreHint') ?? false
+      ..backupFolderHintDismissed = prefs.getBool('backupFolderHintDismissed') ?? false;
   }
 
   Future<void> save() async {
@@ -128,6 +132,7 @@ class AppSettings {
       await prefs.remove('lastBackupTime');
     }
     await prefs.setBool('skipRestoreHint', skipRestoreHint);
+    await prefs.setBool('backupFolderHintDismissed', backupFolderHintDismissed);
   }
 
   /// Remember [albumName] as an album the app has used.

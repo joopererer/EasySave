@@ -18,6 +18,11 @@ import 'parse_page.dart';
 class MainShell extends StatefulWidget {
   const MainShell({super.key});
 
+  /// Resets session throttle for testing.
+  static void resetSessionHintForTesting() {
+    _MainShellState.hintShownInCurrentSession = false;
+  }
+
   @override
   State<MainShell> createState() => _MainShellState();
 }
@@ -28,12 +33,20 @@ class _MainShellState extends State<MainShell> with WidgetsBindingObserver {
   final _historyKey = GlobalKey<HistoryPageState>();
   final _parseKey = GlobalKey<ParsePageState>();
 
+  static bool hintShownInCurrentSession = false;
+
+  /// Resets session throttle for testing.
+  static void resetSessionHintForTesting() {
+    hintShownInCurrentSession = false;
+  }
+
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     HostBridge.parseError.addListener(_consumeHostError);
     HostBridge.openRequest.addListener(_consumeHostOpen);
+    DownloadManager.instance.onBatchSuccess.addListener(_checkBackupFolderHint);
     // A cold-start error may already be present before the first frame.
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _consumeHostError();
@@ -47,7 +60,53 @@ class _MainShellState extends State<MainShell> with WidgetsBindingObserver {
     WidgetsBinding.instance.removeObserver(this);
     HostBridge.parseError.removeListener(_consumeHostError);
     HostBridge.openRequest.removeListener(_consumeHostOpen);
+    DownloadManager.instance.onBatchSuccess.removeListener(_checkBackupFolderHint);
     super.dispose();
+  }
+
+  Future<void> _checkBackupFolderHint() async {
+    final batch = DownloadManager.instance.onBatchSuccess.value;
+    if (batch == null) return;
+    if (hintShownInCurrentSession) return;
+
+    final settings = await AppSettings.load();
+    if (settings.backupFolderHintDismissed) return;
+    final hasFolder = settings.backupTreeUri != null && settings.backupTreeUri!.isNotEmpty;
+    if (hasFolder && settings.autoFolderBackupEnabled) return;
+
+    hintShownInCurrentSession = true;
+    if (!mounted) return;
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Row(
+          children: [
+            const Expanded(
+              child: Text('设置备份文件夹，换机或重装时可恢复记录'),
+            ),
+            TextButton(
+              onPressed: () async {
+                ScaffoldMessenger.of(context).hideCurrentSnackBar();
+                final s = await AppSettings.load();
+                s.backupFolderHintDismissed = true;
+                await s.save();
+              },
+              child: const Text('不再提示'),
+            ),
+            TextButton(
+              onPressed: () {
+                ScaffoldMessenger.of(context).hideCurrentSnackBar();
+                Navigator.of(context).push(
+                  MaterialPageRoute(builder: (_) => const BackupRestorePage()),
+                );
+              },
+              child: const Text('去设置'),
+            ),
+          ],
+        ),
+        duration: const Duration(seconds: 8),
+      ),
+    );
   }
 
   /// Show a background error on the parse tab, using the same error page as a

@@ -471,11 +471,17 @@ class _BackupRestorePageState extends State<BackupRestorePage> with WidgetsBindi
                       if (_settings.backupTreeUri == null || _settings.backupTreeUri!.isEmpty) {
                         final picked = await _pickFolder();
                         if (picked != null && mounted) {
-                          setState(() => _settings.autoFolderBackupEnabled = true);
+                          setState(() {
+                            _settings.autoFolderBackupEnabled = true;
+                            _settings.backupFolderHintDismissed = true;
+                          });
                           await _settings.save();
                         }
                       } else {
-                        setState(() => _settings.autoFolderBackupEnabled = true);
+                        setState(() {
+                          _settings.autoFolderBackupEnabled = true;
+                          _settings.backupFolderHintDismissed = true;
+                        });
                         await _settings.save();
                       }
                     } else {

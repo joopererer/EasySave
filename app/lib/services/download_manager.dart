@@ -485,6 +485,9 @@ class DownloadManager extends ChangeNotifier {
   Timer? _heartbeat;
   bool _ready = false;
 
+  /// Notifier triggered whenever a batch completes with at least one succeeded item.
+  final ValueNotifier<DownloadBatch?> onBatchSuccess = ValueNotifier<DownloadBatch?>(null);
+
   final _notifications = FlutterLocalNotificationsPlugin();
   static const _channelId = 'easysave_downloads';
   final Map<String, int> _lastShownPercent = {};
@@ -1011,6 +1014,9 @@ class DownloadManager extends ChangeNotifier {
       }
       unawaited(LocalAutoBackup.performAutoBackup(db: db));
       unawaited(SafService.performAutoBackupToDirectory(db: db));
+      if (batch.succeeded > 0) {
+        onBatchSuccess.value = batch;
+      }
     }
     // Record who finished a batch it did not start. The snapshot keeps its
     // terminal jobs, so this flag is the only thing that stops the next start
