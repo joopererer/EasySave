@@ -49,6 +49,8 @@ class MetadataService {
           return pkg.readPngXmp(bytes);
         case pkg.MediaFormat.webp:
           return pkg.readWebpXmp(bytes);
+        case pkg.MediaFormat.mp4:
+          return pkg.readMp4Xmp(bytes);
         case pkg.MediaFormat.other:
           return null;
       }
@@ -76,6 +78,8 @@ class MetadataService {
         return pkg.writePngXmp(bytes, provenance);
       case pkg.MediaFormat.webp:
         return pkg.writeWebpXmp(bytes, provenance);
+      case pkg.MediaFormat.mp4:
+        return pkg.writeMp4Xmp(bytes, provenance);
       case pkg.MediaFormat.other:
         return null;
     }

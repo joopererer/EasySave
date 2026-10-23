@@ -307,6 +307,8 @@ class HistoryBackfillService {
           newBytes = writePngXmp(originalBytes, provenance);
         case MediaFormat.webp:
           newBytes = writeWebpXmp(originalBytes, provenance);
+        case MediaFormat.mp4:
+          newBytes = writeMp4Xmp(originalBytes, provenance);
         case MediaFormat.other:
           return _BackfillStatusResult(_BackfillStatus.formatNotSupported);
       }
