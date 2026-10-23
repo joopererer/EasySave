@@ -1,3 +1,7 @@
+// Bottom-navigation shell: 解析 / 历史 / 我的.
+
+import 'package:flutter/material.dart';
+
 import '../services/backup/backup_model.dart';
 import '../services/backup/backup_service.dart';
 import '../services/backup/startup_backup_coordinator.dart';
@@ -294,7 +298,7 @@ class _MainShellState extends State<MainShell> with WidgetsBindingObserver {
         title: const Text('正在扫描相册'),
         content: ValueListenableBuilder<String>(
           valueListenable: progressText,
-          builder: (_, val, __) => Text(val),
+          builder: (_, val, _) => Text(val),
         ),
         actions: [
           TextButton(

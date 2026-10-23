@@ -4,7 +4,6 @@
 import 'package:flutter/material.dart';
 
 import '../services/backup/backup_model.dart';
-import '../theme/app_theme.dart';
 
 class RestorePreviewResult {
   final bool restoreSettings;

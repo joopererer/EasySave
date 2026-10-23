@@ -10,7 +10,6 @@ import '../services/backup/backup_service.dart';
 import '../services/backup/saf_service.dart';
 import '../services/bubble_service.dart';
 import '../services/download_manager.dart';
-import '../services/gallery_locator_service.dart';
 import '../services/history_rebuild_service.dart';
 import '../services/settings.dart';
 import '../widgets/restore_preview_sheet.dart';
@@ -364,7 +363,7 @@ class _BackupRestorePageState extends State<BackupRestorePage> {
         title: const Text('正在扫描相册'),
         content: ValueListenableBuilder<String>(
           valueListenable: progressText,
-          builder: (_, val, __) => Text(val),
+          builder: (_, val, _) => Text(val),
         ),
         actions: [
           TextButton(

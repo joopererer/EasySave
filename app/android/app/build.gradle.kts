@@ -44,6 +44,10 @@ android {
             signingConfig = signingConfigs.getByName("debug")
         }
     }
+
+    lint {
+        disable += "FullBackupContent"
+    }
 }
 
 flutter {

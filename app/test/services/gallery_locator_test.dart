@@ -3,7 +3,6 @@
 import 'dart:io';
 import 'dart:typed_data';
 
-import 'package:easysave/core/models.dart';
 import 'package:easysave/metadata/xmp_jpeg.dart';
 import 'package:easysave/metadata/xmp_model.dart';
 import 'package:easysave/services/gallery_locator_service.dart';
