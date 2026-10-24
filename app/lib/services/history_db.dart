@@ -553,8 +553,16 @@ class HistoryDb {
       final existing = await _getByPostUrl(txn, record.postUrl) ??
           await _getByPostId(txn, record.postId);
       if (existing != null) {
+        final recordByMediaId = <String, HistoryFile>{
+          for (final f in record.files)
+            if (f.mediaId != null && f.mediaId!.isNotEmpty) f.mediaId!: f,
+        };
+
         final fileMap = <String, HistoryFile>{};
         for (final f in existing.files) {
+          if (f.mediaId != null && recordByMediaId.containsKey(f.mediaId)) {
+            continue;
+          }
           fileMap['${f.itemIndex}_${f.isImage}'] = f;
         }
         for (final f in record.files) {

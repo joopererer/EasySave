@@ -414,19 +414,41 @@ class HistoryRebuildService {
       final existing = await db.getByPostId(sourceId);
 
       if (existing != null) {
-        final mergedFiles = <String, HistoryFile>{};
+        // Merge by mediaId: recognize existing files by mediaId, update itemIndex & pairing
+        final scannedByMediaId = <String, HistoryFile>{
+          for (final f in files)
+            if (f.mediaId != null) f.mediaId!: f,
+        };
+
+        final mergedMap = <String, HistoryFile>{};
+
         for (final f in existing.files) {
-          mergedFiles['${f.itemIndex}_${f.isImage}'] = f;
-        }
-        for (final f in files) {
-          final key = '${f.itemIndex}_${f.isImage}';
-          final existingF = mergedFiles[key];
-          if (existingF == null || f.savedAt < existingF.savedAt) {
-            mergedFiles[key] = f;
+          if (f.mediaId != null && scannedByMediaId.containsKey(f.mediaId)) {
+            final rescanned = scannedByMediaId.remove(f.mediaId)!;
+            final earliestSavedAt = rescanned.savedAt < f.savedAt ? rescanned.savedAt : f.savedAt;
+            final key = '${rescanned.itemIndex}_${rescanned.isImage}';
+            mergedMap[key] = HistoryFile(
+              filename: rescanned.filename.isNotEmpty ? rescanned.filename : f.filename,
+              savedAt: earliestSavedAt,
+              mediaId: f.mediaId,
+              itemIndex: rescanned.itemIndex,
+              isImage: rescanned.isImage,
+              assetId: rescanned.assetId ?? f.assetId,
+              relativePath: rescanned.relativePath ?? f.relativePath,
+              status: FileStatus.found,
+            );
+          } else {
+            final key = '${f.itemIndex}_${f.isImage}';
+            mergedMap[key] = f;
           }
         }
 
-        final mergedList = mergedFiles.values.toList()
+        for (final f in scannedByMediaId.values) {
+          final key = '${f.itemIndex}_${f.isImage}';
+          mergedMap[key] = f;
+        }
+
+        final mergedList = mergedMap.values.toList()
           ..sort((a, b) {
             final cmp = a.itemIndex.compareTo(b.itemIndex);
             if (cmp != 0) return cmp;
