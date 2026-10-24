@@ -25,6 +25,11 @@ import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ProgressBar
 import android.widget.TextView
+import android.content.res.ColorStateList
+import android.os.SystemClock
+import android.view.GestureDetector
+import android.widget.SeekBar
+import java.util.Locale
 import java.net.HttpURLConnection
 import java.net.URL
 import java.util.concurrent.Executors
@@ -84,6 +89,22 @@ class SelectPanelView(
     private var previewTitle: TextView? = null
     private var mediaPlayer: MediaPlayer? = null
     private var previewIndex = -1
+    private var previewOpenedAt = 0L
+
+    // Navigation and video control components
+    private var prevArrowBtn: TextView? = null
+    private var nextArrowBtn: TextView? = null
+    private var videoControlBar: LinearLayout? = null
+    private var playPauseBtn: TextView? = null
+    private var videoSeekBar: SeekBar? = null
+    private var videoTimeText: TextView? = null
+    private var isTrackingTouch = false
+
+    private val isStickyPreview: Boolean
+        get() = stickyPreview || try {
+            context.getSharedPreferences("FlutterSharedPreferences", Context.MODE_PRIVATE)
+                .getBoolean("flutter.bubblePreviewSticky", false)
+        } catch (_: Exception) { false }
 
     init {
         setBackgroundColor(0x99000000.toInt())
@@ -233,7 +254,15 @@ class SelectPanelView(
             setBackgroundColor(0xF4000000.toInt())
             visibility = View.GONE
             isClickable = true
-            setOnClickListener { hidePreview() }
+            setOnClickListener {
+                if (!isStickyPreview) {
+                    hidePreview()
+                } else {
+                    if (SystemClock.uptimeMillis() - previewOpenedAt > 400L) {
+                        hidePreview()
+                    }
+                }
+            }
         }
 
         val contentContainer = FrameLayout(context)
@@ -256,6 +285,92 @@ class SelectPanelView(
         contentContainer.addView(
             previewTexture,
             LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT, Gravity.CENTER)
+        )
+
+        val gestureDetector = GestureDetector(context, object : GestureDetector.SimpleOnGestureListener() {
+            override fun onDown(e: MotionEvent): Boolean = true
+            override fun onFling(
+                e1: MotionEvent?,
+                e2: MotionEvent,
+                velocityX: Float,
+                velocityY: Float
+            ): Boolean {
+                if (e1 == null) return false
+                val diffX = e2.x - e1.x
+                val diffY = e2.y - e1.y
+                if (Math.abs(diffX) > Math.abs(diffY) && Math.abs(diffX) > dp(36) && Math.abs(velocityX) > 150) {
+                    if (diffX < 0) {
+                        if (previewIndex < cells.size - 1) {
+                            showPreview(previewIndex + 1)
+                            return true
+                        }
+                    } else {
+                        if (previewIndex > 0) {
+                            showPreview(previewIndex - 1)
+                            return true
+                        }
+                    }
+                }
+                return false
+            }
+            override fun onSingleTapConfirmed(e: MotionEvent): Boolean {
+                if (previewIndex in cells.indices && cells[previewIndex].video) {
+                    togglePlayPause()
+                    return true
+                }
+                if (isStickyPreview && SystemClock.uptimeMillis() - previewOpenedAt > 400L) {
+                    hidePreview()
+                    return true
+                }
+                return false
+            }
+        })
+        contentContainer.setOnTouchListener { _, event ->
+            gestureDetector.onTouchEvent(event)
+            true
+        }
+
+        // Navigation arrows
+        prevArrowBtn = TextView(context).apply {
+            text = "‹"
+            setTextColor(Color.WHITE)
+            textSize = 34f
+            gravity = Gravity.CENTER
+            visibility = View.GONE
+            background = GradientDrawable().apply {
+                shape = GradientDrawable.OVAL
+                setColor(0x66000000)
+            }
+            setOnClickListener {
+                if (previewIndex > 0) showPreview(previewIndex - 1)
+            }
+        }
+        overlay.addView(
+            prevArrowBtn,
+            LayoutParams(dp(44), dp(44), Gravity.CENTER_VERTICAL or Gravity.START).apply {
+                marginStart = dp(12)
+            }
+        )
+
+        nextArrowBtn = TextView(context).apply {
+            text = "›"
+            setTextColor(Color.WHITE)
+            textSize = 34f
+            gravity = Gravity.CENTER
+            visibility = View.GONE
+            background = GradientDrawable().apply {
+                shape = GradientDrawable.OVAL
+                setColor(0x66000000)
+            }
+            setOnClickListener {
+                if (previewIndex < cells.size - 1) showPreview(previewIndex + 1)
+            }
+        }
+        overlay.addView(
+            nextArrowBtn,
+            LayoutParams(dp(44), dp(44), Gravity.CENTER_VERTICAL or Gravity.END).apply {
+                marginEnd = dp(12)
+            }
         )
 
         previewProgress = ProgressBar(context).apply {
@@ -297,6 +412,74 @@ class SelectPanelView(
         overlay.addView(
             topBar,
             LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT, Gravity.TOP)
+        )
+
+        // Video control bar
+        val bar = LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(12), dp(6), dp(12), dp(6))
+            visibility = View.GONE
+            background = GradientDrawable().apply {
+                cornerRadius = dp(24).toFloat()
+                setColor(0x99000000.toInt())
+            }
+        }
+        playPauseBtn = TextView(context).apply {
+            text = "⏸"
+            setTextColor(Color.WHITE)
+            textSize = 18f
+            gravity = Gravity.CENTER
+            setPadding(dp(6), dp(4), dp(6), dp(4))
+            setOnClickListener { togglePlayPause() }
+        }
+        bar.addView(playPauseBtn, LinearLayout.LayoutParams(dp(36), dp(36)))
+
+        videoSeekBar = SeekBar(context).apply {
+            max = 1000
+            progressTintList = ColorStateList.valueOf(0xFFFF5340.toInt())
+            thumbTintList = ColorStateList.valueOf(0xFFFF5340.toInt())
+            setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
+                    if (fromUser) {
+                        val mp = mediaPlayer
+                        val total = mp?.duration ?: 0
+                        if (total > 0) {
+                            val targetMs = (progress.toLong() * total / 1000L).toInt()
+                            videoTimeText?.text = "${formatTime(targetMs)} / ${formatTime(total)}"
+                        }
+                    }
+                }
+                override fun onStartTrackingTouch(seekBar: SeekBar?) {
+                    isTrackingTouch = true
+                }
+                override fun onStopTrackingTouch(seekBar: SeekBar?) {
+                    val mp = mediaPlayer
+                    val total = mp?.duration ?: 0
+                    if (mp != null && total > 0 && seekBar != null) {
+                        val targetMs = (seekBar.progress.toLong() * total / 1000L).toInt()
+                        try { mp.seekTo(targetMs) } catch (_: Exception) {}
+                    }
+                    isTrackingTouch = false
+                }
+            })
+        }
+        bar.addView(videoSeekBar, LinearLayout.LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f))
+
+        videoTimeText = TextView(context).apply {
+            setTextColor(Color.WHITE)
+            textSize = 11f
+            text = "00:00 / 00:00"
+            setPadding(dp(6), 0, dp(4), 0)
+        }
+        bar.addView(videoTimeText, LinearLayout.LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT))
+
+        videoControlBar = bar
+        overlay.addView(
+            bar,
+            LayoutParams(LayoutParams.MATCH_PARENT, dp(48), Gravity.BOTTOM).apply {
+                setMargins(dp(16), 0, dp(16), dp(32))
+            }
         )
 
         previewOverlay = overlay
@@ -426,7 +609,7 @@ class SelectPanelView(
                     MotionEvent.ACTION_UP -> {
                         main.removeCallbacks(longPressRunnable)
                         if (isLongPress) {
-                            if (!stickyPreview) {
+                            if (!isStickyPreview) {
                                 hidePreview()
                             }
                         } else {
@@ -438,7 +621,7 @@ class SelectPanelView(
                     }
                     MotionEvent.ACTION_CANCEL -> {
                         main.removeCallbacks(longPressRunnable)
-                        if (isLongPress && !stickyPreview) {
+                        if (isLongPress && !isStickyPreview) {
                             hidePreview()
                         }
                         true
@@ -453,26 +636,76 @@ class SelectPanelView(
         updateFooter()
     }
 
+    private val updateProgressRunnable = object : Runnable {
+        override fun run() {
+            val mp = mediaPlayer
+            if (mp != null && !isTrackingTouch) {
+                try {
+                    val current = mp.currentPosition
+                    val total = mp.duration
+                    if (total > 0) {
+                        videoSeekBar?.progress = ((current.toLong() * 1000L) / total).toInt()
+                        videoTimeText?.text = "${formatTime(current)} / ${formatTime(total)}"
+                    }
+                } catch (_: Exception) {}
+            }
+            if (previewIndex != -1 && previewOverlay?.visibility == View.VISIBLE) {
+                main.postDelayed(this, 250L)
+            }
+        }
+    }
+
+    private fun formatTime(ms: Int): String {
+        val totalSec = (ms / 1000).coerceAtLeast(0)
+        val m = totalSec / 60
+        val s = totalSec % 60
+        return String.format(Locale.US, "%02d:%02d", m, s)
+    }
+
+    private fun togglePlayPause() {
+        val mp = mediaPlayer ?: return
+        try {
+            if (mp.isPlaying) {
+                mp.pause()
+                playPauseBtn?.text = "▶"
+            } else {
+                mp.start()
+                playPauseBtn?.text = "⏸"
+            }
+        } catch (_: Exception) {}
+    }
+
     private fun showPreview(index: Int) {
         if (index !in cells.indices) return
         previewIndex = index
+        previewOpenedAt = SystemClock.uptimeMillis()
         val cell = cells[index]
         previewTitle?.text = if (cell.video) {
             "视频预览 (${index + 1}/${cells.size})"
         } else {
             "大图预览 (${index + 1}/${cells.size})"
         }
+        prevArrowBtn?.visibility = if (index > 0) View.VISIBLE else View.GONE
+        nextArrowBtn?.visibility = if (index < cells.size - 1) View.VISIBLE else View.GONE
         previewOverlay?.visibility = View.VISIBLE
         previewProgress?.visibility = View.VISIBLE
 
         releasePlayer()
 
         if (cell.video) {
+            videoControlBar?.visibility = View.VISIBLE
+            playPauseBtn?.text = "⏸"
+            videoSeekBar?.progress = 0
+            videoTimeText?.text = "00:00 / 00:00"
             previewImage?.visibility = View.GONE
             previewTexture?.visibility = View.VISIBLE
             val videoTarget = cell.videoUrl?.takeIf { it.isNotEmpty() } ?: cell.url
             playVideo(videoTarget)
+            main.removeCallbacks(updateProgressRunnable)
+            main.post(updateProgressRunnable)
         } else {
+            videoControlBar?.visibility = View.GONE
+            main.removeCallbacks(updateProgressRunnable)
             previewTexture?.visibility = View.GONE
             previewImage?.visibility = View.VISIBLE
             loadImage(cell.url, cell.thumb)
@@ -577,9 +810,11 @@ class SelectPanelView(
         releasePlayer()
         previewOverlay?.visibility = View.GONE
         previewImage?.setImageBitmap(null)
+        videoControlBar?.visibility = View.GONE
     }
 
     private fun releasePlayer() {
+        main.removeCallbacks(updateProgressRunnable)
         try {
             mediaPlayer?.stop()
             mediaPlayer?.release()
