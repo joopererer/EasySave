@@ -235,7 +235,8 @@ class HostService : Service() {
                     "showSelectPanel" -> {
                         val args = call.arguments as? Map<*, *>
                         val items = args?.get("items") as? List<Any?> ?: emptyList()
-                        showSelectPanel(items)
+                        val stickyPreview = args?.get("stickyPreview") as? Boolean ?: false
+                        showSelectPanel(items, stickyPreview)
                         result.success(null)
                     }
                     "unmountSelectPanel" -> {
@@ -275,7 +276,7 @@ class HostService : Service() {
 
     /// Show the native "选择下载" panel as an overlay window. A FlutterView in
     /// an overlay proved unreliable, so this is a plain Android view tree.
-    private fun showSelectPanel(items: List<Any?>) {
+    private fun showSelectPanel(items: List<Any?>, stickyPreview: Boolean = false) {
         handler.post {
             unmountSelectPanel()
             try {
@@ -285,7 +286,7 @@ class HostService : Service() {
                     @Suppress("DEPRECATION")
                     WindowManager.LayoutParams.TYPE_PHONE
                 }
-                val panel = SelectPanelView(this) { picked ->
+                val panel = SelectPanelView(this, stickyPreview = stickyPreview) { picked ->
                     unmountSelectPanel()
                     val payload: Any? = picked?.let { mapOf("indices" to it.map { i -> i as Any }) }
                     channel?.invokeMethod("selectResult", payload)

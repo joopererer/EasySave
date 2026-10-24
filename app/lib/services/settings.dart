@@ -44,6 +44,10 @@ class AppSettings {
   /// (roadmap v1.7.1), default on.
   bool bubbleAutoHide = true;
 
+  /// Whether long-pressing a thumbnail in the bubble "select download" panel
+  /// opens a persistent fullscreen preview (default false = peek-and-release).
+  bool bubblePreviewSticky = false;
+
   /// Whether the one-time "allow autostart so the bubble survives swipe"
   /// hint has been shown.
   bool bubbleAutoStartHintShown = false;
@@ -81,6 +85,7 @@ class AppSettings {
       ..backgroundToast = prefs.getBool('backgroundToast') ?? true
       ..bubbleEnabled = prefs.getBool('bubbleEnabled') ?? false
       ..bubbleAutoHide = prefs.getBool('bubbleAutoHide') ?? true
+      ..bubblePreviewSticky = prefs.getBool('bubblePreviewSticky') ?? false
       ..bubbleAutoStartHintShown = prefs.getBool('bubbleAutoStartHintShown') ?? false
       ..historyView = _enumFromName(
         HistoryView.values,
@@ -118,6 +123,7 @@ class AppSettings {
     await prefs.setBool('backgroundToast', backgroundToast);
     await prefs.setBool('bubbleEnabled', bubbleEnabled);
     await prefs.setBool('bubbleAutoHide', bubbleAutoHide);
+    await prefs.setBool('bubblePreviewSticky', bubblePreviewSticky);
     await prefs.setBool('bubbleAutoStartHintShown', bubbleAutoStartHintShown);
     await prefs.setString('historyView', historyView.name);
     await prefs.setString('historyLayout', historyLayout.name);

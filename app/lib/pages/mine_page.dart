@@ -761,11 +761,28 @@ class _MinePageState extends State<MinePage> with WidgetsBindingObserver {
                         : '保持贴边完整显示，80% 透明度',
                   ),
                   value: _settings.bubbleAutoHide,
-                  onChanged: (v) async {
-                    setState(() => _settings.bubbleAutoHide = v);
-                    await _saveSettings();
-                    await BubbleService.updateAutoHide(v);
-                  },
+                  onChanged: _settings.bubbleEnabled
+                      ? (v) async {
+                          setState(() => _settings.bubbleAutoHide = v);
+                          await _saveSettings();
+                          await BubbleService.updateAutoHide(v);
+                        }
+                      : null,
+                ),
+                SwitchListTile(
+                  title: const Text('大图预览常驻'),
+                  subtitle: Text(
+                    _settings.bubblePreviewSticky
+                        ? '长按缩略图弹出常驻大图/视频预览，点击关闭'
+                        : '按住缩略图预览，松手即关闭',
+                  ),
+                  value: _settings.bubblePreviewSticky,
+                  onChanged: _settings.bubbleEnabled
+                      ? (v) async {
+                          setState(() => _settings.bubblePreviewSticky = v);
+                          await _saveSettings();
+                        }
+                      : null,
                 ),
                 SwitchListTile(
                   title: const Text('后台下载结果提示'),

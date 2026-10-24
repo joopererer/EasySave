@@ -197,10 +197,13 @@ Future<void> _handleSubmit(MethodChannel channel, Map<dynamic, dynamic> args) as
           await _log(channel, 'SELECT history lookup failed: $e');
         }
         await _invoke(channel, 'showSelectPanel', {
+          'stickyPreview': settings.bubblePreviewSticky,
           'items': [
             for (var i = 0; i < post.items.length; i++)
               {
                 'thumb': post.items[i].posterUrl ?? post.items[i].url,
+                'url': post.items[i].url,
+                'videoUrl': post.items[i].videoUrl,
                 'video': post.items[i].type == 'video',
                 'saved': savedIdx.contains(i),
               },

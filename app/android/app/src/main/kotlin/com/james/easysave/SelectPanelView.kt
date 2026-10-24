@@ -1,24 +1,34 @@
 package com.james.easysave
 
-import android.content.Context
 import android.animation.ValueAnimator
+import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Color
+import android.graphics.SurfaceTexture
+import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
+import android.media.MediaPlayer
+import android.net.Uri
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
 import android.view.Gravity
+import android.view.HapticFeedbackConstants
+import android.view.MotionEvent
+import android.view.TextureView
 import android.view.View
+import android.view.ViewConfiguration
 import android.widget.FrameLayout
 import android.widget.GridLayout
 import android.widget.ImageView
 import android.widget.LinearLayout
+import android.widget.ProgressBar
 import android.widget.TextView
 import java.net.HttpURLConnection
 import java.net.URL
 import java.util.concurrent.Executors
+import kotlin.math.hypot
 
 /**
  * Native "选择下载" panel shown as a TYPE_APPLICATION_OVERLAY window. Plain
@@ -26,9 +36,14 @@ import java.util.concurrent.Executors
  * proved unreliable on some devices (transparent SurfaceView, dead touch).
  * Thumbnails load off the main thread with the webview cookie jar; the chosen
  * indices are handed back through [onResult].
+ *
+ * Supports long-press fullscreen preview for images and videos (default muted).
+ * When [stickyPreview] is false, previews are peek-and-pop (releasing finger closes).
+ * When [stickyPreview] is true, previews are persistent (tap to close).
  */
 class SelectPanelView(
     context: Context,
+    private val stickyPreview: Boolean = false,
     private val onResult: (List<Int>?) -> Unit,
 ) : FrameLayout(context) {
 
@@ -38,7 +53,13 @@ class SelectPanelView(
         private const val TARGET_PX = 300
     }
 
-    private class Cell(val thumb: String, val video: Boolean, val saved: Boolean)
+    private class Cell(
+        val thumb: String,
+        val url: String,
+        val videoUrl: String?,
+        val video: Boolean,
+        val saved: Boolean,
+    )
 
     private val main = Handler(Looper.getMainLooper())
     private val pool = Executors.newFixedThreadPool(6)
@@ -55,6 +76,15 @@ class SelectPanelView(
     private lateinit var grid: GridLayout
     private lateinit var savedBanner: TextView
 
+    // Fullscreen preview components
+    private var previewOverlay: FrameLayout? = null
+    private var previewImage: ImageView? = null
+    private var previewTexture: TextureView? = null
+    private var previewProgress: ProgressBar? = null
+    private var previewTitle: TextView? = null
+    private var mediaPlayer: MediaPlayer? = null
+    private var previewIndex = -1
+
     init {
         setBackgroundColor(0x99000000.toInt())
         isClickable = true
@@ -63,17 +93,24 @@ class SelectPanelView(
             buildSheet(),
             LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT, Gravity.BOTTOM)
         )
+        addView(
+            buildPreviewOverlay(),
+            LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT)
+        )
     }
 
     fun setItems(items: List<Any?>) {
         cells.clear()
         for (raw in items) {
             val m = raw as? Map<*, *> ?: continue
+            val thumb = m["thumb"] as? String ?: ""
             cells.add(
                 Cell(
-                    m["thumb"] as? String ?: "",
-                    m["video"] as? Boolean ?: false,
-                    m["saved"] as? Boolean ?: false,
+                    thumb = thumb,
+                    url = m["url"] as? String ?: thumb,
+                    videoUrl = m["videoUrl"] as? String,
+                    video = m["video"] as? Boolean ?: false,
+                    saved = m["saved"] as? Boolean ?: false,
                 )
             )
         }
@@ -191,6 +228,81 @@ class SelectPanelView(
         return sheet
     }
 
+    private fun buildPreviewOverlay(): View {
+        val overlay = FrameLayout(context).apply {
+            setBackgroundColor(0xF4000000.toInt())
+            visibility = View.GONE
+            isClickable = true
+            setOnClickListener { hidePreview() }
+        }
+
+        val contentContainer = FrameLayout(context)
+        overlay.addView(
+            contentContainer,
+            LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT)
+        )
+
+        previewImage = ImageView(context).apply {
+            scaleType = ImageView.ScaleType.FIT_CENTER
+        }
+        contentContainer.addView(
+            previewImage,
+            LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT, Gravity.CENTER)
+        )
+
+        previewTexture = TextureView(context).apply {
+            visibility = View.GONE
+        }
+        contentContainer.addView(
+            previewTexture,
+            LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT, Gravity.CENTER)
+        )
+
+        previewProgress = ProgressBar(context).apply {
+            visibility = View.GONE
+        }
+        overlay.addView(
+            previewProgress,
+            LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT, Gravity.CENTER)
+        )
+
+        val topBar = LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(16), dp(28), dp(16), dp(16))
+        }
+        previewTitle = TextView(context).apply {
+            setTextColor(Color.WHITE)
+            textSize = 15f
+            typeface = Typeface.DEFAULT_BOLD
+        }
+        topBar.addView(
+            previewTitle,
+            LinearLayout.LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f)
+        )
+
+        val closeBtn = TextView(context).apply {
+            text = "✕"
+            setTextColor(Color.WHITE)
+            textSize = 20f
+            setPadding(dp(12), dp(8), dp(12), dp(8))
+            background = GradientDrawable().apply {
+                shape = GradientDrawable.OVAL
+                setColor(0x55000000)
+            }
+            setOnClickListener { hidePreview() }
+        }
+        topBar.addView(closeBtn)
+
+        overlay.addView(
+            topBar,
+            LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT, Gravity.TOP)
+        )
+
+        previewOverlay = overlay
+        return overlay
+    }
+
     private fun render() {
         grid.removeAllViews()
         syncers.clear()
@@ -198,6 +310,9 @@ class SelectPanelView(
         val anySaved = cells.any { it.saved }
         savedBanner.visibility = if (anySaved) View.VISIBLE else View.GONE
         val cell = (resources.displayMetrics.widthPixels - dp(28) - dp(8) * (COLS - 1)) / COLS
+        val touchSlop = ViewConfiguration.get(context).scaledTouchSlop
+        val longPressTimeout = ViewConfiguration.getLongPressTimeout().toLong()
+
         for (i in cells.indices) {
             val box = FrameLayout(context)
             box.layoutParams = GridLayout.LayoutParams(
@@ -283,15 +398,193 @@ class SelectPanelView(
             }
             sync()
             syncers.add(::sync)
-            box.setOnClickListener {
-                if (!selected.remove(i)) selected.add(i)
-                sync()
-                updateFooter()
+
+            var downX = 0f
+            var downY = 0f
+            var isLongPress = false
+            val longPressRunnable = Runnable {
+                isLongPress = true
+                box.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+                showPreview(i)
             }
+
+            box.setOnTouchListener { _, event ->
+                when (event.actionMasked) {
+                    MotionEvent.ACTION_DOWN -> {
+                        isLongPress = false
+                        downX = event.x
+                        downY = event.y
+                        main.postDelayed(longPressRunnable, longPressTimeout)
+                        true
+                    }
+                    MotionEvent.ACTION_MOVE -> {
+                        if (hypot(event.x - downX, event.y - downY) > touchSlop) {
+                            main.removeCallbacks(longPressRunnable)
+                        }
+                        true
+                    }
+                    MotionEvent.ACTION_UP -> {
+                        main.removeCallbacks(longPressRunnable)
+                        if (isLongPress) {
+                            if (!stickyPreview) {
+                                hidePreview()
+                            }
+                        } else {
+                            if (!selected.remove(i)) selected.add(i)
+                            sync()
+                            updateFooter()
+                        }
+                        true
+                    }
+                    MotionEvent.ACTION_CANCEL -> {
+                        main.removeCallbacks(longPressRunnable)
+                        if (isLongPress && !stickyPreview) {
+                            hidePreview()
+                        }
+                        true
+                    }
+                    else -> false
+                }
+            }
+
             grid.addView(box)
             loadThumb(cells[i].thumb, iv, shimmer)
         }
         updateFooter()
+    }
+
+    private fun showPreview(index: Int) {
+        if (index !in cells.indices) return
+        previewIndex = index
+        val cell = cells[index]
+        previewTitle?.text = if (cell.video) {
+            "视频预览 (${index + 1}/${cells.size})"
+        } else {
+            "大图预览 (${index + 1}/${cells.size})"
+        }
+        previewOverlay?.visibility = View.VISIBLE
+        previewProgress?.visibility = View.VISIBLE
+
+        releasePlayer()
+
+        if (cell.video) {
+            previewImage?.visibility = View.GONE
+            previewTexture?.visibility = View.VISIBLE
+            val videoTarget = cell.videoUrl?.takeIf { it.isNotEmpty() } ?: cell.url
+            playVideo(videoTarget)
+        } else {
+            previewTexture?.visibility = View.GONE
+            previewImage?.visibility = View.VISIBLE
+            loadImage(cell.url, cell.thumb)
+        }
+    }
+
+    private fun playVideo(videoUrl: String) {
+        val texture = previewTexture ?: return
+        fun startMp(surfaceTexture: SurfaceTexture) {
+            try {
+                val mp = MediaPlayer().apply {
+                    setSurface(android.view.Surface(surfaceTexture))
+                    setVolume(0f, 0f) // Muted by default for overlay preview
+                    isLooping = true
+                    val headers = HashMap<String, String>()
+                    android.webkit.CookieManager.getInstance().getCookie(videoUrl)
+                        ?.takeIf { it.isNotEmpty() }
+                        ?.let { headers["Cookie"] = it }
+                    headers["User-Agent"] =
+                        "Mozilla/5.0 (Linux; Android 12) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Mobile Safari/537.36"
+                    setDataSource(context, Uri.parse(videoUrl), headers)
+                    setOnPreparedListener {
+                        if (previewIndex != -1 && previewOverlay?.visibility == View.VISIBLE) {
+                            previewProgress?.visibility = View.GONE
+                            start()
+                        }
+                    }
+                    setOnErrorListener { _, what, extra ->
+                        Log.w(TAG, "MediaPlayer preview error: what=$what extra=$extra")
+                        previewProgress?.visibility = View.GONE
+                        true
+                    }
+                    prepareAsync()
+                }
+                mediaPlayer = mp
+            } catch (e: Exception) {
+                Log.e(TAG, "playVideo failed: $e")
+                previewProgress?.visibility = View.GONE
+            }
+        }
+
+        if (texture.isAvailable) {
+            startMp(texture.surfaceTexture!!)
+        } else {
+            texture.surfaceTextureListener = object : TextureView.SurfaceTextureListener {
+                override fun onSurfaceTextureAvailable(st: SurfaceTexture, width: Int, height: Int) {
+                    startMp(st)
+                }
+                override fun onSurfaceTextureSizeChanged(st: SurfaceTexture, width: Int, height: Int) {}
+                override fun onSurfaceTextureDestroyed(st: SurfaceTexture): Boolean {
+                    releasePlayer()
+                    return true
+                }
+                override fun onSurfaceTextureUpdated(st: SurfaceTexture) {}
+            }
+        }
+    }
+
+    private fun loadImage(url: String, thumbUrl: String) {
+        val target = previewImage ?: return
+        target.setImageBitmap(null)
+        val maxDim = resources.displayMetrics.widthPixels.coerceAtLeast(resources.displayMetrics.heightPixels)
+
+        pool.execute {
+            var bmp: Bitmap? = null
+            try {
+                val targetUrl = url.ifEmpty { thumbUrl }
+                val conn = URL(targetUrl).openConnection() as HttpURLConnection
+                conn.connectTimeout = 8000
+                conn.readTimeout = 12000
+                conn.instanceFollowRedirects = true
+                runCatching { android.webkit.CookieManager.getInstance().getCookie(targetUrl) }
+                    .getOrNull()?.takeIf { it.isNotEmpty() }
+                    ?.let { conn.setRequestProperty("Cookie", it) }
+                conn.setRequestProperty(
+                    "Accept",
+                    "image/webp,image/apng,image/*,*/*;q=0.8"
+                )
+                conn.connect()
+                if (conn.responseCode in 200..299) {
+                    val bytes = conn.inputStream.use { it.readBytes() }
+                    bmp = decodeSampled(bytes, maxDim)
+                }
+                conn.disconnect()
+            } catch (e: Exception) {
+                Log.w(TAG, "loadImage failed: ${e.javaClass.simpleName}")
+            }
+            val resBmp = bmp
+            main.post {
+                if (previewIndex != -1 && previewOverlay?.visibility == View.VISIBLE) {
+                    previewProgress?.visibility = View.GONE
+                    if (resBmp != null) {
+                        target.setImageBitmap(resBmp)
+                    }
+                }
+            }
+        }
+    }
+
+    private fun hidePreview() {
+        previewIndex = -1
+        releasePlayer()
+        previewOverlay?.visibility = View.GONE
+        previewImage?.setImageBitmap(null)
+    }
+
+    private fun releasePlayer() {
+        try {
+            mediaPlayer?.stop()
+            mediaPlayer?.release()
+        } catch (_: Exception) {}
+        mediaPlayer = null
     }
 
     /// Pulsing placeholder animation shared by every pending thumbnail.
@@ -324,8 +617,6 @@ class SelectPanelView(
             selected.clear()
             selected.addAll(cells.indices)
         }
-        // Refresh the cells in place — a full re-render would refetch every
-        // thumbnail and restart the shimmer.
         for (s in syncers) s()
         updateFooter()
     }
@@ -356,8 +647,6 @@ class SelectPanelView(
                 }
                 conn.disconnect()
             } catch (e: Exception) {
-                // The exception message can contain the full CDN url (with
-                // query parameters) — log only the host and the error type.
                 Log.w(
                     TAG,
                     "thumb failed: ${e.javaClass.simpleName} host=" +
@@ -396,10 +685,12 @@ class SelectPanelView(
     private fun finish(result: List<Int>?) {
         if (finished) return
         finished = true
+        hidePreview()
         main.post { onResult(result) }
     }
 
     fun release() {
+        hidePreview()
         shimmerAnim?.cancel()
         shimmerAnim = null
         pool.shutdownNow()

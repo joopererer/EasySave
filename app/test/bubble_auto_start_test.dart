@@ -111,4 +111,25 @@ void main() {
       expect(settings.bubbleEnabled, isFalse);
     });
   });
+
+  group('bubblePreviewSticky setting', () {
+    test('defaults to false when not present', () async {
+      SharedPreferences.setMockInitialValues({});
+      final settings = await AppSettings.load();
+      expect(settings.bubblePreviewSticky, isFalse);
+    });
+
+    test('persists true value when saved', () async {
+      SharedPreferences.setMockInitialValues({'bubblePreviewSticky': true});
+      final settings = await AppSettings.load();
+      expect(settings.bubblePreviewSticky, isTrue);
+
+      settings.bubblePreviewSticky = false;
+      await settings.save();
+
+      final reloaded = await AppSettings.load();
+      expect(reloaded.bubblePreviewSticky, isFalse);
+    });
+  });
 }
+

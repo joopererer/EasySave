@@ -133,6 +133,7 @@ abstract final class BackupService {
       saveProvenanceInImages: appSettings.saveProvenanceInImages,
       bubbleEnabled: appSettings.bubbleEnabled,
       bubbleAutoHide: appSettings.bubbleAutoHide,
+      bubblePreviewSticky: appSettings.bubblePreviewSticky,
       backgroundToast: appSettings.backgroundToast,
       autoClipboard: appSettings.autoClipboard,
       saveCaptionTxt: appSettings.saveCaptionTxt,
@@ -261,6 +262,7 @@ abstract final class BackupService {
       settings.namePattern = data.settings.namePattern;
       settings.saveProvenanceInImages = data.settings.saveProvenanceInImages;
       settings.bubbleAutoHide = data.settings.bubbleAutoHide;
+      settings.bubblePreviewSticky = data.settings.bubblePreviewSticky;
       settings.backgroundToast = data.settings.backgroundToast;
       settings.autoClipboard = data.settings.autoClipboard;
       settings.saveCaptionTxt = data.settings.saveCaptionTxt;

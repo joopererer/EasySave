@@ -115,6 +115,7 @@ void main() {
       settings.usedAlbumNames = ['CustomAlbum', 'OldAlbum'];
       settings.saveCaptionTxt = true;
       settings.bubbleEnabled = true;
+      settings.bubblePreviewSticky = true;
       await settings.save();
 
       // Export
@@ -182,6 +183,7 @@ void main() {
       expect(emptySettings.usedAlbumNames, containsAll(['CustomAlbum', 'OldAlbum']));
       expect(emptySettings.saveCaptionTxt, true);
       expect(emptySettings.bubbleEnabled, true);
+      expect(emptySettings.bubblePreviewSticky, true);
     });
 
     test('TC-01b: Empty history protection tests', () async {

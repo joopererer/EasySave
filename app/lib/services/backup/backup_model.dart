@@ -134,6 +134,7 @@ class BackupSettings {
   final bool saveProvenanceInImages;
   final bool bubbleEnabled;
   final bool bubbleAutoHide;
+  final bool bubblePreviewSticky;
   final bool backgroundToast;
   final bool autoClipboard;
   final bool saveCaptionTxt;
@@ -148,6 +149,7 @@ class BackupSettings {
     this.saveProvenanceInImages = true,
     this.bubbleEnabled = false,
     this.bubbleAutoHide = true,
+    this.bubblePreviewSticky = false,
     this.backgroundToast = true,
     this.autoClipboard = true,
     this.saveCaptionTxt = false,
@@ -165,6 +167,7 @@ class BackupSettings {
         'saveProvenanceInImages': saveProvenanceInImages,
         'bubbleEnabled': bubbleEnabled,
         'bubbleAutoHide': bubbleAutoHide,
+        'bubblePreviewSticky': bubblePreviewSticky,
         'backgroundToast': backgroundToast,
         'autoClipboard': autoClipboard,
         'saveCaptionTxt': saveCaptionTxt,
@@ -191,6 +194,7 @@ class BackupSettings {
       saveProvenanceInImages: map['saveProvenanceInImages'] as bool? ?? true,
       bubbleEnabled: map['bubbleEnabled'] as bool? ?? false,
       bubbleAutoHide: map['bubbleAutoHide'] as bool? ?? true,
+      bubblePreviewSticky: map['bubblePreviewSticky'] as bool? ?? false,
       backgroundToast: map['backgroundToast'] as bool? ?? true,
       autoClipboard: map['autoClipboard'] as bool? ?? true,
       saveCaptionTxt: map['saveCaptionTxt'] as bool? ?? false,
