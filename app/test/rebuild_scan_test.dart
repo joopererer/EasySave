@@ -10,6 +10,7 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:easysave/metadata/metadata_service.dart';
+import 'package:easysave/services/gallery_locator_service.dart';
 import 'package:easysave/services/history_db.dart';
 import 'package:easysave/services/history_rebuild_service.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -17,13 +18,21 @@ import 'package:photo_manager/photo_manager.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
-AssetEntity _asset(String id, String title, String mimeType) => AssetEntity(
+AssetEntity _asset(
+  String id,
+  String title,
+  String mimeType, {
+  AssetType type = AssetType.image,
+  String? relativePath,
+}) =>
+    AssetEntity(
       id: id,
-      typeInt: AssetType.image.index,
+      typeInt: type.index,
       width: 100,
       height: 100,
       title: title,
       mimeType: mimeType,
+      relativePath: relativePath,
     );
 
 void main() {
@@ -159,6 +168,369 @@ void main() {
 
       expect(result.skipped, 1);
       expect(result.created, 0);
+    });
+  });
+
+  group('HistoryRebuildService video pairing', () {
+    Uint8List makeJpeg(XmpProvenance prov) {
+      final minimalJpeg = Uint8List.fromList([0xFF, 0xD8, 0xFF, 0xD9]);
+      return writeJpegXmp(minimalJpeg, prov);
+    }
+
+    Uint8List makeMp4(XmpProvenance prov) {
+      final minimalMp4 = Uint8List.fromList([
+        0x00, 0x00, 0x00, 0x14,
+        0x66, 0x74, 0x79, 0x70,
+        0x69, 0x73, 0x6F, 0x6D,
+        0x00, 0x00, 0x02, 0x00,
+        0x69, 0x73, 0x6F, 0x6D,
+      ]);
+      return writeMp4Xmp(minimalMp4, prov);
+    }
+
+    XmpProvenance makeProv({
+      required String assetId,
+      required String sourceId,
+      int itemIndex = 1,
+      String? pairId,
+      String platform = 'xiaohongshu',
+    }) =>
+        XmpProvenance(
+          schema: '0.1',
+          assetId: assetId,
+          platform: platform,
+          sourceId: sourceId,
+          sourceUrl: 'https://xhs.com/$sourceId',
+          itemIndex: itemIndex,
+          pairId: pairId,
+          capturedAt: DateTime.now(),
+          capturedBy: 'EasySave/1.8.2',
+          metadataDate: DateTime.now(),
+        );
+
+    test('正常配对: pairs by pairId', () async {
+      final imgAsset = _asset('img1', 'xhs_post1_1.jpg', 'image/jpeg');
+      final vidAsset = _asset(
+        'vid1',
+        'xhs_post1_1.mp4',
+        'video/mp4',
+        type: AssetType.video,
+      );
+
+      final imgProv = makeProv(
+        assetId: 'aid-img-1',
+        sourceId: 'post1',
+        itemIndex: 1,
+        pairId: 'post1#1',
+      );
+
+      final vidProv = makeProv(
+        assetId: 'aid-vid-1',
+        sourceId: 'post1',
+        itemIndex: 1,
+        pairId: 'post1#1',
+      );
+
+      final result = await HistoryRebuildService.instance.rebuild(
+        assetsOverride: [imgAsset, vidAsset],
+        dbOverride: db,
+        readHeader: (mediaId, mimeType) async {
+          if (mediaId == 'img1') return makeJpeg(imgProv);
+          if (mediaId == 'vid1') return makeMp4(vidProv);
+          return Uint8List(0);
+        },
+      );
+
+      expect(result.created, 1);
+      final records = await db.recent();
+      expect(records.length, 1);
+      final record = records.first;
+      expect(record.files.length, 2);
+      expect(record.files.any((f) => f.isImage && f.itemIndex == 1), isTrue);
+      expect(record.files.any((f) => !f.isImage && f.itemIndex == 1), isTrue);
+    });
+
+    test('组合 a 配对: 同 sourceId、同 itemIndex，图片无 pairId、视频有 pairId 成功配对', () async {
+      final imgAsset = _asset('img_a', 'post_a_1.jpg', 'image/jpeg');
+      final vidAsset = _asset('vid_a', 'post_a_other.mp4', 'video/mp4', type: AssetType.video);
+
+      final imgProv = makeProv(
+        assetId: 'aid-a-img',
+        sourceId: 'post_a',
+        itemIndex: 1,
+        pairId: null,
+      );
+      final vidProv = makeProv(
+        assetId: 'aid-a-vid',
+        sourceId: 'post_a',
+        itemIndex: 1,
+        pairId: 'post_a#1',
+      );
+
+      final result = await HistoryRebuildService.instance.rebuild(
+        assetsOverride: [imgAsset, vidAsset],
+        dbOverride: db,
+        readHeader: (mediaId, mimeType) async {
+          if (mediaId == 'img_a') return makeJpeg(imgProv);
+          if (mediaId == 'vid_a') return makeMp4(vidProv);
+          return Uint8List(0);
+        },
+      );
+
+      expect(result.created, 1);
+      final records = await db.recent();
+      expect(records.length, 1);
+      final record = records.first;
+      expect(record.files.length, 2);
+      expect(record.files.any((f) => f.isImage && f.itemIndex == 1), isTrue);
+      expect(record.files.any((f) => !f.isImage && f.itemIndex == 1), isTrue);
+    });
+
+    test('组合 b 配对: 同 sourceId、同 itemIndex，双方无 pairId，主干不同也成功配对', () async {
+      final imgAsset = _asset('img_b', 'post_b_photo.jpg', 'image/jpeg');
+      final vidAsset = _asset('vid_b', 'post_b_motion.mp4', 'video/mp4', type: AssetType.video);
+
+      final imgProv = makeProv(
+        assetId: 'aid-b-img',
+        sourceId: 'post_b',
+        itemIndex: 1,
+        pairId: null,
+      );
+      final vidProv = makeProv(
+        assetId: 'aid-b-vid',
+        sourceId: 'post_b',
+        itemIndex: 1,
+        pairId: null,
+      );
+
+      final result = await HistoryRebuildService.instance.rebuild(
+        assetsOverride: [imgAsset, vidAsset],
+        dbOverride: db,
+        readHeader: (mediaId, mimeType) async {
+          if (mediaId == 'img_b') return makeJpeg(imgProv);
+          if (mediaId == 'vid_b') return makeMp4(vidProv);
+          return Uint8List(0);
+        },
+      );
+
+      expect(result.created, 1);
+      final records = await db.recent();
+      expect(records.length, 1);
+      final record = records.first;
+      expect(record.files.length, 2);
+      expect(record.files.any((f) => f.isImage && f.itemIndex == 1), isTrue);
+      expect(record.files.any((f) => !f.isImage && f.itemIndex == 1), isTrue);
+    });
+
+    test('pairId 不一致时不配对', () async {
+      final imgAsset = _asset('img_mismatch', 'post_m_1.jpg', 'image/jpeg');
+      final vidAsset = _asset('vid_mismatch', 'post_m_1.mp4', 'video/mp4', type: AssetType.video);
+
+      final imgProv = makeProv(
+        assetId: 'aid-m-img',
+        sourceId: 'post_m',
+        itemIndex: 1,
+        pairId: 'post_m#1',
+      );
+      final vidProv = makeProv(
+        assetId: 'aid-m-vid',
+        sourceId: 'post_m',
+        itemIndex: 1,
+        pairId: 'post_m#conflict',
+      );
+
+      final result = await HistoryRebuildService.instance.rebuild(
+        assetsOverride: [imgAsset, vidAsset],
+        dbOverride: db,
+        readHeader: (mediaId, mimeType) async {
+          if (mediaId == 'img_mismatch') return makeJpeg(imgProv);
+          if (mediaId == 'vid_mismatch') return makeMp4(vidProv);
+          return Uint8List(0);
+        },
+      );
+
+      // Both are in the same post group, but not paired into the same itemIndex
+      expect(result.created, 1);
+      final records = await db.recent();
+      expect(records.length, 1);
+      final record = records.first;
+      // img and standalone vid: pairId conflict, not paired as live
+      final post = record.toPost();
+      expect(post.items.any((it) => it.type == 'live'), isFalse);
+    });
+
+    test('同序号多个候选时不配对: 同一 itemIndex 有两个候选视频时不配对', () async {
+      final imgAsset = _asset('img_multi', 'post_multi_1.jpg', 'image/jpeg');
+      final vidAsset1 = _asset('vid_multi_1', 'post_multi_1a.mp4', 'video/mp4', type: AssetType.video);
+      final vidAsset2 = _asset('vid_multi_2', 'post_multi_1b.mp4', 'video/mp4', type: AssetType.video);
+
+      final imgProv = makeProv(
+        assetId: 'aid-multi-img',
+        sourceId: 'post_multi',
+        itemIndex: 1,
+      );
+      final vid1Prov = makeProv(
+        assetId: 'aid-multi-vid1',
+        sourceId: 'post_multi',
+        itemIndex: 1,
+      );
+      final vid2Prov = makeProv(
+        assetId: 'aid-multi-vid2',
+        sourceId: 'post_multi',
+        itemIndex: 1,
+      );
+
+      final result = await HistoryRebuildService.instance.rebuild(
+        assetsOverride: [imgAsset, vidAsset1, vidAsset2],
+        dbOverride: db,
+        readHeader: (mediaId, mimeType) async {
+          if (mediaId == 'img_multi') return makeJpeg(imgProv);
+          if (mediaId == 'vid_multi_1') return makeMp4(vid1Prov);
+          if (mediaId == 'vid_multi_2') return makeMp4(vid2Prov);
+          return Uint8List(0);
+        },
+      );
+
+      expect(result.created, 1);
+      final records = await db.recent();
+      expect(records.length, 1);
+      final record = records.first;
+      // Multiple candidates: not paired as live
+      final post = record.toPost();
+      expect(post.items.any((it) => it.type == 'live'), isFalse);
+    });
+
+    test('无 pairId 回退配对: pairs when same album, same stem, single candidate', () async {
+      final imgAsset = _asset(
+        'img2',
+        'post2_1.jpg',
+        'image/jpeg',
+        relativePath: 'Pictures/EasySave/',
+      );
+      final vidAsset = _asset(
+        'vid2',
+        'post2_1.mp4',
+        'video/mp4',
+        type: AssetType.video,
+        relativePath: 'Pictures/EasySave/',
+      );
+
+      final imgProv = makeProv(
+        assetId: 'aid-img-2',
+        sourceId: 'post2',
+        itemIndex: 1,
+      );
+
+      final result = await HistoryRebuildService.instance.rebuild(
+        assetsOverride: [imgAsset, vidAsset],
+        dbOverride: db,
+        readHeader: (mediaId, mimeType) async {
+          if (mediaId == 'img2') return makeJpeg(imgProv);
+          // Video has no XMP header
+          return Uint8List(0);
+        },
+      );
+
+      expect(result.created, 1);
+      final records = await db.recent();
+      expect(records.length, 1);
+      final record = records.first;
+      expect(record.files.length, 2);
+      expect(record.files.any((f) => f.isImage && f.mediaId == 'img2'), isTrue);
+      expect(record.files.any((f) => !f.isImage && f.mediaId == 'vid2'), isTrue);
+    });
+
+    test('多个候选时不配对: does not pair when multiple candidate videos exist', () async {
+      final imgAsset = _asset(
+        'img3',
+        'post3_1.jpg',
+        'image/jpeg',
+        relativePath: 'Pictures/EasySave/',
+      );
+      final vidAsset1 = _asset(
+        'vid3_a',
+        'post3_1.mp4',
+        'video/mp4',
+        type: AssetType.video,
+        relativePath: 'Pictures/EasySave/',
+      );
+      final vidAsset2 = _asset(
+        'vid3_b',
+        'post3_1.mov',
+        'video/quicktime',
+        type: AssetType.video,
+        relativePath: 'Pictures/EasySave/',
+      );
+
+      final imgProv = makeProv(
+        assetId: 'aid-img-3',
+        sourceId: 'post3',
+        itemIndex: 1,
+      );
+
+      final result = await HistoryRebuildService.instance.rebuild(
+        assetsOverride: [imgAsset, vidAsset1, vidAsset2],
+        dbOverride: db,
+        readHeader: (mediaId, mimeType) async {
+          if (mediaId == 'img3') return makeJpeg(imgProv);
+          return Uint8List(0);
+        },
+      );
+
+      expect(result.created, 1);
+      expect(result.skipped, 2);
+      final records = await db.recent();
+      expect(records.length, 1);
+      expect(records.first.files.length, 1);
+      expect(records.first.files.first.isImage, isTrue);
+    });
+
+    test('视频 XMP 与图片不符时不配对: does not pair when video XMP belongs to different post', () async {
+      final imgAsset = _asset(
+        'img4',
+        'same_stem.jpg',
+        'image/jpeg',
+        relativePath: 'Pictures/EasySave/',
+      );
+      final vidAsset = _asset(
+        'vid4',
+        'same_stem.mp4',
+        'video/mp4',
+        type: AssetType.video,
+        relativePath: 'Pictures/EasySave/',
+      );
+
+      final imgProv = makeProv(
+        assetId: 'aid-img-4',
+        sourceId: 'post_img',
+        itemIndex: 1,
+      );
+
+      final vidProv = makeProv(
+        assetId: 'aid-vid-4',
+        sourceId: 'post_other',
+        itemIndex: 1,
+      );
+
+      final result = await HistoryRebuildService.instance.rebuild(
+        assetsOverride: [imgAsset, vidAsset],
+        dbOverride: db,
+        readHeader: (mediaId, mimeType) async {
+          if (mediaId == 'img4') return makeJpeg(imgProv);
+          if (mediaId == 'vid4') return makeMp4(vidProv);
+          return Uint8List(0);
+        },
+      );
+
+      expect(result.created, 2);
+      final records = await db.recent();
+      expect(records.length, 2);
+      final imgRec = records.firstWhere((r) => r.postId == 'post_img');
+      final vidRec = records.firstWhere((r) => r.postId == 'post_other');
+      expect(imgRec.files.length, 1);
+      expect(imgRec.files.first.isImage, isTrue);
+      expect(vidRec.files.length, 1);
+      expect(vidRec.files.first.isImage, isFalse);
     });
   });
 }

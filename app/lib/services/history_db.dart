@@ -240,13 +240,39 @@ class HistoryRecord {
       items.add(MediaItem(type: 'image', url: thumbnailUrl!));
     }
     if (items.isEmpty && files.isNotEmpty) {
+      final byIndex = <int, List<HistoryFile>>{};
       for (final f in files) {
-        items.add(
-          MediaItem(
-            type: f.isImage ? 'image' : 'video',
-            url: '',
-          ),
-        );
+        byIndex.putIfAbsent(f.itemIndex, () => []).add(f);
+      }
+      final sortedIndices = byIndex.keys.toList()..sort();
+      for (final idx in sortedIndices) {
+        final group = byIndex[idx]!;
+        final img = group.where((f) => f.isImage).firstOrNull;
+        final vid = group.where((f) => !f.isImage).firstOrNull;
+        if (img != null && vid != null) {
+          items.add(
+            MediaItem(
+              type: 'live',
+              url: img.filename,
+              videoUrl: vid.filename,
+            ),
+          );
+        } else if (img != null) {
+          items.add(
+            MediaItem(
+              type: 'image',
+              url: img.filename,
+            ),
+          );
+        } else if (vid != null) {
+          items.add(
+            MediaItem(
+              type: 'video',
+              url: vid.filename,
+              videoUrl: vid.filename,
+            ),
+          );
+        }
       }
     }
     return ParsedPost(
@@ -527,8 +553,16 @@ class HistoryDb {
       final existing = await _getByPostUrl(txn, record.postUrl) ??
           await _getByPostId(txn, record.postId);
       if (existing != null) {
+        final recordByMediaId = <String, HistoryFile>{
+          for (final f in record.files)
+            if (f.mediaId != null && f.mediaId!.isNotEmpty) f.mediaId!: f,
+        };
+
         final fileMap = <String, HistoryFile>{};
         for (final f in existing.files) {
+          if (f.mediaId != null && recordByMediaId.containsKey(f.mediaId)) {
+            continue;
+          }
           fileMap['${f.itemIndex}_${f.isImage}'] = f;
         }
         for (final f in record.files) {

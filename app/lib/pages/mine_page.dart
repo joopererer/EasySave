@@ -700,9 +700,9 @@ class _MinePageState extends State<MinePage> with WidgetsBindingObserver {
                   ),
                 ),
                 SwitchListTile(
-                  title: const Text('在图片中保存来源信息'),
+                  title: const Text('保存来源信息（图片和视频）'),
                   subtitle: const Text(
-                    '下载的图片中会记录来源链接、作者和标题，方便以后整理和溯源',
+                    '下载的图片和视频中会记录来源链接、作者和标题，方便以后整理和溯源',
                   ),
                   value: _settings.saveProvenanceInImages,
                   onChanged: (v) async {

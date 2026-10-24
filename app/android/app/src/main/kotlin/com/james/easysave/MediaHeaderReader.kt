@@ -4,7 +4,72 @@ import android.content.ContentResolver
 import android.net.Uri
 import android.os.Build
 import android.provider.MediaStore
+import java.io.FileInputStream
 import java.io.InputStream
+import java.io.RandomAccessFile
+import java.nio.ByteBuffer
+import java.nio.channels.FileChannel
+
+/**
+ * Seekable data source interface for reading container formats (like MP4/MOV)
+ * without loading the whole file or relying on ContentResolver.
+ */
+interface SeekableByteSource {
+    val size: Long
+    fun position(): Long
+    fun seek(position: Long)
+    fun read(buffer: ByteArray, offset: Int, length: Int): Int
+
+    fun readFully(buffer: ByteArray): Boolean {
+        var total = 0
+        while (total < buffer.size) {
+            val count = read(buffer, total, buffer.size - total)
+            if (count <= 0) return false
+            total += count
+        }
+        return true
+    }
+}
+
+class FileChannelSource(private val channel: FileChannel) : SeekableByteSource {
+    override val size: Long get() = channel.size()
+    override fun position(): Long = channel.position()
+    override fun seek(position: Long) {
+        channel.position(position)
+    }
+    override fun read(buffer: ByteArray, offset: Int, length: Int): Int {
+        val byteBuffer = ByteBuffer.wrap(buffer, offset, length)
+        return channel.read(byteBuffer)
+    }
+}
+
+class RandomAccessFileSource(private val raf: RandomAccessFile) : SeekableByteSource {
+    override val size: Long get() = raf.length()
+    override fun position(): Long = raf.filePointer
+    override fun seek(position: Long) {
+        raf.seek(position)
+    }
+    override fun read(buffer: ByteArray, offset: Int, length: Int): Int {
+        return raf.read(buffer, offset, length)
+    }
+}
+
+class ByteArraySource(private val bytes: ByteArray) : SeekableByteSource {
+    private var pos = 0L
+    override val size: Long get() = bytes.size.toLong()
+    override fun position(): Long = pos
+    override fun seek(position: Long) {
+        pos = position.coerceIn(0L, size)
+    }
+    override fun read(buffer: ByteArray, offset: Int, length: Int): Int {
+        if (pos >= size) return -1
+        val available = (size - pos).toInt()
+        val toRead = minOf(length, available)
+        System.arraycopy(bytes, pos.toInt(), buffer, offset, toRead)
+        pos += toRead
+        return toRead
+    }
+}
 
 /**
  * Reads only the header bytes of a media file through [ContentResolver].
@@ -19,7 +84,10 @@ import java.io.InputStream
  *    skipped, and the scan stops at the XMP chunk (returned whole, so the
  *    Dart PNG reader can parse it unchanged);
  *  * WebP: same idea on the RIFF container - walk the chunks, skip their
- *    data, stop at the `XMP ` chunk.
+ *    data, stop at the `XMP ` chunk;
+ *  * MP4 / MOV: top-level boxes are walked via [SeekableByteSource] using
+ *    [FileChannel.position] (never InputStream.skip). Returns all complete
+ *    XMP uuid boxes concatenated in file order.
  *
  * The result is the **byte array that was read**, never a byte count: the Dart
  * side parses these bytes with the existing XMP readers.
@@ -31,6 +99,20 @@ object MediaHeaderReader {
     /** Safety cap for the chunk walks (a corrupt file must not loop forever). */
     const val MAX_WALK_BYTES = 4 * 1024 * 1024
 
+    /** Max XMP uuid box bytes read per box (matches maxMp4XmpBytes in package). */
+    const val MAX_MP4_XMP_BYTES = 16 * 1024 * 1024
+
+    /**
+     * 16-byte UUID for Adobe XMP in MP4/MOV:
+     * BE7ACFCB-97A9-42E8-9C71-999491E3AFAC
+     */
+    val XMP_UUID = byteArrayOf(
+        0xBE.toByte(), 0x7A.toByte(), 0xCF.toByte(), 0xCB.toByte(),
+        0x97.toByte(), 0xA9.toByte(), 0x42.toByte(), 0xE8.toByte(),
+        0x9C.toByte(), 0x71.toByte(), 0x99.toByte(), 0x94.toByte(),
+        0x91.toByte(), 0xE3.toByte(), 0xAF.toByte(), 0xAC.toByte()
+    )
+
     private const val PNG_SIGNATURE = 8
     private const val WEBP_HEADER = 12
 
@@ -40,7 +122,10 @@ object MediaHeaderReader {
         return mime.contains("jpeg") ||
             mime.contains("jpg") ||
             mime.contains("png") ||
-            mime.contains("webp")
+            mime.contains("webp") ||
+            mime.contains("mp4") ||
+            mime.contains("quicktime") ||
+            mime.startsWith("video/")
     }
 
     /**
@@ -50,13 +135,21 @@ object MediaHeaderReader {
     fun readHeader(resolver: ContentResolver, uri: Uri, mimeType: String?): ByteArray? {
         val mime = mimeType?.lowercase() ?: return null
         return try {
-            resolver.openInputStream(uri)?.use { input ->
-                when {
-                    mime.contains("jpeg") || mime.contains("jpg") ->
-                        readJpeg(input)
-                    mime.contains("png") -> readPng(input)
-                    mime.contains("webp") -> readWebp(input)
-                    else -> null
+            if (mime.contains("mp4") || mime.contains("quicktime") || mime.startsWith("video/")) {
+                resolver.openFileDescriptor(uri, "r")?.use { pfd ->
+                    FileInputStream(pfd.fileDescriptor).channel.use { channel ->
+                        readMp4(FileChannelSource(channel))
+                    }
+                }
+            } else {
+                resolver.openInputStream(uri)?.use { input ->
+                    when {
+                        mime.contains("jpeg") || mime.contains("jpg") ->
+                            readJpeg(input)
+                        mime.contains("png") -> readPng(input)
+                        mime.contains("webp") -> readWebp(input)
+                        else -> null
+                    }
                 }
             }
         } catch (_: Exception) {
@@ -212,4 +305,116 @@ object MediaHeaderReader {
             ((bytes[offset + 1].toInt() and 0xFF) shl 8) or
             ((bytes[offset + 2].toInt() and 0xFF) shl 16) or
             ((bytes[offset + 3].toInt() and 0xFF) shl 24)
+
+    /**
+     * Checks if [source] has the 'ftyp' box header characteristic of MP4 / MOV.
+     */
+    fun isMp4(source: SeekableByteSource): Boolean {
+        if (source.size < 8) return false
+        source.seek(0)
+        val header = ByteArray(8)
+        if (!source.readFully(header)) return false
+        return header[4] == 'f'.code.toByte() &&
+            header[5] == 't'.code.toByte() &&
+            header[6] == 'y'.code.toByte() &&
+            header[7] == 'p'.code.toByte()
+    }
+
+    /**
+     * Reads all complete XMP uuid boxes in [source], returning their bytes
+     * concatenated in file order.
+     *
+     * Walks the top-level box chain jumping with seek, never reading mdat.
+     * Retains all complete boxes found before any truncation point.
+     * Returns null if no XMP uuid box is found, or if [source] is not MP4/MOV.
+     */
+    fun readMp4(source: SeekableByteSource): ByteArray? {
+        if (!isMp4(source)) return null
+
+        val fileSize = source.size
+        var pos = 0L
+        val xmpBoxes = mutableListOf<ByteArray>()
+
+        while (pos + 8 <= fileSize) {
+            source.seek(pos)
+            val header = ByteArray(8)
+            if (!source.readFully(header)) break
+
+            val size32 = readU32BigEndianLong(header, 0)
+            val type = String(header, 4, 4, Charsets.US_ASCII)
+
+            val headerSize: Long
+            val totalBoxSize: Long
+
+            when {
+                size32 == 1L -> {
+                    if (pos + 16 > fileSize) break
+                    val ext = ByteArray(8)
+                    if (!source.readFully(ext)) break
+                    val largeSize = readU64BigEndianLong(ext, 0)
+                    if (largeSize < 16L) break
+                    headerSize = 16L
+                    totalBoxSize = largeSize
+                }
+                size32 == 0L -> {
+                    headerSize = 8L
+                    totalBoxSize = fileSize - pos
+                }
+                size32 < 8L -> {
+                    break
+                }
+                else -> {
+                    headerSize = 8L
+                    totalBoxSize = size32
+                }
+            }
+
+            if (totalBoxSize <= 0L || pos + totalBoxSize > fileSize) {
+                // Truncated or invalid box: keep complete boxes found before
+                break
+            }
+
+            if (type == "uuid" && totalBoxSize >= headerSize + 16L) {
+                val uuid = ByteArray(16)
+                source.seek(pos + headerSize)
+                if (source.readFully(uuid) && uuid.contentEquals(XMP_UUID)) {
+                    val payloadSize = totalBoxSize - headerSize
+                    if (payloadSize in 1..MAX_MP4_XMP_BYTES) {
+                        source.seek(pos)
+                        val boxBytes = ByteArray(totalBoxSize.toInt())
+                        if (source.readFully(boxBytes)) {
+                            xmpBoxes.add(boxBytes)
+                        }
+                    }
+                }
+            }
+
+            pos += totalBoxSize
+        }
+
+        if (xmpBoxes.isEmpty()) return null
+
+        val totalBytes = xmpBoxes.sumOf { it.size }
+        val result = ByteArray(totalBytes)
+        var destPos = 0
+        for (box in xmpBoxes) {
+            System.arraycopy(box, 0, result, destPos, box.size)
+            destPos += box.size
+        }
+        return result
+    }
+
+    private fun readU32BigEndianLong(bytes: ByteArray, offset: Int): Long =
+        ((bytes[offset].toLong() and 0xFF) shl 24) or
+            ((bytes[offset + 1].toLong() and 0xFF) shl 16) or
+            ((bytes[offset + 2].toLong() and 0xFF) shl 8) or
+            (bytes[offset + 3].toLong() and 0xFF)
+
+    private fun readU64BigEndianLong(bytes: ByteArray, offset: Int): Long {
+        var v = 0L
+        for (i in 0 until 8) {
+            v = (v shl 8) or (bytes[offset + i].toLong() and 0xFF)
+        }
+        return v
+    }
 }

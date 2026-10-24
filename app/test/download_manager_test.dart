@@ -114,6 +114,7 @@ void main() {
               urls: planned[i].urls,
               isImage: planned[i].isImage,
               itemIndex: planned[i].itemIndex,
+              isLivePhoto: planned[i].isLivePhoto,
             ),
         ],
       );
@@ -183,7 +184,7 @@ void main() {
       expect(legacy.totalItems, 5);
     });
 
-    test('Live item: still and motion jobs both carry the original index', () {
+    test('Live item: still and motion jobs both carry original index, isLivePhoto and pairId', () {
       final live = ParsedPost(
         platform: 'xhs',
         id: 'n1',
@@ -197,9 +198,30 @@ void main() {
       );
       final batch = batchFor(live, [1]);
       expect(batch.jobs.map((j) => j.itemIndex), [2, 2]);
-      final p = provenanceForBatchItem(batch, itemIndex: 2);
-      expect(p.itemIndex, 2);
-      expect(p.itemCount, 3);
+      expect(batch.jobs.every((j) => j.isLivePhoto), isTrue);
+
+      final pairId = '${batch.postId}#2';
+      final pStill = provenanceForBatchItem(batch, itemIndex: batch.jobs[0].itemIndex, pairId: pairId);
+      final pMotion = provenanceForBatchItem(batch, itemIndex: batch.jobs[1].itemIndex, pairId: pairId);
+
+      expect(pStill.pairId, 'n1#2');
+      expect(pMotion.pairId, 'n1#2');
+      expect(pStill.pairId, equals(pMotion.pairId));
+      expect(pStill.itemIndex, 2);
+      expect(pStill.itemCount, 3);
+    });
+
+    test('Non-live items do not carry pairId', () {
+      final batch = batchFor(post5(), [1]);
+      final job = batch.jobs.single;
+      expect(job.isLivePhoto, isFalse);
+
+      final p = provenanceForBatchItem(
+        batch,
+        itemIndex: job.itemIndex,
+        pairId: job.isLivePhoto ? '${batch.postId}#${job.itemIndex}' : null,
+      );
+      expect(p.pairId, isNull);
     });
   });
 

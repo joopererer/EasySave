@@ -56,6 +56,24 @@ abstract final class MediaHeaderService {
     String mediaId,
   )? albumReader;
 
+  /// Overridable for tests: (path, mimeType) -> scanned uri.
+  static Future<String?> Function(String path, String? mimeType)? scanner;
+
+  /// Trigger MediaScannerConnection.scanFile on [path].
+  static Future<String?> scanFile(String path, [String? mimeType]) async {
+    final override = scanner;
+    if (override != null) return override(path, mimeType);
+    try {
+      return await _channel.invokeMethod<String>(
+        'scanFile',
+        {'path': path, 'mimeType': mimeType},
+      );
+    } catch (e) {
+      DevLog.write(logTag, 'scanFile failed for $path: $e'); // i18n:ignore 日志
+      return null;
+    }
+  }
+
   /// Read the header bytes of a media file.
   ///
   /// Returns an empty list when the platform is unavailable or the file

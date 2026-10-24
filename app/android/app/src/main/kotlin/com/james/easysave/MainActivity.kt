@@ -17,6 +17,7 @@ import androidx.core.content.ContextCompat
 import androidx.documentfile.provider.DocumentFile
 import android.provider.DocumentsContract
 import java.io.IOException
+import android.media.MediaScannerConnection
 import android.util.Log
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
@@ -184,6 +185,7 @@ class MainActivity : FlutterActivity() {
                     "requestWriteAccess" -> requestWriteAccess(call, result)
                     "readMediaHeader" -> readMediaHeader(call, result)
                     "queryMediaAlbum" -> queryMediaAlbum(call, result)
+                    "scanFile" -> scanFile(call, result)
                     else -> result.notImplemented()
                 }
             }
@@ -529,10 +531,15 @@ class MainActivity : FlutterActivity() {
         }
         val mimeType = call.argument<String>("mimeType")
         try {
-            val uri = ContentUris.withAppendedId(
-                MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
-                mediaId,
-            )
+            val isVideo = mimeType?.startsWith("video/") == true ||
+                mimeType?.contains("mp4") == true ||
+                mimeType?.contains("quicktime") == true
+            val collection = if (isVideo) {
+                MediaStore.Video.Media.EXTERNAL_CONTENT_URI
+            } else {
+                MediaStore.Images.Media.EXTERNAL_CONTENT_URI
+            }
+            val uri = ContentUris.withAppendedId(collection, mediaId)
             result.success(MediaHeaderReader.readHeader(contentResolver, uri, mimeType))
         } catch (e: Exception) {
             result.error("read_failed", e.message, null)
@@ -552,12 +559,34 @@ class MainActivity : FlutterActivity() {
         }
         try {
             val uri = ContentUris.withAppendedId(
-                MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
+                MediaStore.Files.getContentUri("external"),
                 mediaId,
             )
             result.success(MediaHeaderReader.queryAlbum(contentResolver, uri))
         } catch (e: Exception) {
             result.error("query_failed", e.message, null)
+        }
+    }
+
+    private fun scanFile(call: MethodCall, result: MethodChannel.Result) {
+        val path = call.argument<String>("path")
+        val mimeType = call.argument<String>("mimeType")
+        if (path == null) {
+            result.error("bad_args", "path required", null)
+            return
+        }
+        try {
+            MediaScannerConnection.scanFile(
+                this,
+                arrayOf(path),
+                if (mimeType != null) arrayOf(mimeType) else null,
+            ) { _, uri ->
+                runOnUiThread {
+                    result.success(uri?.toString())
+                }
+            }
+        } catch (e: Exception) {
+            result.error("scan_failed", e.message, null)
         }
     }
 

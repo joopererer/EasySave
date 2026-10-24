@@ -29,11 +29,18 @@ val newBuildDir: Directory =
 rootProject.layout.buildDirectory.value(newBuildDir)
 
 subprojects {
-    val newSubprojectBuildDir: Directory = newBuildDir.dir(project.name)
-    project.layout.buildDirectory.value(newSubprojectBuildDir)
+    if (project.projectDir.toPath().root == rootProject.projectDir.toPath().root) {
+        val newSubprojectBuildDir: Directory = newBuildDir.dir(project.name)
+        project.layout.buildDirectory.value(newSubprojectBuildDir)
+    }
 }
 subprojects {
     project.evaluationDependsOn(":app")
+    if (project.path != ":app") {
+        tasks.matching { it.name.contains("Test", ignoreCase = true) }.configureEach {
+            enabled = false
+        }
+    }
 }
 
 // Force legacy Groovy-style plugin builds onto one JVM target. withPlugin

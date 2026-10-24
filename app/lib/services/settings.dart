@@ -68,6 +68,9 @@ class AppSettings {
   /// Whether user has dismissed the gentle reminder to set up backup folder (v1.8).
   bool backupFolderHintDismissed = false;
 
+  /// Whether user has dismissed the one-time video provenance backfill hint (v1.8.2).
+  bool videoBackfillHintDismissed = false;
+
   static Future<AppSettings> load() async {
     final prefs = await SharedPreferences.getInstance();
     return AppSettings()
@@ -102,7 +105,8 @@ class AppSettings {
       ..autoFolderBackupEnabled = prefs.getBool('autoFolderBackupEnabled') ?? false
       ..lastBackupTime = prefs.getInt('lastBackupTime')
       ..skipRestoreHint = prefs.getBool('skipRestoreHint') ?? false
-      ..backupFolderHintDismissed = prefs.getBool('backupFolderHintDismissed') ?? false;
+      ..backupFolderHintDismissed = prefs.getBool('backupFolderHintDismissed') ?? false
+      ..videoBackfillHintDismissed = prefs.getBool('videoBackfillHintDismissed') ?? false;
   }
 
   Future<void> save() async {
@@ -133,6 +137,7 @@ class AppSettings {
     }
     await prefs.setBool('skipRestoreHint', skipRestoreHint);
     await prefs.setBool('backupFolderHintDismissed', backupFolderHintDismissed);
+    await prefs.setBool('videoBackfillHintDismissed', videoBackfillHintDismissed);
   }
 
   /// Remember [albumName] as an album the app has used.
