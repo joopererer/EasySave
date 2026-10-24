@@ -47,16 +47,16 @@ void main() {
       );
     });
 
-    test('capturedBy reads EasySave/1.8.2 matching pubspec.yaml version', () {
+    test('capturedBy reads EasySave/1.8.3 matching pubspec.yaml version', () {
       final pubspecFile = File('pubspec.yaml');
       final content = pubspecFile.readAsStringSync();
       final match = RegExp(r'^version:\s*(\d+\.\d+\.\d+)\+(\d+)', multiLine: true).firstMatch(content);
       expect(match, isNotNull);
       final pubspecVersion = match!.group(1);
       final buildNumber = match!.group(2);
-      expect(pubspecVersion, equals('1.8.2'));
-      expect(buildNumber, equals('7'));
-      expect(AppVersion.capturedBy, equals('EasySave/1.8.2'));
+      expect(pubspecVersion, equals('1.8.3'));
+      expect(buildNumber, equals('8'));
+      expect(AppVersion.capturedBy, equals('EasySave/1.8.3'));
     });
   });
 
