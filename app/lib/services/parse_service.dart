@@ -4,6 +4,7 @@
 // Throws [ParseFailure] so callers can distinguish login walls.
 
 import 'dart:async';
+import 'dart:collection';
 import 'dart:convert';
 import 'dart:math' as math;
 
@@ -370,6 +371,79 @@ Future<ParseOutcome> _parseXhsViaWebView(String targetUrl) async {
   }
 }
 
+const String _kNetworkSniffScript = '''
+(() => {
+  if (window.__easysaveSniffInstalled) return;
+  window.__easysaveSniffInstalled = true;
+  window.__easysaveIgProducts = window.__easysaveIgProducts || {};
+
+  function isProductShaped(obj) {
+    if (!obj || typeof obj !== 'object') return false;
+    return typeof obj.shortcode === 'string' &&
+      obj.shortcode.length > 0 &&
+      ('video_versions' in obj || 'carousel_media' in obj || 'image_versions2' in obj);
+  }
+
+  function extractProducts(payload) {
+    const seen = new Set();
+    function visit(node) {
+      if (!node || typeof node !== 'object') return;
+      if (seen.has(node)) return;
+      seen.add(node);
+      if (isProductShaped(node)) {
+        window.__easysaveIgProducts[node.shortcode] = node;
+      }
+      if (Array.isArray(node)) {
+        for (const item of node) visit(item);
+      } else {
+        for (const key of Object.keys(node)) visit(node[key]);
+      }
+    }
+    try { visit(payload); } catch (_) {}
+  }
+
+  function sniffText(text) {
+    if (!text || text.length < 10) return;
+    if (!text.includes('shortcode')) return;
+    try {
+      const json = JSON.parse(text);
+      extractProducts(json);
+    } catch (_) {}
+  }
+
+  try {
+    const originalFetch = window.fetch;
+    if (originalFetch) {
+      window.fetch = async function(...args) {
+        const response = await originalFetch.apply(this, args);
+        try {
+          const clone = response.clone();
+          clone.text().then(sniffText).catch(() => {});
+        } catch (_) {}
+        return response;
+      };
+    }
+  } catch (_) {}
+
+  try {
+    const originalOpen = XMLHttpRequest.prototype.open;
+    const originalSend = XMLHttpRequest.prototype.send;
+    XMLHttpRequest.prototype.open = function(method, url, ...rest) {
+      this.__url = url;
+      return originalOpen.apply(this, [method, url, ...rest]);
+    };
+    XMLHttpRequest.prototype.send = function(...args) {
+      this.addEventListener('load', function() {
+        try {
+          sniffText(this.responseText);
+        } catch (_) {}
+      });
+      return originalSend.apply(this, args);
+    };
+  } catch (_) {}
+})();
+''';
+
 Future<ParseOutcome> _headlessParse(String targetUrl, {required bool isXhs}) async {
   final loaded = Completer<void>();
   InAppWebViewController? readyController;
@@ -377,6 +451,12 @@ Future<ParseOutcome> _headlessParse(String targetUrl, {required bool isXhs}) asy
   try {
     headless = HeadlessInAppWebView(
       initialUrlRequest: URLRequest(url: WebUri.uri(Uri.parse(targetUrl))),
+      initialUserScripts: UnmodifiableListView<UserScript>([
+        UserScript(
+          source: _kNetworkSniffScript,
+          injectionTime: UserScriptInjectionTime.AT_DOCUMENT_START,
+        ),
+      ]),
       initialSettings: InAppWebViewSettings(
         javaScriptEnabled: true,
         domStorageEnabled: true,
@@ -443,6 +523,41 @@ Future<ParseOutcome> _headlessParse(String targetUrl, {required bool isXhs}) asy
       if (liveStr != null && liveStr.isNotEmpty) currentUrl = liveStr;
     } catch (_) {}
     await _waitForNoteState(controller, currentUrl);
+
+    // For Instagram: auto-dismiss age-gated / sensitive content warnings if present
+    final isIg = isInstagramHost(Uri.tryParse(currentUrl)?.host ?? '');
+    if (isIg) {
+      try {
+        final clicked = await controller.evaluateJavascript(source: '''
+(() => {
+  const keywords = ['see post', 'view post', '查看帖子', '查看貼文', '了解详情', 'continue', 'i understand', '确认'];
+  const buttons = document.querySelectorAll('button, [role="button"], a[role="button"]');
+  for (const b of buttons) {
+    const text = (b.innerText || b.textContent || '').trim().toLowerCase();
+    if (keywords.some(k => text.includes(k))) {
+      b.click();
+      return true;
+    }
+  }
+  return false;
+})()
+''');
+        if (clicked == true) {
+          final shortcodeMatch = RegExp(r'/(?:p|reels?|tv)/([A-Za-z0-9-_]+)').firstMatch(currentUrl);
+          final shortcode = shortcodeMatch?.group(1);
+          if (shortcode != null) {
+            final deadline = DateTime.now().add(const Duration(seconds: 3));
+            while (DateTime.now().isBefore(deadline)) {
+              final hasProduct = await controller.evaluateJavascript(
+                source: '!!((window.__easysaveIgProducts || {})[${jsonEncode(shortcode)}])',
+              );
+              if (hasProduct == true) break;
+              await Future<void>.delayed(const Duration(milliseconds: 300));
+            }
+          }
+        }
+      } catch (_) {}
+    }
 
     final parserJs = await ParserManager.instance.getActiveScript();
     dynamic jsResult;

@@ -667,14 +667,25 @@ var EasySaveParser = (() => {
         if (product) break;
       }
     }
+    if (!product && shortcode) {
+      try {
+        const g = typeof globalThis !== "undefined" ? globalThis : typeof window !== "undefined" ? window : null;
+        const cached = g?.["__easysaveIgProducts"];
+        if (cached && isRecord2(cached[shortcode])) {
+          product = cached[shortcode];
+        }
+      } catch (_) {
+      }
+    }
     const looksLikeInstagram = /instagram\.com|instagr\.am/.test(pageUrl) || /instagram\.com|instagr\.am|data-sjs/.test(html.slice(0, 2e4));
     if (!product || !shortcode) {
       if (looksLikeInstagram) {
+        const isAgeGated = /sensitive content|age-restricted|查看帖子|了解详情|see post|成人内容|sensitive_content/i.test(html);
         return {
           ok: false,
           error: {
             code: "LOGIN_REQUIRED",
-            message: "Instagram returned a login-gated shell without post data."
+            message: isAgeGated ? "\u8BE5\u5E16\u5B50\u5305\u542B\u654F\u611F\u5185\u5BB9\u6216\u5E74\u9F84\u9650\u5236\uFF0C\u9700\u8981\u901A\u8FC7\u7F51\u9875\u6388\u6743\u6216\u70B9\u51FB\u67E5\u770B\u3002" : "Instagram returned a login-gated shell without post data."
           }
         };
       }
@@ -938,6 +949,10 @@ var EasySaveParser = (() => {
     const m = /\/(?:explore|discovery\/item|user\/profile\/[^/]+)\/([a-f0-9]{24})/i.exec(url);
     return m ? m[1].toLowerCase() : void 0;
   }
+  function shortcodeFromUrl(url) {
+    const m = /\/(?:p|reels?|tv)\/([A-Za-z0-9-_]+)/.exec(url);
+    return m ? m[1] : void 0;
+  }
   function parsePage() {
     const url = window.location.href;
     const html = document.documentElement.outerHTML;
@@ -959,6 +974,12 @@ var EasySaveParser = (() => {
       return JSON.stringify(parseXhs(html, url));
     }
     if (isInstagramHost(url)) {
+      const shortcode = shortcodeFromUrl(url);
+      if (shortcode && window.__easysaveIgProducts?.[shortcode]) {
+        return JSON.stringify(
+          buildPostFromProduct(window.__easysaveIgProducts[shortcode], shortcode)
+        );
+      }
       return JSON.stringify(parseInstagram(html, url));
     }
     if (isXHost(url)) {

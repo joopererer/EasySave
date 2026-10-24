@@ -191,16 +191,34 @@ export function parseInstagram(html: string, pageUrl: string): InstagramResult {
     }
   }
 
+  if (!product && shortcode) {
+    try {
+      const g = (typeof globalThis !== "undefined"
+        ? globalThis
+        : typeof window !== "undefined"
+          ? window
+          : null) as Record<string, unknown> | null;
+      const cached = g?.["__easysaveIgProducts"] as Record<string, unknown> | undefined;
+      if (cached && isRecord(cached[shortcode])) {
+        product = cached[shortcode] as Record<string, unknown>;
+      }
+    } catch (_) {}
+  }
+
   const looksLikeInstagram =
     /instagram\.com|instagr\.am/.test(pageUrl) ||
     /instagram\.com|instagr\.am|data-sjs/.test(html.slice(0, 20000));
   if (!product || !shortcode) {
     if (looksLikeInstagram) {
+      const isAgeGated =
+        /sensitive content|age-restricted|查看帖子|了解详情|see post|成人内容|sensitive_content/i.test(html);
       return {
         ok: false,
         error: {
           code: "LOGIN_REQUIRED",
-          message: "Instagram returned a login-gated shell without post data.",
+          message: isAgeGated
+            ? "该帖子包含敏感内容或年龄限制，需要通过网页授权或点击查看。"
+            : "Instagram returned a login-gated shell without post data.",
         },
       };
     }

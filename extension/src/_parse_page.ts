@@ -1,11 +1,16 @@
 import { parseXhs, findNoteInStates, buildNoteFromRecord } from './xhs';
-import { parseInstagram } from './instagram';
+import { parseInstagram, buildPostFromProduct } from './instagram';
 import { parseX, calculateToken, extractTweetId } from './x';
 import { hostnameOf, isXhsHost, isInstagramHost, isXHost } from './_utils';
 
 function noteIdFromUrl(url: string): string | undefined {
   const m = /\/(?:explore|discovery\/item|user\/profile\/[^/]+)\/([a-f0-9]{24})/i.exec(url);
   return m ? m[1].toLowerCase() : undefined;
+}
+
+function shortcodeFromUrl(url: string): string | undefined {
+  const m = /\/(?:p|reels?|tv)\/([A-Za-z0-9-_]+)/.exec(url);
+  return m ? m[1] : undefined;
 }
 
 export function parsePage(): string {
@@ -33,6 +38,12 @@ export function parsePage(): string {
     return JSON.stringify(parseXhs(html, url));
   }
   if (isInstagramHost(url)) {
+    const shortcode = shortcodeFromUrl(url);
+    if (shortcode && (window as any).__easysaveIgProducts?.[shortcode]) {
+      return JSON.stringify(
+        buildPostFromProduct((window as any).__easysaveIgProducts[shortcode], shortcode)
+      );
+    }
     return JSON.stringify(parseInstagram(html, url));
   }
   if (isXHost(url)) {

@@ -108,4 +108,32 @@ describe("shortcodeToMediaId", () => {
       expect("duration" in withoutDuration.data.items[0]).toBe(false);
     }
   });
+
+  it("recovers via __easysaveIgProducts when HTML lacks data-sjs", () => {
+    const dummyHtml = "<html><head><title>Instagram</title></head><body><script data-sjs>{}</script></body></html>";
+    (globalThis as any).__easysaveIgProducts = {
+      TestCode123: {
+        id: "12345",
+        shortcode: "TestCode123",
+        display_url: "https://example.com/img.jpg",
+      },
+    };
+    const res = parseInstagram(dummyHtml, "https://www.instagram.com/p/TestCode123/");
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.data.id).toBe("TestCode123");
+      expect(res.data.items[0].url).toBe("https://example.com/img.jpg");
+    }
+    delete (globalThis as any).__easysaveIgProducts;
+  });
+
+  it("returns actionable error message on age-restricted or sensitive interstitial", () => {
+    const warningHtml = "<html><head><title>Instagram</title></head><body><div class='warning'>Sensitive content - See Post</div><script data-sjs>{}</script></body></html>";
+    const res = parseInstagram(warningHtml, "https://www.instagram.com/p/Sensitive123/");
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.error.code).toBe("LOGIN_REQUIRED");
+      expect(res.error.message).toContain("敏感内容或年龄限制");
+    }
+  });
 });
