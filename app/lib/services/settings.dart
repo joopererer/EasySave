@@ -77,6 +77,7 @@ class AppSettings {
 
   static Future<AppSettings> load() async {
     final prefs = await SharedPreferences.getInstance();
+    await prefs.reload();
     return AppSettings()
       ..albumName = prefs.getString('albumName') ?? defaultAlbumName
       ..namePattern = prefs.getString('namePattern') ?? defaultNamePattern

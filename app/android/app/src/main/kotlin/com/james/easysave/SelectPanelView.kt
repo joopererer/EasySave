@@ -26,8 +26,12 @@ import android.widget.LinearLayout
 import android.widget.ProgressBar
 import android.widget.TextView
 import android.content.res.ColorStateList
+import android.graphics.Canvas
+import android.graphics.Paint
+import android.graphics.Path
 import android.os.SystemClock
 import android.view.GestureDetector
+import android.view.KeyEvent
 import android.widget.SeekBar
 import java.util.Locale
 import java.net.HttpURLConnection
@@ -56,6 +60,98 @@ class SelectPanelView(
         const val TAG = "V16SEL"
         private const val COLS = 3
         private const val TARGET_PX = 300
+    }
+
+    private class ChevronView(context: Context, private val isLeft: Boolean) : View(context) {
+        private val bgPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = 0x66000000
+            style = Paint.Style.FILL
+        }
+        private val strokePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.WHITE
+            style = Paint.Style.STROKE
+            strokeWidth = 2.8f * resources.displayMetrics.density
+            strokeCap = Paint.Cap.ROUND
+            strokeJoin = Paint.Join.ROUND
+        }
+        private val path = Path()
+
+        override fun onDraw(canvas: Canvas) {
+            super.onDraw(canvas)
+            val w = width.toFloat()
+            val h = height.toFloat()
+            val cx = w / 2f
+            val cy = h / 2f
+            val radius = Math.min(w, h) / 2f
+            canvas.drawCircle(cx, cy, radius, bgPaint)
+
+            path.reset()
+            val arrowHalfW = radius * 0.22f
+            val arrowHalfH = radius * 0.40f
+            if (isLeft) {
+                path.moveTo(cx + arrowHalfW, cy - arrowHalfH)
+                path.lineTo(cx - arrowHalfW, cy)
+                path.lineTo(cx + arrowHalfW, cy + arrowHalfH)
+            } else {
+                path.moveTo(cx - arrowHalfW, cy - arrowHalfH)
+                path.lineTo(cx + arrowHalfW, cy)
+                path.lineTo(cx - arrowHalfW, cy + arrowHalfH)
+            }
+            canvas.drawPath(path, strokePaint)
+        }
+    }
+
+    private class PlayPauseView(context: Context) : View(context) {
+        var isPlaying: Boolean = false
+            set(value) {
+                field = value
+                invalidate()
+            }
+
+        private val fillPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.WHITE
+            style = Paint.Style.FILL
+        }
+        private val path = Path()
+
+        override fun onDraw(canvas: Canvas) {
+            super.onDraw(canvas)
+            val w = width.toFloat()
+            val h = height.toFloat()
+            val cx = w / 2f
+            val cy = h / 2f
+            val s = Math.min(w, h)
+
+            if (isPlaying) {
+                val barW = s * 0.16f
+                val barH = s * 0.52f
+                val gap = s * 0.16f
+                val top = cy - barH / 2f
+                val bottom = cy + barH / 2f
+                val corner = barW / 3f
+
+                val left1 = cx - gap / 2f - barW
+                val right1 = cx - gap / 2f
+                canvas.drawRoundRect(left1, top, right1, bottom, corner, corner, fillPaint)
+
+                val left2 = cx + gap / 2f
+                val right2 = cx + gap / 2f + barW
+                canvas.drawRoundRect(left2, top, right2, bottom, corner, corner, fillPaint)
+            } else {
+                path.reset()
+                val triW = s * 0.44f
+                val triH = s * 0.48f
+                val left = cx - triW * 0.42f
+                val right = cx + triW * 0.58f
+                val top = cy - triH / 2f
+                val bottom = cy + triH / 2f
+                path.moveTo(left, top)
+                path.lineTo(right, cy)
+                path.lineTo(left, bottom)
+                path.close()
+                canvas.drawPath(path, fillPaint)
+            }
+        }
     }
 
     private class Cell(
@@ -87,28 +183,35 @@ class SelectPanelView(
     private var previewTexture: TextureView? = null
     private var previewProgress: ProgressBar? = null
     private var previewTitle: TextView? = null
+    private var previewCloseBtn: TextView? = null
     private var mediaPlayer: MediaPlayer? = null
     private var previewIndex = -1
     private var previewOpenedAt = 0L
 
     // Navigation and video control components
-    private var prevArrowBtn: TextView? = null
-    private var nextArrowBtn: TextView? = null
+    private var prevArrowBtn: View? = null
+    private var nextArrowBtn: View? = null
     private var videoControlBar: LinearLayout? = null
-    private var playPauseBtn: TextView? = null
+    private var playPauseBtn: PlayPauseView? = null
     private var videoSeekBar: SeekBar? = null
     private var videoTimeText: TextView? = null
     private var isTrackingTouch = false
 
     private val isStickyPreview: Boolean
-        get() = stickyPreview || try {
-            context.getSharedPreferences("FlutterSharedPreferences", Context.MODE_PRIVATE)
-                .getBoolean("flutter.bubblePreviewSticky", false)
-        } catch (_: Exception) { false }
+        get() = try {
+            val prefs = context.getSharedPreferences("FlutterSharedPreferences", Context.MODE_PRIVATE)
+            if (prefs.contains("flutter.bubblePreviewSticky")) {
+                prefs.getBoolean("flutter.bubblePreviewSticky", false)
+            } else {
+                stickyPreview
+            }
+        } catch (_: Exception) { stickyPreview }
 
     init {
         setBackgroundColor(0x99000000.toInt())
         isClickable = true
+        isFocusable = true
+        isFocusableInTouchMode = true
         setOnClickListener { finish(null) }
         addView(
             buildSheet(),
@@ -118,6 +221,36 @@ class SelectPanelView(
             buildPreviewOverlay(),
             LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT)
         )
+    }
+
+    override fun onAttachedToWindow() {
+        super.onAttachedToWindow()
+        requestFocus()
+    }
+
+    override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        if (event.keyCode == KeyEvent.KEYCODE_BACK) {
+            if (event.action == KeyEvent.ACTION_UP) {
+                if (previewOverlay?.visibility == View.VISIBLE) {
+                    hidePreview()
+                    return true
+                }
+                finish(null)
+                return true
+            }
+            return true
+        }
+        return super.dispatchKeyEvent(event)
+    }
+
+    override fun dispatchTouchEvent(ev: MotionEvent): Boolean {
+        if (!isStickyPreview && previewOverlay?.visibility == View.VISIBLE) {
+            if (ev.actionMasked == MotionEvent.ACTION_UP || ev.actionMasked == MotionEvent.ACTION_CANCEL) {
+                hidePreview()
+                return true
+            }
+        }
+        return super.dispatchTouchEvent(ev)
     }
 
     fun setItems(items: List<Any?>) {
@@ -330,17 +463,9 @@ class SelectPanelView(
             true
         }
 
-        // Navigation arrows
-        prevArrowBtn = TextView(context).apply {
-            text = "‹"
-            setTextColor(Color.WHITE)
-            textSize = 34f
-            gravity = Gravity.CENTER
+        // Navigation arrows (custom drawn for exact geometric centering)
+        prevArrowBtn = ChevronView(context, isLeft = true).apply {
             visibility = View.GONE
-            background = GradientDrawable().apply {
-                shape = GradientDrawable.OVAL
-                setColor(0x66000000)
-            }
             setOnClickListener {
                 if (previewIndex > 0) showPreview(previewIndex - 1)
             }
@@ -352,16 +477,8 @@ class SelectPanelView(
             }
         )
 
-        nextArrowBtn = TextView(context).apply {
-            text = "›"
-            setTextColor(Color.WHITE)
-            textSize = 34f
-            gravity = Gravity.CENTER
+        nextArrowBtn = ChevronView(context, isLeft = false).apply {
             visibility = View.GONE
-            background = GradientDrawable().apply {
-                shape = GradientDrawable.OVAL
-                setColor(0x66000000)
-            }
             setOnClickListener {
                 if (previewIndex < cells.size - 1) showPreview(previewIndex + 1)
             }
@@ -407,6 +524,7 @@ class SelectPanelView(
             }
             setOnClickListener { hidePreview() }
         }
+        previewCloseBtn = closeBtn
         topBar.addView(closeBtn)
 
         overlay.addView(
@@ -425,12 +543,7 @@ class SelectPanelView(
                 setColor(0x99000000.toInt())
             }
         }
-        playPauseBtn = TextView(context).apply {
-            text = "⏸"
-            setTextColor(Color.WHITE)
-            textSize = 18f
-            gravity = Gravity.CENTER
-            setPadding(dp(6), dp(4), dp(6), dp(4))
+        playPauseBtn = PlayPauseView(context).apply {
             setOnClickListener { togglePlayPause() }
         }
         bar.addView(playPauseBtn, LinearLayout.LayoutParams(dp(36), dp(36)))
@@ -667,10 +780,10 @@ class SelectPanelView(
         try {
             if (mp.isPlaying) {
                 mp.pause()
-                playPauseBtn?.text = "▶"
+                playPauseBtn?.isPlaying = false
             } else {
                 mp.start()
-                playPauseBtn?.text = "⏸"
+                playPauseBtn?.isPlaying = true
             }
         } catch (_: Exception) {}
     }
@@ -685,16 +798,17 @@ class SelectPanelView(
         } else {
             "大图预览 (${index + 1}/${cells.size})"
         }
-        prevArrowBtn?.visibility = if (index > 0) View.VISIBLE else View.GONE
-        nextArrowBtn?.visibility = if (index < cells.size - 1) View.VISIBLE else View.GONE
+        previewCloseBtn?.visibility = if (isStickyPreview) View.VISIBLE else View.GONE
+        prevArrowBtn?.visibility = if (isStickyPreview && index > 0) View.VISIBLE else View.GONE
+        nextArrowBtn?.visibility = if (isStickyPreview && index < cells.size - 1) View.VISIBLE else View.GONE
         previewOverlay?.visibility = View.VISIBLE
         previewProgress?.visibility = View.VISIBLE
 
         releasePlayer()
 
         if (cell.video) {
-            videoControlBar?.visibility = View.VISIBLE
-            playPauseBtn?.text = "⏸"
+            videoControlBar?.visibility = if (isStickyPreview) View.VISIBLE else View.GONE
+            playPauseBtn?.isPlaying = true
             videoSeekBar?.progress = 0
             videoTimeText?.text = "00:00 / 00:00"
             previewImage?.visibility = View.GONE
