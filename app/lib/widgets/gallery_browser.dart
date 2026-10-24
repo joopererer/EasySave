@@ -3,6 +3,7 @@
 // Adheres strictly to docs/design/ui-spec.md and docs/design/gallery-prototype/.
 
 import 'dart:async';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:photo_manager/photo_manager.dart';
@@ -27,6 +28,7 @@ class GalleryBrowserItem {
     this.fallbacks = const [],
     this.isGif = false,
     this.asset,
+    this.liveVideoAsset,
     this.status = FileStatus.found,
     this.filename,
   });
@@ -43,6 +45,7 @@ class GalleryBrowserItem {
   final List<String> fallbacks;
   final bool isGif;
   final AssetEntity? asset;
+  final AssetEntity? liveVideoAsset;
   final FileStatus status;
   final String? filename;
 
@@ -763,13 +766,23 @@ class _BrowserItemViewState extends State<_BrowserItemView> {
 
     try {
       final it = widget.item;
-      final videoUrl = it.videoUrl;
-      if (videoUrl == null) return;
+      VideoPlayerController controller;
 
-      final controller = VideoPlayerController.networkUrl(
-        Uri.parse(videoUrl),
-        httpHeaders: {'Referer': refererFor(widget.platform)},
-      );
+      if (it.liveVideoAsset != null) {
+        final f = await it.liveVideoAsset!.file;
+        if (f != null && await f.exists()) {
+          controller = VideoPlayerController.file(f);
+        } else {
+          final videoUrl = it.videoUrl;
+          if (videoUrl == null || videoUrl.isEmpty) return;
+          controller = _createPlayerController(videoUrl);
+        }
+      } else {
+        final videoUrl = it.videoUrl;
+        if (videoUrl == null || videoUrl.isEmpty) return;
+        controller = _createPlayerController(videoUrl);
+      }
+
       await controller.initialize();
       await controller.setLooping(true);
       await controller.setVolume(0);
@@ -782,6 +795,19 @@ class _BrowserItemViewState extends State<_BrowserItemView> {
       setState(() {});
     } catch (_) {
       if (mounted) setState(() => _isLiveHolding = false);
+    }
+  }
+
+  VideoPlayerController _createPlayerController(String target) {
+    if (target.startsWith('http://') || target.startsWith('https://')) {
+      return VideoPlayerController.networkUrl(
+        Uri.parse(target),
+        httpHeaders: {'Referer': refererFor(widget.platform)},
+      );
+    } else if (target.startsWith('content://')) {
+      return VideoPlayerController.contentUri(Uri.parse(target));
+    } else {
+      return VideoPlayerController.file(File(target));
     }
   }
 

@@ -436,49 +436,100 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
       var initial = 0;
 
       if (files.isNotEmpty) {
-        final is1Based = files.every((f) => f.itemIndex > 0);
+        final byIndex = <int, List<HistoryFile>>{};
         for (final f in files) {
-          final zeroBasedIdx = is1Based ? f.itemIndex - 1 : f.itemIndex;
+          byIndex.putIfAbsent(f.itemIndex, () => []).add(f);
+        }
+        final is1Based = files.every((f) => f.itemIndex > 0);
+        final sortedIndices = byIndex.keys.toList()..sort();
+
+        for (final idx in sortedIndices) {
+          final groupFiles = byIndex[idx]!;
+          final zeroBasedIdx = is1Based ? idx - 1 : idx;
+
           MediaItem? postItem;
           if (zeroBasedIdx >= 0 && zeroBasedIdx < post.items.length) {
             postItem = post.items[zeroBasedIdx];
-          } else if (f.itemIndex >= 0 && f.itemIndex < post.items.length) {
-            postItem = post.items[f.itemIndex];
+          } else if (idx >= 0 && idx < post.items.length) {
+            postItem = post.items[idx];
           }
 
-          AssetEntity? asset = locator.getAssetById(f.mediaId) ??
-              locator.locateAsset(f, record.postId);
-          if (asset == null && locator.hasAccess) {
-            asset = await locator.locateAssetAsync(
-              f,
-              record.postId,
-              platform: record.platform,
+          final imgFile = groupFiles.where((f) => f.isImage).firstOrNull;
+          final vidFile = groupFiles.where((f) => !f.isImage).firstOrNull;
+
+          if (imgFile != null && vidFile != null && (postItem?.type == 'live' || groupFiles.length == 2)) {
+            // Live Photo: 1 browser item with image cover and live video asset
+            AssetEntity? imgAsset = locator.getAssetById(imgFile.mediaId) ??
+                locator.locateAsset(imgFile, record.postId);
+            if (imgAsset == null && locator.hasAccess) {
+              imgAsset = await locator.locateAssetAsync(imgFile, record.postId, platform: record.platform);
+            }
+
+            AssetEntity? vidAsset = locator.getAssetById(vidFile.mediaId) ??
+                locator.locateAsset(vidFile, record.postId);
+            if (vidAsset == null && locator.hasAccess) {
+              vidAsset = await locator.locateAssetAsync(vidFile, record.postId, platform: record.platform);
+            }
+
+            final status = (imgAsset != null)
+                ? FileStatus.found
+                : (locator.scanned ? imgFile.status : FileStatus.unknown);
+
+            if (highlightItemIndex != null &&
+                (idx == highlightItemIndex || zeroBasedIdx == highlightItemIndex)) {
+              initial = items.length;
+            }
+
+            items.add(
+              GalleryBrowserItem(
+                index: zeroBasedIdx,
+                type: 'live',
+                url: postItem?.url.isNotEmpty == true ? postItem!.url : imgFile.filename,
+                videoUrl: postItem?.videoUrl?.isNotEmpty == true ? postItem!.videoUrl : vidFile.filename,
+                posterUrl: postItem?.posterUrl,
+                fallbacks: postItem?.fallbacks ?? const [],
+                isGif: postItem?.isGif ?? false,
+                asset: imgAsset,
+                liveVideoAsset: vidAsset,
+                status: status,
+                filename: imgFile.filename,
+              ),
+            );
+          } else {
+            final f = imgFile ?? vidFile!;
+            AssetEntity? asset = locator.getAssetById(f.mediaId) ??
+                locator.locateAsset(f, record.postId);
+            if (asset == null && locator.hasAccess) {
+              asset = await locator.locateAssetAsync(f, record.postId, platform: record.platform);
+            }
+
+            final status = (asset != null)
+                ? FileStatus.found
+                : (locator.scanned ? f.status : FileStatus.unknown);
+
+            if (highlightItemIndex != null &&
+                (idx == highlightItemIndex || zeroBasedIdx == highlightItemIndex)) {
+              initial = items.length;
+            }
+
+            final fallbackType = f.isImage ? 'image' : (postItem?.isGif == true ? 'gif' : 'video');
+            final itemType = (postItem != null && postItem.type != 'live') ? postItem.type : fallbackType;
+
+            items.add(
+              GalleryBrowserItem(
+                index: zeroBasedIdx,
+                type: itemType,
+                url: postItem?.url ?? f.filename,
+                videoUrl: f.isImage ? postItem?.videoUrl : (postItem?.videoUrl ?? f.filename),
+                posterUrl: postItem?.posterUrl,
+                fallbacks: postItem?.fallbacks ?? const [],
+                isGif: postItem?.isGif ?? false,
+                asset: asset,
+                status: status,
+                filename: f.filename,
+              ),
             );
           }
-
-          final status = (asset != null)
-              ? FileStatus.found
-              : (locator.scanned ? f.status : FileStatus.unknown);
-
-          if (highlightItemIndex != null &&
-              (f.itemIndex == highlightItemIndex || zeroBasedIdx == highlightItemIndex)) {
-            initial = items.length;
-          }
-
-          items.add(
-            GalleryBrowserItem(
-              index: zeroBasedIdx,
-              type: postItem?.type ?? (f.isImage ? 'image' : 'video'),
-              url: postItem?.url ?? '',
-              videoUrl: postItem?.videoUrl,
-              posterUrl: postItem?.posterUrl,
-              fallbacks: postItem?.fallbacks ?? const [],
-              isGif: postItem?.isGif ?? false,
-              asset: asset,
-              status: status,
-              filename: f.filename,
-            ),
-          );
         }
       }
 
@@ -734,8 +785,11 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
   List<_MediaGroup> _groupMedia(List<HistoryRecord> records) {
     final all = <HistThumbRef>[];
     for (final r in records) {
+      final seenIndices = <int>{};
       for (final f in r.files) {
-        all.add(HistThumbRef(r, f.itemIndex));
+        if (seenIndices.add(f.itemIndex)) {
+          all.add(HistThumbRef(r, f.itemIndex));
+        }
       }
     }
     switch (_sort) {

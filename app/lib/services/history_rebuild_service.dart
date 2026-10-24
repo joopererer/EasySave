@@ -367,6 +367,48 @@ class HistoryRebuildService {
         ));
       }
 
+      String generateItemsJson(List<HistoryFile> postFiles) {
+        final byIndex = <int, List<HistoryFile>>{};
+        for (final f in postFiles) {
+          byIndex.putIfAbsent(f.itemIndex, () => []).add(f);
+        }
+        final sortedIndices = byIndex.keys.toList()..sort();
+        final postItems = <Map<String, Object?>>[];
+        for (final idx in sortedIndices) {
+          final group = byIndex[idx]!;
+          final img = group.where((f) => f.isImage).firstOrNull;
+          final vid = group.where((f) => !f.isImage).firstOrNull;
+          final isPaired = img != null &&
+              vid != null &&
+              img.mediaId != null &&
+              vid.mediaId != null &&
+              pairedImageIds.contains(img.mediaId) &&
+              pairedVideoAssets.contains(vid.mediaId);
+          if (img != null && vid != null && isPaired) {
+            postItems.add({
+              'type': 'live',
+              'url': img.filename,
+              'videoUrl': vid.filename,
+            });
+          } else {
+            if (img != null) {
+              postItems.add({
+                'type': 'image',
+                'url': img.filename,
+              });
+            }
+            if (vid != null) {
+              postItems.add({
+                'type': 'video',
+                'url': vid.filename,
+                'videoUrl': vid.filename,
+              });
+            }
+          }
+        }
+        return jsonEncode(postItems);
+      }
+
       // Try to find existing record
       final db = dbOverride ?? await HistoryDb.instance();
       final existing = await db.getByPostId(sourceId);
@@ -405,7 +447,7 @@ class HistoryRebuildService {
           postUrl: existing.postUrl,
           fileCount: mergedList.length,
           createdAt: recordCreatedAt,
-          itemsJson: existing.itemsJson,
+          itemsJson: generateItemsJson(mergedList),
           files: mergedList,
         );
 
@@ -425,6 +467,7 @@ class HistoryRebuildService {
           postUrl: firstProv.sourceUrl ?? 'https://unknown',
           fileCount: files.length,
           createdAt: recordCreatedAt,
+          itemsJson: generateItemsJson(files),
           files: files,
         );
 
