@@ -2,6 +2,7 @@
 // Service for rebuilding history from gallery scan.
 // See spec/metadata.md §7.1
 
+import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:photo_manager/photo_manager.dart';
@@ -204,76 +205,92 @@ class HistoryRebuildService {
       groups.putIfAbsent(key, () => []).add(img);
     }
 
-    // 1. Pair by pairId
+    // Index identified videos by (platform, sourceId)
+    final identifiedVideosByGroup = <String, List<_AssetWithXmp>>{};
     for (final vid in identifiedVideos) {
-      final pairId = vid.provenance.pairId;
-      if (pairId != null && pairId.isNotEmpty) {
-        _AssetWithXmp? matchingImage;
-        for (final img in identifiedImages) {
-          if (img.provenance.pairId == pairId) {
-            matchingImage = img;
-            break;
+      final key = '${vid.provenance.platform!}:${vid.provenance.sourceId!}';
+      identifiedVideosByGroup.putIfAbsent(key, () => []).add(vid);
+    }
+
+    // 1. In each (platform, sourceId) group, pair by itemIndex
+    // pairId is used only for cross-check (fail only when both have pairId and they differ)
+    for (final entry in groups.entries) {
+      final groupKey = entry.key;
+      final groupImages = [...entry.value];
+      final groupVideos = identifiedVideosByGroup[groupKey] ?? const [];
+
+      for (final img in groupImages) {
+        if (pairedImageIds.contains(img.asset.id)) continue;
+        final targetIndex = img.provenance.itemIndex;
+        if (targetIndex == null) continue;
+
+        // If multiple images share the same itemIndex, do not pair
+        final sameIndexImages = groupImages.where((i) => i.provenance.itemIndex == targetIndex).toList();
+        if (sameIndexImages.length > 1) continue;
+
+        // Find candidate videos in the same group with the same itemIndex
+        final candidateVideos = <_AssetWithXmp>[];
+        for (final vid in groupVideos) {
+          if (pairedVideoAssets.contains(vid.asset.id)) continue;
+          if (vid.provenance.itemIndex != targetIndex) continue;
+
+          // Cross-check pairId: fail only when both have pairId and they differ
+          final imgPair = img.provenance.pairId;
+          final vidPair = vid.provenance.pairId;
+          if (imgPair != null && imgPair.isNotEmpty &&
+              vidPair != null && vidPair.isNotEmpty) {
+            if (imgPair != vidPair) continue;
           }
+
+          candidateVideos.add(vid);
         }
-        if (matchingImage != null) {
-          pairedVideoAssets.add(vid.asset.id);
-          pairedImageIds.add(matchingImage.asset.id);
-          final key = '${matchingImage.provenance.platform!}:${matchingImage.provenance.sourceId!}';
+
+        // Pair only when exactly one candidate matches
+        if (candidateVideos.length == 1) {
+          final matchedVid = candidateVideos.first;
+          pairedVideoAssets.add(matchedVid.asset.id);
+          pairedImageIds.add(img.asset.id);
+
           final alignedVid = _AssetWithXmp(
-            vid.asset,
-            vid.path,
-            vid.provenance.copyWith(itemIndex: matchingImage.provenance.itemIndex),
+            matchedVid.asset,
+            matchedVid.path,
+            matchedVid.provenance.copyWith(itemIndex: img.provenance.itemIndex),
           );
-          groups.putIfAbsent(key, () => []).add(alignedVid);
+          entry.value.add(alignedVid);
         }
       }
     }
 
-    // 2. Fallback pairing for videos without pairId
+    // 2. Fallback pairing ONLY for unidentified videos (videos without XMP)
     for (final img in identifiedImages) {
       if (pairedImageIds.contains(img.asset.id)) continue;
 
       final imgStem = _fileStem(img.asset.title ?? '');
       if (imgStem.isEmpty) continue;
 
-      final matchingCandidates = <_CandidateVideo>[];
+      final matchingCandidates = <AssetEntity>[];
 
-      // Check identified videos without pairId
-      for (final vid in identifiedVideos) {
-        if (pairedVideoAssets.contains(vid.asset.id)) continue;
-        if (vid.provenance.pairId != null && vid.provenance.pairId!.isNotEmpty) continue;
-        if (_fileStem(vid.asset.title ?? '') != imgStem) continue;
-        if (!await _isSameAlbum(img.asset, vid.asset)) continue;
-        // Verify XMP consistency: if video has XMP, it must match the image
-        if (vid.provenance.platform != img.provenance.platform ||
-            vid.provenance.sourceId != img.provenance.sourceId) {
-          continue;
-        }
-        matchingCandidates.add(_CandidateVideo(vid.asset, vid.provenance));
-      }
-
-      // Check unidentified videos
+      // Check unidentified videos only
       for (final vidAsset in unidentifiedVideos) {
         if (pairedVideoAssets.contains(vidAsset.id)) continue;
         if (_fileStem(vidAsset.title ?? '') != imgStem) continue;
         if (!await _isSameAlbum(img.asset, vidAsset)) continue;
-        matchingCandidates.add(_CandidateVideo(vidAsset, null));
+        matchingCandidates.add(vidAsset);
       }
 
       // Pair only when exactly one candidate matches
       if (matchingCandidates.length == 1) {
-        final cand = matchingCandidates.first;
-        pairedVideoAssets.add(cand.asset.id);
+        final vidAsset = matchingCandidates.first;
+        pairedVideoAssets.add(vidAsset.id);
         pairedImageIds.add(img.asset.id);
 
         final key = '${img.provenance.platform!}:${img.provenance.sourceId!}';
-        final vidProv = cand.provenance ??
-            img.provenance.copyWith(itemIndex: img.provenance.itemIndex);
+        final vidProv = img.provenance.copyWith(itemIndex: img.provenance.itemIndex);
 
         final alignedVid = _AssetWithXmp(
-          cand.asset,
+          vidAsset,
           '',
-          vidProv.copyWith(itemIndex: img.provenance.itemIndex),
+          vidProv,
         );
         groups.putIfAbsent(key, () => []).add(alignedVid);
       }
@@ -355,7 +372,6 @@ class HistoryRebuildService {
       final existing = await db.getByPostId(sourceId);
 
       if (existing != null) {
-        // Merge: update existing record with new file info, preferring earlier capturedAt
         final mergedFiles = <String, HistoryFile>{};
         for (final f in existing.files) {
           mergedFiles['${f.itemIndex}_${f.isImage}'] = f;
