@@ -78,12 +78,21 @@ export function shortcodeToMediaId(shortcode: string): string | undefined {
   return id.toString(10);
 }
 
-/** A candidate product object: carries media payload under a matching id/pk. */
+/** A candidate product object: carries media payload under a matching id/pk/shortcode. */
 function isProductShaped(obj: Record<string, unknown>, mediaId: string): boolean {
-  const matchesId = String(obj["id"] ?? "") === mediaId || String(obj["pk"] ?? "") === mediaId;
+  const matchesId =
+    String(obj["id"] ?? "") === mediaId ||
+    String(obj["pk"] ?? "") === mediaId ||
+    (nonBlank(obj["code"]) && shortcodeToMediaId(obj["code"] as string) === mediaId) ||
+    (nonBlank(obj["shortcode"]) && shortcodeToMediaId(obj["shortcode"] as string) === mediaId);
   if (!matchesId) return false;
   return (
-    "video_versions" in obj || "carousel_media" in obj || "image_versions2" in obj
+    "video_versions" in obj ||
+    "carousel_media" in obj ||
+    "image_versions2" in obj ||
+    "display_url" in obj ||
+    "video_url" in obj ||
+    "edge_sidecar_to_children" in obj
   );
 }
 
@@ -136,12 +145,25 @@ function bestImage(media: Record<string, unknown>): Rendition | undefined {
     : undefined;
   const best = bestRendition(versions);
   if (best) return best;
-  if (nonBlank(media["display_url"])) return { url: media["display_url"] as string, width: 0, height: 0 };
+  if (nonBlank(media["display_url"])) {
+    const dim = isRecord(media["dimensions"]) ? (media["dimensions"] as Record<string, unknown>) : {};
+    const width = typeof dim["width"] === "number" ? (dim["width"] as number) : 0;
+    const height = typeof dim["height"] === "number" ? (dim["height"] as number) : 0;
+    return { url: media["display_url"] as string, width, height };
+  }
   return undefined;
 }
 
 function bestVideoUrl(media: Record<string, unknown>): Rendition | undefined {
-  return bestRendition(media["video_versions"]);
+  const best = bestRendition(media["video_versions"]);
+  if (best) return best;
+  if (nonBlank(media["video_url"])) {
+    const dim = isRecord(media["dimensions"]) ? (media["dimensions"] as Record<string, unknown>) : {};
+    const width = typeof dim["width"] === "number" ? (dim["width"] as number) : 0;
+    const height = typeof dim["height"] === "number" ? (dim["height"] as number) : 0;
+    return { url: media["video_url"] as string, width, height };
+  }
+  return undefined;
 }
 
 function mediaItem(media: Record<string, unknown>): InstagramItem | undefined {
@@ -233,7 +255,7 @@ export function parseInstagram(html: string, pageUrl: string): InstagramResult {
 
 /**
  * Build the unified post output from an already-located product object.
- * Shared by parseInstagram (HTML input) and the network-sniffing fast path.
+ * Shared by parseInstagram (HTML input), DOM extraction, and the network-sniffing fast path.
  */
 export function buildPostFromProduct(
   product: Record<string, unknown>,
@@ -251,24 +273,40 @@ export function buildPostFromProduct(
     author.id = String(authorId);
   }
 
+  let caption = "";
   const captionRaw = product["caption"];
-  const caption =
-    typeof captionRaw === "string"
-      ? captionRaw
-      : isRecord(captionRaw) && typeof captionRaw["text"] === "string"
-        ? (captionRaw["text"] as string)
-        : "";
+  if (typeof captionRaw === "string") {
+    caption = captionRaw;
+  } else if (isRecord(captionRaw) && typeof captionRaw["text"] === "string") {
+    caption = captionRaw["text"] as string;
+  } else if (isRecord(product["edge_media_to_caption"])) {
+    const edges = (product["edge_media_to_caption"] as Record<string, unknown>)["edges"];
+    if (Array.isArray(edges) && edges.length > 0 && isRecord(edges[0]["node"])) {
+      const text = (edges[0]["node"] as Record<string, unknown>)["text"];
+      if (typeof text === "string") caption = text;
+    }
+  }
 
-  const takenAt = product["taken_at"];
+  const takenAt = product["taken_at"] ?? product["taken_at_timestamp"];
   const publishedAt =
     typeof takenAt === "number" && Number.isFinite(takenAt) ? toIsoUtcSeconds(takenAt) : "";
 
   const items: InstagramItem[] = [];
   const carousel = product["carousel_media"];
-  if (Array.isArray(carousel)) {
+  const sidecar = isRecord(product["edge_sidecar_to_children"])
+    ? (product["edge_sidecar_to_children"] as Record<string, unknown>)["edges"]
+    : undefined;
+
+  if (Array.isArray(carousel) && carousel.length > 0) {
     for (const child of carousel) {
       if (!isRecord(child)) continue;
       const item = mediaItem(child);
+      if (item) items.push(item);
+    }
+  } else if (Array.isArray(sidecar) && sidecar.length > 0) {
+    for (const edge of sidecar) {
+      if (!isRecord(edge) || !isRecord(edge["node"])) continue;
+      const item = mediaItem(edge["node"] as Record<string, unknown>);
       if (item) items.push(item);
     }
   } else {

@@ -25,6 +25,7 @@ var EasySaveParser = (() => {
     extractTweetId: () => extractTweetId,
     parse: () => parse,
     parseInstagram: () => parseInstagram,
+    parseInstagramFromDom: () => parseInstagramFromDom,
     parsePage: () => parsePage,
     parseX: () => parseX,
     parseXhs: () => parseXhs
@@ -579,9 +580,9 @@ var EasySaveParser = (() => {
     return id.toString(10);
   }
   function isProductShaped(obj, mediaId) {
-    const matchesId = String(obj["id"] ?? "") === mediaId || String(obj["pk"] ?? "") === mediaId;
+    const matchesId = String(obj["id"] ?? "") === mediaId || String(obj["pk"] ?? "") === mediaId || nonBlank2(obj["code"]) && shortcodeToMediaId(obj["code"]) === mediaId || nonBlank2(obj["shortcode"]) && shortcodeToMediaId(obj["shortcode"]) === mediaId;
     if (!matchesId) return false;
-    return "video_versions" in obj || "carousel_media" in obj || "image_versions2" in obj;
+    return "video_versions" in obj || "carousel_media" in obj || "image_versions2" in obj || "display_url" in obj || "video_url" in obj || "edge_sidecar_to_children" in obj;
   }
   function findProduct(root, mediaId) {
     const seen = /* @__PURE__ */ new Set();
@@ -622,11 +623,24 @@ var EasySaveParser = (() => {
     const versions = isRecord2(media["image_versions2"]) ? media["image_versions2"]["candidates"] : void 0;
     const best = bestRendition(versions);
     if (best) return best;
-    if (nonBlank2(media["display_url"])) return { url: media["display_url"], width: 0, height: 0 };
+    if (nonBlank2(media["display_url"])) {
+      const dim = isRecord2(media["dimensions"]) ? media["dimensions"] : {};
+      const width = typeof dim["width"] === "number" ? dim["width"] : 0;
+      const height = typeof dim["height"] === "number" ? dim["height"] : 0;
+      return { url: media["display_url"], width, height };
+    }
     return void 0;
   }
   function bestVideoUrl(media) {
-    return bestRendition(media["video_versions"]);
+    const best = bestRendition(media["video_versions"]);
+    if (best) return best;
+    if (nonBlank2(media["video_url"])) {
+      const dim = isRecord2(media["dimensions"]) ? media["dimensions"] : {};
+      const width = typeof dim["width"] === "number" ? dim["width"] : 0;
+      const height = typeof dim["height"] === "number" ? dim["height"] : 0;
+      return { url: media["video_url"], width, height };
+    }
+    return void 0;
   }
   function mediaItem(media) {
     const image = bestImage(media);
@@ -704,16 +718,34 @@ var EasySaveParser = (() => {
     if (authorId !== void 0 && authorId !== null && String(authorId).length > 0) {
       author.id = String(authorId);
     }
+    let caption = "";
     const captionRaw = product["caption"];
-    const caption = typeof captionRaw === "string" ? captionRaw : isRecord2(captionRaw) && typeof captionRaw["text"] === "string" ? captionRaw["text"] : "";
-    const takenAt = product["taken_at"];
+    if (typeof captionRaw === "string") {
+      caption = captionRaw;
+    } else if (isRecord2(captionRaw) && typeof captionRaw["text"] === "string") {
+      caption = captionRaw["text"];
+    } else if (isRecord2(product["edge_media_to_caption"])) {
+      const edges = product["edge_media_to_caption"]["edges"];
+      if (Array.isArray(edges) && edges.length > 0 && isRecord2(edges[0]["node"])) {
+        const text = edges[0]["node"]["text"];
+        if (typeof text === "string") caption = text;
+      }
+    }
+    const takenAt = product["taken_at"] ?? product["taken_at_timestamp"];
     const publishedAt = typeof takenAt === "number" && Number.isFinite(takenAt) ? toIsoUtcSeconds(takenAt) : "";
     const items = [];
     const carousel = product["carousel_media"];
-    if (Array.isArray(carousel)) {
+    const sidecar = isRecord2(product["edge_sidecar_to_children"]) ? product["edge_sidecar_to_children"]["edges"] : void 0;
+    if (Array.isArray(carousel) && carousel.length > 0) {
       for (const child of carousel) {
         if (!isRecord2(child)) continue;
         const item = mediaItem(child);
+        if (item) items.push(item);
+      }
+    } else if (Array.isArray(sidecar) && sidecar.length > 0) {
+      for (const edge of sidecar) {
+        if (!isRecord2(edge) || !isRecord2(edge["node"])) continue;
+        const item = mediaItem(edge["node"]);
         if (item) items.push(item);
       }
     } else {
@@ -953,6 +985,77 @@ var EasySaveParser = (() => {
     const m = /\/(?:p|reels?|tv)\/([A-Za-z0-9-_]+)/.exec(url);
     return m ? m[1] : void 0;
   }
+  function parseInstagramFromDom(doc, pageUrl) {
+    const shortcodeMatch = /\/(?:p|reels?|tv)\/([A-Za-z0-9-_]+)/.exec(pageUrl);
+    const shortcode = shortcodeMatch ? shortcodeMatch[1] : void 0;
+    if (!shortcode) return void 0;
+    const items = [];
+    const seenUrls = /* @__PURE__ */ new Set();
+    const videos = Array.from(doc.querySelectorAll("article video, main video, video"));
+    for (const v of videos) {
+      const videoEl = v;
+      const videoSrc = videoEl.currentSrc || videoEl.src || videoEl.querySelector("source")?.getAttribute("src");
+      if (videoSrc && !seenUrls.has(videoSrc)) {
+        seenUrls.add(videoSrc);
+        const poster = videoEl.poster || videoEl.getAttribute("poster") || "";
+        items.push({
+          type: "video",
+          url: poster ? poster : videoSrc,
+          videoUrl: videoSrc
+        });
+      }
+    }
+    const imgs = Array.from(doc.querySelectorAll("article img, main img"));
+    for (const img of imgs) {
+      const imgEl = img;
+      const src = imgEl.currentSrc || imgEl.src;
+      if (!src || src.startsWith("data:") || seenUrls.has(src)) continue;
+      const rect = imgEl.getBoundingClientRect ? imgEl.getBoundingClientRect() : null;
+      if (rect && (rect.width < 120 || rect.height < 120)) continue;
+      if (items.some((it) => it.url === src)) continue;
+      seenUrls.add(src);
+      items.push({
+        type: "image",
+        url: src,
+        width: rect?.width ? Math.round(rect.width) : void 0,
+        height: rect?.height ? Math.round(rect.height) : void 0
+      });
+    }
+    if (items.length === 0) {
+      const ogVideo = doc.querySelector('meta[property="og:video"]')?.getAttribute("content");
+      const ogImage = doc.querySelector('meta[property="og:image"]')?.getAttribute("content");
+      if (ogVideo) {
+        items.push({
+          type: "video",
+          url: ogImage || ogVideo,
+          videoUrl: ogVideo
+        });
+      } else if (ogImage) {
+        items.push({
+          type: "image",
+          url: ogImage
+        });
+      }
+    }
+    if (items.length === 0) return void 0;
+    let caption = "";
+    const captionEl = doc.querySelector('article h1, article span[dir="auto"], meta[property="og:title"]');
+    if (captionEl) {
+      caption = (captionEl.getAttribute("content") || captionEl.textContent || "").trim();
+    }
+    const authorName = doc.querySelector("article header a")?.textContent?.trim() || "";
+    return {
+      ok: true,
+      data: {
+        platform: "instagram",
+        id: shortcode,
+        url: `https://www.instagram.com/p/${shortcode}/`,
+        author: { name: authorName },
+        caption,
+        items
+      }
+    };
+  }
   function parsePage() {
     const url = window.location.href;
     const html = document.documentElement.outerHTML;
@@ -980,7 +1083,11 @@ var EasySaveParser = (() => {
           buildPostFromProduct(window.__easysaveIgProducts[shortcode], shortcode)
         );
       }
-      return JSON.stringify(parseInstagram(html, url));
+      const res = parseInstagram(html, url);
+      if (res.ok) return JSON.stringify(res);
+      const domRes = parseInstagramFromDom(document, url);
+      if (domRes && domRes.ok) return JSON.stringify(domRes);
+      return JSON.stringify(res);
     }
     if (isXHost(url)) {
       return JSON.stringify({

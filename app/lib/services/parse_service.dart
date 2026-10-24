@@ -117,18 +117,33 @@ Future<ParseOutcome> parsePostOutcome(String url) {
 /// untouched — this only re-labels the error for the user. Applies to every
 /// parse path, including the background engine.
 Future<ParseFailure> _reclassifyFailure(String url, ParseFailure e) async {
-  if (e.code != ParseErrorCode.privateOrUnavailable) return e;
   final platform = platformFromUrl(url);
   if (platform == null) return e;
-  try {
-    if (!await isLoggedIn(platform)) {
-      return ParseFailure(
-        ParseErrorCode.loginRequired,
-        '可能需要登录${platformLabel(platform)}',
-      );
+
+  if (e.code == ParseErrorCode.privateOrUnavailable) {
+    try {
+      if (!await isLoggedIn(platform)) {
+        return ParseFailure(
+          ParseErrorCode.loginRequired,
+          '可能需要登录${platformLabel(platform)}',
+        );
+      }
+    } catch (_) {
+      // Fall through to the original failure.
     }
-  } catch (_) {
-    // Fall through to the original failure.
+  } else if (e.code == ParseErrorCode.loginRequired && platform == PlatformKind.instagram) {
+    try {
+      if (await isLoggedIn(platform)) {
+        // User has a valid session cookie, but post media was unavailable or restricted.
+        // Reclassify so we don't falsely expire their active session.
+        return ParseFailure(
+          ParseErrorCode.privateOrUnavailable,
+          e.message.contains('敏感内容') || e.message.contains('年龄限制')
+              ? e.message
+              : '未能读取帖子内容（可能包含受限内容或已被删除）',
+        );
+      }
+    } catch (_) {}
   }
   return e;
 }
@@ -379,9 +394,9 @@ const String _kNetworkSniffScript = '''
 
   function isProductShaped(obj) {
     if (!obj || typeof obj !== 'object') return false;
-    return typeof obj.shortcode === 'string' &&
-      obj.shortcode.length > 0 &&
-      ('video_versions' in obj || 'carousel_media' in obj || 'image_versions2' in obj);
+    const sc = typeof obj.shortcode === 'string' ? obj.shortcode : (typeof obj.code === 'string' ? obj.code : null);
+    if (!sc) return false;
+    return ('video_versions' in obj || 'carousel_media' in obj || 'image_versions2' in obj || 'display_url' in obj || 'video_url' in obj || 'edge_sidecar_to_children' in obj);
   }
 
   function extractProducts(payload) {
@@ -391,7 +406,8 @@ const String _kNetworkSniffScript = '''
       if (seen.has(node)) return;
       seen.add(node);
       if (isProductShaped(node)) {
-        window.__easysaveIgProducts[node.shortcode] = node;
+        const sc = typeof node.shortcode === 'string' ? node.shortcode : node.code;
+        window.__easysaveIgProducts[sc] = node;
       }
       if (Array.isArray(node)) {
         for (const item of node) visit(item);
@@ -404,7 +420,7 @@ const String _kNetworkSniffScript = '''
 
   function sniffText(text) {
     if (!text || text.length < 10) return;
-    if (!text.includes('shortcode')) return;
+    if (!text.includes('shortcode') && !text.includes('xdt_shortcode_media') && !text.includes('edge_sidecar_to_children') && !text.includes('display_url')) return;
     try {
       const json = JSON.parse(text);
       extractProducts(json);
@@ -465,7 +481,11 @@ Future<ParseOutcome> _headlessParse(String targetUrl, {required bool isXhs}) asy
         sharedCookiesEnabled: true,
         cacheEnabled: true,
         mixedContentMode: MixedContentMode.MIXED_CONTENT_ALWAYS_ALLOW,
-        userAgent: null,
+        userAgent: isXhs
+            ? loginUserAgent(PlatformKind.xhs)
+            : (isInstagramHost(Uri.tryParse(targetUrl)?.host ?? '')
+                ? loginUserAgent(PlatformKind.instagram)
+                : null),
       ),
       // XHS pages auto-navigate to xhsdiscover:// (app-open scheme) after
       // load, and probe 127.0.0.1 to detect its desktop client. Cancel every

@@ -13,6 +13,88 @@ function shortcodeFromUrl(url: string): string | undefined {
   return m ? m[1] : undefined;
 }
 
+export function parseInstagramFromDom(doc: Document, pageUrl: string): { ok: true; data: any } | undefined {
+  const shortcodeMatch = /\/(?:p|reels?|tv)\/([A-Za-z0-9-_]+)/.exec(pageUrl);
+  const shortcode = shortcodeMatch ? shortcodeMatch[1] : undefined;
+  if (!shortcode) return undefined;
+
+  const items: any[] = [];
+  const seenUrls = new Set<string>();
+
+  // 1. Check article / main for videos
+  const videos = Array.from(doc.querySelectorAll('article video, main video, video'));
+  for (const v of videos) {
+    const videoEl = v as HTMLVideoElement;
+    const videoSrc = videoEl.currentSrc || videoEl.src || videoEl.querySelector('source')?.getAttribute('src');
+    if (videoSrc && !seenUrls.has(videoSrc)) {
+      seenUrls.add(videoSrc);
+      const poster = videoEl.poster || videoEl.getAttribute('poster') || '';
+      items.push({
+        type: 'video',
+        url: poster ? poster : videoSrc,
+        videoUrl: videoSrc,
+      });
+    }
+  }
+
+  // 2. Check article / main for images
+  const imgs = Array.from(doc.querySelectorAll('article img, main img'));
+  for (const img of imgs) {
+    const imgEl = img as HTMLImageElement;
+    const src = imgEl.currentSrc || imgEl.src;
+    if (!src || src.startsWith('data:') || seenUrls.has(src)) continue;
+    const rect = imgEl.getBoundingClientRect ? imgEl.getBoundingClientRect() : null;
+    if (rect && (rect.width < 120 || rect.height < 120)) continue;
+    if (items.some(it => it.url === src)) continue;
+    seenUrls.add(src);
+    items.push({
+      type: 'image',
+      url: src,
+      width: rect?.width ? Math.round(rect.width) : undefined,
+      height: rect?.height ? Math.round(rect.height) : undefined,
+    });
+  }
+
+  // 3. Fallback to OpenGraph meta tags
+  if (items.length === 0) {
+    const ogVideo = doc.querySelector('meta[property="og:video"]')?.getAttribute('content');
+    const ogImage = doc.querySelector('meta[property="og:image"]')?.getAttribute('content');
+    if (ogVideo) {
+      items.push({
+        type: 'video',
+        url: ogImage || ogVideo,
+        videoUrl: ogVideo,
+      });
+    } else if (ogImage) {
+      items.push({
+        type: 'image',
+        url: ogImage,
+      });
+    }
+  }
+
+  if (items.length === 0) return undefined;
+
+  let caption = '';
+  const captionEl = doc.querySelector('article h1, article span[dir="auto"], meta[property="og:title"]');
+  if (captionEl) {
+    caption = (captionEl.getAttribute('content') || captionEl.textContent || '').trim();
+  }
+  const authorName = doc.querySelector('article header a')?.textContent?.trim() || '';
+
+  return {
+    ok: true,
+    data: {
+      platform: 'instagram',
+      id: shortcode,
+      url: `https://www.instagram.com/p/${shortcode}/`,
+      author: { name: authorName },
+      caption,
+      items,
+    },
+  };
+}
+
 export function parsePage(): string {
   const url = window.location.href;
   const html = document.documentElement.outerHTML;
@@ -44,7 +126,11 @@ export function parsePage(): string {
         buildPostFromProduct((window as any).__easysaveIgProducts[shortcode], shortcode)
       );
     }
-    return JSON.stringify(parseInstagram(html, url));
+    const res = parseInstagram(html, url);
+    if (res.ok) return JSON.stringify(res);
+    const domRes = parseInstagramFromDom(document, url);
+    if (domRes && domRes.ok) return JSON.stringify(domRes);
+    return JSON.stringify(res);
   }
   if (isXHost(url)) {
     return JSON.stringify({

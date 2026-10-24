@@ -94,10 +94,17 @@ String loginEntryUrl(PlatformKind platform) {
 /// 小红书移动端 UA 会命中 App 引流落地页（无登录入口），所以把 WebView 的
 /// UA 改成桌面形态：去掉 `Mobile` / `Version/4.0`，平台段换成 `X11; Linux
 /// x86_64`（与 XHS_Downloader_Android 的做法一致）。
-String? loginUserAgent(PlatformKind platform) => platform == PlatformKind.xhs
-    ? 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) '
-          'Chrome/141.0.0.0 Safari/537.36'
-    : null;
+/// Instagram 使用标准移动 Chrome UA，去除内嵌 WebView 标识（Version/4.0 / ; wv）。
+String? loginUserAgent(PlatformKind platform) {
+  switch (platform) {
+    case PlatformKind.xhs:
+      return 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36';
+    case PlatformKind.instagram:
+      return 'Mozilla/5.0 (Linux; Android 12; Pixel 6) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Mobile Safari/537.36';
+    case PlatformKind.x:
+      return null;
+  }
+}
 
 String _cookieUrl(PlatformKind platform) {
   switch (platform) {
