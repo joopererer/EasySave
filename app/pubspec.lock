@@ -572,11 +572,11 @@ packages:
     dependency: "direct main"
     description:
       path: "."
-      ref: "v0.2.1"
-      resolved-ref: b8a417f13cbbcd780a831c6084f3f69468a3d3ff
+      ref: "v0.2.3"
+      resolved-ref: c56cff8ac72089787af0f51f16bd4c40135c3e9c
       url: "https://github.com/joopererer/provenance_dart"
     source: git
-    version: "0.2.1"
+    version: "0.2.3"
   pub_semver:
     dependency: transitive
     description:
