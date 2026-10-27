@@ -32,6 +32,14 @@ import 'update_service.dart';
 /// retries stay at 0 so this counter is the single source of truth.
 const int kMaxAttempts = 3;
 
+int maxAttemptsFor(DownloadBatch batch, DownloadJob job) =>
+    batch.platform == 'tiktok' ? job.urls.length : kMaxAttempts;
+
+List<String> orderedMediaUrls(ParsedPost post, MediaItem item) =>
+    post.platform == 'tiktok'
+        ? [item.url, ...item.fallbacks]
+        : [...item.fallbacks, item.url];
+
 /// How long a batch snapshot may stay untouched before the other engine may
 /// consider its owner dead and adopt the batch. The owner refreshes the
 /// snapshot every 15s (heartbeat), so 90s is a safe margin.
@@ -75,6 +83,7 @@ enum StalledAction { keepWaiting, finishFile, retry, fail }
 StalledAction decideStalledAction({
   required TaskStatus? nativeStatus,
   required int attempts,
+  int maxAttempts = kMaxAttempts,
 }) {
   switch (nativeStatus) {
     case TaskStatus.complete:
@@ -88,7 +97,7 @@ StalledAction decideStalledAction({
     case TaskStatus.notFound:
     case TaskStatus.canceled:
     case null:
-      return attempts < kMaxAttempts ? StalledAction.retry : StalledAction.fail;
+      return attempts < maxAttempts ? StalledAction.retry : StalledAction.fail;
   }
 }
 
@@ -427,7 +436,7 @@ List<PlannedFile> planFiles(
     // Display order: CDN originals first (the rewritten ci primary is
     // occasionally slow/unreachable from mobile networks); ci stays last
     // as a fallback so nothing is lost when only it serves the bytes.
-    final imageUrls = [...item.fallbacks, item.url];
+    final imageUrls = orderedMediaUrls(post, item);
     if (item.type == 'live' && item.videoUrl != null) {
       final base = nextLabel('Live');
       planned.add(
@@ -822,6 +831,7 @@ class DownloadManager extends ChangeNotifier {
         final action = decideStalledAction(
           nativeStatus: record?.status,
           attempts: job.attempts,
+          maxAttempts: maxAttemptsFor(batch, job),
         );
         _log('watchdog ${job.key} native=${record?.status} -> $action');
         switch (action) {
@@ -1310,7 +1320,7 @@ class DownloadManager extends ChangeNotifier {
     DownloadJob job,
     TaskStatusUpdate update,
   ) async {
-    if (job.attempts < kMaxAttempts) {
+    if (job.attempts < maxAttemptsFor(batch, job)) {
       await _enqueueAttempt(batch, job);
       return;
     }
@@ -1726,7 +1736,7 @@ class DownloadManager extends ChangeNotifier {
         changed = true;
       } else if (record.status == TaskStatus.failed ||
           record.status == TaskStatus.notFound) {
-        if (job.attempts < kMaxAttempts) {
+        if (job.attempts < maxAttemptsFor(batch, job)) {
           await _enqueueAttempt(batch, job);
         } else {
           job.state = JobState.failed;
@@ -1770,7 +1780,7 @@ class DownloadManager extends ChangeNotifier {
 List<String>? planFilesForItem(ParsedPost post, int itemIndex) {
   if (itemIndex < 0 || itemIndex >= post.items.length) return null;
   final item = post.items[itemIndex];
-  final imageUrls = [...item.fallbacks, item.url];
+  final imageUrls = orderedMediaUrls(post, item);
   if (item.type == 'live' && item.videoUrl != null) {
     return [imageUrls.first, item.videoUrl!];
   }
