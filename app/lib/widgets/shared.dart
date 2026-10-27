@@ -230,10 +230,11 @@ class PlatformTag extends StatelessWidget {
   Widget build(BuildContext context) {
     final isXhs = platform == 'xhs';
     final isX = platform == 'x';
+    final isTiktok = platform == 'tiktok';
     final color = isXhs
         ? AppTokens.platformXhs
-        : (isX ? AppTokens.platformX : AppTokens.platformIg);
-    final label = isXhs ? '小红书' : (isX ? 'X' : 'Instagram');
+        : (isX || isTiktok ? AppTokens.platformX : AppTokens.platformIg);
+    final label = isTiktok ? 'TikTok' : (isXhs ? '小红书' : (isX ? 'X' : 'Instagram'));
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
       decoration: BoxDecoration(

@@ -810,6 +810,11 @@ class ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
             ),
             ListTile(
               leading: const Icon(Icons.login),
+              title: const Text('TikTok'),
+              onTap: () => Navigator.of(context).pop(PlatformKind.tiktok),
+            ),
+            ListTile(
+              leading: const Icon(Icons.login),
               title: const Text('X'),
               onTap: () => Navigator.of(context).pop(PlatformKind.x),
             ),
@@ -863,7 +868,7 @@ class ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
                       minLines: 1,
                       maxLines: 3,
                       decoration: InputDecoration(
-                        hintText: '粘贴小红书 / Instagram 链接',
+                        hintText: '粘贴小红书 / Instagram / X / TikTok 链接',
                         filled: true,
                         fillColor: Theme.of(context).scaffoldBackgroundColor,
                         border: const OutlineInputBorder(

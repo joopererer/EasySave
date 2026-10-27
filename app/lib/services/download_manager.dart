@@ -533,7 +533,7 @@ XmpProvenance provenanceForBatchItem(
 
 bool _shouldWriteAuthorId(String platform, String? authorId) {
   if (authorId == null || authorId.isEmpty) return false;
-  if (platform != 'x') return true;
+  if (platform != 'x' && platform != 'tiktok') return true;
   return RegExp(r'^\d+$').hasMatch(authorId);
 }
 

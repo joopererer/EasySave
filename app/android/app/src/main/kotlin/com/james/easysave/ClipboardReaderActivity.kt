@@ -77,10 +77,10 @@ class ClipboardReaderActivity : Activity() {
         // with tokens) — only its length and the host of the first URL.
         Log.i(TAG, "CLIPBOARD=${LogSanitizer.summarize(text)}")
         // Shown from this (foreground) activity so it isn't suppressed the way a
-        // background toast would be. The authoritative supported-host check
-        // runs in Dart; this only guards the obvious "no URL" case.
+        // background toast would be. This shares the supported-host guard
+        // with the share and bubble entry points; Dart resolves short links.
         val emptyMsg = intent?.getStringExtra(EXTRA_EMPTY_MESSAGE)
-        val hasHttp = !text.isNullOrBlank() && text.contains("http", ignoreCase = true)
+        val hasHttp = SupportedLinks.containsSupportedUrl(text)
         if (!hasHttp && !emptyMsg.isNullOrBlank()) {
             Toast.makeText(this, emptyMsg, Toast.LENGTH_SHORT).show()
         }

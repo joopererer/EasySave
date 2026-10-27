@@ -1513,6 +1513,7 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
         PopupMenuItem(value: 'all', child: Text('全部')),
         PopupMenuItem(value: 'xhs', child: Text('小红书')),
         PopupMenuItem(value: 'instagram', child: Text('Instagram')),
+        PopupMenuItem(value: 'tiktok', child: Text('TikTok')),
         PopupMenuItem(value: 'x', child: Text('X')),
       ],
       child: _toolbarButtonInner(
@@ -1560,6 +1561,7 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
   String _platformLabel(String key) => switch (key) {
     'xhs' => '小红书',
     'instagram' => 'Instagram',
+    'tiktok' => 'TikTok',
     'x' => 'X',
     _ => '全部',
   };

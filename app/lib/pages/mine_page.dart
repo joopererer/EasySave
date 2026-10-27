@@ -197,6 +197,7 @@ class _MinePageState extends State<MinePage> with WidgetsBindingObserver {
     final cachedXhs = await XhsAccountCache.load();
     final ig = await isLoggedIn(PlatformKind.instagram);
     final x = await isLoggedIn(PlatformKind.x);
+    final tiktok = await isLoggedIn(PlatformKind.tiktok);
     final info = await PackageInfo.fromPlatform();
     if (!mounted) return;
     setState(() {
@@ -204,6 +205,7 @@ class _MinePageState extends State<MinePage> with WidgetsBindingObserver {
       _loggedIn[PlatformKind.xhs] = cachedXhs?.loggedIn ?? false;
       _loggedIn[PlatformKind.instagram] = ig;
       _loggedIn[PlatformKind.x] = x;
+      _loggedIn[PlatformKind.tiktok] = tiktok;
       _nickname = cachedXhs?.nickname ?? '';
       _checkingLogin = false;
       _version = '${info.version}+${info.buildNumber}';
