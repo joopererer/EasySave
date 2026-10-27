@@ -487,7 +487,7 @@ Future<ParseOutcome> _headlessParse(String targetUrl, {required bool isXhs}) asy
         sharedCookiesEnabled: true,
         cacheEnabled: true,
         mixedContentMode: MixedContentMode.MIXED_CONTENT_ALWAYS_ALLOW,
-        userAgent: isXhs
+        userAgent: isTiktok ? tiktokParserUserAgent : isXhs
             ? loginUserAgent(PlatformKind.xhs)
             : (isInstagramHost(Uri.tryParse(targetUrl)?.host ?? '')
                 ? loginUserAgent(PlatformKind.instagram)
@@ -557,7 +557,12 @@ Future<ParseOutcome> _headlessParse(String targetUrl, {required bool isXhs}) asy
       final liveStr = live?.toString();
       if (liveStr != null && liveStr.isNotEmpty) currentUrl = liveStr;
     } catch (_) {}
-    if (!isTiktok) await _waitForNoteState(controller, currentUrl);
+    if (isTiktok) {
+      await waitForTiktokState(() async =>
+        await controller.evaluateJavascript(source: tiktokStateReadyScript) == true);
+    } else {
+      await _waitForNoteState(controller, currentUrl);
+    }
 
     // For Instagram: auto-dismiss age-gated / sensitive content warnings if present
     final isIg = isInstagramHost(Uri.tryParse(currentUrl)?.host ?? '');

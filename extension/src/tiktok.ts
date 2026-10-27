@@ -73,7 +73,7 @@ export type TiktokResult = { ok: false; error: { code: TiktokErrorCode; message:
 
 function failure(detail: RecordValue): TiktokResult {
   const status = Number(detail.statusCode);
-  const message = text(detail.statusMsg)?.toLowerCase() ?? '';
+  const message = (text(detail.statusMsg) ?? text(detail.statusMessage))?.toLowerCase() ?? '';
   // Private codes and IP denial are documented by yt-dlp's TikTok extractor.
   // Do not infer deletion merely from an unknown status or missing itemStruct.
   if ([10216, 10222].includes(status) || /private/.test(message))
@@ -94,7 +94,13 @@ export function parseTiktok(input: string, pageUrl: string): TiktokResult {
       /<script\b[^>]*\bid=["']__UNIVERSAL_DATA_FOR_REHYDRATION__["'][^>]*>([\s\S]*?)<\/script>/i.exec(input)?.[1];
     root = record(JSON.parse(json ?? ''));
   } catch { return failure({}); }
-  const detail = record(record(root.__DEFAULT_SCOPE__)['webapp.video-detail']);
+  const scope = record(root.__DEFAULT_SCOPE__);
+  // Mobile WebView receives the reflow route, even at a canonical /video URL.
+  // Prefer a matching item rather than an unrelated or empty route's payload.
+  const details = ['webapp.video-detail', 'webapp.reflow.video.detail']
+    .map(key => record(scope[key])).filter(detail => Object.keys(detail).length > 0);
+  const detail = details.find(detail => Number(detail.statusCode) === 0 &&
+    text(record(record(detail.itemInfo).itemStruct).id) === wanted) ?? details[0] ?? {};
   const item = record(record(detail.itemInfo).itemStruct);
   if (Number(detail.statusCode) !== 0 || !Object.keys(item).length) return failure(detail);
   const id = text(item.id);

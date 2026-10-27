@@ -1019,7 +1019,7 @@ var EasySaveParser = (() => {
   }
   function failure(detail) {
     const status = Number(detail.statusCode);
-    const message = text(detail.statusMsg)?.toLowerCase() ?? "";
+    const message = (text(detail.statusMsg) ?? text(detail.statusMessage))?.toLowerCase() ?? "";
     if ([10216, 10222].includes(status) || /private/.test(message))
       return { ok: false, error: { code: "PRIVATE", message: "\u8BE5 TikTok \u5E16\u5B50\u6216\u8D26\u53F7\u4E3A\u79C1\u5BC6" } };
     if (status === 10204 || /region|country|geo.?block|ip.*block/.test(message))
@@ -1038,7 +1038,9 @@ var EasySaveParser = (() => {
     } catch {
       return failure({});
     }
-    const detail = record(record(root.__DEFAULT_SCOPE__)["webapp.video-detail"]);
+    const scope = record(root.__DEFAULT_SCOPE__);
+    const details = ["webapp.video-detail", "webapp.reflow.video.detail"].map((key) => record(scope[key])).filter((detail2) => Object.keys(detail2).length > 0);
+    const detail = details.find((detail2) => Number(detail2.statusCode) === 0 && text(record(record(detail2.itemInfo).itemStruct).id) === wanted) ?? details[0] ?? {};
     const item = record(record(detail.itemInfo).itemStruct);
     if (Number(detail.statusCode) !== 0 || !Object.keys(item).length) return failure(detail);
     const id = text(item.id);
@@ -1180,7 +1182,15 @@ var EasySaveParser = (() => {
   function parsePage() {
     const url = window.location.href;
     const html = document.documentElement.outerHTML;
-    if (isTiktokLink(url)) return JSON.stringify(parseTiktok(html, url));
+    if (isTiktokLink(url)) {
+      const result = parseTiktok(html, url);
+      if (result.ok) return JSON.stringify(result);
+      const state = window.__UNIVERSAL_DATA_FOR_REHYDRATION__;
+      if (state && typeof state === "object") {
+        return JSON.stringify(parseTiktok(JSON.stringify(state), url));
+      }
+      return JSON.stringify(result);
+    }
     if (isXhsHost(url)) {
       const state = window.__INITIAL_STATE__;
       if (state !== void 0) {

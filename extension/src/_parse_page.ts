@@ -99,7 +99,15 @@ export function parseInstagramFromDom(doc: Document, pageUrl: string): { ok: tru
 export function parsePage(): string {
   const url = window.location.href;
   const html = document.documentElement.outerHTML;
-  if (isTiktokLink(url)) return JSON.stringify(parseTiktok(html, url));
+  if (isTiktokLink(url)) {
+    const result = parseTiktok(html, url);
+    if (result.ok) return JSON.stringify(result);
+    const state = (window as any).__UNIVERSAL_DATA_FOR_REHYDRATION__;
+    if (state && typeof state === 'object') {
+      return JSON.stringify(parseTiktok(JSON.stringify(state), url));
+    }
+    return JSON.stringify(result);
+  }
   if (isXhsHost(url)) {
     const state = (window as any).__INITIAL_STATE__;
     if (state !== undefined) {
