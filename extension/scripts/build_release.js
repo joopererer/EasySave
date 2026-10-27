@@ -28,10 +28,14 @@ const sha256Hex = crypto.createHash('sha256').update(parserBytes).digest('hex');
 // 2. Prepare manifest structure
 const manifest = {
   parserVersion: version,
-  minAppVersion: '1.0.0',
+  minAppVersion: '1.9.0',
   sha256: sha256Hex,
   signature: '',
   platforms: {
+    tiktok: {
+      enabled: true,
+      notice: 'TikTok 解析服务维护中，请稍后再试',
+    },
     xhs: {
       enabled: true,
       notice: '小红书解析服务维护中，请稍后再试',
@@ -47,6 +51,9 @@ const manifest = {
     },
   },
   headers: {
+    tiktok: {
+      Referer: 'https://www.tiktok.com/',
+    },
     xhs: {
       'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36',
     },
