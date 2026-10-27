@@ -149,36 +149,36 @@
 
 ## v1.8 备份与恢复
 
-- [ ] 备份格式规范（`spec/backup.md` 定义）：单个 JSON 文件 `easysave-backup.json`
+- [x] 备份格式规范（`spec/backup.md` 定义）：单个 JSON 文件 `easysave-backup.json`
   - 顶层：format="easysave-backup"、formatVersion=1、exportedAt（带时区）、appVersion、provenanceSpecVersion（共用常量）、settings（仅非敏感设置项）、posts[]
   - 每个 post：platform、sourceId、originalUrl（保留用于重新解析）、title、authorName、caption、createdAt、files[]；files[] 包含 filename、relativePath（MediaStore RELATIVE_PATH）、savedAt、mediaType、mediaId、itemIndex、assetId 及按 provenance-spec 第 7 节 JSON 结构表示的 provenance
   - 绝不包含：cookie、Authorization、WebView 数据、登录状态、解析器缓存、日志；xsec_token 仅允许出现在原始链接中；单元测试对导出 JSON 全文检查不含敏感键
   - 遇到更高的 formatVersion：拒绝并提示升级 App，不崩溃
-- [ ] 导出与导入（纯 Dart，可单元测试）：
+- [x] 导出与导入（纯 Dart，可单元测试）：
   - 导出：从 HistoryDb 生成一致性的 JSON（在一个读事务内完成）
   - 导入：按 (platform, sourceId) 合并帖子，按 assetId 合并文件；重复导入不产生重复记录；与已有记录冲突时，捕获字段以相册文件中的 XMP 为准
   - 从备份恢复为用户主动操作：写入历史时使用 restoreDeleted: true，备份中存在、当前被删除的记录恢复可见
   - 单元测试：导出→清空→导入后数据完全一致；导入两次结果不变；字段缺失的旧格式也能导入；已删除记录经恢复后可见；敏感词全文检测
-- [ ] 第 2 层：Android 自动备份：
+- [x] 第 2 层：Android 自动备份：
   - App 在每批下载完成后（最多每小时一次）和每天首次启动时，把 JSON 写到私有目录 `files/backup/easysave-backup.json`
   - 配置 `dataExtractionRules`（Android 12+）和 `fullBackupContent`（Android 11 及以下）：只包含这一个文件，排除数据库、shared_prefs、app_webview、cache、解析器缓存、日志
   - 提供 `adb shell bmgr backupnow` 等测试方法，由真机验证
-- [ ] 第 3 层：自动备份到用户选择的文件夹：
+- [x] 第 3 层：自动备份到用户选择的文件夹：
   - 「我的 → 设置 → 备份与恢复」：选择文件夹（ACTION_OPEN_DOCUMENT_TREE，持久化 URI 权限），建议默认位置 `Documents/EasySave Backup`
   - 自动导出 `easysave-backup-YYYYMMDD-HHmm.json`，保留最近 7 份；"立即备份"按钮；显示上次备份时间
   - 文件夹权限失效（重装、用户撤销）时，提示重新选择，不静默失败；交互参考 Mihon 自动备份设计
-- [ ] 恢复流程与联动：
+- [x] 恢复流程与联动：
   - 「从备份恢复」：ACTION_OPEN_DOCUMENT 选择备份文件 → 显示预览（帖子数、文件数、备份时间）→ 确认后合并导入
   - 首次启动或历史为空时，提示：从备份文件恢复 / 从相册重建 / 跳过
   - 恢复完成后自动执行一次"从相册重建历史"，补上备份之后下载的文件，并重新定位相册文件
-- [ ] 设置项备份恢复：
+- [x] 设置项备份恢复：
   - 仅包含非敏感设置（相册名、用过的相册名列表、文件名格式、来源信息开关、悬浮球开关、闲置时贴边隐藏等）
   - 恢复悬浮球开关时不自动请求悬浮窗权限：若当前没有权限，开关恢复为关闭，并在恢复结果中提示"悬浮球需重新授权后开启"
   - 设置中的列表字段不得使用不可修改集合作为默认值
-- [ ] files_json 新增 relativePath 字段：
+- [x] files_json 新增 relativePath 字段：
   - 新下载的文件保存后记录；旧记录在 GalleryLocatorService 定位成功时补写
   - 换手机恢复（mediaId 失效）时，先按 relativePath + 文件名查找，找不到再在用过的相册中按文件名查找
-- [ ] 验收：全部单元测试通过；真机测试验证完整流程（立即备份导出 → 成功预览 → 清除 App 数据 → 首次启动提示 → 从备份文件恢复 → 自动从相册重建，同时验证相册名默认列表修复）
+- [x] 验收：全部单元测试通过；真机测试验证完整流程（立即备份导出 → 成功预览 → 清除 App 数据 → 首次启动提示 → 从备份文件恢复 → 自动从相册重建，同时验证相册名默认列表修复）
 
 ## v1.9 TikTok
 
