@@ -12,6 +12,7 @@ import '../core/models.dart';
 import 'media_header_service.dart';
 
 String refererFor(String platform) {
+  if (platform == 'tiktok') return 'https://www.tiktok.com/';
   if (platform == 'xhs') return 'https://www.xiaohongshu.com/';
   if (platform == 'instagram') return 'https://www.instagram.com/';
   if (platform == 'x') return 'https://x.com/';
