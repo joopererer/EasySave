@@ -14,6 +14,7 @@ import '../services/history_rebuild_service.dart';
 import '../services/host_bridge.dart';
 import '../services/settings.dart';
 import '../widgets/restore_preview_sheet.dart';
+import 'download_queue_page.dart';
 
 class BackupRestorePage extends StatefulWidget {
   const BackupRestorePage({super.key});
@@ -220,22 +221,57 @@ class _BackupRestorePageState extends State<BackupRestorePage> with WidgetsBindi
   }
 
   Future<void> _handleRestoreFromFile() async {
-    // 1. Guard against concurrent active downloads
-    if (DownloadManager.instance.hasActiveDownloads) {
-      await showDialog<void>(
+    // 1. Unfinished downloads (either engine, stalled ones included) would be
+    // overwritten by the restore. Never dead-end the user: offer the queue or
+    // a one-tap cancel-all instead of a hard block.
+    final unfinished = [
+      for (final b in await DownloadManager.instance.liveBatches())
+        if (!b.isTerminal) b,
+    ];
+    if (!mounted) return;
+    if (unfinished.isNotEmpty) {
+      final choice = await showDialog<String>(
         context: context,
         builder: (ctx) => AlertDialog(
-          title: const Text('无法恢复数据'),
-          content: const Text('有下载任务正在进行，暂时无法恢复数据。请等待下载完成后再试。'),
+          title: const Text('有未完成的下载任务'),
+          content: Text(
+            '还有 ${unfinished.length} 个下载任务未完成。恢复数据前，'
+            '可以先到下载队列查看，或取消全部任务后继续。',
+          ),
           actions: [
             TextButton(
-              onPressed: () => Navigator.of(ctx).pop(),
-              child: const Text('我知道了'),
+              onPressed: () => Navigator.of(ctx).pop('cancel'),
+              child: const Text('返回'),
+            ),
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop('queue'),
+              child: const Text('去下载队列'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(ctx).pop('cancelAll'),
+              child: const Text('全部取消并继续'),
             ),
           ],
         ),
       );
-      return;
+      if (!mounted) return;
+      if (choice == 'queue') {
+        await Navigator.of(context).push(
+          MaterialPageRoute<void>(builder: (_) => const DownloadQueuePage()),
+        );
+        return;
+      }
+      if (choice != 'cancelAll') return;
+      try {
+        await DownloadManager.instance.cancelAll();
+      } catch (e) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('取消下载任务失败：$e')),
+        );
+        return;
+      }
+      if (!mounted) return;
     }
 
     // 2. Pick backup file via system picker
@@ -626,14 +662,14 @@ class _BackupRestorePageState extends State<BackupRestorePage> with WidgetsBindi
                   title: const Text('从文件恢复'),
                   subtitle: Text(
                     isDownloading
-                        ? '有下载任务正在进行，暂时无法恢复数据'
+                        ? '有下载任务未完成，恢复时可选择取消它们'
                         : '选择 JSON 备份文件恢复历史记录与个性化设置',
                     style: TextStyle(
                       color: isDownloading ? theme.colorScheme.error : null,
                     ),
                   ),
                   trailing: FilledButton(
-                    onPressed: isDownloading ? null : _handleRestoreFromFile,
+                    onPressed: _handleRestoreFromFile,
                     child: const Text('从文件恢复'),
                   ),
                 ),

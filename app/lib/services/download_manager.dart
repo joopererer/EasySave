@@ -61,7 +61,56 @@ bool canAdoptForeignBatch({
   return allTasksTerminal;
 }
 
-enum JobState { queued, active, done, failed, canceled }
+/// What the watchdog does with a job that showed no life for
+/// [kStalledBatchAgeMs].
+enum StalledAction { keepWaiting, finishFile, retry, fail }
+
+/// Pure decision for a stuck `queued`/`active` job, given the status the
+/// native task database reports for its current task ([nativeStatus] is null
+/// when the record is missing, e.g. the task was lost with a killed engine).
+///
+/// Anything the native side still works on is left alone; a finished task
+/// whose import never ran is imported now; lost or failed tasks are retried
+/// until [kMaxAttempts] is used up, then failed so the batch can finish.
+StalledAction decideStalledAction({
+  required TaskStatus? nativeStatus,
+  required int attempts,
+}) {
+  switch (nativeStatus) {
+    case TaskStatus.complete:
+      return StalledAction.finishFile;
+    case TaskStatus.enqueued:
+    case TaskStatus.running:
+    case TaskStatus.waitingToRetry:
+    case TaskStatus.paused:
+      return StalledAction.keepWaiting;
+    case TaskStatus.failed:
+    case TaskStatus.notFound:
+    case TaskStatus.canceled:
+    case null:
+      return attempts < kMaxAttempts ? StalledAction.retry : StalledAction.fail;
+  }
+}
+
+/// Own live batches win over their (older) snapshot copies; newest first.
+List<DownloadBatch> mergeBatchViews(
+  Iterable<DownloadBatch> own,
+  Iterable<DownloadBatch> snapshots,
+) {
+  final byId = <String, DownloadBatch>{
+    for (final b in snapshots) b.batchId: b,
+    for (final b in own) b.batchId: b,
+  };
+  final list = byId.values.toList()
+    ..sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
+  return list;
+}
+
+/// Longest the gallery import of one finished file may take.
+const Duration kFinishFileTimeout = Duration(seconds: 60);
+
+/// `paused` is appended last: job states are persisted by index.
+enum JobState { queued, active, done, failed, canceled, paused }
 
 class DownloadJob {
   DownloadJob({
@@ -100,7 +149,18 @@ class DownloadJob {
   String? savedTitle;
   String? relativePath;
 
+  /// Last time this job showed life (enqueued, progress or status update), in
+  /// epoch ms. The watchdog and the stale-batch check use it; 0 = unknown
+  /// (snapshots written before this field existed).
+  int lastProgressAt = 0;
+
+  bool get isTerminal =>
+      state == JobState.done ||
+      state == JobState.failed ||
+      state == JobState.canceled;
+
   Map<String, Object?> toJson() => {
+    'lastProgressAt': lastProgressAt,
     'key': key,
     'label': label,
     'filename': filename,
@@ -140,6 +200,7 @@ class DownloadJob {
     job.mediaId = map['mediaId'] as String?;
     job.savedTitle = map['savedTitle'] as String?;
     job.relativePath = map['relativePath'] as String?;
+    job.lastProgressAt = (map['lastProgressAt'] as num?)?.toInt() ?? 0;
     return job;
   }
 }
@@ -228,6 +289,57 @@ class DownloadBatch {
   );
 
   int get succeeded => jobs.where((j) => j.state == JobState.done).length;
+
+  /// Overall progress 0..1 across the jobs that were not canceled.
+  double get progress {
+    final live = jobs.where((j) => j.state != JobState.canceled).toList();
+    if (live.isEmpty) return 0;
+    var sum = 0.0;
+    for (final j in live) {
+      sum += j.state == JobState.done ? 1.0 : j.progress.clamp(0.0, 1.0);
+    }
+    return sum / live.length;
+  }
+
+  /// Unfinished and every unfinished job is paused by the user.
+  bool get isPaused {
+    final open = jobs.where((j) => !j.isTerminal);
+    return open.isNotEmpty && open.every((j) => j.state == JobState.paused);
+  }
+
+  int get doneCount => jobs.where((j) => j.state == JobState.done).length;
+  int get failedCount => jobs.where((j) => j.state == JobState.failed).length;
+
+  /// Newest sign of life among the unfinished jobs; falls back to the
+  /// snapshot time for snapshots without per-job timestamps.
+  int get lastActivityAt {
+    var last = 0;
+    for (final j in jobs) {
+      if (!j.isTerminal && j.lastProgressAt > last) last = j.lastProgressAt;
+    }
+    return last > 0 ? last : updatedAt;
+  }
+
+  /// A non-terminal batch whose jobs showed no life for
+  /// [kStalledBatchAgeMs]. Such a batch is not really running any more, so it
+  /// must not block other work (e.g. restoring a backup).
+  bool isStalledAt(int now) {
+    if (isTerminal) return false;
+    // A batch the user paused is waiting on purpose, not stuck.
+    if (isPaused) return false;
+    final last = lastActivityAt;
+    if (last <= 0) return false;
+    return now - last >= kStalledBatchAgeMs;
+  }
+
+  /// Copy of this batch owned by [owner], used when this engine takes over a
+  /// batch whose owner is gone (so its task updates are no longer ignored).
+  DownloadBatch copyOwnedBy(String owner) {
+    final json = Map<String, Object?>.from(toJson())
+      ..['source'] = owner
+      ..['settledBy'] = null;
+    return DownloadBatch.fromJson(json);
+  }
 
   Map<String, Object?> toJson() => {
     'batchId': batchId,
@@ -479,6 +591,48 @@ Future<void> writeBatchHistory(
   );
 }
 
+/// Write a file-less history record as soon as a batch starts, so the post is
+/// already visible in the history (with a downloading placeholder) while its
+/// files are fetched. [HistoryDb.upsert] merges by file key, so an existing
+/// record keeps its files; the terminal [writeBatchHistory] fills in the rest.
+Future<void> writePlaceholderHistory(
+  HistoryDb db,
+  DownloadBatch batch,
+) async {
+  await db.upsert(
+    HistoryRecord(
+      platform: batch.platform,
+      postId: batch.postId,
+      authorName: batch.authorName,
+      title: batch.title,
+      caption: batch.caption,
+      thumbnailUrl: _thumbnailFor(batch),
+      postUrl: batch.postUrl,
+      fileCount: 0,
+      createdAt: DateTime.now(),
+      // itemsJson is deliberately omitted: HistoryRecord.fromMap infers
+      // `unknown` files from it when files_json is empty, which would make the
+      // placeholder look like a fully downloaded post. The terminal
+      // writeBatchHistory supplies it; an existing record keeps its own.
+      itemsJson: null,
+      files: const [],
+    ),
+    // A user-initiated download brings a deleted record back.
+    restoreDeleted: true,
+  );
+}
+
+/// Remove the placeholder of a batch that produced nothing. A record that
+/// already has files (an earlier download of the same post) is left alone.
+Future<void> discardEmptyPlaceholder(HistoryDb db, DownloadBatch batch) async {
+  final existing = await db.getByPostId(batch.postId);
+  if (existing == null || existing.id == null) return;
+  // fileCount, not files: HistoryRecord.fromMap infers `unknown` files from
+  // itemsJson, so `files` is non-empty even when nothing was saved.
+  if (existing.fileCount > 0) return;
+  await db.permanentlyDelete(existing.id!);
+}
+
 class DownloadManager extends ChangeNotifier {
   DownloadManager._();
 
@@ -525,9 +679,50 @@ class DownloadManager extends ChangeNotifier {
 
   DownloadBatch? batchById(String batchId) => _batches[batchId];
 
-  /// Whether any download batch is currently active or queued.
-  bool get hasActiveDownloads =>
-      _batches.values.any((b) => !b.isTerminal);
+  /// Whether any download batch is genuinely running. Batches that showed no
+  /// sign of life for [kStalledBatchAgeMs] are ignored: they are stuck, and
+  /// must not block other work such as restoring a backup.
+  bool get hasActiveDownloads {
+    final now = DateTime.now().millisecondsSinceEpoch;
+    return _batches.values.any((b) => !b.isTerminal && !b.isStalledAt(now));
+  }
+
+  /// Batches that are not terminal, stalled ones included (queue page).
+  List<DownloadBatch> get unfinishedBatches =>
+      [for (final b in _batches.values) if (!b.isTerminal) b];
+
+  /// Every batch this engine knows about merged with the snapshots of the
+  /// other engine (SharedPreferences are shared), newest first. A batch that
+  /// the other engine is running only exists as a snapshot here.
+  Future<List<DownloadBatch>> liveBatches() async {
+    final snapshots = <DownloadBatch>[];
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.reload();
+      for (final id in prefs.getStringList(_batchIndexKey) ?? const []) {
+        final raw = prefs.getString(_batchKey(id));
+        if (raw == null) continue;
+        try {
+          snapshots.add(
+            DownloadBatch.fromJson((jsonDecode(raw) as Map).cast<String, Object?>()),
+          );
+        } catch (_) {
+          // Skip a corrupt snapshot.
+        }
+      }
+    } catch (_) {
+      // Fall back to the in-memory batches below.
+    }
+    return mergeBatchViews(_batches.values, snapshots);
+  }
+
+  /// Batch of [postId] that is still unfinished, from [liveBatches].
+  Future<DownloadBatch?> activeBatchForPost(String postId) async {
+    for (final b in await liveBatches()) {
+      if (b.postId == postId && !b.isTerminal) return b;
+    }
+    return null;
+  }
 
   @visibleForTesting
   void setBatchForTesting(DownloadBatch batch) {
@@ -584,7 +779,82 @@ class DownloadManager extends ChangeNotifier {
   Future<void> _heartbeatTick() async {
     for (final batch in _batches.values.toList()) {
       if (batch.isTerminal) continue;
+      // Only batches this engine owns are driven here; a foreign batch is
+      // left to its owner until it is adopted or force-adopted.
+      if (batch.source == DownloadManager.owner) {
+        try {
+          await _watchdog(batch);
+        } catch (e) {
+          _log('watchdog error ${batch.batchId}: $e');
+        }
+      }
+      if (batch.isTerminal) continue;
       await _persist(batch);
+    }
+  }
+
+  final Set<String> _watchdogBusy = <String>{};
+
+  /// Unstick jobs that were silent for [kStalledBatchAgeMs]: ask the native
+  /// task database what really happened and import, retry or fail the job so
+  /// the batch can reach a terminal state.
+  Future<void> _watchdog(DownloadBatch batch) async {
+    final now = DateTime.now().millisecondsSinceEpoch;
+    for (final job in batch.jobs.toList()) {
+      if (job.isTerminal || job.state == JobState.paused) continue;
+      if (job.lastProgressAt <= 0) {
+        // Snapshot from an older build: start the clock now.
+        job.lastProgressAt = now;
+        continue;
+      }
+      if (now - job.lastProgressAt < kStalledBatchAgeMs) continue;
+      if (!_watchdogBusy.add(job.key)) continue;
+      try {
+        TaskRecord? record;
+        final taskId = job.currentTaskId;
+        if (taskId != null) {
+          try {
+            record = await FileDownloader().database.recordForId(taskId);
+          } catch (_) {
+            record = null;
+          }
+        }
+        final action = decideStalledAction(
+          nativeStatus: record?.status,
+          attempts: job.attempts,
+        );
+        _log('watchdog ${job.key} native=${record?.status} -> $action');
+        switch (action) {
+          case StalledAction.keepWaiting:
+            // Native side still works on it: give it another window.
+            job.lastProgressAt = now;
+          case StalledAction.finishFile:
+            job.lastProgressAt = now;
+            await _finishFile(batch, job, record!.task);
+          case StalledAction.retry:
+            if (taskId != null) {
+              try {
+                await FileDownloader().cancelTaskWithId(taskId);
+              } catch (_) {}
+            }
+            try {
+              await _enqueueAttempt(batch, job);
+            } catch (e) {
+              job.state = JobState.failed;
+              job.error = '加入下载队列失败';
+            }
+          case StalledAction.fail:
+            job.state = JobState.failed;
+            job.error ??= '下载超时，请重试';
+        }
+      } finally {
+        _watchdogBusy.remove(job.key);
+      }
+    }
+    if (batch.isTerminal) {
+      await _persist(batch);
+      notifyListeners();
+      await _afterTerminal(batch, recovered: false);
     }
   }
 
@@ -709,10 +979,27 @@ class DownloadManager extends ChangeNotifier {
     _log('batch start id=$batchId source=${batch.source} post=${batch.postId}');
     unawaited(_refreshNotification(batch));
     await _persist(batch);
-    for (final job in batch.jobs) {
-      await _enqueueAttempt(batch, job);
+    try {
+      final db = await HistoryDb.instance();
+      await writePlaceholderHistory(db, batch);
+    } catch (e) {
+      // The placeholder is a convenience; the download must still start.
+      _log('placeholder write failed post=${batch.postId}: $e');
     }
+    for (final job in batch.jobs) {
+      // One failing enqueue must not strand the remaining jobs in `queued`
+      // (that kept the batch non-terminal forever, e.g. stuck at ~50%).
+      try {
+        await _enqueueAttempt(batch, job);
+      } catch (e) {
+        _log('enqueue failed ${job.key}: $e');
+        job.state = JobState.failed;
+        job.error = '加入下载队列失败';
+      }
+    }
+    await _persist(batch);
     notifyListeners();
+    if (batch.isTerminal) await _afterTerminal(batch, recovered: false);
     return batch;
   }
 
@@ -736,6 +1023,7 @@ class DownloadManager extends ChangeNotifier {
     job.currentTaskId = taskId;
     job.state = job.attempts == 1 ? JobState.queued : JobState.active;
     job.error = null;
+    job.lastProgressAt = DateTime.now().millisecondsSinceEpoch;
     
     // Look up existing assetId for this file (for re-download reuse)
     String? existingAssetId;
@@ -778,7 +1066,10 @@ class DownloadManager extends ChangeNotifier {
     );
     await _persist(batch);
     notifyListeners();
-    await FileDownloader().enqueue(task);
+    final accepted = await FileDownloader().enqueue(task);
+    if (!accepted) {
+      throw StateError('enqueue rejected for ${job.key}');
+    }
   }
 
   void _onUpdate(TaskUpdate update) {
@@ -803,6 +1094,10 @@ class DownloadManager extends ChangeNotifier {
       }
     }
     if (job == null) return;
+    // A paused job has no live task; a late update of the cancelled one must
+    // not flip it back to active/canceled/failed.
+    if (job.state == JobState.paused) return;
+    job.lastProgressAt = DateTime.now().millisecondsSinceEpoch;
     if (update is TaskProgressUpdate) {
       if (update.progress >= 0) {
         job.state = JobState.active;
@@ -890,6 +1185,9 @@ class DownloadManager extends ChangeNotifier {
     } catch (_) {}
     
     try {
+      // A hung album scan / metadata write / gallery copy must not leave the
+      // job `active` forever (the batch would never finish).
+      await (() async {
       final file = File(path);
       if (!await file.exists()) {
         job.error = '文件丢失，请重试';
@@ -940,6 +1238,11 @@ class DownloadManager extends ChangeNotifier {
           job.assetId = writtenAssetId;
         }
       }
+      })().timeout(kFinishFileTimeout);
+    } on TimeoutException {
+      _log('gallery import timed out: ${job.filename}');
+      job.error = '保存超时，请重试';
+      job.state = JobState.failed;
     } catch (e) {
       job.error = '$e';
       job.state = JobState.failed;
@@ -1033,6 +1336,14 @@ class DownloadManager extends ChangeNotifier {
       batch.historyWritten = true;
       final db = await HistoryDb.instance();
       await writeBatchHistory(db, batch, recovered: recovered);
+      if (batch.succeeded == 0) {
+        // Nothing was saved: do not leave an empty placeholder behind.
+        try {
+          await discardEmptyPlaceholder(db, batch);
+        } catch (e) {
+          _log('placeholder cleanup failed post=${batch.postId}: $e');
+        }
+      }
       final locator = GalleryLocatorService.instance;
       if (locator.hasAccess) {
         unawaited(locator.scanAlbum(force: true));
@@ -1061,7 +1372,10 @@ class DownloadManager extends ChangeNotifier {
   /// Manual per-row retry: re-parse the post first so 403/expired CDN links
   /// are refreshed; fall back to the stored URLs when parsing fails.
   Future<void> retryJob(DownloadBatch batch, DownloadJob job) async {
-    if (job.state != JobState.failed) return;
+    if (job.state != JobState.failed && job.state != JobState.canceled) return;
+    // The batch becomes active again: let its terminal handler write the
+    // history record once more when it finishes.
+    batch.historyWritten = false;
     try {
       final outcome = await parsePostOutcome(batch.postUrl);
       final postIdx = job.itemIndex > 0 ? job.itemIndex - 1 : job.itemIndex;
@@ -1102,13 +1416,185 @@ class DownloadManager extends ChangeNotifier {
       }
     }
     for (final job in batch.jobs) {
-      if (job.state == JobState.queued || job.state == JobState.active) {
+      if (job.state == JobState.queued ||
+          job.state == JobState.active ||
+          job.state == JobState.paused) {
         job.state = JobState.canceled;
       }
     }
     await _persist(batch);
     notifyListeners();
     await _afterTerminal(batch, recovered: false);
+  }
+
+  /// Pause a batch: running files are stopped (they restart from zero on
+  /// resume, the CDNs do not reliably support ranges) and the watchdog leaves
+  /// them alone until [resumeBatch].
+  Future<void> pauseBatch(DownloadBatch batch) async {
+    batch = await _ownedOrAdopt(batch);
+    final ids = <String>[];
+    for (final job in batch.jobs) {
+      if (job.state != JobState.queued && job.state != JobState.active) {
+        continue;
+      }
+      final id = job.currentTaskId;
+      if (id != null) ids.add(id);
+      // State first, so the late `canceled` update of the task is ignored.
+      job.state = JobState.paused;
+      job.progress = 0;
+    }
+    await _persist(batch);
+    notifyListeners();
+    if (ids.isNotEmpty) {
+      try {
+        await FileDownloader().cancelTasksWithIds(ids);
+      } catch (_) {
+        // Best effort; the paused state already shields the job.
+      }
+    }
+    unawaited(_refreshNotification(batch));
+  }
+
+  /// Re-enqueue every paused file of a batch.
+  Future<void> resumeBatch(DownloadBatch batch) async {
+    batch = await _ownedOrAdopt(batch);
+    final now = DateTime.now().millisecondsSinceEpoch;
+    for (final job in batch.jobs.where((j) => j.state == JobState.paused)) {
+      job.attempts = 0;
+      job.progress = 0;
+      job.lastProgressAt = now;
+      try {
+        await _enqueueAttempt(batch, job);
+      } catch (e) {
+        _log('resume enqueue failed ${job.key}: $e');
+        job.state = JobState.failed;
+        job.error = '加入下载队列失败';
+      }
+    }
+    await _persist(batch);
+    notifyListeners();
+    if (batch.isTerminal) await _afterTerminal(batch, recovered: false);
+  }
+
+  /// Retry everything that is not finished: failed files (re-parsed for fresh
+  /// links) and files that are stuck, queued or paused (plain re-enqueue).
+  Future<void> restartBatch(DownloadBatch batch) async {
+    batch = await _ownedOrAdopt(batch);
+    final now = DateTime.now().millisecondsSinceEpoch;
+    for (final job in batch.jobs.toList()) {
+      switch (job.state) {
+        case JobState.failed:
+          await retryJob(batch, job);
+        case JobState.queued:
+        case JobState.active:
+        case JobState.paused:
+          final id = job.currentTaskId;
+          if (id != null && job.state != JobState.paused) {
+            try {
+              await FileDownloader().cancelTaskWithId(id);
+            } catch (_) {}
+          }
+          job.attempts = 0;
+          job.progress = 0;
+          job.lastProgressAt = now;
+          try {
+            await _enqueueAttempt(batch, job);
+          } catch (e) {
+            _log('restart enqueue failed ${job.key}: $e');
+            job.state = JobState.failed;
+            job.error = '加入下载队列失败';
+          }
+        case JobState.done:
+        case JobState.canceled:
+          break;
+      }
+    }
+    await _persist(batch);
+    notifyListeners();
+    if (batch.isTerminal) await _afterTerminal(batch, recovered: false);
+  }
+
+  /// Cancel one file of a batch (queue page / preview page).
+  Future<void> cancelJob(DownloadBatch batch, DownloadJob job) async {
+    batch = await _ownedOrAdopt(batch);
+    job = batch.jobs.firstWhere((j) => j.key == job.key, orElse: () => job);
+    if (job.isTerminal) return;
+    final id = job.currentTaskId;
+    if (id != null) {
+      try {
+        await FileDownloader().cancelTaskWithId(id);
+      } catch (_) {
+        // Best effort; the state change below is what matters.
+      }
+    }
+    job.state = JobState.canceled;
+    await _persist(batch);
+    notifyListeners();
+    await _afterTerminal(batch, recovered: false);
+  }
+
+  /// Cancel a batch and drop it from the queue, including its snapshot. An
+  /// empty placeholder history record is removed by [_afterTerminal]; a post
+  /// that already has saved files stays in the history.
+  Future<void> removeBatch(DownloadBatch batch) async {
+    final owned = await _ownedOrAdopt(batch);
+    if (!owned.isTerminal) await cancelBatch(owned);
+    _batches.remove(owned.batchId);
+    _lastShownPercent.remove(owned.batchId);
+    await _removeSnapshot(owned.batchId);
+    unawaited(_cancelNotification(owned));
+    notifyListeners();
+  }
+
+  /// Cancel every unfinished batch, then drop them (restore-anyway path).
+  Future<void> cancelAll() async {
+    for (final b in await liveBatches()) {
+      if (b.isTerminal) continue;
+      await removeBatch(b);
+    }
+  }
+
+  /// Take over a batch whose owner engine is gone or stuck, so this engine's
+  /// task updates, watchdog and cancel logic apply to it.
+  Future<DownloadBatch> forceAdopt(DownloadBatch batch) async {
+    if (batch.source == DownloadManager.owner) {
+      _batches[batch.batchId] ??= batch;
+      return _batches[batch.batchId]!;
+    }
+    final mine = batch.copyOwnedBy(DownloadManager.owner);
+    // Give the watchdog a fresh window instead of judging old timestamps.
+    final now = DateTime.now().millisecondsSinceEpoch;
+    for (final j in mine.jobs) {
+      if (!j.isTerminal) j.lastProgressAt = now;
+    }
+    _batches[mine.batchId] = mine;
+    _log('force adopt batch ${mine.batchId} (was ${batch.source})');
+    await _persist(mine);
+    notifyListeners();
+    return mine;
+  }
+
+  Future<DownloadBatch> _ownedOrAdopt(DownloadBatch batch) async {
+    final known = _batches[batch.batchId];
+    if (known != null && known.source == DownloadManager.owner) return known;
+    if (batch.source == DownloadManager.owner) {
+      _batches[batch.batchId] = batch;
+      return batch;
+    }
+    return forceAdopt(batch);
+  }
+
+  Future<void> _removeSnapshot(String batchId) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.remove(_batchKey(batchId));
+      final index = prefs.getStringList(_batchIndexKey) ?? [];
+      if (index.remove(batchId)) {
+        await prefs.setStringList(_batchIndexKey, index);
+      }
+    } catch (_) {
+      // Best effort.
+    }
   }
 
   /// Kill-recovery: finish gallery imports for tasks that completed while

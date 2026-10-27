@@ -59,6 +59,11 @@ class GalleryBrowserItem {
   );
 }
 
+/// Initial selection of the browser. [selectedIndices] holds original post
+/// item indices ([GalleryBrowserItem.index]); null means nothing is selected.
+Set<int> initialGallerySelection(Set<int>? selectedIndices) =>
+    Set<int>.from(selectedIndices ?? const <int>{});
+
 class GalleryBrowserPage extends StatefulWidget {
   const GalleryBrowserPage({
     super.key,
@@ -99,8 +104,11 @@ class _GalleryBrowserPageState extends State<GalleryBrowserPage> {
   late final PageController _pageController =
       PageController(initialPage: widget.initialIndex);
   late final ScrollController _thumbController = ScrollController();
-  late final Set<int> _selected = Set<int>.from(
-    widget.selectedIndices ?? {for (var i = 0; i < widget.items.length; i++) i},
+  // Selection is keyed by GalleryBrowserItem.index (the original post item
+  // index), never by list position. Viewers that do not drive a selection
+  // (history) start with nothing selected.
+  late final Set<int> _selected = initialGallerySelection(
+    widget.selectedIndices,
   );
 
   double _dragOffset = 0.0;

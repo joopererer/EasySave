@@ -16,6 +16,7 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../core/models.dart';
 import '../services/auth.dart';
+import '../services/download_manager.dart';
 import '../services/gallery_locator_service.dart';
 import '../services/history_backfill_service.dart';
 import '../services/history_db.dart';
@@ -28,6 +29,7 @@ import '../widgets/delete_records_sheet.dart';
 import '../widgets/download_sheet.dart';
 import '../widgets/gallery_browser.dart';
 import '../widgets/history_cards.dart';
+import 'download_queue_page.dart';
 import 'login_page.dart';
 import 'preview_page.dart';
 
@@ -75,7 +77,128 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
     WidgetsBinding.instance.addObserver(this);
     GalleryLocatorService.instance.addListener(_onLocatorChanged);
     HostBridge.historyRevision.addListener(_onHostHistoryChanged);
+    DownloadManager.instance.addListener(_refreshDownloads);
+    // Batches of the other engine only exist as snapshots, so poll them.
+    _downloadPoll = Timer.periodic(
+      const Duration(seconds: 3),
+      (_) => _refreshDownloads(),
+    );
+    _refreshDownloads();
     _init();
+  }
+
+  Timer? _downloadPoll;
+  bool _refreshingDownloads = false;
+
+  /// Unfinished batches (placeholder cards + queue badge).
+  List<DownloadBatch> _unfinished = const [];
+
+  /// postId -> 0..1 for posts that are being downloaded right now.
+  Map<String, double> _downloadProgress = const {};
+
+  /// postId -> unfinished batch, for the pause / cancel controls on a card.
+  Map<String, DownloadBatch> _downloadBatches = const {};
+
+  bool _isPaused(String postId) => _downloadBatches[postId]?.isPaused ?? false;
+
+  bool _isStalled(String postId) =>
+      _downloadBatches[postId]?.isStalledAt(
+        DateTime.now().millisecondsSinceEpoch,
+      ) ??
+      false;
+
+  /// Pause, resume or (when stalled) restart the download of [postId].
+  Future<void> _toggleDownload(String postId) async {
+    final batch = _downloadBatches[postId];
+    if (batch == null) return;
+    final dm = DownloadManager.instance;
+    try {
+      if (batch.isPaused) {
+        await dm.resumeBatch(batch);
+      } else if (batch.isStalledAt(DateTime.now().millisecondsSinceEpoch)) {
+        await dm.restartBatch(await dm.forceAdopt(batch));
+      } else {
+        await dm.pauseBatch(batch);
+      }
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('操作失败，请稍后重试')),
+        );
+      }
+    }
+    unawaited(_refreshDownloads());
+  }
+
+  /// Cancel the download of [postId] after a confirm; the half-made
+  /// placeholder record is discarded by the manager.
+  Future<void> _cancelDownload(String postId) async {
+    final batch = _downloadBatches[postId];
+    if (batch == null) return;
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('取消下载？'),
+        content: const Text('未下载完的图片将被丢弃，已保存的内容保留。'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('继续下载'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('取消下载'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true || !mounted) return;
+    try {
+      final dm = DownloadManager.instance;
+      await dm.cancelBatch(await dm.forceAdopt(batch));
+    } catch (_) {
+      // The next refresh shows the real state.
+    }
+    unawaited(_refreshDownloads());
+    unawaited(_reload());
+  }
+
+  Future<void> _refreshDownloads() async {
+    if (_refreshingDownloads || !mounted) return;
+    _refreshingDownloads = true;
+    try {
+      final all = await DownloadManager.instance.liveBatches();
+      if (!mounted) return;
+      final unfinished = [for (final b in all) if (!b.isTerminal) b];
+      final progress = <String, double>{
+        for (final b in unfinished) b.postId: b.progress,
+      };
+      final pausedNow = {
+        for (final b in unfinished)
+          if (b.isPaused) b.postId,
+      };
+      final changed = progress.length != _downloadProgress.length ||
+          unfinished.length != _unfinished.length ||
+          pausedNow.length !=
+              _downloadBatches.values.where((b) => b.isPaused).length ||
+          progress.entries.any(
+            (e) => (_downloadProgress[e.key] ?? -1) != e.value,
+          );
+      if (changed) {
+        setState(() {
+          _unfinished = unfinished;
+          _downloadProgress = progress;
+          _downloadBatches = {for (final b in unfinished) b.postId: b};
+        });
+      } else {
+        // Same numbers, but keep the batch objects fresh for the actions.
+        _downloadBatches = {for (final b in unfinished) b.postId: b};
+      }
+    } catch (_) {
+      // Progress display is best effort.
+    } finally {
+      _refreshingDownloads = false;
+    }
   }
 
   @override
@@ -83,6 +206,8 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
     WidgetsBinding.instance.removeObserver(this);
     GalleryLocatorService.instance.removeListener(_onLocatorChanged);
     HostBridge.historyRevision.removeListener(_onHostHistoryChanged);
+    DownloadManager.instance.removeListener(_refreshDownloads);
+    _downloadPoll?.cancel();
     _searchController.dispose();
     super.dispose();
   }
@@ -887,6 +1012,44 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
     );
   }
 
+  /// Entry to the download queue (right end of the view-switcher row); the
+  /// badge counts unfinished batches. Same 34px round look as the other
+  /// toolbar buttons.
+  Widget _queueButton() {
+    final count = _unfinished.length;
+    return Tooltip(
+      message: count > 0 ? '下载队列（$count 个进行中）' : '下载队列',
+      child: InkWell(
+        borderRadius: BorderRadius.circular(999),
+        onTap: () async {
+          await Navigator.of(context).push(
+            MaterialPageRoute<void>(builder: (_) => const DownloadQueuePage()),
+          );
+          if (!mounted) return;
+          unawaited(_refreshDownloads());
+          unawaited(_reload());
+        },
+        child: Container(
+          width: 40,
+          height: 40,
+          alignment: Alignment.center,
+          decoration: BoxDecoration(
+            // Always filled so the entry reads as a button, tinted while busy.
+            color: count > 0
+                ? SecondaryBg.pink(context)
+                : Theme.of(context).colorScheme.surfaceContainerHighest,
+            shape: BoxShape.circle,
+          ),
+          child: Badge(
+            isLabelVisible: count > 0,
+            label: Text('$count'),
+            child: const Icon(Icons.download_for_offline_outlined, size: 24),
+          ),
+        ),
+      ),
+    );
+  }
+
   PreferredSizeWidget _appBar() {
     final filtered = _filtered;
     final fileCount = filtered.fold<int>(
@@ -1235,14 +1398,34 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
               ],
             ),
           ),
-          const Spacer(),
-          if (_author != null)
-            _filterChip(_author!, () => setState(() => _author = null)),
-          if (_platform != 'all')
-            _filterChip(
-              _platformLabel(_platform),
-              () => setState(() => _platform = 'all'),
+          // Active filter chips take the free space and scroll when they do
+          // not fit, so the queue button on the right never gets pushed out.
+          Expanded(
+            child: Align(
+              alignment: Alignment.centerRight,
+              child: SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                reverse: true,
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    if (_author != null)
+                      _filterChip(
+                        _author!,
+                        () => setState(() => _author = null),
+                      ),
+                    if (_platform != 'all')
+                      _filterChip(
+                        _platformLabel(_platform),
+                        () => setState(() => _platform = 'all'),
+                      ),
+                  ],
+                ),
+              ),
             ),
+          ),
+          const SizedBox(width: 4),
+          _queueButton(),
         ],
       ),
     );
@@ -1517,6 +1700,11 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
                   record: record,
                   selectionMode: _selectionMode,
                   selected: _selected.contains(key),
+                  downloadProgress: _downloadProgress[record.postId],
+                  downloadPaused: _isPaused(record.postId),
+                  downloadStalled: _isStalled(record.postId),
+                  onToggleDownload: () => _toggleDownload(record.postId),
+                  onCancelDownload: () => _cancelDownload(record.postId),
                   onTap: () => _openRecord(record),
                   onLongPress: () => _enterSelection(key),
                   onToggleSelect: () => _toggleSelection(key),
@@ -1580,6 +1768,13 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
                         record: record,
                         selectionMode: _selectionMode,
                         selected: _selected.contains(key),
+                        downloadProgress: _downloadProgress[record.postId],
+                        downloadPaused: _isPaused(record.postId),
+                        downloadStalled: _isStalled(record.postId),
+                        onToggleDownload: () =>
+                            _toggleDownload(record.postId),
+                        onCancelDownload: () =>
+                            _cancelDownload(record.postId),
                         onTap: () => _openRecord(record),
                         onLongPress: () => _enterSelection(key),
                         onToggleSelect: () => _toggleSelection(key),

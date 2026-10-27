@@ -46,6 +46,8 @@ PlatformKind? platformFromUrl(String url) {
   if (host.isEmpty) return null;
   if (host == 'xiaohongshu.com' ||
       host.endsWith('.xiaohongshu.com') ||
+      host == 'rednote.com' ||
+      host.endsWith('.rednote.com') ||
       host == 'xhslink.com' ||
       host.endsWith('.xhslink.com') ||
       host == 'xhslink.cn' ||

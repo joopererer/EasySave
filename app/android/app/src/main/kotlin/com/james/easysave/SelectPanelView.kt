@@ -19,6 +19,9 @@ import android.view.MotionEvent
 import android.view.TextureView
 import android.view.View
 import android.view.ViewConfiguration
+import android.text.InputType
+import android.view.inputmethod.EditorInfo
+import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.GridLayout
 import android.widget.ImageView
@@ -170,6 +173,12 @@ class SelectPanelView(
     private val syncers = ArrayList<() -> Unit>()
     private var shimmerAnim: ValueAnimator? = null
     private var finished = false
+
+    // Thumbnails cost mobile data, so they stay off until the user asks.
+    private var showThumbs = false
+    private lateinit var specInput: EditText
+    private lateinit var specHint: TextView
+    private lateinit var thumbToggle: TextView
 
     private lateinit var countLabel: TextView
     private lateinit var allBtn: TextView
@@ -353,6 +362,74 @@ class SelectPanelView(
             }
         )
         sheet.addView(header)
+
+        // Number entry: type the item numbers chosen elsewhere (e.g. 1,3,5-8)
+        // instead of loading thumbnails to tap them.
+        val specRow = LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        specInput = EditText(context).apply {
+            hint = "输入编号，如 1,3,5-8"
+            setHintTextColor(0x66FFFFFF)
+            setTextColor(Color.WHITE)
+            textSize = 14f
+            setSingleLine(true)
+            inputType = InputType.TYPE_CLASS_TEXT
+            imeOptions = EditorInfo.IME_ACTION_DONE
+            setPadding(dp(12), dp(8), dp(12), dp(8))
+            background = GradientDrawable().apply {
+                cornerRadius = dp(10).toFloat()
+                setColor(0xFF2A2928.toInt())
+            }
+            setOnEditorActionListener { _, actionId, _ ->
+                if (actionId == EditorInfo.IME_ACTION_DONE) {
+                    applySpec()
+                    true
+                } else false
+            }
+        }
+        specRow.addView(
+            specInput,
+            LinearLayout.LayoutParams(0, LayoutParams.WRAP_CONTENT).apply { weight = 1f }
+        )
+        specRow.addView(
+            TextView(context).apply {
+                text = "应用"
+                setTextColor(0xFFFF6A3D.toInt())
+                textSize = 14f
+                setPadding(dp(14), dp(8), dp(6), dp(8))
+                setOnClickListener { applySpec() }
+            }
+        )
+        sheet.addView(specRow)
+
+        val subRow = LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(0, dp(4), 0, dp(4))
+        }
+        specHint = TextView(context).apply {
+            setTextColor(0x99FFFFFF.toInt())
+            textSize = 12f
+        }
+        subRow.addView(
+            specHint,
+            LinearLayout.LayoutParams(0, LayoutParams.WRAP_CONTENT).apply { weight = 1f }
+        )
+        thumbToggle = TextView(context).apply {
+            text = "显示预览图（耗流量）"
+            setTextColor(0xFFFF6A3D.toInt())
+            textSize = 12f
+            setPadding(dp(8), dp(4), 0, dp(4))
+            setOnClickListener {
+                showThumbs = !showThumbs
+                text = if (showThumbs) "隐藏预览图" else "显示预览图（耗流量）"
+                render()
+            }
+        }
+        subRow.addView(thumbToggle)
+        sheet.addView(subRow)
 
         grid = GridLayout(context).apply { columnCount = COLS }
         sheet.addView(
@@ -638,8 +715,39 @@ class SelectPanelView(
                 alpha = 0.6f
             }
             box.addView(shimmer, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT))
-            shimmers.add(shimmer)
-            startShimmer()
+            if (showThumbs) {
+                shimmers.add(shimmer)
+                startShimmer()
+            } else {
+                shimmer.visibility = View.GONE
+            }
+
+            // Item number (1-based), matching what the post shows. Large when
+            // thumbnails are off, small badge when they are on.
+            box.addView(
+                TextView(context).apply {
+                    text = "${i + 1}"
+                    setTextColor(Color.WHITE)
+                    typeface = Typeface.DEFAULT_BOLD
+                    if (showThumbs) {
+                        textSize = 11f
+                        gravity = Gravity.CENTER
+                        background = GradientDrawable().apply {
+                            cornerRadius = dp(4).toFloat()
+                            setColor(0x99000000.toInt())
+                        }
+                    } else {
+                        textSize = 26f
+                        gravity = Gravity.CENTER
+                    }
+                },
+                if (showThumbs) {
+                    LayoutParams(dp(26), dp(18), Gravity.BOTTOM or Gravity.END)
+                        .apply { setMargins(0, 0, dp(6), dp(6)) }
+                } else {
+                    LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT)
+                }
+            )
 
             if (cells[i].video) {
                 box.addView(
@@ -744,7 +852,7 @@ class SelectPanelView(
             }
 
             grid.addView(box)
-            loadThumb(cells[i].thumb, iv, shimmer)
+            if (showThumbs) loadThumb(cells[i].thumb, iv, shimmer)
         }
         updateFooter()
     }
@@ -957,6 +1065,32 @@ class SelectPanelView(
         allBtn.text = if (total > 0 && selected.size == total) "取消全选" else "全选"
         downloadBtn.text = "下载 (${selected.size})"
         downloadBtn.alpha = if (selected.isEmpty()) 0.5f else 1f
+    }
+
+    /** Replace the selection with the numbers typed in [specInput]. */
+    private fun applySpec() {
+        val text = specInput.text.toString()
+        if (text.isBlank()) return
+        val total = cells.size
+        val r = IndexSpec.parse(text, total)
+        selected.clear()
+        selected.addAll(r.indices)
+        for (s in syncers) s()
+        updateFooter()
+        specHint.setTextColor(
+            if (r.invalid || r.outOfRange) 0xFFFFB26A.toInt() else 0x99FFFFFF.toInt()
+        )
+        specHint.text = when {
+            r.invalid -> "有无法识别的编号，共 $total 张"
+            r.outOfRange -> "部分编号超出范围，共 $total 张"
+            else -> "已选 ${r.indices.size} 项"
+        }
+        // Hide the keyboard so the download button is reachable.
+        runCatching {
+            val imm = context.getSystemService(Context.INPUT_METHOD_SERVICE)
+                as android.view.inputmethod.InputMethodManager
+            imm.hideSoftInputFromWindow(specInput.windowToken, 0)
+        }
     }
 
     private fun toggleAll() {

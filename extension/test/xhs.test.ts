@@ -227,6 +227,53 @@ describe("video duration", () => {
   });
 });
 
+describe("type=video carousel", () => {
+  const id = "6adc49970000000033020539";
+  const imageEntry = (n: number) => ({
+    urlDefault: `https://sns-img-bd.xhscdn.com/img${n}`,
+    width: 1080,
+    height: 1440,
+  });
+
+  it("keeps every imageList entry when a video-typed note has several images", () => {
+    const result = buildNoteFromRecord(
+      {
+        noteId: id,
+        type: "video",
+        title: "t",
+        user: { nickname: "momo", userId: "u1" },
+        imageList: [imageEntry(1), imageEntry(2), imageEntry(3)],
+        video: { consumer: { originVideoKey: "https://example.com/v.mp4" } },
+      },
+      id,
+    );
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      const images = result.data.items.filter((i) => i.type === "image");
+      expect(images).toHaveLength(3);
+    }
+  });
+
+  it("still treats a single-cover video note as one video", () => {
+    const result = buildNoteFromRecord(
+      {
+        noteId: id,
+        type: "video",
+        title: "t",
+        user: { nickname: "momo", userId: "u1" },
+        imageList: [imageEntry(1)],
+        video: { consumer: { originVideoKey: "https://example.com/v.mp4" } },
+      },
+      id,
+    );
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.data.items).toHaveLength(1);
+      expect(result.data.items[0].type).toBe("video");
+    }
+  });
+});
+
 describe("imageUrlOf fallbacks", () => {
   const id = "6aca089a000000000a01efb4";
   const noteWith = (images: Array<Record<string, unknown>>) => ({

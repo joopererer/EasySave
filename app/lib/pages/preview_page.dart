@@ -1,6 +1,8 @@
 // Preview page: 2-column grid, collapsible caption, ordered selection,
 // fullscreen viewing, and saving through the download panel.
 
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -65,9 +67,117 @@ class _PreviewPageState extends State<PreviewPage> {
   // starves the raster thread and freezes the transition mid-way.
   bool _imagesReady = false;
 
+  /// Unfinished (or just failed) batch of this post, from both engines.
+  DownloadBatch? _activeBatch;
+  Timer? _batchPoll;
+  bool _batchBusy = false;
+
+  Future<void> _refreshBatch() async {
+    if (!mounted || _batchBusy) return;
+    try {
+      final batches = await DownloadManager.instance.liveBatches();
+      DownloadBatch? found;
+      for (final b in batches) {
+        if (b.postId != widget.post.id) continue;
+        // Keep a finished batch visible only while it has failures to retry.
+        if (!b.isTerminal || b.failedCount > 0) {
+          found = b;
+          break;
+        }
+      }
+      if (!mounted) return;
+      setState(() => _activeBatch = found);
+    } catch (_) {
+      // The strip is a convenience; ignore lookup errors.
+    }
+  }
+
+  Future<void> _batchAction(Future<void> Function(DownloadBatch b) act) async {
+    final batch = _activeBatch;
+    if (batch == null || _batchBusy) return;
+    setState(() => _batchBusy = true);
+    try {
+      await act(batch);
+    } finally {
+      if (mounted) setState(() => _batchBusy = false);
+      await _refreshBatch();
+    }
+  }
+
+  Widget _downloadStrip() {
+    final batch = _activeBatch;
+    if (batch == null) return const SizedBox.shrink();
+    final running = !batch.isTerminal;
+    final stalled =
+        running && batch.isStalledAt(DateTime.now().millisecondsSinceEpoch);
+    final pct = (batch.progress * 100).round();
+    final text = running
+        ? (stalled ? '下载已停滞 · $pct%' : '下载中 · $pct%')
+        : '${batch.failedCount} 个文件下载失败';
+    return Material(
+      color: Theme.of(context).colorScheme.surfaceContainerHighest,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(16, 8, 8, 8),
+        child: Row(
+          children: [
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(text, style: const TextStyle(fontSize: 13)),
+                  if (running) ...[
+                    const SizedBox(height: 4),
+                    LinearProgressIndicator(
+                      value: batch.progress > 0 ? batch.progress : null,
+                      semanticsLabel: '下载进度 $pct%',
+                    ),
+                  ],
+                ],
+              ),
+            ),
+            if (running || stalled)
+              TextButton(
+                onPressed: _batchBusy
+                    ? null
+                    : () => _batchAction(
+                        (b) => DownloadManager.instance.removeBatch(b),
+                      ),
+                child: const Text('取消下载'),
+              ),
+            if (stalled || !running)
+              TextButton(
+                onPressed: _batchBusy
+                    ? null
+                    : () => _batchAction((b) async {
+                        final owned =
+                            await DownloadManager.instance.forceAdopt(b);
+                        await DownloadManager.instance.retryBatch(owned);
+                      }),
+                child: const Text('重试'),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  @override
+  void dispose() {
+    _batchPoll?.cancel();
+    DownloadManager.instance.removeListener(_refreshBatch);
+    super.dispose();
+  }
+
   @override
   void initState() {
     super.initState();
+    DownloadManager.instance.addListener(_refreshBatch);
+    _batchPoll = Timer.periodic(
+      const Duration(seconds: 2),
+      (_) => _refreshBatch(),
+    );
+    _refreshBatch();
     _checkDownloaded();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       Future.delayed(const Duration(milliseconds: 350), () {
@@ -276,6 +386,7 @@ class _PreviewPageState extends State<PreviewPage> {
       ),
       body: Column(
         children: [
+          _downloadStrip(),
           if (captionText.isNotEmpty)
             ExpansionTile(
               title: Text(

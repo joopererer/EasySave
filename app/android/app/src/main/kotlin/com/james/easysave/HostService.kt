@@ -297,7 +297,11 @@ class HostService : Service() {
                     overlayType,
                     WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
                     PixelFormat.TRANSLUCENT
-                ).apply { gravity = Gravity.TOP or Gravity.START }
+                ).apply {
+                    gravity = Gravity.TOP or Gravity.START
+                    // Keep the number input visible above the keyboard.
+                    softInputMode = WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE
+                }
                 (getSystemService(WINDOW_SERVICE) as WindowManager).addView(panel, params)
                 panelView = panel
                 panel.setItems(items)

@@ -143,6 +143,114 @@ class HistoryThumb extends StatelessWidget {
 }
 
 /// Dark translucent capsule badge (multi count / video duration).
+/// Dimmed cover with a progress ring and percent, shown on a history card
+/// while its post is still being downloaded.
+class DownloadingOverlay extends StatelessWidget {
+  const DownloadingOverlay({
+    super.key,
+    required this.progress,
+    this.compact = false,
+    this.paused = false,
+    this.stalled = false,
+    this.onTogglePause,
+    this.onCancel,
+  });
+
+  final double progress;
+  final bool compact;
+
+  /// The user paused the download: shows a play icon and "已暂停".
+  final bool paused;
+
+  /// No sign of life for a while: the toggle becomes "retry".
+  final bool stalled;
+
+  /// Pause / resume (retry when [stalled]); null hides the control.
+  final VoidCallback? onTogglePause;
+
+  /// Cancel and discard the download; null hides the control.
+  final VoidCallback? onCancel;
+
+  @override
+  Widget build(BuildContext context) {
+    final pct = (progress.clamp(0.0, 1.0) * 100).round();
+    final size = compact ? 28.0 : 44.0;
+    final label = paused ? '已暂停 $pct%' : (stalled ? '已停滞 $pct%' : '下载中 $pct%');
+    final toggleIcon = paused
+        ? Icons.play_arrow_rounded
+        : (stalled ? Icons.refresh : Icons.pause_rounded);
+    final toggleTip = paused ? '继续下载' : (stalled ? '重试' : '暂停下载');
+    final actionSize = compact ? 18.0 : 22.0;
+
+    Widget action(IconData icon, String tip, VoidCallback onTap) {
+      return IconButton(
+        tooltip: tip,
+        onPressed: onTap,
+        icon: Icon(icon, color: Colors.white, size: actionSize),
+        padding: EdgeInsets.zero,
+        visualDensity: VisualDensity.compact,
+        constraints: BoxConstraints.tightFor(
+          width: compact ? 28 : 36,
+          height: compact ? 28 : 36,
+        ),
+        style: IconButton.styleFrom(backgroundColor: Colors.black38),
+      );
+    }
+
+    return Semantics(
+      label: label,
+      child: ColoredBox(
+        color: Colors.black.withValues(alpha: 0.45),
+        child: Center(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              SizedBox(
+                width: size,
+                height: size,
+                child: CircularProgressIndicator(
+                  // Indeterminate until the first bytes arrive.
+                  value: paused || progress > 0
+                      ? progress.clamp(0.0, 1.0)
+                      : null,
+                  strokeWidth: 3,
+                  color: paused ? Colors.white54 : Colors.white,
+                  backgroundColor: Colors.white24,
+                ),
+              ),
+              if (!compact) ...[
+                const SizedBox(height: 6),
+                Text(
+                  label,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ],
+              if (onTogglePause != null || onCancel != null) ...[
+                SizedBox(height: compact ? 2 : 6),
+                Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    if (onTogglePause != null)
+                      action(toggleIcon, toggleTip, onTogglePause!),
+                    if (onTogglePause != null && onCancel != null)
+                      SizedBox(width: compact ? 4 : 8),
+                    if (onCancel != null)
+                      action(Icons.close, '取消下载', onCancel!),
+                  ],
+                ),
+              ],
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class DarkBadge extends StatelessWidget {
   const DarkBadge({super.key, required this.child});
 
@@ -294,6 +402,11 @@ class WaterfallPostCard extends StatelessWidget {
     this.selected = false,
     this.onLongPress,
     this.onToggleSelect,
+    this.downloadProgress,
+    this.downloadPaused = false,
+    this.downloadStalled = false,
+    this.onToggleDownload,
+    this.onCancelDownload,
   });
 
   final HistoryRecord record;
@@ -302,6 +415,15 @@ class WaterfallPostCard extends StatelessWidget {
   final bool selected;
   final VoidCallback? onLongPress;
   final VoidCallback? onToggleSelect;
+
+  /// 0..1 while a download of this post is running, null otherwise.
+  final double? downloadProgress;
+  final bool downloadPaused;
+  final bool downloadStalled;
+
+  /// Pause / resume (retry when stalled) and cancel of the running download.
+  final VoidCallback? onToggleDownload;
+  final VoidCallback? onCancelDownload;
 
   @override
   Widget build(BuildContext context) {
@@ -384,6 +506,19 @@ class WaterfallPostCard extends StatelessWidget {
                       cover: cover,
                       fileCount: fileCount,
                     ),
+                    if (downloadProgress != null)
+                      Positioned.fill(
+                        child: DownloadingOverlay(
+                          progress: downloadProgress!,
+                          paused: downloadPaused,
+                          stalled: downloadStalled,
+                          // Hidden in multi-select so taps keep selecting.
+                          onTogglePause: selectionMode
+                              ? null
+                              : onToggleDownload,
+                          onCancel: selectionMode ? null : onCancelDownload,
+                        ),
+                      ),
                     if (selectionMode)
                       Positioned(
                         top: 6,
@@ -483,6 +618,11 @@ class ListPostRow extends StatelessWidget {
     this.selected = false,
     this.onLongPress,
     this.onToggleSelect,
+    this.downloadProgress,
+    this.downloadPaused = false,
+    this.downloadStalled = false,
+    this.onToggleDownload,
+    this.onCancelDownload,
   });
 
   final HistoryRecord record;
@@ -493,6 +633,13 @@ class ListPostRow extends StatelessWidget {
   final bool selected;
   final VoidCallback? onLongPress;
   final VoidCallback? onToggleSelect;
+
+  /// 0..1 while a download of this post is running, null otherwise.
+  final double? downloadProgress;
+  final bool downloadPaused;
+  final bool downloadStalled;
+  final VoidCallback? onToggleDownload;
+  final VoidCallback? onCancelDownload;
 
   @override
   Widget build(BuildContext context) {
@@ -526,6 +673,19 @@ class ListPostRow extends StatelessWidget {
                     fit: StackFit.expand,
                     children: [
                       HistoryThumb(record: record, fit: BoxFit.cover),
+                      if (downloadProgress != null)
+                        Positioned.fill(
+                          child: DownloadingOverlay(
+                            progress: downloadProgress!,
+                            compact: true,
+                            paused: downloadPaused,
+                            stalled: downloadStalled,
+                            onTogglePause: selectionMode
+                                ? null
+                                : onToggleDownload,
+                            onCancel: selectionMode ? null : onCancelDownload,
+                          ),
+                        ),
                       if (badge != null)
                         Positioned(
                           top: 4,

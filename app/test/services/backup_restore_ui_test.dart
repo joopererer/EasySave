@@ -245,38 +245,74 @@ void main() {
       expect(find.text('当前没有任何记录，备份将是空的，确定要导出吗？'), findsNothing);
     });
 
-    testWidgets('disables 从文件恢复 button with reason when download is active', (tester) async {
-      final activeBatch = DownloadBatch(
-        batchId: 'active_batch_1',
-        album: 'Test',
-        postUrl: 'https://test.com',
-        platform: 'xhs',
-        postId: 'p1',
-        jobs: [
-          DownloadJob(
-            key: 'job1',
-            label: 'job1',
-            filename: 'test.jpg',
-            urls: ['https://test.com/1.jpg'],
-            isImage: true,
-            itemIndex: 1,
-          )..state = JobState.active,
-        ],
-      );
-      DownloadManager.instance.setBatchForTesting(activeBatch);
+    DownloadBatch activeBatch() => DownloadBatch(
+      batchId: 'active_batch_1',
+      album: 'Test',
+      postUrl: 'https://test.com',
+      platform: 'xhs',
+      postId: 'p1',
+      jobs: [
+        DownloadJob(
+          key: 'job1',
+          label: 'job1',
+          filename: 'test.jpg',
+          urls: ['https://test.com/1.jpg'],
+          isImage: true,
+          itemIndex: 1,
+        )
+          ..state = JobState.active
+          ..lastProgressAt = DateTime.now().millisecondsSinceEpoch,
+      ],
+    );
 
+    testWidgets('keeps 从文件恢复 enabled and explains the unfinished task', (tester) async {
+      DownloadManager.instance.setBatchForTesting(activeBatch());
       try {
-        await tester.pumpWidget(
-          const MaterialApp(
-            home: BackupRestorePage(),
-          ),
-        );
+        await tester.pumpWidget(const MaterialApp(home: BackupRestorePage()));
         await tester.pumpAndSettle();
 
-        expect(find.text('有下载任务正在进行，暂时无法恢复数据'), findsOneWidget);
+        expect(find.text('有下载任务未完成，恢复时可选择取消它们'), findsOneWidget);
         final restoreBtnFinder = find.widgetWithText(FilledButton, '从文件恢复');
         expect(restoreBtnFinder, findsOneWidget);
-        expect(tester.widget<FilledButton>(restoreBtnFinder).onPressed, isNull);
+        expect(tester.widget<FilledButton>(restoreBtnFinder).onPressed, isNotNull);
+      } finally {
+        DownloadManager.instance.clearBatchesForTesting();
+      }
+    });
+
+    testWidgets('restore with an unfinished task offers queue / cancel-all instead of a hard block', (tester) async {
+      DownloadManager.instance.setBatchForTesting(activeBatch());
+      try {
+        await tester.pumpWidget(const MaterialApp(home: BackupRestorePage()));
+        await tester.pumpAndSettle();
+
+        await tester.tap(find.widgetWithText(FilledButton, '从文件恢复'));
+        await tester.pumpAndSettle();
+
+        expect(find.text('有未完成的下载任务'), findsOneWidget);
+        expect(find.text('去下载队列'), findsOneWidget);
+        expect(find.text('全部取消并继续'), findsOneWidget);
+        expect(find.text('无法恢复数据'), findsNothing);
+
+        // Backing out leaves the batch untouched.
+        await tester.tap(find.text('返回'));
+        await tester.pumpAndSettle();
+        expect(DownloadManager.instance.unfinishedBatches, hasLength(1));
+      } finally {
+        DownloadManager.instance.clearBatchesForTesting();
+      }
+    });
+
+    testWidgets('a stalled batch no longer disables restore messaging', (tester) async {
+      final stalled = activeBatch();
+      stalled.jobs.single.lastProgressAt =
+          DateTime.now().millisecondsSinceEpoch - kStalledBatchAgeMs - 5000;
+      DownloadManager.instance.setBatchForTesting(stalled);
+      try {
+        await tester.pumpWidget(const MaterialApp(home: BackupRestorePage()));
+        await tester.pumpAndSettle();
+
+        expect(find.text('有下载任务未完成，恢复时可选择取消它们'), findsNothing);
       } finally {
         DownloadManager.instance.clearBatchesForTesting();
       }

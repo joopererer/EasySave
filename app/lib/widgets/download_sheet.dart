@@ -280,6 +280,8 @@ class _DownloadSheetState extends State<DownloadSheet> {
         return '失败$attempt：${job.error ?? '未知错误'}';
       case JobState.canceled:
         return '已取消';
+      case JobState.paused:
+        return '已暂停';
     }
   }
 

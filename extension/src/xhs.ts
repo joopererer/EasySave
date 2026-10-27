@@ -525,8 +525,8 @@ export function parseXhs(html: string, pageUrl: string): XhsResult {
   }
 
   const looksLikeXhs =
-    /xiaohongshu\.com|xhslink/.test(pageUrl) ||
-    /xiaohongshu\.com|xhslink|__INITIAL_STATE__/.test(html.slice(0, 20000));
+    /xiaohongshu\.com|rednote\.com|xhslink/.test(pageUrl) ||
+    /xiaohongshu\.com|rednote\.com|xhslink|__INITIAL_STATE__/.test(html.slice(0, 20000));
   if (!note) {
     if (looksLikeXhs) {
       return {
@@ -668,8 +668,11 @@ export function buildNoteFromRecord(
       (typeof (note["video"] as Record<string, unknown>)["mediaV2"] === "string" &&
         (((note["video"] as Record<string, unknown>)["mediaV2"] as string).includes("master_url") ||
           ((note["video"] as Record<string, unknown>)["mediaV2"] as string).includes("masterUrl"))));
+  // A real video note carries a single cover in `imageList`. Several entries mean a
+  // mixed carousel (images / live photos / video) even if `type` says "video".
   const isVideoNote =
-    noteType === "video" || (noteType === "" && hasMainVideo && images.length <= 1 && !firstHasStream);
+    (noteType === "video" && images.length <= 1) ||
+    (noteType === "" && hasMainVideo && images.length <= 1 && !firstHasStream);
 
   const items: XhsItem[] = [];
 

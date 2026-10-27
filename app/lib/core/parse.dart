@@ -6,6 +6,8 @@ import 'models.dart';
 bool isXhsHost(String host) =>
     host == 'xiaohongshu.com' ||
     host.endsWith('.xiaohongshu.com') ||
+    host == 'rednote.com' ||
+    host.endsWith('.rednote.com') ||
     host == 'xhslink.com' ||
     host.endsWith('.xhslink.com') ||
     host == 'xhslink.cn' ||

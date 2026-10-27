@@ -43,6 +43,8 @@ void main() {
       expect(isSupportedLink('https://twitter.com/user/status/12345678'), isTrue);
       expect(isSupportedLink('https://t.co/xyz123'), isTrue);
       expect(isSupportedLink('https://evil-xiaohongshu.com/x'), isFalse);
+      expect(isSupportedLink('https://www.rednote.com/explore/abc'), isTrue);
+      expect(isSupportedLink('https://evil-rednote.com/x'), isFalse);
     });
   });
 }

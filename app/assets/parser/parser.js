@@ -385,7 +385,7 @@ var EasySaveParser = (() => {
     if (note && wantedId && nonBlank(note["noteId"]) && note["noteId"].toLowerCase() !== wantedId) {
       note = void 0;
     }
-    const looksLikeXhs = /xiaohongshu\.com|xhslink/.test(pageUrl) || /xiaohongshu\.com|xhslink|__INITIAL_STATE__/.test(html.slice(0, 2e4));
+    const looksLikeXhs = /xiaohongshu\.com|rednote\.com|xhslink/.test(pageUrl) || /xiaohongshu\.com|rednote\.com|xhslink|__INITIAL_STATE__/.test(html.slice(0, 2e4));
     if (!note) {
       if (looksLikeXhs) {
         return {
@@ -462,7 +462,7 @@ var EasySaveParser = (() => {
     const hasMainVideo = isRecord(note["video"]) && (nonBlank(note["video"]["originVideoKey"]) || isRecord(note["video"]["consumer"]) && nonBlank(
       note["video"]["consumer"]["originVideoKey"]
     ) || collectStreamCandidates(note["video"]["media"]).length > 0 || collectStreamCandidates(note["video"]["stream"]).length > 0 || typeof note["video"]["mediaV2"] === "string" && (note["video"]["mediaV2"].includes("master_url") || note["video"]["mediaV2"].includes("masterUrl")));
-    const isVideoNote = noteType === "video" || noteType === "" && hasMainVideo && images.length <= 1 && !firstHasStream;
+    const isVideoNote = noteType === "video" && images.length <= 1 || noteType === "" && hasMainVideo && images.length <= 1 && !firstHasStream;
     const items = [];
     if (isVideoNote) {
       const resolved = resolveVideoUrl(note["video"]);
@@ -967,7 +967,7 @@ var EasySaveParser = (() => {
     }
   }
   function isXhsHost(host) {
-    return /xiaohongshu\.com|xhslink\.com|xhslink\.cn|xhs\.cn/.test(host);
+    return /xiaohongshu\.com|rednote\.com|xhslink\.com|xhslink\.cn|xhs\.cn/.test(host);
   }
   function isInstagramHost(host) {
     return /instagram\.com|instagr\.am/.test(host);
