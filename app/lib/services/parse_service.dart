@@ -16,6 +16,7 @@ import '../core/parse.dart';
 import 'auth.dart';
 import 'links.dart';
 import 'update_service.dart';
+import 'tiktok_links.dart';
 
 class ParseFailure implements Exception {
   ParseFailure(this.code, this.message);
@@ -43,6 +44,8 @@ void _checkPlatform(String url) {
     platform = 'instagram';
   } else if (isXHost(host)) {
     platform = 'x';
+  } else if (isTiktokHost(host)) {
+    platform = 'tiktok';
   }
 
   if (platform.isNotEmpty && !ParserManager.instance.isPlatformEnabled(platform)) {
@@ -156,6 +159,7 @@ Future<ParseFailure> _reclassifyFailure(String url, ParseFailure e) async {
 /// a real browser engine follows the redirect to the actual note page.
 /// Resolve short links to their final URL.
 Future<String> _resolveForParse(String url) async {
+  if (isTiktokLink(url)) return canonicalTiktokUrl(url) ?? url;
   try {
     return await resolveShortLink(
       url,
@@ -462,6 +466,8 @@ const String _kNetworkSniffScript = '''
 
 Future<ParseOutcome> _headlessParse(String targetUrl, {required bool isXhs}) async {
   final loaded = Completer<void>();
+  final isTiktok = isTiktokLink(targetUrl);
+  var canonicalNavigationStarted = false;
   InAppWebViewController? readyController;
   HeadlessInAppWebView? headless;
   try {
@@ -514,7 +520,16 @@ Future<ParseOutcome> _headlessParse(String targetUrl, {required bool isXhs}) asy
         }
         return NavigationActionPolicy.CANCEL;
       },
-      onLoadStop: (controller, uri) {
+      onLoadStop: (controller, uri) async {
+        if (isTiktok && !loaded.isCompleted) {
+          final canonical = canonicalTiktokUrl(uri?.toString() ?? '');
+          if (canonical == null) return;
+          if (!canonicalNavigationStarted && targetUrl != canonical) {
+            canonicalNavigationStarted = true;
+            await controller.loadUrl(urlRequest: URLRequest(url: WebUri(canonical)));
+            return;
+          }
+        }
         readyController ??= controller;
         if (!loaded.isCompleted) loaded.complete();
       },
@@ -542,7 +557,7 @@ Future<ParseOutcome> _headlessParse(String targetUrl, {required bool isXhs}) asy
       final liveStr = live?.toString();
       if (liveStr != null && liveStr.isNotEmpty) currentUrl = liveStr;
     } catch (_) {}
-    await _waitForNoteState(controller, currentUrl);
+    if (!isTiktok) await _waitForNoteState(controller, currentUrl);
 
     // For Instagram: auto-dismiss age-gated / sensitive content warnings if present
     final isIg = isInstagramHost(Uri.tryParse(currentUrl)?.host ?? '');

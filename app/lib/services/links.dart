@@ -3,6 +3,7 @@
 // needs network and is covered by widget-free manual testing.
 
 import 'dart:io';
+import 'tiktok_links.dart';
 
 final _urlPattern = RegExp(
   r"https?://[^\s<>"
@@ -12,6 +13,7 @@ const _trailingPunctuation = ".,!?;:)]}\"'，。！？；：）】”…";
 
 /// Supported post hosts (full pages and short links).
 bool isSupportedLink(String url) {
+  if (isTiktokLink(url)) return true;
   final host = Uri.tryParse(url)?.host.toLowerCase() ?? '';
   if (host.isEmpty) return false;
   return host == 'xiaohongshu.com' ||
