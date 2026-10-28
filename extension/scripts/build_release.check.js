@@ -1,0 +1,84 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import crypto from 'node:crypto';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { resolve, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { spawnSync } from 'node:child_process';
+import { buildRelease } from './build_release.js';
+
+const repo = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
+function fixture(t) {
+  const root = mkdtempSync(resolve(tmpdir(), 'easysave-v2-release-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const { privateKey, publicKey } = crypto.generateKeyPairSync('ed25519');
+  const seed = privateKey.export({ format: 'der', type: 'pkcs8' }).subarray(-32).toString('hex');
+  const pub = publicKey.export({ format: 'der', type: 'spki' }).subarray(-32).toString('hex');
+  for (const name of ['config/sites.json', 'config/parser-release.json', 'spec/sites-manifest.schema.json', 'spec/PARSER_VERSION']) {
+    mkdirSync(dirname(resolve(root, name)), { recursive: true });
+    writeFileSync(resolve(root, name), readFileSync(resolve(repo, name)));
+  }
+  for (const [name, value] of Object.entries({
+    'app/lib/services/update_service.dart': "const kDefaultParserPublicKeyHex = '" + pub + "';",
+    'app/assets/parser/parser.js': '/* parser test fixture */',
+    'spec/manifest.json': 'frozen manifest', 'spec/parser.js': 'frozen parser',
+  })) {
+    mkdirSync(dirname(resolve(root, name)), { recursive: true });
+    writeFileSync(resolve(root, name), value);
+  }
+  return { root, seed, publicKey };
+}
+
+for (const seed of [undefined, '', ' ', 'zz'.repeat(32), '01'.repeat(31), '01'.repeat(33)]) {
+  test('invalid or missing signing key produces no artifacts: ' + String(seed?.length), (t) => {
+    const { root } = fixture(t);
+    assert.throws(() => buildRelease({ root, seed: seed ?? '' }), /64 hex/);
+    assert.equal(existsSync(resolve(root, 'extension/dist')), false);
+    assert.equal(readFileSync(resolve(root, 'spec/manifest.json'), 'utf8'), 'frozen manifest');
+    assert.equal(readFileSync(resolve(root, 'spec/parser.js'), 'utf8'), 'frozen parser');
+  });
+}
+test('wrong key is rejected before mkdir or overwriting prior artifacts', (t) => {
+  const { root, seed } = fixture(t);
+  const dist = resolve(root, 'extension/dist/release');
+  mkdirSync(dist, { recursive: true });
+  writeFileSync(resolve(dist, 'manifest.json'), 'prior output');
+  assert.throws(() => buildRelease({ root, seed: (seed.startsWith('00') ? '01' : '00') + seed.slice(2) }), /public key/);
+  assert.equal(readFileSync(resolve(dist, 'manifest.json'), 'utf8'), 'prior output');
+  assert.equal(existsSync(resolve(dist, 'parser.js')), false);
+});
+test('valid signature covers the exact UTF-8 payload and binds parser bytes', (t) => {
+  const { root, seed, publicKey } = fixture(t);
+  const { envelope, payload, directory } = buildRelease({ root, seed });
+  assert.equal(crypto.verify(null, Buffer.from(envelope.payload), publicKey, Buffer.from(envelope.signature, 'hex')), true);
+  assert.equal(crypto.verify(null, Buffer.from(envelope.payload + ' '), publicKey, Buffer.from(envelope.signature, 'hex')), false);
+  assert.equal(payload.sha256, crypto.createHash('sha256').update(readFileSync(resolve(directory, 'parser.js'))).digest('hex'));
+  assert.match(payload.parserUrl, /\/releases\/download\/parser-v[0-9.]+\/parser\.js$/);
+  assert.equal(payload.sites.length, 5);
+  assert.equal(readFileSync(resolve(root, 'spec/manifest.json'), 'utf8'), 'frozen manifest');
+  assert.equal(readFileSync(resolve(root, 'spec/parser.js'), 'utf8'), 'frozen parser');
+});
+test('candidate is unsigned and separate from release', (t) => {
+  const { root } = fixture(t);
+  const { envelope, directory } = buildRelease({ root, candidate: true, seed: 'invalid' });
+  assert.equal(Object.hasOwn(envelope, 'signature'), false);
+  assert.equal(directory, resolve(root, 'extension/dist/candidate'));
+  assert.equal(existsSync(resolve(root, 'extension/dist/release')), false);
+});
+test('configuration errors cannot create signed artifacts', (t) => {
+  const { root, seed } = fixture(t);
+  const path = resolve(root, 'config/sites.json');
+  const sites = JSON.parse(readFileSync(path));
+  sites[0].download.headers.Cookie = 'forbidden';
+  writeFileSync(path, JSON.stringify(sites));
+  assert.throws(() => buildRelease({ root, seed }), /Invalid manifest/);
+  assert.equal(existsSync(resolve(root, 'extension/dist')), false);
+});
+test('CLI missing-key failure has nonzero status', () => {
+  const env = { ...process.env };
+  delete env.PARSER_SIGNING_KEY;
+  const result = spawnSync(process.execPath, [resolve(repo, 'extension/scripts/build_release.js')], { env, encoding: 'utf8' });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /PARSER_SIGNING_KEY/);
+});
