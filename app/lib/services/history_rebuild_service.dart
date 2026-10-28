@@ -112,7 +112,7 @@ class HistoryRebuildService {
     }
 
     final settings = await AppSettings.load();
-    final selectedAlbums = (albums == null || albums.isEmpty)
+    final selectedAlbums = (albums == null)
         ? settings.effectiveAlbumNames
         : albums.toSet();
 
@@ -175,17 +175,9 @@ class HistoryRebuildService {
         DevLog.write(_logTag, 'Failed to read header of ${asset.title}: $e'); // i18n:ignore 日志
       }
 
-      // Parse XMP from the header bytes.
-      XmpProvenance? provenance;
-      if (bytes.isNotEmpty) {
-        try {
-          provenance = MetadataService.readProvenanceFromBytes(bytes);
-        } catch (e) {
-          DevLog.write(_logTag, 'Failed to parse XMP of ${asset.title}: $e'); // i18n:ignore 日志
-        }
-      }
-
-      provenance ??= await readProvenanceSidecar(asset.id);
+      // Merge raw XMP so embedded user fields without prov:assetId survive.
+      final provenance = mergeProvenanceXml(MetadataService.readXmpXmlFromBytes(bytes),
+          await readProvenanceSidecarXml(asset.id));
       if (provenance != null &&
           provenance.platform != null &&
           provenance.sourceId != null) {
@@ -421,6 +413,7 @@ class HistoryRebuildService {
           itemIndex: awx.provenance.itemIndex ?? 1,
           isImage: awx.asset.type == AssetType.image,
           assetId: awx.provenance.assetId,
+          relativePath: await locator.getRelativePath(awx.asset),
           status: FileStatus.found,
         ));
       }

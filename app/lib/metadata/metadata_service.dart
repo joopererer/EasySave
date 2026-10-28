@@ -62,6 +62,21 @@ class MetadataService {
   }
 
   /// Read provenance from header bytes (used by rebuild and gallery locator).
+  static String? readXmpXmlFromBytes(Uint8List bytes) {
+    if (bytes.isEmpty) return null;
+    try {
+      return switch (pkg.detectFormat(bytes)) {
+        pkg.MediaFormat.jpeg => pkg.readJpegXmpText(bytes),
+        pkg.MediaFormat.png => pkg.readPngXmpText(bytes),
+        pkg.MediaFormat.webp => pkg.readWebpXmpText(bytes),
+        pkg.MediaFormat.mp4 => pkg.readMp4XmpText(bytes),
+        pkg.MediaFormat.other => null,
+      };
+    } on FormatException {
+      return null;
+    }
+  }
+
   static pkg.XmpProvenance? readProvenanceFromBytes(Uint8List bytes) {
     if (bytes.isEmpty) return null;
     final format = pkg.detectFormat(bytes);

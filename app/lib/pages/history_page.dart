@@ -819,7 +819,13 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
     }
 
     // Delete album files first (no undo), then the records.
-    final approved = await MediaDeleteService.instance.deleteMedia(media);
+    final bool approved;
+    try {
+      approved = await MediaDeleteService.instance.deleteMedia(media);
+    } on StateError catch (e) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('${e.message}')));
+      return;
+    }
     for (final id in ids) {
       await db.delete(id);
     }

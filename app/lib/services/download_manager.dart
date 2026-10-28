@@ -1381,7 +1381,7 @@ class DownloadManager extends ChangeNotifier {
           );
           
           final saved = job.metadataNotice != null
-              ? await saveProvenancePair(path, batch.album)
+              ? await saveProvenancePair(path)
               : await saveToGallery(path, isImage, batch.album);
           _log('gallery import done: ${job.filename} -> ${saved.mediaId}');
           job.mediaId = saved.mediaId;
@@ -1442,7 +1442,7 @@ class DownloadManager extends ChangeNotifier {
       // Embed into file (videos use Mp4WriteMode.rewrite in private cache)
       final sidecar = await prepareDownloadProvenance(filePath, provenance);
       if (sidecar) {
-        job.metadataNotice = '来源信息已保存为同目录 .xmp 边车';
+        job.metadataNotice = c2paSavedNotice;
         _log('provenance sidecar prepared: ${job.filename}');
       } else {
         _log('provenance embedded and verified: ${job.filename}');

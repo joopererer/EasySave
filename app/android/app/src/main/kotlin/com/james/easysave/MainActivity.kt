@@ -46,6 +46,7 @@ class MainActivity : FlutterActivity() {
      * a time; the Dart side never issues concurrent requests.
      */
     private var pendingDeleteResult: MethodChannel.Result? = null
+    private var pendingDeleteSidecars: List<Uri> = emptyList()
 
     /**
      * Result callback for the system's batch-write confirmation dialog
@@ -360,8 +361,20 @@ class MainActivity : FlutterActivity() {
         super.onActivityResult(requestCode, resultCode, data)
         when (requestCode) {
             DELETE_REQUEST_CODE -> {
-                pendingDeleteResult?.success(resultCode == RESULT_OK)
+                val reply = pendingDeleteResult
+                val sidecars = pendingDeleteSidecars
                 pendingDeleteResult = null
+                pendingDeleteSidecars = emptyList()
+                Thread {
+                    try {
+                        val approved = C2paStoragePolicy.finishDelete(resultCode == RESULT_OK, sidecars) {
+                            ProvenancePairWriter.deleteSidecars(this, listOf(it))
+                        }
+                        runOnUiThread { reply?.success(approved) }
+                    } catch (_: Exception) {
+                        runOnUiThread { reply?.error("sidecar_delete_failed", "图片已删除，但来源边车删除失败", null) }
+                    }
+                }.start()
             }
             WRITE_REQUEST_CODE -> {
                 pendingWriteResult?.success(resultCode == RESULT_OK)
@@ -445,6 +458,7 @@ class MainActivity : FlutterActivity() {
         }
 
         try {
+            pendingDeleteSidecars = ProvenancePairWriter.sidecarsFor(this, ids)
             val pendingIntent = MediaStore.createDeleteRequest(contentResolver, uris)
             pendingDeleteResult = result
             @Suppress("DEPRECATION")
@@ -458,6 +472,7 @@ class MainActivity : FlutterActivity() {
             )
         } catch (e: Exception) {
             pendingDeleteResult = null
+            pendingDeleteSidecars = emptyList()
             result.error("delete_failed", e.message, null)
         }
     }

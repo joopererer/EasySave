@@ -24,20 +24,21 @@ object ProvenancePairWriter {
 
     fun register(context: Context, messenger: BinaryMessenger) {
         MethodChannel(messenger, "easysave/provenance_pair").setMethodCallHandler { call, result ->
-            if (call.method != "savePair" && call.method != "readSidecar") {
+            if (call.method !in setOf("savePair", "readSidecar", "queryFixedMedia")) {
                 result.notImplemented()
                 return@setMethodCallHandler
             }
             Thread {
                 try {
-                    val value = if (call.method == "readSidecar") {
+                    val value = if (call.method == "queryFixedMedia") {
+                        queryFixedMedia(context)
+                    } else if (call.method == "readSidecar") {
                         read(context, call.argument<String>("mediaId")!!)
                     } else {
                         val path = call.argument<String>("path")!!
                         val source = File(path).canonicalFile
                         require(source.path.startsWith(File(context.applicationInfo.dataDir).canonicalPath + File.separator))
-                        save(context, source, call.argument<String>("album")!!,
-                            call.argument<String>("mime")!!)
+                        save(context, source, call.argument<String>("mime")!!)
                     }
                     Handler(Looper.getMainLooper()).post { result.success(value) }
                 } catch (_: Exception) {
@@ -49,15 +50,14 @@ object ProvenancePairWriter {
         }
     }
 
-    private fun save(context: Context, source: File, album: String, mime: String): Map<String, String> {
-        sidecarName(album)
+    private fun save(context: Context, source: File, mime: String): Map<String, String> {
         val sidecar = File(source.path + ".xmp")
         require(source.isFile && sidecar.isFile && sidecar.length() in 1..1048576)
         require(mime in setOf("image/jpeg", "image/png", "image/webp", "video/mp4"))
-        if (Build.VERSION.SDK_INT < 29) return saveLegacy(context, source, sidecar, album, mime)
+        if (Build.VERSION.SDK_INT < 29) return saveLegacy(context, source, sidecar, mime)
         val resolver = context.contentResolver
         val collection = MediaStore.Downloads.EXTERNAL_CONTENT_URI
-        val relative = "${Environment.DIRECTORY_DOWNLOADS}/$album/"
+        val relative = C2paStoragePolicy.RELATIVE_PATH
         val inserted = mutableListOf<Uri>()
         try {
             fun insert(name: String, type: String, file: File): Uri {
@@ -109,8 +109,8 @@ object ProvenancePairWriter {
     }
 
     @Suppress("DEPRECATION")
-    private fun saveLegacy(context: Context, source: File, sidecar: File, album: String, mime: String): Map<String, String> {
-        val directory = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), album)
+    private fun saveLegacy(context: Context, source: File, sidecar: File, mime: String): Map<String, String> {
+        val directory = fixedDirectory()
         check(directory.isDirectory || directory.mkdirs())
         val media = File(directory, "${source.nameWithoutExtension}_${java.util.UUID.randomUUID()}.${source.extension}")
         val xmp = File(directory, sidecarName(media.name))
@@ -126,10 +126,65 @@ object ProvenancePairWriter {
             }
             check(latch.await(30, java.util.concurrent.TimeUnit.SECONDS))
             return mapOf("mediaId" to checkNotNull(saved).lastPathSegment!!,
-                "title" to media.name, "relativePath" to "${Environment.DIRECTORY_DOWNLOADS}/$album/")
+                "title" to media.name, "relativePath" to C2paStoragePolicy.RELATIVE_PATH)
         } catch (e: Exception) {
             media.delete(); xmp.delete()
             throw e
+        }
+    }
+
+    @Suppress("DEPRECATION")
+    private fun fixedDirectory(): File = File(
+        Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS),
+        C2paStoragePolicy.DIRECTORY_NAME)
+
+    /** RELATIVE_PATH equality deliberately ignores bucket names and used albums. */
+    private fun queryFixedMedia(context: Context): List<Map<String, Any?>> {
+        val result = mutableListOf<Map<String, Any?>>()
+        val modern = Build.VERSION.SDK_INT >= 29
+        val projection = arrayOf("_id", "_display_name", "mime_type", "media_type", "width", "height",
+            if (modern) "relative_path" else "_data")
+        val selection = if (modern) C2paStoragePolicy.MEDIA_SELECTION else "_data LIKE ? AND media_type IN (1, 3)"
+        val args = arrayOf(if (modern) C2paStoragePolicy.RELATIVE_PATH else fixedDirectory().path + "/%")
+        context.contentResolver.query(MediaStore.Files.getContentUri("external"), projection,
+            selection, args, null)?.use { cursor ->
+            while (cursor.moveToNext()) {
+                if (!modern && File(cursor.getString(6)).parentFile?.canonicalPath != fixedDirectory().canonicalPath) continue
+                val mime = cursor.getString(2)
+                if (!C2paStoragePolicy.isFixedMedia(C2paStoragePolicy.RELATIVE_PATH, mime)) continue
+                result.add(mapOf("id" to cursor.getString(0), "title" to cursor.getString(1),
+                    "mimeType" to mime, "typeInt" to if (cursor.getInt(3) == 1) 1 else 2,
+                    "width" to cursor.getInt(4), "height" to cursor.getInt(5),
+                    "relativePath" to C2paStoragePolicy.RELATIVE_PATH))
+            }
+        }
+        return result
+    }
+
+    /** Capture sidecar URIs before the OS removes the media row. */
+    fun sidecarsFor(context: Context, ids: List<String>): List<Uri> {
+        if (Build.VERSION.SDK_INT < 29) return emptyList()
+        val resolver = context.contentResolver
+        val result = mutableListOf<Uri>()
+        for (id in ids.distinct()) {
+            val name = resolver.query(MediaStore.Files.getContentUri("external"), arrayOf("_display_name", "relative_path"),
+                "_id = ?", arrayOf(id), null)?.use {
+                if (it.moveToFirst() && it.getString(1) == C2paStoragePolicy.RELATIVE_PATH) it.getString(0) else null
+            } ?: continue
+            resolver.query(MediaStore.Downloads.EXTERNAL_CONTENT_URI, arrayOf("_id"),
+                "_display_name = ? AND relative_path = ?", arrayOf(sidecarName(name), C2paStoragePolicy.RELATIVE_PATH), null)?.use {
+                while (it.moveToNext()) result.add(Uri.withAppendedPath(MediaStore.Downloads.EXTERNAL_CONTENT_URI, it.getString(0)))
+            }
+        }
+        return result.distinct()
+    }
+
+    fun deleteSidecars(context: Context, sidecars: List<Uri>) {
+        for (uri in sidecars) {
+            context.contentResolver.delete(uri, null, null)
+            context.contentResolver.query(uri, arrayOf("_id"), null, null, null)?.use {
+                check(!it.moveToFirst()) { "Sidecar was not deleted" }
+            }
         }
     }
 

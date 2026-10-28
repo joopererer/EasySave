@@ -410,6 +410,12 @@ class _MinePageState extends State<MinePage> with WidgetsBindingObserver {
             child: ListView(
               shrinkWrap: true,
               children: [
+                const CheckboxListTile(
+                  value: true,
+                  onChanged: null,
+                  title: Text('Download/EasySave'),
+                  subtitle: Text('内容凭证图片，始终扫描'),
+                ),
                 for (final option in options)
                   CheckboxListTile(
                     value: selected.contains(option.name),
@@ -454,12 +460,6 @@ class _MinePageState extends State<MinePage> with WidgetsBindingObserver {
   Future<void> _rebuildHistory() async {
     final selection = await _pickRebuildAlbums();
     if (selection == null || !mounted) return;
-    if (!selection.allAlbums && selection.albums.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('请至少选择一个相册')),
-      );
-      return;
-    }
 
     // Show progress dialog
     final progressText = ValueNotifier<String>('准备中…');
