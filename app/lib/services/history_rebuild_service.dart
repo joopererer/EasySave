@@ -521,6 +521,8 @@ class HistoryRebuildService {
           authorName: existing.authorName,
           title: existing.title,
           caption: existing.caption,
+          aiLabel: existing.aiLabel ?? earliestAwx.provenance.aiLabel,
+          aiLabelSource: existing.aiLabel != null ? existing.aiLabelSource : earliestAwx.provenance.aiLabelSource,
           thumbnailUrl: existing.thumbnailUrl,
           postUrl: existing.postUrl,
           fileCount: mergedList.length,
@@ -541,6 +543,8 @@ class HistoryRebuildService {
           authorName: firstProv.creators?.firstOrNull,
           title: firstProv.title,
           caption: firstProv.description,
+          aiLabel: firstProv.aiLabel,
+          aiLabelSource: firstProv.aiLabelSource,
           thumbnailUrl: null, // Will be populated by history page
           postUrl: firstProv.sourceUrl ?? 'https://unknown',
           fileCount: files.length,

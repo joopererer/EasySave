@@ -97,6 +97,23 @@ class MediaItem {
 
 /// Unified output: { platform, id, url, author, title?, caption?,
 /// publishedAt?, items }.
+class AiLabel {
+  const AiLabel({required this.text, required this.source});
+  final String text;
+  final String source;
+
+  static AiLabel? fromJson(Object? value) {
+    if (value is! Map) return null;
+    final text = value['text'];
+    final source = value['source'];
+    if (text is! String || text.trim().isEmpty ||
+        (source != 'platform' && source != 'author')) return null;
+    return AiLabel(text: text, source: source as String);
+  }
+
+  Map<String, Object?> toJson() => {'text': text, 'source': source};
+}
+
 class ParsedPost {
   ParsedPost({
     required this.platform,
@@ -107,6 +124,7 @@ class ParsedPost {
     this.title,
     this.caption,
     this.publishedAt,
+    this.aiLabel,
   });
 
   factory ParsedPost.fromJson(Map<String, dynamic> json) => ParsedPost(
@@ -125,6 +143,7 @@ class ParsedPost {
     title: json['title'] as String?,
     caption: json['caption'] as String?,
     publishedAt: json['publishedAt'] as String?,
+    aiLabel: AiLabel.fromJson(json['aiLabel']),
   );
 
   final String platform;
@@ -135,6 +154,7 @@ class ParsedPost {
   final String? title;
   final String? caption;
   final String? publishedAt;
+  final AiLabel? aiLabel;
 
   Map<String, Object?> toJson() {
     final map = <String, Object?>{
@@ -146,6 +166,7 @@ class ParsedPost {
     if (title != null) map['title'] = title;
     if (caption != null) map['caption'] = caption;
     if (publishedAt != null) map['publishedAt'] = publishedAt;
+    if (aiLabel != null) map['aiLabel'] = aiLabel!.toJson();
     map['items'] = [for (final item in items) item.toJson()];
     return map;
   }

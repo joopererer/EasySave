@@ -239,6 +239,8 @@ class DownloadBatch {
     this.authorName,
     this.title,
     this.caption,
+    this.aiLabel,
+    this.aiLabelSource,
     this.authorId,
     this.publishedAt,
     this.itemsJson,
@@ -264,6 +266,8 @@ class DownloadBatch {
   final String? authorName;
   final String? title;
   final String? caption;
+  final String? aiLabel;
+  final String? aiLabelSource;
   final String? authorId;
   final DateTime? publishedAt;
   final String? itemsJson;
@@ -374,6 +378,8 @@ class DownloadBatch {
     'authorName': authorName,
     'title': title,
     'caption': caption,
+    'aiLabel': aiLabel,
+    'aiLabelSource': aiLabelSource,
     'authorId': authorId,
     'publishedAt': publishedAt?.toIso8601String(),
     'itemsJson': itemsJson,
@@ -394,6 +400,8 @@ class DownloadBatch {
     authorName: map['authorName'] as String?,
     title: map['title'] as String?,
     caption: map['caption'] as String?,
+    aiLabel: map['aiLabel'] as String?,
+    aiLabelSource: map['aiLabelSource'] as String?,
     authorId: map['authorId'] as String?,
     publishedAt: map['publishedAt'] != null 
         ? DateTime.tryParse(map['publishedAt'] as String)
@@ -522,6 +530,8 @@ XmpProvenance provenanceForBatchItem(
     authorName: batch.authorName,
     title: batch.title,
     caption: batch.caption,
+    aiLabel: batch.aiLabel,
+    aiLabelSource: batch.aiLabelSource,
     authorId: authorId,
     creditPlatformName: platformDisplayName(batch.platform),
     publishedAt: batch.publishedAt,
@@ -602,6 +612,8 @@ Future<void> writeBatchHistory(
       authorName: batch.authorName,
       title: batch.title,
       caption: batch.caption,
+      aiLabel: batch.aiLabel,
+      aiLabelSource: batch.aiLabelSource,
       thumbnailUrl: thumb,
       postUrl: batch.postUrl,
       fileCount: batch.succeeded,
@@ -630,6 +642,8 @@ Future<void> writePlaceholderHistory(
       authorName: batch.authorName,
       title: batch.title,
       caption: batch.caption,
+      aiLabel: batch.aiLabel,
+      aiLabelSource: batch.aiLabelSource,
       thumbnailUrl: _thumbnailFor(batch),
       postUrl: batch.postUrl,
       fileCount: 0,
@@ -988,6 +1002,8 @@ class DownloadManager extends ChangeNotifier {
       authorId: post.author.id,
       title: post.title,
       caption: post.caption,
+      aiLabel: post.aiLabel?.text,
+      aiLabelSource: post.aiLabel?.source,
       publishedAt: post.publishedAt != null ? DateTime.tryParse(post.publishedAt!) : null,
       itemsJson: jsonEncode([for (final item in post.items) item.toJson()]),
       postItemCount: post.items.length,

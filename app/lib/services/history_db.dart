@@ -177,6 +177,8 @@ class HistoryRecord {
     this.authorName,
     this.title,
     this.caption,
+    this.aiLabel,
+    this.aiLabelSource,
     this.thumbnailUrl,
     required this.postUrl,
     required this.fileCount,
@@ -192,6 +194,8 @@ class HistoryRecord {
   final String? authorName;
   final String? title;
   final String? caption;
+  final String? aiLabel;
+  final String? aiLabelSource;
   final String? thumbnailUrl;
   final String postUrl;
   final int fileCount;
@@ -283,6 +287,7 @@ class HistoryRecord {
       items: items,
       title: title,
       caption: caption,
+      aiLabel: aiLabel == null ? null : AiLabel(text: aiLabel!, source: aiLabelSource ?? 'unknown'),
     );
   }
 
@@ -292,6 +297,8 @@ class HistoryRecord {
     'author_name': authorName,
     'title': title,
     'caption': caption,
+    'ai_label': aiLabel,
+    'ai_label_source': aiLabelSource,
     'thumbnail_url': thumbnailUrl,
     'post_url': postUrl,
     'file_count': fileCount,
@@ -338,6 +345,8 @@ class HistoryRecord {
       authorName: authorName,
       title: map['title'] as String?,
       caption: map['caption'] as String?,
+      aiLabel: map['ai_label'] as String?,
+      aiLabelSource: map['ai_label_source'] as String?,
       thumbnailUrl: map['thumbnail_url'] as String?,
       postUrl: map['post_url'] as String,
       fileCount: (map['file_count'] as num).toInt(),
@@ -437,7 +446,7 @@ class HistoryDb {
     final path = dbPath ?? '${await getDatabasesPath()}/easysave_history.db';
     final db = await openDatabase(
       path,
-      version: 3,
+      version: 4,
       // Two engines (main UI isolate + background isolate) can hold a
       // connection to the same file. WAL lets readers work while a writer is
       // active, and busy_timeout makes a writer wait for the lock instead of
@@ -452,6 +461,8 @@ class HistoryDb {
         'author_name TEXT,'
         'title TEXT,'
         'caption TEXT,'
+        'ai_label TEXT,'
+        'ai_label_source TEXT,'
         'thumbnail_url TEXT,'
         'post_url TEXT NOT NULL UNIQUE,'
         'file_count INTEGER NOT NULL,'
@@ -491,7 +502,10 @@ class HistoryDb {
         if (oldVersion < 3) {
           await db.execute('ALTER TABLE history_records ADD COLUMN is_deleted INTEGER DEFAULT 0');
         }
-        // Future migrations go here
+        if (oldVersion < 4) {
+          await db.execute('ALTER TABLE history_records ADD COLUMN ai_label TEXT');
+          await db.execute('ALTER TABLE history_records ADD COLUMN ai_label_source TEXT');
+        }
       },
     );
     final historyDb = HistoryDb._(db);
@@ -586,6 +600,8 @@ class HistoryDb {
           authorName: record.authorName ?? existing.authorName,
           title: (record.title?.isNotEmpty == true) ? record.title : existing.title,
           caption: (record.caption?.isNotEmpty == true) ? record.caption : existing.caption,
+          aiLabel: record.aiLabel ?? existing.aiLabel,
+          aiLabelSource: record.aiLabel != null ? record.aiLabelSource : existing.aiLabelSource,
           thumbnailUrl: record.thumbnailUrl ?? existing.thumbnailUrl,
           postUrl: record.postUrl,
           fileCount: mergedFiles.length,

@@ -65,6 +65,8 @@ class BackupPost {
   final String? title;
   final String? authorName;
   final String? caption;
+  final String? aiLabel;
+  final String? aiLabelSource;
   final String createdAt;
   final List<Map<String, dynamic>>? items;
   final List<BackupFile> files;
@@ -76,6 +78,8 @@ class BackupPost {
     this.title,
     this.authorName,
     this.caption,
+    this.aiLabel,
+    this.aiLabelSource,
     required this.createdAt,
     this.items,
     required this.files,
@@ -88,6 +92,8 @@ class BackupPost {
         if (title != null) 'title': title,
         if (authorName != null) 'authorName': authorName,
         if (caption != null) 'caption': caption,
+        if (aiLabel != null) 'aiLabel': aiLabel,
+        if (aiLabelSource != null) 'aiLabelSource': aiLabelSource,
         'createdAt': createdAt,
         if (items != null) 'items': items,
         'files': [for (final f in files) f.toMap()],
@@ -120,6 +126,8 @@ class BackupPost {
       title: map['title'] as String?,
       authorName: map['authorName'] as String? ?? map['author_name'] as String?,
       caption: map['caption'] as String?,
+      aiLabel: map['aiLabel'] as String?,
+      aiLabelSource: map['aiLabelSource'] as String?,
       createdAt: map['createdAt'] as String? ?? map['created_at'] as String? ?? '',
       items: resolvedItems,
       files: resolvedFiles,

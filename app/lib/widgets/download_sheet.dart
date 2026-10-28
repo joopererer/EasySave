@@ -73,6 +73,7 @@ class _DownloadSheetState extends State<DownloadSheet> {
       items: const [],
       title: batch.title,
       caption: batch.caption,
+      aiLabel: batch.aiLabel == null ? null : AiLabel(text: batch.aiLabel!, source: batch.aiLabelSource ?? 'unknown'),
     );
     if ((post.title ?? '').isEmpty && (post.caption ?? '').isEmpty) return;
     final path = await saveCaptionTxt(post);

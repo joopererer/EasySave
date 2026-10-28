@@ -489,6 +489,8 @@ class HistoryBackfillService {
       authorName: record.authorName,
       title: record.title,
       caption: record.caption,
+      aiLabel: record.aiLabel,
+      aiLabelSource: record.aiLabelSource,
       authorId: null, // Don't have authorId from history
       creditPlatformName: platformDisplayName(record.platform),
       publishedAt: null, // Don't have from history
