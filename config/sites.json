@@ -41,7 +41,7 @@
             }
           ],
           "pathPatterns": [
-            "^/[^/]+/?$"
+            "^/(?:(?:a|o)/)?[^/]+/?$"
           ]
         }
       ]
@@ -145,7 +145,7 @@
             }
           ],
           "pathPatterns": [
-            "^/(?:p|reel|tv)/([A-Za-z0-9_-]+)"
+            "^/(?:p|reels?|tv)/([A-Za-z0-9_-]+)"
           ]
         }
       ]
@@ -154,7 +154,7 @@
     "normalize": {
       "sourceId": {
         "source": "path",
-        "pattern": "^/(?:p|reel|tv)/([A-Za-z0-9_-]+)"
+        "pattern": "^/(?:p|reels?|tv)/([A-Za-z0-9_-]+)"
       },
       "canonicalTemplate": "https://www.instagram.com/p/{id}/",
       "preserveLoadQuery": [],
@@ -305,7 +305,8 @@
             }
           ],
           "pathPatterns": [
-            "^/@[^/]+/(?:video|photo)/([0-9]+)"
+            "^/(?:@[^/]*/(?:video|photo)/([0-9]+)|share/video/([0-9]+)|v/([0-9]+)\\.html)/?$",
+            "^/t/[^/]+/?$"
           ]
         },
         {
@@ -332,7 +333,8 @@
           "includeSubdomains": false
         },
         "strategy": "webview",
-        "maxRedirects": 5
+        "maxRedirects": 5,
+        "historyStrategy": "http"
       },
       {
         "host": {
@@ -340,13 +342,26 @@
           "includeSubdomains": false
         },
         "strategy": "webview",
+        "maxRedirects": 5,
+        "historyStrategy": "http"
+      },
+      {
+        "host": {
+          "domain": "tiktok.com",
+          "includeSubdomains": true
+        },
+        "strategy": "webview",
+        "historyStrategy": "http",
+        "pathPatterns": [
+          "^/t/[^/]+/?$"
+        ],
         "maxRedirects": 5
       }
     ],
     "normalize": {
       "sourceId": {
         "source": "path",
-        "pattern": "^/@[^/]+/(?:video|photo)/([0-9]+)"
+        "pattern": "^/(?:@[^/]*/(?:video|photo)/([0-9]+)|share/video/([0-9]+)|v/([0-9]+)\\.html)/?$"
       },
       "canonicalTemplate": "https://www.tiktok.com/@/video/{id}",
       "preserveLoadQuery": [],

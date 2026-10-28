@@ -80,7 +80,7 @@ class ClipboardReaderActivity : Activity() {
         // background toast would be. This shares the supported-host guard
         // with the share and bubble entry points; Dart resolves short links.
         val emptyMsg = intent?.getStringExtra(EXTRA_EMPTY_MESSAGE)
-        val hasHttp = SupportedLinks.containsSupportedUrl(text)
+        val hasHttp = SupportedLinks.containsSupportedUrl(text, this)
         if (!hasHttp && !emptyMsg.isNullOrBlank()) {
             Toast.makeText(this, emptyMsg, Toast.LENGTH_SHORT).show()
         }

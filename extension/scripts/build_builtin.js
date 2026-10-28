@@ -11,3 +11,7 @@ validatePayload(payload, JSON.parse(readFileSync(resolve(root, 'spec/sites-manif
 validateCanonicalTemplates(payload.sites);
 const write = (name, contents) => { const p = resolve(root, name); mkdirSync(dirname(p), {recursive:true}); writeFileSync(p, contents); };
 write('app/assets/parser/builtin-manifest.json', JSON.stringify(payload));
+write('app/lib/generated/builtin_sites.dart', '// GENERATED FILE - DO NOT EDIT\nconst builtinSitesJson = ' +
+  JSON.stringify(JSON.stringify(payload.sites)).replaceAll('$', '\\$') + ';\n');
+const view = {sites: payload.sites.filter((s) => s.enabled).map((s) => ({id:s.id, routes:s.match.routes}))};
+write('app/android/app/src/main/assets/link-recognition.json', JSON.stringify(view));

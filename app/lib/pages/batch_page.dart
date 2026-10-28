@@ -9,6 +9,7 @@ import 'package:flutter/services.dart';
 import '../core/error_copy.dart';
 import '../core/models.dart';
 import '../services/links.dart';
+import '../services/site_registry.dart';
 import '../services/parse_service.dart';
 import '../services/preview_open_guard.dart';
 import '../services/seal.dart';
@@ -50,13 +51,8 @@ class _BatchPageState extends State<BatchPage> {
     _run();
   }
 
-  String _platformOf(String link) {
-    final host = Uri.tryParse(link)?.host.toLowerCase() ?? '';
-    if (host.contains('instagram.com') || host.contains('instagr.am')) {
-      return 'instagram';
-    }
-    return 'xhs';
-  }
+  String _platformOf(String link) =>
+      SiteRegistry.current.match(link)?.id ?? 'unknown';
 
   Future<void> _run() async {
     if (_running) return;
@@ -107,12 +103,9 @@ class _BatchPageState extends State<BatchPage> {
     // preview (e.g. tapped twice before the push finished).
     if (PreviewOpenGuard.isTopPreview(post.id)) return;
     _opening = true;
-    await Navigator.of(context).push(
-      PreviewPage.route(
-        post: post,
-        rawImages: item.rawImages,
-      ),
-    );
+    await Navigator.of(
+      context,
+    ).push(PreviewPage.route(post: post, rawImages: item.rawImages));
     _opening = false;
   }
 

@@ -105,6 +105,15 @@ test('APK-bundled manifest is generated from current configuration and parser by
   assert.equal(readFileSync(resolve(repo, 'app/assets/parser/builtin-manifest.json'), 'utf8'), JSON.stringify(createPayload(repo)));
 });
 
+test('Dart registry and Kotlin fallback view are generated from the same builtin sites', () => {
+  const sites = createPayload(repo).sites;
+  const view = JSON.parse(readFileSync(resolve(repo, 'app/android/app/src/main/assets/link-recognition.json')));
+  assert.deepEqual(view, { sites: sites.filter((s) => s.enabled).map((s) => ({ id: s.id, routes: s.match.routes })) });
+  const source = readFileSync(resolve(repo, 'app/lib/generated/builtin_sites.dart'), 'utf8');
+  const literal = source.split('const builtinSitesJson = ')[1].trim().slice(0, -1).replaceAll('\\$', '$');
+  assert.deepEqual(JSON.parse(JSON.parse(literal)), sites);
+});
+
 test('shared signature vector covers UTF-8 payload verbatim', () => {
   const vector = JSON.parse(readFileSync(resolve(repo, 'spec/test-vectors/parser-manifest-v2.json')));
   const pub = crypto.createPublicKey({ type: 'spki', format: 'der', key: Buffer.concat([

@@ -118,6 +118,7 @@ class ParserReleaseStore {
   Future<ParserRelease?> load() async {
     final state = readState();
     if (state == null) return null;
+    if (state['current'] == 'builtin') return null;
     for (final reference in [state['current'], state['previous']]) {
       if (reference is! String) continue;
       try {

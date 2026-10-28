@@ -19,6 +19,7 @@ import '../generated/parser_version.dart';
 import 'signed_parser_manifest.dart';
 import 'parser_release_store.dart';
 import 'https_parser_download.dart';
+import 'site_registry.dart';
 
 /// Ed25519 public key (32 bytes raw, hex encoded) for parser bundle verification.
 /// Replace this constant with your generated public key.
@@ -298,6 +299,7 @@ class ParserManager {
   }
 
   void _useBuiltin() {
+    SiteRegistry.useBuiltin();
     _activeVersion = ParserVersion.version;
     _activeSource = ParserSource.builtin;
     _activeManifest = null;
@@ -307,6 +309,7 @@ class ParserManager {
   void _useRemote(ParserRelease release) {
     final manifest = release.manifest;
     _signedManifest = manifest;
+    SiteRegistry.activate(manifest.sitesFor(_appVersion!));
     _activeVersion = manifest.parserVersion;
     _activeSource = ParserSource.remote;
     // Temporary compatibility adapter: existing platform branches remain until 2b.

@@ -42,7 +42,7 @@ class ShareToBackgroundActivity : Activity() {
 
         // Reject unsupported hosts before starting the background engine.
         // Dart handles canonicalization and resolves platform short links.
-        if (text.isNullOrBlank() || !SupportedLinks.containsSupportedUrl(text)) {
+        if (text.isNullOrBlank() || !SupportedLinks.containsSupportedUrl(text, this)) {
             Toast.makeText(this, "没有可解析的链接", Toast.LENGTH_SHORT).show()
         } else {
             HostService.submitText(this, text, "all", "background")

@@ -216,14 +216,14 @@ void main() {
       );
     });
 
-    test('extracts Douyin and TikTok video/note ids', () {
+    test('extracts supported TikTok IDs but does not infer disabled Douyin IDs', () {
       expect(
         postIdOfUrl('https://www.douyin.com/video/7123456789012345678'),
-        '7123456789012345678',
+        isNull,
       );
       expect(
         postIdOfUrl('https://www.douyin.com/note/7123456789012345678'),
-        '7123456789012345678',
+        isNull,
       );
       expect(
         postIdOfUrl('https://www.tiktok.com/@user/video/7123456789012345678'),
@@ -231,10 +231,10 @@ void main() {
       );
     });
 
-    test('extracts Bilibili, Instagram, X status ids', () {
+    test('extracts registered Instagram/X IDs and rejects unregistered Bilibili', () {
       expect(
         postIdOfUrl('https://www.bilibili.com/video/BV1xx411c7mD'),
-        'BV1xx411c7mD',
+        isNull,
       );
       expect(
         postIdOfUrl('https://www.instagram.com/reel/CxYzAbCdEfG/'),

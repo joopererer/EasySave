@@ -404,7 +404,7 @@ class OverlayService : Service() {
         }
         ClipboardReaderActivity.listener = { text ->
             val t = text?.trim().orEmpty()
-            if (SupportedLinks.containsSupportedUrl(t)) {
+            if (SupportedLinks.containsSupportedUrl(t, this)) {
                 pendingText = t
                 showMenu()
             } else {
