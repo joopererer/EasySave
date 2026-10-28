@@ -209,22 +209,26 @@ object ProvenancePairWriter {
     private fun queryFixedMedia(context: Context): List<Map<String, Any?>> {
         val result = mutableListOf<Map<String, Any?>>()
         val modern = Build.VERSION.SDK_INT >= 29
-        val projection = arrayOf("_id", "_display_name", "mime_type", "media_type", "width", "height",
+        val projection = arrayOf("_id", "_display_name", "mime_type", "width", "height",
             if (modern) "relative_path" else "_data")
         val selection = if (modern) C2paStoragePolicy.MEDIA_SELECTION else "_data LIKE ? AND media_type IN (1, 3)"
         val args = arrayOf(if (modern) C2paStoragePolicy.RELATIVE_PATH else fixedDirectory().path + "/%")
-        context.contentResolver.query(MediaStore.Files.getContentUri("external"), projection,
-            selection, args, null)?.use { cursor ->
+        // Query the collection used by savePair. A Downloads row can carry an
+        // image MIME while an OEM leaves Files.media_type as MEDIA_TYPE_NONE.
+        val collection = if (modern) MediaStore.Downloads.EXTERNAL_CONTENT_URI else MediaStore.Files.getContentUri("external")
+        checkNotNull(context.contentResolver.query(collection, projection,
+            selection, args, null)) { "Fixed Downloads query returned no cursor" }.use { cursor ->
             while (cursor.moveToNext()) {
-                if (!modern && File(cursor.getString(6)).parentFile?.canonicalPath != fixedDirectory().canonicalPath) continue
+                if (!modern && File(cursor.getString(5)).parentFile?.canonicalPath != fixedDirectory().canonicalPath) continue
                 val mime = cursor.getString(2)
-                if (!C2paStoragePolicy.isFixedMedia(C2paStoragePolicy.RELATIVE_PATH, mime)) continue
+                val type = C2paStoragePolicy.mediaType(C2paStoragePolicy.RELATIVE_PATH, mime) ?: continue
                 result.add(mapOf("id" to cursor.getString(0), "title" to cursor.getString(1),
-                    "mimeType" to mime, "typeInt" to if (cursor.getInt(3) == 1) 1 else 2,
-                    "width" to cursor.getInt(4), "height" to cursor.getInt(5),
+                    "mimeType" to mime, "typeInt" to type,
+                    "width" to cursor.getInt(3), "height" to cursor.getInt(4),
                     "relativePath" to C2paStoragePolicy.RELATIVE_PATH))
             }
         }
+        Log.i("EasySavePair", "queryFixedMedia directory=${C2paStoragePolicy.RELATIVE_PATH} media=${result.size}")
         return result
     }
 

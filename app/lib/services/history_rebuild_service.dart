@@ -105,10 +105,7 @@ class HistoryRebuildService {
 
     // Check permission (only needed when the album really has to be read).
     if (assetsOverride == null && !locator.hasAccess) {
-      await PhotoManager.requestPermissionExtend();
-      if (!locator.hasAccess) {
-        throw Exception('没有相册访问权限');
-      }
+      await locator.requestPermission(scan: false);
     }
 
     final settings = await AppSettings.load();
@@ -122,11 +119,12 @@ class HistoryRebuildService {
             ? await locator.allImages()
             : await locator.assetsInAlbums(selectedAlbums));
     final total = assets.length;
+    if (assetsOverride == null && !locator.hasAccess && assets.isEmpty) throw Exception('没有相册访问权限，固定目录中也未找到可读取的媒体');
 
     DevLog.write(
       _logTag, // i18n:ignore 日志
       'scan start albums=${includeAllAlbums ? '<all>' : selectedAlbums.join(',')} '
-      'files=$total at=${startedAt.toIso8601String()}',
+      'fixedDirectory=$c2paRelativePath files=$total at=${startedAt.toIso8601String()}',
     );
 
     final reader = readHeader ?? MediaHeaderService.readHeader;

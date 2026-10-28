@@ -105,6 +105,7 @@ Future<List<AssetEntity>> fixedC2paAssets() async {
           ),
     ];
   } on MissingPluginException {
+    if (Platform.isAndroid) rethrow;
     return [];
   }
 }

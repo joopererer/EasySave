@@ -12,7 +12,16 @@ class C2paStoragePolicyTest {
         assertFalse(C2paStoragePolicy.isFixedMedia("Download/EasySave/sub/", "image/jpeg"))
         assertFalse(C2paStoragePolicy.isFixedMedia("Download/EasySave/", "application/json"))
         assertFalse(C2paStoragePolicy.isFixedMedia("Download/EasySave/", "application/rdf+xml"))
-        assertEquals("relative_path = ? AND media_type IN (1, 3)", C2paStoragePolicy.MEDIA_SELECTION)
+        assertEquals("relative_path = ? AND is_pending = 0", C2paStoragePolicy.MEDIA_SELECTION)
+    }
+    @Test fun downloadsUsesMimeInsteadOfOptionalFilesMediaType() {
+        assertEquals(1, C2paStoragePolicy.mediaType("Download/EasySave/", "image/jpeg"))
+        assertEquals(2, C2paStoragePolicy.mediaType("Download/EasySave/", "video/mp4"))
+        assertEquals(1, C2paStoragePolicy.mediaType("Download/EasySave/", "IMAGE/PNG"))
+        for (mime in listOf("application/octet-stream", "application/rdf+xml", "application/json", null)) {
+            assertNull(C2paStoragePolicy.mediaType("Download/EasySave/", mime))
+        }
+        assertNull(C2paStoragePolicy.mediaType("Pictures/EasySave/", "image/jpeg"))
     }
     @Test fun approvedMediaDeletionRemovesSidecarAndCancellationKeepsBoth() {
         val directory = Files.createTempDirectory("pair-delete-").toFile()

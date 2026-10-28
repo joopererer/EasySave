@@ -152,11 +152,11 @@ class GalleryLocatorService extends ChangeNotifier {
   }
 
   /// Request photo permission. If granted, automatically triggers album scan.
-  Future<PermissionState> requestPermission() async {
+  Future<PermissionState> requestPermission({bool scan = true}) async {
     try {
       _permission = await PhotoManager.requestPermissionExtend(requestOption: _defaultOption);
       notifyListeners();
-      if (_permission.hasAccess) {
+      if (_permission.hasAccess && scan) {
         await scanAlbum();
       }
     } catch (e) {
@@ -956,15 +956,15 @@ class GalleryLocatorService extends ChangeNotifier {
   /// index: the rebuild scan must not leave the app pointing at a different
   /// set of assets than [scanAlbum] would.
   Future<List<AssetEntity>> assetsInAlbums(Iterable<String> albumNames) async {
+    final fixed = await fixedC2paAssets();
     if (!_permission.hasAccess) {
       await checkPermission();
-      if (!_permission.hasAccess) return const [];
+      if (!_permission.hasAccess) return fixed;
     }
     final wanted = {
       for (final name in albumNames)
         if (name.trim().isNotEmpty) name.trim().toLowerCase(),
     };
-    final fixed = await fixedC2paAssets();
     if (wanted.isEmpty) return fixed;
     try {
       final paths = await PhotoManager.getAssetPathList(
@@ -996,11 +996,11 @@ class GalleryLocatorService extends ChangeNotifier {
 
   /// Every media item on the device (explicit "全部相册" rebuild only).
   Future<List<AssetEntity>> allImages() async {
+    final fixed = await fixedC2paAssets();
     if (!_permission.hasAccess) {
       await checkPermission();
-      if (!_permission.hasAccess) return const [];
+      if (!_permission.hasAccess) return fixed;
     }
-    final fixed = await fixedC2paAssets();
     try {
       final paths = await PhotoManager.getAssetPathList(
         type: RequestType.common,
