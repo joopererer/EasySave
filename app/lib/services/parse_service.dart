@@ -18,6 +18,7 @@ import 'ai_label_log.dart';
 import 'links.dart';
 import 'update_service.dart';
 import 'tiktok_links.dart';
+import 'history_db.dart';
 
 class ParseFailure implements Exception {
   ParseFailure(this.code, this.message);
@@ -91,15 +92,7 @@ String calculateXToken(String id) {
 
 /// Load [url] and parse the post it resolves to.
 Future<ParsedPost> parsePostUrl(String url) {
-  _checkPlatform(url);
-  return _withTimeout(() async {
-    final resolved = await _resolveForParse(url);
-    try {
-      return (await _parseInner(resolved)).data;
-    } on ParseFailure catch (e) {
-      throw await _reclassifyFailure(resolved, e);
-    }
-  }, '加载页面');
+  return parsePostOutcome(url).then((result) => result.data);
 }
 
 /// Same as [parsePostUrl] but keeps the raw image entries for diagnostics.
@@ -108,7 +101,14 @@ Future<ParseOutcome> parsePostOutcome(String url) {
   return _withTimeout(() async {
     final resolved = await _resolveForParse(url);
     try {
-      return await _parseInner(resolved);
+      final result = await _parseInner(resolved);
+      final host = Uri.tryParse(url)?.host.toLowerCase();
+      if (result.data.platform == 'tiktok' && {'vm.tiktok.com', 'vt.tiktok.com'}.contains(host)) {
+        try {
+          await HistoryDb.instance().then((db) => db.rememberParsedLink(url, result.data)).timeout(const Duration(seconds: 2));
+        } catch (_) { /* Optional local shortcut must not fail a successful parse. */ }
+      }
+      return result;
     } on ParseFailure catch (e) {
       throw await _reclassifyFailure(resolved, e);
     }

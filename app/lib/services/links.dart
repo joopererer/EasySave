@@ -118,7 +118,10 @@ String? extractYouTubeLink(String text) {
 /// Resolve xhslink short links to the final page URL with plain HTTP
 /// redirect following (no WebView involved, so in-page app-open schemes
 /// can't hijack the navigation). Other URLs pass through untouched.
-Future<String> resolveShortLink(String url) async {
+Future<String> resolveShortLink(String url, {
+  bool forHistoryLookup = false,
+  Future<String?> Function(Uri)? readRedirect,
+}) async {
   final uri = Uri.tryParse(url);
   final host = uri?.host.toLowerCase() ?? '';
   final isShort =
@@ -127,22 +130,29 @@ Future<String> resolveShortLink(String url) async {
       host == 'xhslink.cn' ||
       host.endsWith('.xhslink.cn') ||
       host == 't.co' ||
-      host.endsWith('.t.co');
+      host.endsWith('.t.co') ||
+      (forHistoryLookup && (host == 'vm.tiktok.com' || host == 'vt.tiktok.com'));
 
   if (!isShort || uri == null) return url;
   final client = HttpClient();
+  final watch = Stopwatch()..start();
+  Future<T> bounded<T>(Future<T> work) => forHistoryLookup
+      ? work.timeout(Duration(milliseconds: (3000 - watch.elapsedMilliseconds).clamp(1, 3000))) : work;
+  if (forHistoryLookup) client.connectionTimeout = const Duration(seconds: 3);
   try {
     var current = uri;
     for (var i = 0; i < 5; i++) {
-      final request = await client.getUrl(current);
-      request.followRedirects = false;
-      request.headers.set(
-        HttpHeaders.userAgentHeader,
-        'Mozilla/5.0 (Linux; Android 10)',
-      );
-      final response = await request.close();
-      await response.drain<void>();
-      final location = response.headers.value(HttpHeaders.locationHeader);
+      String? location;
+      if (readRedirect != null) {
+        location = await bounded(readRedirect(current));
+      } else {
+        final request = await bounded(client.getUrl(current));
+        request.followRedirects = false;
+        request.headers.set(HttpHeaders.userAgentHeader, 'Mozilla/5.0 (Linux; Android 10)');
+        final response = await bounded(request.close());
+        location = response.headers.value(HttpHeaders.locationHeader);
+        await bounded(response.drain<void>());
+      }
       if (location == null) return current.toString();
       current = current.resolve(location);
       if (current.scheme != 'http' && current.scheme != 'https') {

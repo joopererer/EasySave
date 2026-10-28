@@ -357,9 +357,13 @@ class ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
   /// matches the record stored under its canonical url.
   Future<bool> _alreadyDownloaded(String link) async {
     if (isLinkKnown(link, _knownPosts)) return true;
+    try {
+      final db = await HistoryDb.instance();
+      if (await db.findRecordByLink(link) != null) return true;
+    } catch (_) {}
     String? resolved;
     try {
-      resolved = await resolveShortLink(link);
+      resolved = await resolveShortLink(link, forHistoryLookup: true);
       if (isLinkKnown(link, _knownPosts, resolvedUrl: resolved)) return true;
     } catch (_) {}
     try {

@@ -458,6 +458,8 @@ class HistoryDb {
         await db.execute('CREATE TABLE IF NOT EXISTS download_delete_barriers('
             'platform TEXT NOT NULL, post_id TEXT NOT NULL, deleted_at INTEGER NOT NULL,'
             'PRIMARY KEY(platform, post_id))');
+        await db.execute('CREATE TABLE IF NOT EXISTS resolved_post_links('
+            'link_key TEXT PRIMARY KEY, platform TEXT NOT NULL, post_id TEXT NOT NULL)');
       },
       onCreate: (db, version) => db.execute(
         'CREATE TABLE history_records('
@@ -717,10 +719,22 @@ class HistoryDb {
   }
 
   /// Find a history record matching a link (by postId, canonical URL, or resolved URL).
+  Future<void> rememberParsedLink(String link, ParsedPost post) async {
+    final host = Uri.tryParse(link)?.host.toLowerCase();
+    if (post.platform != 'tiktok' || !{'vm.tiktok.com', 'vt.tiktok.com'}.contains(host)) return;
+    await _db.insert('resolved_post_links', {'link_key': linkKey(link), 'platform': post.platform, 'post_id': post.id},
+        conflictAlgorithm: ConflictAlgorithm.replace);
+  }
+
   Future<HistoryRecord?> findRecordByLink(
     String link, {
     String? resolvedUrl,
   }) async {
+    final aliases = await _db.query('resolved_post_links', where: 'link_key = ?', whereArgs: [linkKey(link)], limit: 1);
+    if (aliases.isNotEmpty) {
+      final record = await getByPostId(aliases.first['post_id'] as String);
+      if (record != null && !record.isDeleted && record.platform == aliases.first['platform']) return record;
+    }
     final id = postIdOfUrl(link) ??
         (resolvedUrl != null ? postIdOfUrl(resolvedUrl) : null);
     if (id != null) {
