@@ -10,10 +10,19 @@ class AiLabelBadge extends StatelessWidget {
     if (text == null || text!.isEmpty) return const SizedBox.shrink();
     return Padding(
       padding: const EdgeInsets.only(left: 4),
-      child: ActionChip(
-        label: const Text('AI'),
-        visualDensity: VisualDensity.compact,
-        onPressed: () => showDialog<void>(
+      child: InkWell(
+        borderRadius: BorderRadius.circular(8),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+          decoration: BoxDecoration(
+            color: Theme.of(context).colorScheme.primary,
+            borderRadius: BorderRadius.circular(8),
+          ),
+          child: const Text('AI', style: TextStyle(
+            color: Colors.white, fontSize: 11, fontWeight: FontWeight.w600,
+          )),
+        ),
+        onTap: () => showDialog<void>(
           context: context,
           builder: (context) => AlertDialog(
             title: const Text('AI 标注'),
