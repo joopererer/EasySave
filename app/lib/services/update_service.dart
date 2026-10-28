@@ -16,6 +16,8 @@ import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../generated/parser_version.dart';
+import 'signed_parser_manifest.dart';
+import 'parser_release_store.dart';
 
 /// Ed25519 public key (32 bytes raw, hex encoded) for parser bundle verification.
 /// Replace this constant with your generated public key.
@@ -23,9 +25,9 @@ const String kDefaultParserPublicKeyHex =
     'ca4f1c302d00220e32178d2e9b47fd589dffc38e8c9711fe93327a44aa199ded';
 
 const String kDefaultManifestUrl =
-    'https://raw.githubusercontent.com/joopererer/EasySave/master/spec/manifest.json';
+    'https://raw.githubusercontent.com/joopererer/EasySave/master/spec/v2/manifest.json';
 
-const String kPrefKeyLastUpdateCheckMs = 'parser_last_update_check_ms';
+const String kPrefKeyLastUpdateCheckMs = 'parser_v2_last_update_check_ms';
 
 enum ParserSource { builtin, remote }
 
@@ -56,7 +58,6 @@ class PlatformConfig {
     if (tokenFormula.isNotEmpty) 'tokenFormula': tokenFormula,
   };
 }
-
 
 class ParserManifest {
   ParserManifest({
@@ -221,6 +222,8 @@ class UpdateVerifier {
 
 class ParserManager {
   ParserManager._();
+  @visibleForTesting
+  ParserManager.forTesting();
   static final ParserManager instance = ParserManager._();
 
   String _publicKeyHex = kDefaultParserPublicKeyHex;
@@ -228,17 +231,22 @@ class ParserManager {
   http.Client _client = http.Client();
   Directory? _cacheDir;
   SharedPreferences? _prefs;
+  String? _appVersion;
+  Map<String, dynamic>? _schema;
+  bool _canUpdate = false;
+  Future<bool>? _updating;
 
   String _activeVersion = ParserVersion.version;
   ParserSource _activeSource = ParserSource.builtin;
-  String? _activeScript;
   ParserManifest? _activeManifest;
+  SignedParserManifest? _signedManifest;
 
   String get activeVersion => _activeVersion;
   ParserSource get activeSource => _activeSource;
   String get activeSourceLabel =>
       _activeSource == ParserSource.remote ? '云端' : '内置';
   ParserManifest? get activeManifest => _activeManifest;
+  SignedParserManifest? get activeSignedManifest => _signedManifest;
 
   void configure({
     String? publicKeyHex,
@@ -246,282 +254,195 @@ class ParserManager {
     http.Client? client,
     Directory? cacheDir,
     SharedPreferences? prefs,
+    String? appVersion,
   }) {
     if (publicKeyHex != null) _publicKeyHex = publicKeyHex;
     if (manifestUrl != null) _manifestUrl = manifestUrl;
     if (client != null) _client = client;
     if (cacheDir != null) _cacheDir = cacheDir;
     if (prefs != null) _prefs = prefs;
+    if (appVersion != null) _appVersion = appVersion;
   }
 
-  Future<Directory> _getCacheDir() async {
-    if (_cacheDir != null) return _cacheDir!;
-    final base = await getApplicationSupportDirectory();
-    final dir = Directory('${base.path}/parser_cache');
-    if (!dir.existsSync()) {
-      dir.createSync(recursive: true);
-    }
-    return dir;
+  Future<ParserReleaseStore> _store() async {
+    final base =
+        _cacheDir ??
+        Directory('${(await getApplicationSupportDirectory()).path}/parser_v2');
+    _schema ??=
+        jsonDecode(
+              await rootBundle.loadString(
+                'assets/parser/sites-manifest.schema.json',
+              ),
+            )
+            as Map<String, dynamic>;
+    _appVersion ??= (await PackageInfo.fromPlatform()).version;
+    return ParserReleaseStore(base, _publicKeyHex, _appVersion!, _schema!);
   }
 
-  Future<SharedPreferences> _getPrefs() async {
-    return _prefs ??= await SharedPreferences.getInstance();
+  Future<void> init({bool canUpdate = false}) async {
+    _canUpdate = canUpdate;
+    await _selectVerified();
+    if (_canUpdate) await _refreshRecognitionView();
   }
 
-  /// Initialize and load the active parser. Checks local cache first;
-  /// if verified, loads cached remote parser; otherwise falls back to builtin.
-  Future<void> init() async {
+  void _useBuiltin() {
     _activeVersion = ParserVersion.version;
     _activeSource = ParserSource.builtin;
-    _activeScript = null;
     _activeManifest = null;
+    _signedManifest = null;
+  }
 
-    try {
-      final dir = await _getCacheDir();
-      final scriptFile = File('${dir.path}/parser.js');
-      final manifestFile = File('${dir.path}/manifest.json');
-
-      if (scriptFile.existsSync() && manifestFile.existsSync()) {
-        final manifestJson =
-            jsonDecode(manifestFile.readAsStringSync(encoding: utf8))
-                as Map<String, dynamic>;
-        final manifest = ParserManifest.fromJson(manifestJson);
-        final scriptBytes = scriptFile.readAsBytesSync();
-
-        // Verify hash
-        final isHashValid = UpdateVerifier.verifySha256(
-          scriptBytes,
-          manifest.sha256,
-        );
-        // Verify signature of canonical manifest
-        final canonicalString =
-            UpdateVerifier.canonicalizeManifest(manifestJson);
-        final canonicalBytes = Uint8List.fromList(utf8.encode(canonicalString));
-        final isSigValid = await UpdateVerifier.verifyEd25519(
-          canonicalBytes,
-          signatureHex: manifest.signature,
-          publicKeyHex: _publicKeyHex,
-        );
-        // Verify minAppVersion
-        String appVersion = '1.0.0';
-        try {
-          final info = await PackageInfo.fromPlatform();
-          appVersion = info.version;
-        } catch (_) {}
-
-        final isAppSupported = UpdateVerifier.isAppVersionSupported(
-          appVersion,
-          manifest.minAppVersion,
-        );
-
-        // Anti-downgrade check: remote parserVersion must be strictly greater than built-in version
-        final isNewerThanBuiltin = UpdateVerifier.compareVersions(
-          manifest.parserVersion,
-          ParserVersion.version,
-        ) > 0;
-
-        if (isHashValid && isSigValid && isAppSupported && isNewerThanBuiltin) {
-          _activeVersion = manifest.parserVersion;
-          _activeSource = ParserSource.remote;
-          _activeScript = utf8.decode(scriptBytes);
-          _activeManifest = manifest;
-          debugPrint(
-            'ParserManager: loaded remote parser v$_activeVersion from cache',
-          );
-          return;
-        } else {
-          debugPrint(
-            'ParserManager: cached parser verification failed; falling back to builtin',
-          );
-          // Invalidate broken cache
-          try {
-            scriptFile.deleteSync();
-            manifestFile.deleteSync();
-          } catch (_) {}
-        }
+  void _useRemote(ParserRelease release) {
+    final manifest = release.manifest;
+    _signedManifest = manifest;
+    _activeVersion = manifest.parserVersion;
+    _activeSource = ParserSource.remote;
+    // Temporary compatibility adapter: existing platform branches remain until 2b.
+    final json = Map<String, dynamic>.from(manifest.payload);
+    final platforms = Map<String, dynamic>.from(
+      json['platforms'] as Map? ?? {},
+    );
+    final compatible = manifest
+        .sitesFor(_appVersion!)
+        .map((s) => s['id'])
+        .toSet();
+    for (final site in manifest.sites) {
+      if (!compatible.contains(site['id'])) {
+        platforms[site['id'] as String] = {
+          'enabled': false,
+          'notice': '请更新 EasySave 后使用该站点',
+        };
       }
-    } catch (e) {
-      debugPrint(
-        'ParserManager: cache read error: $e; falling back to builtin',
-      );
     }
-
-    await _loadBuiltin();
+    json['platforms'] = platforms;
+    _activeManifest = ParserManifest.fromJson(json);
   }
 
-  Future<void> _loadBuiltin() async {
-    _activeVersion = ParserVersion.version;
-    _activeSource = ParserSource.builtin;
-    _activeScript = await rootBundle.loadString('assets/parser/parser.js');
-    _activeManifest = null;
-    debugPrint('ParserManager: using builtin parser v$_activeVersion');
+  Future<ParserRelease?> _selectVerified() async {
+    try {
+      final release = await (await _store()).load();
+      if (release != null) {
+        _useRemote(release);
+        return release;
+      }
+    } catch (_) {
+      debugPrint('ParserManager: local v2 bundle unavailable');
+    }
+    _useBuiltin();
+    return null;
+  }
+
+  Future<void> _refreshRecognitionView() async {
+    try {
+      (await _store()).writeRecognitionView(_signedManifest);
+    } catch (_) {
+      // Projection failure does not undo a committed, verified release. Foreground
+      // startup/use retries it. Kotlin only uses this file as a recognition hint.
+      debugPrint('ParserManager: recognition projection unavailable');
+    }
   }
 
   Future<String> getActiveScript() async {
-    if (_activeScript != null && _activeScript!.isNotEmpty) {
-      return _activeScript!;
-    }
-    await _loadBuiltin();
-    return _activeScript!;
+    // Re-read and verify original manifest + parser bytes on every use, including
+    // background-engine uses. No cached remote executable is trusted in memory.
+    final release = await _selectVerified();
+    if (_canUpdate) await _refreshRecognitionView();
+    return release?.script ??
+        await rootBundle.loadString('assets/parser/parser.js');
   }
 
-  /// Check remote server for updates (at most once every 6 hours unless forced)
-  Future<bool> checkForUpdates({bool force = false}) async {
+  Future<bool> checkForUpdates({bool force = false}) {
+    if (!_canUpdate) return Future.value(false);
+    return _updating ??= _checkForUpdates(
+      force,
+    ).whenComplete(() => _updating = null);
+  }
+
+  Future<bool> _checkForUpdates(bool force) async {
     try {
-      final prefs = await _getPrefs();
+      final store = await _store();
+      final prefs = _prefs ??= await SharedPreferences.getInstance();
       final now = DateTime.now().millisecondsSinceEpoch;
-      final lastCheck = prefs.getInt(kPrefKeyLastUpdateCheckMs) ?? 0;
-
-      const sixHoursMs = 6 * 3600 * 1000;
-      if (!force && (now - lastCheck < sixHoursMs)) {
-        debugPrint(
-          'ParserManager: update check throttled (< 6 hours since last check)',
-        );
+      final last = prefs.getInt(kPrefKeyLastUpdateCheckMs) ?? 0;
+      if (!force && now - last < const Duration(days: 1).inMilliseconds) {
         return false;
       }
-
-      final baseManifestUri = Uri.parse(_manifestUrl);
-      final manifestUri = force
-          ? baseManifestUri.replace(queryParameters: {
-              ...baseManifestUri.queryParameters,
-              't': '$now',
-            })
-          : baseManifestUri;
-      final manifestResp = await _client
-          .get(manifestUri, headers: const {'Cache-Control': 'no-cache'})
-          .timeout(const Duration(seconds: 10));
-      if (manifestResp.statusCode != 200) {
-        debugPrint(
-          'ParserManager: manifest fetch failed (HTTP ${manifestResp.statusCode})',
-        );
-        return false;
-      }
-
-      final manifestJson =
-          jsonDecode(utf8.decode(manifestResp.bodyBytes))
-              as Map<String, dynamic>;
-      final manifest = ParserManifest.fromJson(manifestJson);
-
-      // Verify minAppVersion
-      String appVersion = '1.0.0';
-      try {
-        final info = await PackageInfo.fromPlatform();
-        appVersion = info.version;
-      } catch (_) {}
-
-      // Anti-downgrade check: remote parserVersion must be strictly greater than built-in version
-      if (UpdateVerifier.compareVersions(
-            manifest.parserVersion,
-            ParserVersion.version,
-          ) <=
-          0) {
-        debugPrint(
-          'ParserManager: remote parserVersion (${manifest.parserVersion}) <= builtin (${ParserVersion.version}), skipping',
-        );
-        return false;
-      }
-
-      if (!UpdateVerifier.isAppVersionSupported(
-        appVersion,
-        manifest.minAppVersion,
-      )) {
-        debugPrint(
-          'ParserManager: minAppVersion (${manifest.minAppVersion}) > current ($appVersion), skipping',
-        );
-        return false;
-      }
-
-      // Download parser.js
-      final baseParserUri = manifestUri.resolve('parser.js');
-      final parserUri = force
-          ? baseParserUri.replace(queryParameters: {
-              ...baseParserUri.queryParameters,
-              't': '$now',
-            })
-          : baseParserUri;
-      final parserResp = await _client
-          .get(parserUri, headers: const {'Cache-Control': 'no-cache'})
-          .timeout(const Duration(seconds: 15));
-      if (parserResp.statusCode != 200) {
-        debugPrint(
-          'ParserManager: parser.js fetch failed (HTTP ${parserResp.statusCode})',
-        );
-        return false;
-      }
-
-      final parserBytes = parserResp.bodyBytes;
-
-      // Verify SHA256
-      if (!UpdateVerifier.verifySha256(parserBytes, manifest.sha256)) {
-        debugPrint(
-          'ParserManager: parser.js SHA256 mismatch! Remote rejected.',
-        );
-        return false;
-      }
-
-      // Verify Ed25519 signature of canonical manifest
-      final canonicalString =
-          UpdateVerifier.canonicalizeManifest(manifestJson);
-      final canonicalBytes = Uint8List.fromList(utf8.encode(canonicalString));
-      final isSigValid = await UpdateVerifier.verifyEd25519(
-        canonicalBytes,
-        signatureHex: manifest.signature,
-        publicKeyHex: _publicKeyHex,
-      );
-      if (!isSigValid) {
-        debugPrint(
-          'ParserManager: manifest Ed25519 signature invalid! Remote rejected.',
-        );
-        return false;
-      }
-
-      // Save to local cache
-      final dir = await _getCacheDir();
-      final scriptFile = File('${dir.path}/parser.js');
-      final manifestFile = File('${dir.path}/manifest.json');
-      scriptFile.writeAsBytesSync(parserBytes, flush: true);
-      manifestFile.writeAsStringSync(
-        jsonEncode(manifest.toJson()),
-        encoding: utf8,
-        flush: true,
-      );
-
-      // Activate remote version
-      _activeVersion = manifest.parserVersion;
-      _activeSource = ParserSource.remote;
-      _activeScript = utf8.decode(parserBytes);
-      _activeManifest = manifest;
-
-      // Update check timestamp
+      // Count failed attempts too: foreground automatic checks run at most daily.
       await prefs.setInt(kPrefKeyLastUpdateCheckMs, now);
-      debugPrint(
-        'ParserManager: successfully updated to remote parser v$_activeVersion',
+      final uri = Uri.parse(_manifestUrl);
+      if (uri.scheme != 'https' || uri.userInfo.isNotEmpty) return false;
+      final stateBeforeFetch = store.readState();
+      final cachedBeforeFetch = await store.load();
+      // A cached ETag cannot stand in for a damaged/missing current bundle.
+      // Omit it so the server returns the bytes needed to repair that release.
+      final etag =
+          cachedBeforeFetch?.reference == stateBeforeFetch?['current'] &&
+              cachedBeforeFetch != null
+          ? prefs.getString('parser_v2_etag')
+          : null;
+      final response = await _client
+          .get(
+            uri,
+            headers: {if (!force && etag != null) 'If-None-Match': etag},
+          )
+          .timeout(const Duration(seconds: 15));
+      if (response.statusCode == 304) {
+        await _selectVerified();
+        await _refreshRecognitionView();
+        return false;
+      }
+      if (response.statusCode != 200) return false;
+      final manifest = await SignedParserManifest.verify(
+        response.bodyBytes,
+        publicKeyHex: _publicKeyHex,
+        schema: _schema!,
       );
+      if (!manifest.supportsApp(_appVersion!)) return false;
+      store.checkWatermark(manifest, store.readState());
+      final current = await store.load();
+      if (current != null &&
+          current.manifest.version == manifest.version &&
+          current.manifest.payloadHash == manifest.payloadHash) {
+        return false;
+      }
+      final parser = await _client
+          .get(Uri.parse(manifest.parserUrl))
+          .timeout(const Duration(seconds: 30));
+      if (parser.statusCode != 200 ||
+          parser.bodyBytes.length > 10 * 1024 * 1024) {
+        return false;
+      }
+      final release = await store.activate(manifest, parser.bodyBytes);
+      _useRemote(release);
+      await _refreshRecognitionView();
+      final nextEtag = response.headers['etag'];
+      if (nextEtag != null) {
+        await prefs.setString('parser_v2_etag', nextEtag);
+      } else {
+        await prefs.remove('parser_v2_etag');
+      }
       return true;
-    } catch (e) {
-      debugPrint('ParserManager: error during update check: $e');
+    } catch (_) {
+      debugPrint(
+        'ParserManager: v2 update rejected; retaining current release',
+      );
       return false;
     }
   }
 
-  /// Remote platform switch: check if platform is currently enabled
   bool isPlatformEnabled(String platform) {
-    if (_activeManifest == null) return true;
-    final cfg = _activeManifest!.platforms[platform];
-    return cfg?.enabled ?? true;
+    return _activeManifest?.platforms[platform]?.enabled ?? true;
   }
 
-  /// Remote platform maintenance notice
   String? getMaintenanceNotice(String platform) {
-    if (_activeManifest == null) return null;
-    final cfg = _activeManifest!.platforms[platform];
+    final cfg = _activeManifest?.platforms[platform];
     if (cfg == null || cfg.enabled) return null;
     return cfg.notice.isNotEmpty ? cfg.notice : '该平台解析服务维护中，请稍后再试';
   }
 
-  /// Request headers for a platform (from manifest, with sensible defaults)
   Map<String, String>? getPlatformHeaders(String platform) {
-    if (_activeManifest != null && _activeManifest!.headers.containsKey(platform)) {
+    if (_activeManifest != null &&
+        _activeManifest!.headers.containsKey(platform)) {
       return _activeManifest!.headers[platform];
     }
     if (platform == 'x') {
@@ -533,16 +454,12 @@ class ParserManager {
     return null;
   }
 
-  /// Endpoint template for a platform (from manifest, with sensible defaults)
   String getPlatformEndpoint(String platform) {
-    if (_activeManifest != null && _activeManifest!.platforms.containsKey(platform)) {
-      final ep = _activeManifest!.platforms[platform]?.endpoint;
-      if (ep != null && ep.isNotEmpty) return ep;
-    }
+    final endpoint = _activeManifest?.platforms[platform]?.endpoint;
+    if (endpoint != null && endpoint.isNotEmpty) return endpoint;
     if (platform == 'x') {
       return 'https://cdn.syndication.twimg.com/tweet-result?id={id}&lang=en&token={token}';
     }
     return '';
   }
 }
-

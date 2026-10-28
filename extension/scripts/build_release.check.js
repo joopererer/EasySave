@@ -82,3 +82,18 @@ test('CLI missing-key failure has nonzero status', () => {
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /PARSER_SIGNING_KEY/);
 });
+
+test('frozen v1.2.4 channel bytes remain unchanged', () => {
+  for (const [name, hash] of Object.entries({
+    'spec/manifest.json': '7e04cdf8d489b9f03482884fe5da0d23f92465415a95d3af4d1766408101912b',
+    'spec/parser.js': 'db469d347e2ffd54264ac0ac88f74ca935dfe60df14d57241e043d9e04b42a66',
+  })) assert.equal(crypto.createHash('sha256').update(readFileSync(resolve(repo, name))).digest('hex'), hash);
+});
+
+test('shared signature vector covers UTF-8 payload verbatim', () => {
+  const vector = JSON.parse(readFileSync(resolve(repo, 'spec/test-vectors/parser-manifest-v2.json')));
+  const pub = crypto.createPublicKey({ type: 'spki', format: 'der', key: Buffer.concat([
+    Buffer.from('302a300506032b6570032100', 'hex'), Buffer.from(vector.publicKeyHex, 'hex'),
+  ]) });
+  assert.equal(crypto.verify(null, Buffer.from(vector.envelope.payload), pub, Buffer.from(vector.envelope.signature, 'hex')), true);
+});
