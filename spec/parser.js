@@ -606,7 +606,12 @@ var EasySaveParser = (() => {
       author,
       items
     };
-    const label = xhsAiLabel(isRecord(note.illegalInfo) ? note.illegalInfo.desc : void 0, noteId);
+    const platformLabel = xhsAiLabel(isRecord(note.illegalInfo) ? note.illegalInfo.desc : void 0, noteId);
+    const statement = note.noteStatement;
+    const authorLabel = typeof statement === "string" && statement.startsWith("\u4F5C\u8005\u58F0\u660E") && /ai/i.test(statement) ? { text: statement, source: "author" } : void 0;
+    if (typeof statement === "string" && statement.trim() && !authorLabel) unknownAiLabel(noteId, statement);
+    if (authorLabel && platformLabel) unknownAiLabel(noteId, platformLabel.text);
+    const label = authorLabel ?? platformLabel;
     if (label) data.aiLabel = label;
     if (nonBlank(note["title"])) data.title = note["title"];
     const caption = pickString(note, ["desc", "description"]);

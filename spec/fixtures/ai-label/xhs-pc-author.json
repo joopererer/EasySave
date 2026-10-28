@@ -1,0 +1,18 @@
+{
+  "note": {
+    "noteDetailMap": {
+      "000000000000000000000001": {
+        "note": {
+          "noteId": "000000000000000000000001",
+          "imageList": [
+            {
+              "urlDefault": "https://example.invalid/FAKE.jpg"
+            }
+          ],
+          "noteStatement": "作者声明：含ai生成内容",
+          "tagList": []
+        }
+      }
+    }
+  }
+}

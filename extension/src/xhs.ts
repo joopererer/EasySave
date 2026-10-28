@@ -4,7 +4,7 @@
 // so the same code works in content scripts and in Vitest.
 // Implements the XHS section of spec/parsing.md.
 
-import { xhsAiLabel, type AiLabel } from './ai-label';
+import { xhsAiLabel, type AiLabel, unknownAiLabel } from './ai-label';
 import { rememberXhsPath, xhsDiagnostic } from './xhs-diagnostic';
 
 export type XhsErrorCode =
@@ -777,7 +777,13 @@ export function buildNoteFromRecord(
     author,
     items,
   };
-  const label = xhsAiLabel(isRecord(note.illegalInfo) ? note.illegalInfo.desc : undefined, noteId);
+  const platformLabel = xhsAiLabel(isRecord(note.illegalInfo) ? note.illegalInfo.desc : undefined, noteId);
+  const statement = note.noteStatement;
+  const authorLabel = typeof statement === 'string' && statement.startsWith('作者声明') && /ai/i.test(statement)
+    ? { text: statement, source: 'author' as const } : undefined;
+  if (typeof statement === 'string' && statement.trim() && !authorLabel) unknownAiLabel(noteId, statement);
+  if (authorLabel && platformLabel) unknownAiLabel(noteId, platformLabel.text);
+  const label = authorLabel ?? platformLabel;
   if (label) data.aiLabel = label;
   if (nonBlank(note["title"])) data.title = note["title"] as string;
   const caption = pickString(note, ["desc", "description"]);
