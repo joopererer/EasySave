@@ -4,6 +4,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import '../widgets/ai_label_badge.dart';
 import 'package:flutter/services.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:photo_manager/photo_manager.dart';
@@ -982,7 +983,10 @@ class ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
                             height: 20,
                             child: CircularProgressIndicator(strokeWidth: 2),
                           )
-                        : PlatformTag(platform: record.platform),
+                        : Row(mainAxisSize: MainAxisSize.min, children: [
+                            PlatformTag(platform: record.platform),
+                            AiLabelBadge(text: record.aiLabel, source: record.aiLabelSource),
+                          ]),
                   ),
                 ),
               ),
@@ -1194,6 +1198,8 @@ class ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
                 : record.postId,
             platform: record.platform,
             postUrl: record.postUrl,
+            aiLabel: record.aiLabel,
+            aiLabelSource: record.aiLabelSource,
             onReparse: () {
               // Pop GalleryBrowser first, then reparse with feedback.
               Navigator.of(context).pop();

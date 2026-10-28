@@ -4,6 +4,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import '../widgets/ai_label_badge.dart';
 import 'package:flutter/services.dart';
 
 import '../core/dev_log.dart';
@@ -245,6 +246,8 @@ class _PreviewPageState extends State<PreviewPage> {
           title: widget.post.title ?? widget.post.id,
           platform: widget.post.platform,
           postUrl: widget.post.url,
+          aiLabel: widget.post.aiLabel?.text,
+          aiLabelSource: widget.post.aiLabel?.source,
           showSave: true,
           selectedIndices: _order.toSet(),
           onSelectionChanged: (set) {
@@ -362,6 +365,7 @@ class _PreviewPageState extends State<PreviewPage> {
             Flexible(child: Text(post.author.name ?? post.id)),
             const SizedBox(width: 8),
             PlatformTag(platform: post.platform),
+            AiLabelBadge(text: post.aiLabel?.text, source: post.aiLabel?.source),
           ],
         ),
         actions: [

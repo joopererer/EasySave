@@ -12,6 +12,7 @@ import '../services/gallery_locator_service.dart';
 import '../services/history_db.dart';
 import '../theme/app_theme.dart';
 import 'shared.dart';
+import 'ai_label_badge.dart';
 
 /// Short saved-time label, e.g. "今天 18:24", "昨天 09:10", "10-12 09:10".
 String formatSavedAt(DateTime time) {
@@ -485,7 +486,10 @@ class WaterfallPostCard extends StatelessWidget {
                           crossAxisAlignment: CrossAxisAlignment.start,
                           mainAxisSize: MainAxisSize.min,
                           children: [
-                            PlatformTag(platform: record.platform),
+                            Wrap(crossAxisAlignment: WrapCrossAlignment.center, children: [
+                              PlatformTag(platform: record.platform),
+                              AiLabelBadge(text: record.aiLabel, source: record.aiLabelSource),
+                            ]),
                             const SizedBox(height: 4),
                             Text(
                               title,
@@ -724,7 +728,10 @@ class ListPostRow extends StatelessWidget {
                   children: [
                     Row(
                       children: [
-                        PlatformTag(platform: record.platform),
+                        Wrap(crossAxisAlignment: WrapCrossAlignment.center, children: [
+                              PlatformTag(platform: record.platform),
+                              AiLabelBadge(text: record.aiLabel, source: record.aiLabelSource),
+                            ]),
                         const SizedBox(width: 6),
                         Flexible(
                           child: Text(
@@ -873,6 +880,9 @@ class AllMediaCard extends StatelessWidget {
                   left: 6,
                   child: _TranslucentBadge(label: badge),
                 ),
+              if (record.aiLabel != null)
+                Positioned(bottom: 6, left: 6,
+                  child: AiLabelBadge(text: record.aiLabel, source: record.aiLabelSource)),
               if (selectionMode)
                 Positioned(
                   top: 6,

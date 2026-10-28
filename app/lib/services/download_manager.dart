@@ -330,6 +330,9 @@ class DownloadBatch {
   }
 
   /// Unfinished and every unfinished job is paused by the user.
+  /// Session-only TikTok videos cannot resume a paused transfer.
+  bool get supportsPause => !jobs.any((job) => needsSessionDownload(this, job));
+
   bool get isPaused {
     final open = jobs.where((j) => !j.isTerminal);
     return open.isNotEmpty && open.every((j) => j.state == JobState.paused);

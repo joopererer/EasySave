@@ -17,6 +17,7 @@ import '../services/gallery_locator_service.dart';
 import '../services/history_db.dart';
 import '../services/saver.dart';
 import 'shared.dart';
+import 'ai_label_badge.dart';
 
 class GalleryBrowserItem {
   GalleryBrowserItem({
@@ -78,6 +79,8 @@ class GalleryBrowserPage extends StatefulWidget {
     this.onRedownload,
     this.onReparse,
     this.showSave = false,
+    this.aiLabel,
+    this.aiLabelSource,
   });
 
   final List<GalleryBrowserItem> items;
@@ -86,6 +89,8 @@ class GalleryBrowserPage extends StatefulWidget {
   final String title;
   final String platform;
   final String postUrl;
+  final String? aiLabel;
+  final String? aiLabelSource;
   final Set<int>? selectedIndices;
   final ValueChanged<Set<int>>? onSelectionChanged;
   final Future<void> Function(int index)? onRedownload;
@@ -338,6 +343,7 @@ class _GalleryBrowserPageState extends State<GalleryBrowserPage> {
                           ),
                         ),
                         const SizedBox(width: 8),
+                        AiLabelBadge(text: widget.aiLabel, source: widget.aiLabelSource),
                         // Checkbox
                         GestureDetector(
                           onTap: currentItem != null

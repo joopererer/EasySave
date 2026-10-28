@@ -700,6 +700,8 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
                 : record.postId,
             platform: record.platform,
             postUrl: record.postUrl,
+            aiLabel: record.aiLabel,
+            aiLabelSource: record.aiLabelSource,
             onReparse: () {
               Navigator.of(context).pop();
               _reparse(record);
@@ -1705,7 +1707,7 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
                   downloadProgress: _downloadProgress[record.postId],
                   downloadPaused: _isPaused(record.postId),
                   downloadStalled: _isStalled(record.postId),
-                  onToggleDownload: () => _toggleDownload(record.postId),
+                  onToggleDownload: _downloadBatches[record.postId]?.supportsPause == false ? null : () => _toggleDownload(record.postId),
                   onCancelDownload: () => _cancelDownload(record.postId),
                   onTap: () => _openRecord(record),
                   onLongPress: () => _enterSelection(key),
@@ -1773,8 +1775,7 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
                         downloadProgress: _downloadProgress[record.postId],
                         downloadPaused: _isPaused(record.postId),
                         downloadStalled: _isStalled(record.postId),
-                        onToggleDownload: () =>
-                            _toggleDownload(record.postId),
+                        onToggleDownload: _downloadBatches[record.postId]?.supportsPause == false ? null : () => _toggleDownload(record.postId),
                         onCancelDownload: () =>
                             _cancelDownload(record.postId),
                         onTap: () => _openRecord(record),
