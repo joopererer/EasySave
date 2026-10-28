@@ -31,6 +31,24 @@ var EasySaveParser = (() => {
     parseXhs: () => parseXhs
   });
 
+  // src/ai-label.ts
+  function unknownAiLabel(id, value) {
+    console.info("EasySaveAiLabel:" + JSON.stringify({ id, value }));
+  }
+  function xhsAiLabel(desc, id) {
+    if (typeof desc !== "string" || !desc.trim()) return;
+    if (desc === "\u53EF\u80FD\u542BAI\u751F\u6210\u5185\u5BB9") return { text: desc, source: "platform" };
+    if (desc.startsWith("\u4F5C\u8005\u58F0\u660E") && /ai/i.test(desc)) return { text: desc, source: "author" };
+    unknownAiLabel(id, desc);
+  }
+  function tiktokAiLabel(value, id) {
+    if (value === 1 || value === "1") return { text: "Contains AI-generated media", source: "platform" };
+    if (value === 2 || value === "2") return { text: "Creator labeled as AI-generated", source: "author" };
+    if (typeof value === "string" && value.trim() || typeof value === "number" || typeof value === "boolean") {
+      unknownAiLabel(id, value);
+    }
+  }
+
   // src/xhs.ts
   var NOTE_ID_PATTERN = /\/(?:explore|discovery\/item|user\/profile\/[^/]+)\/([a-f0-9]{24})/i;
   var STATE_MARKERS = ["__INITIAL_STATE__", "__NEXT_DATA__", "__NUXT__"];
@@ -128,9 +146,9 @@ var EasySaveParser = (() => {
     }
     return out;
   }
-  function tryParseJson(text) {
+  function tryParseJson(text2) {
     try {
-      return JSON.parse(text);
+      return JSON.parse(text2);
     } catch {
       return void 0;
     }
@@ -237,16 +255,16 @@ var EasySaveParser = (() => {
     const type = entry["streamType"] ?? entry["stream_type"];
     const desc = entry["streamDesc"] ?? entry["stream_desc"];
     const watermarked = type === 259 || type === 309 || typeof desc === "string" && desc.toUpperCase() === "WEB_LIVEPHOTO_19";
-    const urls = [
+    const urls2 = [
       entry["masterUrl"],
       entry["master_url"],
       ...Array.isArray(entry["backupUrls"]) ? entry["backupUrls"] : Array.isArray(entry["backup_urls"]) ? entry["backup_urls"] : [],
       entry["url"]
     ].filter(nonBlank);
-    if (urls.length === 0) return void 0;
+    if (urls2.length === 0) return void 0;
     const width = typeof entry["width"] === "number" ? entry["width"] : 0;
     const height = typeof entry["height"] === "number" ? entry["height"] : 0;
-    return { url: toHttps(urls[0]), watermarked, width, height };
+    return { url: toHttps(urls2[0]), watermarked, width, height };
   }
   function collectStreamCandidates(container) {
     if (!isRecord(container)) return [];
@@ -385,7 +403,7 @@ var EasySaveParser = (() => {
     if (note && wantedId && nonBlank(note["noteId"]) && note["noteId"].toLowerCase() !== wantedId) {
       note = void 0;
     }
-    const looksLikeXhs = /xiaohongshu\.com|xhslink/.test(pageUrl) || /xiaohongshu\.com|xhslink|__INITIAL_STATE__/.test(html.slice(0, 2e4));
+    const looksLikeXhs = /xiaohongshu\.com|rednote\.com|xhslink/.test(pageUrl) || /xiaohongshu\.com|rednote\.com|xhslink|__INITIAL_STATE__/.test(html.slice(0, 2e4));
     if (!note) {
       if (looksLikeXhs) {
         return {
@@ -462,7 +480,7 @@ var EasySaveParser = (() => {
     const hasMainVideo = isRecord(note["video"]) && (nonBlank(note["video"]["originVideoKey"]) || isRecord(note["video"]["consumer"]) && nonBlank(
       note["video"]["consumer"]["originVideoKey"]
     ) || collectStreamCandidates(note["video"]["media"]).length > 0 || collectStreamCandidates(note["video"]["stream"]).length > 0 || typeof note["video"]["mediaV2"] === "string" && (note["video"]["mediaV2"].includes("master_url") || note["video"]["mediaV2"].includes("masterUrl")));
-    const isVideoNote = noteType === "video" || noteType === "" && hasMainVideo && images.length <= 1 && !firstHasStream;
+    const isVideoNote = noteType === "video" && images.length <= 1 || noteType === "" && hasMainVideo && images.length <= 1 && !firstHasStream;
     const items = [];
     if (isVideoNote) {
       const resolved = resolveVideoUrl(note["video"]);
@@ -547,6 +565,13 @@ var EasySaveParser = (() => {
       author,
       items
     };
+    const platformLabel = xhsAiLabel(isRecord(note.illegalInfo) ? note.illegalInfo.desc : void 0, noteId);
+    const statement = note.noteStatement;
+    const authorLabel = typeof statement === "string" && statement.startsWith("\u4F5C\u8005\u58F0\u660E") && /ai/i.test(statement) ? { text: statement, source: "author" } : void 0;
+    if (typeof statement === "string" && statement.trim() && !authorLabel) unknownAiLabel(noteId, statement);
+    if (authorLabel && platformLabel) unknownAiLabel(noteId, platformLabel.text);
+    const label = authorLabel ?? platformLabel;
+    if (label) data.aiLabel = label;
     if (nonBlank(note["title"])) data.title = note["title"];
     const caption = pickString(note, ["desc", "description"]);
     if (caption !== void 0) data.caption = caption;
@@ -727,8 +752,8 @@ var EasySaveParser = (() => {
     } else if (isRecord2(product["edge_media_to_caption"])) {
       const edges = product["edge_media_to_caption"]["edges"];
       if (Array.isArray(edges) && edges.length > 0 && isRecord2(edges[0]["node"])) {
-        const text = edges[0]["node"]["text"];
-        if (typeof text === "string") caption = text;
+        const text2 = edges[0]["node"]["text"];
+        if (typeof text2 === "string") caption = text2;
       }
     }
     const takenAt = product["taken_at"] ?? product["taken_at_timestamp"];
@@ -957,6 +982,130 @@ var EasySaveParser = (() => {
     return { ok: true, data: post };
   }
 
+  // src/tiktok.ts
+  var record = (v) => v !== null && typeof v === "object" && !Array.isArray(v) ? v : {};
+  var text = (v) => typeof v === "string" ? v : void 0;
+  var number = (v) => typeof v === "number" && Number.isFinite(v) ? v : 0;
+  function extractTiktokPostId(url) {
+    try {
+      const u = new URL(url);
+      if (!["http:", "https:"].includes(u.protocol) || !["www.tiktok.com", "m.tiktok.com", "tiktok.com"].includes(u.hostname)) return;
+      return /^\/@[^/]*\/(?:video|photo)\/(\d+)\/?$/.exec(u.pathname)?.[1] ?? /^\/v\/(\d+)\.html\/?$/.exec(u.pathname)?.[1] ?? /^\/share\/video\/(\d+)\/?$/.exec(u.pathname)?.[1];
+    } catch {
+      return;
+    }
+  }
+  function isTiktokLink(url) {
+    if (extractTiktokPostId(url)) return true;
+    try {
+      const u = new URL(url);
+      return ["http:", "https:"].includes(u.protocol) && ["vm.tiktok.com", "vt.tiktok.com"].includes(u.hostname) && /^\/[^/]+\/?$/.test(u.pathname);
+    } catch {
+      return false;
+    }
+  }
+  function urls(value) {
+    const values = Array.isArray(value) ? value : [value];
+    return [...new Set(values.filter((v) => {
+      if (typeof v !== "string") return false;
+      try {
+        return ["https:", "http:"].includes(new URL(v).protocol);
+      } catch {
+        return false;
+      }
+    }))];
+  }
+  function selectTiktokVideo(value) {
+    const video = record(value);
+    const variants = (Array.isArray(video.bitrateInfo) ? video.bitrateInfo : []).map((v) => {
+      const b = record(v), addr = record(b.PlayAddr);
+      return {
+        urls: urls(addr.UrlList),
+        width: number(addr.Width),
+        height: number(addr.Height),
+        bitrate: number(b.Bitrate)
+      };
+    }).filter((v) => v.urls.length > 0).sort((a, b) => b.width * b.height - a.width * a.height || b.bitrate - a.bitrate);
+    const candidates = [.../* @__PURE__ */ new Set([
+      ...variants.flatMap((v) => v.urls),
+      ...urls(video.playAddr),
+      ...urls(record(video.PlayAddrStruct).UrlList)
+    ])];
+    if (!candidates.length) return;
+    return {
+      type: "video",
+      url: candidates[0],
+      videoUrl: candidates[0],
+      fallbacks: candidates.slice(1),
+      width: variants[0]?.width || number(video.width) || void 0,
+      height: variants[0]?.height || number(video.height) || void 0,
+      duration: number(video.duration) || void 0
+    };
+  }
+  function failure(detail) {
+    const status = Number(detail.statusCode);
+    const message = (text(detail.statusMsg) ?? text(detail.statusMessage))?.toLowerCase() ?? "";
+    if ([10216, 10222].includes(status) || /private/.test(message))
+      return { ok: false, error: { code: "PRIVATE", message: "\u8BE5 TikTok \u5E16\u5B50\u6216\u8D26\u53F7\u4E3A\u79C1\u5BC6" } };
+    if (status === 10204 || /region|country|geo.?block|ip.*block/.test(message))
+      return { ok: false, error: { code: "REGION_RESTRICTED", message: "\u8BE5 TikTok \u5E16\u5B50\u53D7\u5730\u533A\u6216 IP \u9650\u5236" } };
+    if (/deleted|removed|not found|does not exist/.test(message))
+      return { ok: false, error: { code: "DELETED", message: "\u8BE5 TikTok \u5E16\u5B50\u5DF2\u5220\u9664\u6216\u4E0D\u5B58\u5728" } };
+    return { ok: false, error: { code: "UNKNOWN", message: "\u65E0\u6CD5\u8BFB\u53D6 TikTok \u5E16\u5B50\uFF0C\u8BF7\u91CD\u65B0\u89E3\u6790" } };
+  }
+  function parseTiktok(input, pageUrl) {
+    const wanted = extractTiktokPostId(pageUrl);
+    if (!wanted) return { ok: false, error: { code: "UNSUPPORTED_URL", message: "\u8BF7\u5148\u5C55\u5F00 TikTok \u77ED\u94FE" } };
+    let root;
+    try {
+      const json = input.trim().startsWith("{") ? input : /<script\b[^>]*\bid=["']__UNIVERSAL_DATA_FOR_REHYDRATION__["'][^>]*>([\s\S]*?)<\/script>/i.exec(input)?.[1];
+      root = record(JSON.parse(json ?? ""));
+    } catch {
+      return failure({});
+    }
+    const scope = record(root.__DEFAULT_SCOPE__);
+    const details = ["webapp.video-detail", "webapp.reflow.video.detail"].map((key) => record(scope[key])).filter((detail2) => Object.keys(detail2).length > 0);
+    const detail = details.find((detail2) => Number(detail2.statusCode) === 0 && text(record(record(detail2.itemInfo).itemStruct).id) === wanted) ?? details[0] ?? {};
+    const item = record(record(detail.itemInfo).itemStruct);
+    if (Number(detail.statusCode) !== 0 || !Object.keys(item).length) return failure(detail);
+    const id = text(item.id);
+    if (!id || !/^\d+$/.test(id) || id !== wanted) return failure({});
+    const imagePost = record(item.imagePost);
+    let items;
+    if (Array.isArray(imagePost.images)) {
+      items = imagePost.images.map((raw) => {
+        const image = record(raw), addr = record(image.imageURL);
+        const candidates = urls(addr.urlList);
+        return {
+          type: "image",
+          url: candidates[0],
+          fallbacks: candidates.slice(1),
+          width: number(image.imageWidth) || void 0,
+          height: number(image.imageHeight) || void 0
+        };
+      });
+      if (items.some((i) => !i.url)) return failure({});
+    } else {
+      const video = selectTiktokVideo(item.video);
+      items = video ? [video] : [];
+    }
+    if (!items.length) return failure({});
+    const author = record(item.author), authorId = text(author.id);
+    const created = Number(item.createTime);
+    const date = new Date(created * 1e3);
+    return { ok: true, data: {
+      platform: "tiktok",
+      id,
+      url: `https://www.tiktok.com/@/video/${id}`,
+      author: { name: text(author.nickname), id: authorId && /^\d+$/.test(authorId) ? authorId : void 0 },
+      caption: text(item.desc),
+      title: text(imagePost.title),
+      aiLabel: tiktokAiLabel(item.aigcLabelType, id),
+      publishedAt: created > 0 && !isNaN(date.getTime()) ? date.toISOString().replace(".000Z", "Z") : void 0,
+      items
+    } };
+  }
+
   // src/_utils.ts
   function hostnameOf(url) {
     try {
@@ -967,7 +1116,7 @@ var EasySaveParser = (() => {
     }
   }
   function isXhsHost(host) {
-    return /xiaohongshu\.com|xhslink\.com|xhslink\.cn|xhs\.cn/.test(host);
+    return /xiaohongshu\.com|rednote\.com|xhslink\.com|xhslink\.cn|xhs\.cn/.test(host);
   }
   function isInstagramHost(host) {
     return /instagram\.com|instagr\.am/.test(host);
@@ -1059,6 +1208,15 @@ var EasySaveParser = (() => {
   function parsePage() {
     const url = window.location.href;
     const html = document.documentElement.outerHTML;
+    if (isTiktokLink(url)) {
+      const result = parseTiktok(html, url);
+      if (result.ok) return JSON.stringify(result);
+      const state = window.__UNIVERSAL_DATA_FOR_REHYDRATION__;
+      if (state && typeof state === "object") {
+        return JSON.stringify(parseTiktok(JSON.stringify(state), url));
+      }
+      return JSON.stringify(result);
+    }
     if (isXhsHost(url)) {
       const state = window.__INITIAL_STATE__;
       if (state !== void 0) {
@@ -1098,6 +1256,7 @@ var EasySaveParser = (() => {
     return JSON.stringify({ ok: false, error: { code: "UNSUPPORTED_URL", message: `Unsupported host: ${url}` } });
   }
   function parse(input, pageUrl) {
+    if (isTiktokLink(pageUrl)) return JSON.stringify(parseTiktok(input, pageUrl));
     const host = hostnameOf(pageUrl);
     if (!host) {
       return JSON.stringify({ ok: false, error: { code: "UNSUPPORTED_URL", message: `Cannot parse URL: ${pageUrl}` } });

@@ -1,9 +1,13 @@
 {
-  "parserVersion": "1.1.0",
-  "minAppVersion": "1.0.0",
-  "sha256": "a59ca556927684657c15c8e8b4b805a8b37fa2356ba43f758b2f06d959461890",
-  "signature": "1a4a027c6fce862a3c96daa239c354f1e02931e2444234d5c5a6d217f36b925dc36b674daa48172f60c8adf375cafacff8d3d6dbb54dbd887e552c6f7f708504",
+  "parserVersion": "1.2.4",
+  "minAppVersion": "1.9.0",
+  "sha256": "db469d347e2ffd54264ac0ac88f74ca935dfe60df14d57241e043d9e04b42a66",
+  "signature": "979917104228fa049740fca761399580d14c6a3d2aa042d54c8738502b3db74c1bf210cb544ba93e66dcd8eb1997aa509fa0a1cb0a4bf0210d9406a99d117d06",
   "platforms": {
+    "tiktok": {
+      "enabled": true,
+      "notice": "TikTok 解析服务维护中，请稍后再试"
+    },
     "xhs": {
       "enabled": true,
       "notice": "小红书解析服务维护中，请稍后再试"
@@ -14,11 +18,14 @@
     },
     "x": {
       "enabled": true,
-      "notice": "X (Twitter) 解析服务维护中，请稍后再试",
+      "notice": "X 解析服务维护中，请稍后再试",
       "endpoint": "https://cdn.syndication.twimg.com/tweet-result?id={id}&lang=en&token={token}"
     }
   },
   "headers": {
+    "tiktok": {
+      "Referer": "https://www.tiktok.com/"
+    },
     "xhs": {
       "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
     },
