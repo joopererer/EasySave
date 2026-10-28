@@ -7,6 +7,7 @@ import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { buildRelease } from './build_release.js';
+import { verifyRelease } from './verify_release.js';
 
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 function fixture(t) {
@@ -96,4 +97,50 @@ test('shared signature vector covers UTF-8 payload verbatim', () => {
     Buffer.from('302a300506032b6570032100', 'hex'), Buffer.from(vector.publicKeyHex, 'hex'),
   ]) });
   assert.equal(crypto.verify(null, Buffer.from(vector.envelope.payload), pub, Buffer.from(vector.envelope.signature, 'hex')), true);
+});
+
+test('readback verification accepts matching signed artifacts and rejects changed bytes', (t) => {
+  const { root, seed } = fixture(t);
+  const { directory } = buildRelease({ root, seed });
+  const downloaded = resolve(root, 'downloaded');
+  mkdirSync(downloaded);
+  for (const name of ['manifest.json', 'parser.js']) writeFileSync(resolve(downloaded, name), readFileSync(resolve(directory, name)));
+  assert.equal(verifyRelease({ root, downloadDirectory: downloaded }).manifestVersion, 1);
+  writeFileSync(resolve(downloaded, 'parser.js'), 'unexpected parser bytes');
+  assert.throws(() => verifyRelease({ root, downloadDirectory: downloaded }), /differs/);
+  writeFileSync(resolve(downloaded, 'parser.js'), readFileSync(resolve(directory, 'parser.js')));
+  writeFileSync(resolve(downloaded, 'manifest.json'), readFileSync(resolve(directory, 'manifest.json'), 'utf8') + ' ');
+  assert.throws(() => verifyRelease({ root, downloadDirectory: downloaded }), /differs/);
+});
+
+test('readback verifies signature and hash even if both local and remote are changed', (t) => {
+  const { root, seed } = fixture(t);
+  const { directory, envelope } = buildRelease({ root, seed });
+  envelope.signature = '0'.repeat(128);
+  writeFileSync(resolve(directory, 'manifest.json'), JSON.stringify(envelope));
+  assert.throws(() => verifyRelease({ root, downloadDirectory: directory }), /signature/);
+  buildRelease({ root, seed });
+  writeFileSync(resolve(directory, 'parser.js'), 'changed');
+  assert.throws(() => verifyRelease({ root, downloadDirectory: directory }), /hash/);
+});
+
+test('unknown header fields cannot bypass closed schema through inherited names', (t) => {
+  const { root, seed } = fixture(t);
+  const path = resolve(root, 'config/sites.json');
+  const sites = JSON.parse(readFileSync(path));
+  sites[0].download.headers.toString = 'forbidden';
+  writeFileSync(path, JSON.stringify(sites));
+  assert.throws(() => buildRelease({ root, seed }), /Invalid manifest/);
+});
+
+test('workflow publishes channel only after upload and readback; release jobs never cancel each other', () => {
+  const workflow = readFileSync(resolve(repo, '.github/workflows/release_parser.yml'), 'utf8');
+  const steps = ['Run all tests', 'Require signing key', 'Build and sign v2 release',
+    'Upload Release attachments', 'Read back and verify Release attachments', 'Commit v2 channel manifest to master'];
+  const positions = steps.map((s) => workflow.indexOf('name: ' + s));
+  assert.equal(positions.every((p, i) => p >= 0 && (i === 0 || p > positions[i - 1])), true);
+  assert.match(workflow, /cancel-in-progress: false/);
+  assert.match(workflow, /overwrite_files: false/);
+  assert.match(workflow, /git add spec\/v2\/manifest\.json/);
+  assert.doesNotMatch(workflow, /git add spec\/manifest\.json|always\(\)|continue-on-error/);
 });

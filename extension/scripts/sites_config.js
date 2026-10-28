@@ -18,7 +18,8 @@ export function validateSchema(value, rule, schema, path = '$') {
     if (!value || typeof value !== 'object' || Array.isArray(value)) fail();
     for (const key of rule.required ?? []) if (!Object.hasOwn(value, key)) fail();
     for (const [key, child] of Object.entries(value)) {
-      const childRule = rule.properties?.[key] ?? rule.additionalProperties;
+      const childRule = Object.hasOwn(rule.properties ?? {}, key)
+        ? rule.properties[key] : rule.additionalProperties;
       if (childRule === false) fail();
       if (childRule && typeof childRule === 'object') validateSchema(child, childRule, schema, path + '.' + key);
     }
