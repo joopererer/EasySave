@@ -1,0 +1,16 @@
+{
+  "note": {
+    "noteDetailMap": {
+      "000000000000000000000001": {
+        "note": {
+          "noteId": "000000000000000000000001",
+          "imageList": [
+            {
+              "urlDefault": "https://example.invalid/FAKE.jpg"
+            }
+          ]
+        }
+      }
+    }
+  }
+}

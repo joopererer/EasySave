@@ -4,6 +4,8 @@
 // so the same code works in content scripts and in Vitest.
 // Implements the XHS section of spec/parsing.md.
 
+import { xhsAiLabel, type AiLabel } from './ai-label';
+
 export type XhsErrorCode =
   | "LOGIN_REQUIRED"
   | "PRIVATE_OR_UNAVAILABLE"
@@ -36,6 +38,7 @@ export interface XhsItem {
 }
 
 export interface XhsNote {
+  aiLabel?: AiLabel;
   platform: "xhs";
   id: string;
   url: string;
@@ -771,6 +774,8 @@ export function buildNoteFromRecord(
     author,
     items,
   };
+  const label = xhsAiLabel(isRecord(note.illegalInfo) ? note.illegalInfo.desc : undefined, noteId);
+  if (label) data.aiLabel = label;
   if (nonBlank(note["title"])) data.title = note["title"] as string;
   const caption = pickString(note, ["desc", "description"]);
   if (caption !== undefined) data.caption = caption;

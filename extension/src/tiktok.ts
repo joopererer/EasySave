@@ -1,4 +1,5 @@
 // Pure TikTok parser. Cookies never enter the parser input or output model.
+import { tiktokAiLabel, type AiLabel } from './ai-label';
 type RecordValue = Record<string, unknown>;
 const record = (v: unknown): RecordValue =>
   v !== null && typeof v === 'object' && !Array.isArray(v) ? v as RecordValue : {};
@@ -69,7 +70,7 @@ export type TiktokErrorCode = 'DELETED' | 'PRIVATE' | 'REGION_RESTRICTED' | 'UNK
 export type TiktokResult = { ok: false; error: { code: TiktokErrorCode; message: string } } |
   { ok: true; data: { platform: 'tiktok'; id: string; url: string;
     author: { name?: string; id?: string }; caption?: string; title?: string;
-    publishedAt?: string; items: TiktokItem[] } };
+    publishedAt?: string; items: TiktokItem[]; aiLabel?: AiLabel } };
 
 function failure(detail: RecordValue): TiktokResult {
   const status = Number(detail.statusCode);
@@ -127,6 +128,7 @@ export function parseTiktok(input: string, pageUrl: string): TiktokResult {
     url: `https://www.tiktok.com/@/video/${id}`,
     author: { name: text(author.nickname), id: authorId && /^\d+$/.test(authorId) ? authorId : undefined },
     caption: text(item.desc), title: text(imagePost.title),
+    aiLabel: tiktokAiLabel(item.aigcLabelType, id),
     publishedAt: created > 0 && !isNaN(date.getTime()) ? date.toISOString().replace('.000Z', 'Z') : undefined,
     items } };
 }

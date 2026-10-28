@@ -31,6 +31,24 @@ var EasySaveParser = (() => {
     parseXhs: () => parseXhs
   });
 
+  // src/ai-label.ts
+  function unknownAiLabel(id, value) {
+    console.info("EasySaveAiLabel:" + JSON.stringify({ id, value }));
+  }
+  function xhsAiLabel(desc, id) {
+    if (typeof desc !== "string" || !desc.trim()) return;
+    if (desc === "\u53EF\u80FD\u542BAI\u751F\u6210\u5185\u5BB9") return { text: desc, source: "platform" };
+    if (desc.startsWith("\u4F5C\u8005\u58F0\u660E") && /ai/i.test(desc)) return { text: desc, source: "author" };
+    unknownAiLabel(id, desc);
+  }
+  function tiktokAiLabel(value, id) {
+    if (value === 1 || value === "1") return { text: "Contains AI-generated media", source: "platform" };
+    if (value === 2 || value === "2") return { text: "Creator labeled as AI-generated", source: "author" };
+    if (typeof value === "string" && value.trim() || typeof value === "number" || typeof value === "boolean") {
+      unknownAiLabel(id, value);
+    }
+  }
+
   // src/xhs.ts
   var NOTE_ID_PATTERN = /\/(?:explore|discovery\/item|user\/profile\/[^/]+)\/([a-f0-9]{24})/i;
   var STATE_MARKERS = ["__INITIAL_STATE__", "__NEXT_DATA__", "__NUXT__"];
@@ -547,6 +565,8 @@ var EasySaveParser = (() => {
       author,
       items
     };
+    const label = xhsAiLabel(isRecord(note.illegalInfo) ? note.illegalInfo.desc : void 0, noteId);
+    if (label) data.aiLabel = label;
     if (nonBlank(note["title"])) data.title = note["title"];
     const caption = pickString(note, ["desc", "description"]);
     if (caption !== void 0) data.caption = caption;
@@ -1075,6 +1095,7 @@ var EasySaveParser = (() => {
       author: { name: text(author.nickname), id: authorId && /^\d+$/.test(authorId) ? authorId : void 0 },
       caption: text(item.desc),
       title: text(imagePost.title),
+      aiLabel: tiktokAiLabel(item.aigcLabelType, id),
       publishedAt: created > 0 && !isNaN(date.getTime()) ? date.toISOString().replace(".000Z", "Z") : void 0,
       items
     } };

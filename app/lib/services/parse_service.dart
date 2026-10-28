@@ -14,6 +14,7 @@ import 'package:http/http.dart' as http;
 import '../core/models.dart';
 import '../core/parse.dart';
 import 'auth.dart';
+import 'ai_label_log.dart';
 import 'links.dart';
 import 'update_service.dart';
 import 'tiktok_links.dart';
@@ -235,6 +236,7 @@ Future<ParseOutcome> _runParserJs(String input, String pageUrl) async {
   try {
     headless = HeadlessInAppWebView(
       initialData: InAppWebViewInitialData(data: '<html><body></body></html>'),
+      onConsoleMessage: (_, message) => logUnknownAiLabel(message.message),
       onLoadStop: (controller, uri) {
         readyController ??= controller;
         if (!loaded.isCompleted) loaded.complete();
@@ -473,6 +475,7 @@ Future<ParseOutcome> _headlessParse(String targetUrl, {required bool isXhs}) asy
   try {
     headless = HeadlessInAppWebView(
       initialUrlRequest: URLRequest(url: WebUri.uri(Uri.parse(targetUrl))),
+      onConsoleMessage: (_, message) => logUnknownAiLabel(message.message),
       initialUserScripts: UnmodifiableListView<UserScript>([
         UserScript(
           source: _kNetworkSniffScript,
