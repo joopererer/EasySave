@@ -14,7 +14,7 @@ class SupportedLinksTest {
         assertFalse(SupportedLinks.containsSupportedUrl("https://tiktok.com.evil.example/video/123"))
         assertFalse(SupportedLinks.containsSupportedUrl("https://nottiktok.com/video/123"))
         assertFalse(SupportedLinks.containsSupportedUrl(null))
-        assertFalse(SupportedLinks.containsSupportedUrl("tiktok.com"))
+        assertTrue(SupportedLinks.containsSupportedUrl("tiktok.com"))
     }
     @Test fun existingPlatformsRemainSupported() {
         for (host in listOf("www.xiaohongshu.com", "xhslink.com", "www.instagram.com", "x.com", "twitter.com", "t.co")) {

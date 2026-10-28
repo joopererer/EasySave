@@ -8,11 +8,18 @@ object SupportedLinks {
         "xiaohongshu.com", "rednote.com", "xhslink.com", "xhslink.cn", "xhs.cn",
         "instagram.com", "instagr.am", "x.com", "twitter.com", "t.co", "tiktok.com"
     )
-    private val urls = Regex("https?://[^\\s<>\"'，。]+", RegexOption.IGNORE_CASE)
+    private val urls = Regex("""https?://[^\s<>"'，。！？；：）】”　]+|(?<![a-zA-Z0-9_@./:-])(?:[a-zA-Z0-9-]+\.)+[a-zA-Z]{2,}(?:[/\?#][^\s<>"'，。！？；：）】”　]*)?""", RegexOption.IGNORE_CASE)
+
+    fun extractUrls(text: String?): List<String> = if (text == null) emptyList() else
+        urls.findAll(text).mapNotNull { match ->
+            val raw = match.value.trimEnd(')', ']', '}', ',', '.', ';', '!', '?')
+            val normalized = if (raw.contains("://")) raw else "https://$raw"
+            val uri = runCatching { URI(normalized) }.getOrNull()
+            val host = uri?.host?.lowercase()
+            if (uri?.scheme?.lowercase() in setOf("http", "https") && uri?.userInfo == null &&
+                host != null && domains.any { host == it || host.endsWith(".$it") }) normalized else null
+        }.distinct().toList()
 
     fun containsSupportedUrl(text: String?): Boolean =
-        text != null && urls.findAll(text).any { match ->
-            val host = runCatching { URI(match.value.trimEnd(')', ']', '}', ',', '.', ';')).host?.lowercase() }.getOrNull()
-            host != null && domains.any { host == it || host.endsWith(".$it") }
-        }
+        extractUrls(text).isNotEmpty()
 }

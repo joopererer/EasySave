@@ -9,10 +9,28 @@ final _urlPattern = RegExp(
   r"https?://[^\s<>"
   "'，。！？；：）】”　]+",
 );
+final _candidatePattern = RegExp(
+  r"https?://[^\s<>"
+  "'，。！？；：）】”　]+|(?<![a-zA-Z0-9_@./:-])(?:[a-zA-Z0-9-]+\\.)+[a-zA-Z]{2,}(?:[/？?#][^\\s<>"
+  "'，。！？；：）】”　]*)?",
+  caseSensitive: false,
+);
+
+String normalizeSupportedLink(String input) {
+  final value = input.trim();
+  if (value.contains('://')) return value;
+  final candidate = 'https://$value';
+  return _isSupportedAbsolute(candidate) ? candidate : input;
+}
+
 const _trailingPunctuation = ".,!?;:)]}\"'，。！？；：）】”…";
 
 /// Supported post hosts (full pages and short links).
-bool isSupportedLink(String url) {
+bool isSupportedLink(String url) => _isSupportedAbsolute(normalizeSupportedLink(url));
+
+bool _isSupportedAbsolute(String url) {
+  final uri = Uri.tryParse(url);
+  if (uri == null || !['http', 'https'].contains(uri.scheme) || uri.userInfo.isNotEmpty) return false;
   if (isTiktokLink(url)) return true;
   final host = Uri.tryParse(url)?.host.toLowerCase() ?? '';
   if (host.isEmpty) return false;
@@ -46,12 +64,13 @@ String? extractLink(String text) => extractLinks(text).firstOrNull;
 /// an unbounded batch.
 List<String> extractLinks(String text, {int limit = 9}) {
   final links = <String>[];
-  for (final match in _urlPattern.allMatches(text)) {
+  for (final match in _candidatePattern.allMatches(text)) {
     var url = match.group(0)!;
     while (url.isNotEmpty &&
         _trailingPunctuation.contains(url[url.length - 1])) {
       url = url.substring(0, url.length - 1);
     }
+    url = normalizeSupportedLink(url);
     if (isSupportedLink(url) && !links.contains(url)) {
       links.add(url);
       if (links.length >= limit) break;
