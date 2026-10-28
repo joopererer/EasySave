@@ -59,8 +59,9 @@ class PreviewPage extends StatefulWidget {
 }
 
 class _PreviewPageState extends State<PreviewPage> {
+  late ParsedPost _post = widget.post;
   late final List<int> _order = [
-    for (var i = 0; i < widget.post.items.length; i++) i,
+    for (var i = 0; i < _post.items.length; i++) i,
   ];
   Set<int> _downloaded = {};
   // Thumbnails only start fetching after the push transition settles:
@@ -79,7 +80,7 @@ class _PreviewPageState extends State<PreviewPage> {
       final batches = await DownloadManager.instance.liveBatches();
       DownloadBatch? found;
       for (final b in batches) {
-        if (b.postId != widget.post.id) continue;
+        if (b.postId != _post.id) continue;
         // Keep a finished batch visible only while it has failures to retry.
         if (!b.isTerminal || b.failedCount > 0) {
           found = b;
@@ -165,6 +166,7 @@ class _PreviewPageState extends State<PreviewPage> {
 
   @override
   void dispose() {
+    GalleryLocatorService.instance.removeListener(_checkDownloaded);
     _batchPoll?.cancel();
     DownloadManager.instance.removeListener(_refreshBatch);
     super.dispose();
@@ -179,6 +181,7 @@ class _PreviewPageState extends State<PreviewPage> {
       (_) => _refreshBatch(),
     );
     _refreshBatch();
+    GalleryLocatorService.instance.addListener(_checkDownloaded);
     _checkDownloaded();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       Future.delayed(const Duration(milliseconds: 350), () {
@@ -188,8 +191,15 @@ class _PreviewPageState extends State<PreviewPage> {
   }
 
   Future<void> _checkDownloaded() async {
+    try {
+      final db = await HistoryDb.instance();
+      final merged = await db.mergeParsedPost(_post);
+      if (!mounted) return;
+      setState(() => _post = merged);
+    } catch (_) {}
+
     final downloaded =
-        await GalleryLocatorService.instance.findDownloadedIndices(widget.post);
+        await GalleryLocatorService.instance.findDownloadedIndices(_post);
     if (!mounted) return;
     setState(() {
       _downloaded = downloaded;
@@ -229,25 +239,25 @@ class _PreviewPageState extends State<PreviewPage> {
       MaterialPageRoute<bool>(
         builder: (_) => GalleryBrowserPage(
           items: [
-            for (var i = 0; i < widget.post.items.length; i++)
+            for (var i = 0; i < _post.items.length; i++)
               GalleryBrowserItem(
                 index: i,
-                type: widget.post.items[i].type,
-                url: widget.post.items[i].url,
-                videoUrl: widget.post.items[i].videoUrl,
-                posterUrl: widget.post.items[i].posterUrl,
-                fallbacks: widget.post.items[i].fallbacks,
-                isGif: widget.post.items[i].isGif ?? false,
+                type: _post.items[i].type,
+                url: _post.items[i].url,
+                videoUrl: _post.items[i].videoUrl,
+                posterUrl: _post.items[i].posterUrl,
+                fallbacks: _post.items[i].fallbacks,
+                isGif: _post.items[i].isGif ?? false,
                 status: FileStatus.found,
               ),
           ],
           initialIndex: index,
-          authorName: widget.post.author.name ?? '',
-          title: widget.post.title ?? widget.post.id,
-          platform: widget.post.platform,
-          postUrl: widget.post.url,
-          aiLabel: widget.post.aiLabel?.text,
-          aiLabelSource: widget.post.aiLabel?.source,
+          authorName: _post.author.name ?? '',
+          title: _post.title ?? _post.id,
+          platform: _post.platform,
+          postUrl: _post.url,
+          aiLabel: _post.aiLabel?.text,
+          aiLabelSource: _post.aiLabel?.source,
           showSave: true,
           selectedIndices: _order.toSet(),
           onSelectionChanged: (set) {
@@ -274,7 +284,7 @@ class _PreviewPageState extends State<PreviewPage> {
     // saving: those are associated with the history record instead of being
     // downloaded again. The album scan happens once and the result is reused
     // for the association write, so the two steps cannot disagree.
-    final matches = await locator.matchPostItems(widget.post);
+    final matches = await locator.matchPostItems(_post);
     final downloaded = matches.keys.toSet();
     final toAssociate = _order.where(downloaded.contains).toList();
     final toDownload = _order.where((i) => !downloaded.contains(i)).toList();
@@ -282,14 +292,14 @@ class _PreviewPageState extends State<PreviewPage> {
 
     DevLog.write(
       'V16DL', // i18n:ignore 日志
-      'save plan post=${widget.post.id} selected=${_order.length} '
+      'save plan post=${_post.id} selected=${_order.length} '
       'associate=${toAssociate.length} download=${toDownload.length}',
     );
 
     var associated = 0;
     if (toAssociate.isNotEmpty) {
       associated = await locator.associateExisting(
-        widget.post,
+        _post,
         toAssociate,
         // The user pressed "保存": the post must be back in the history, even
         // if they had deleted the record before.
@@ -311,7 +321,7 @@ class _PreviewPageState extends State<PreviewPage> {
       return;
     }
 
-    final batch = await DownloadSheet.show(context, widget.post, toDownload);
+    final batch = await DownloadSheet.show(context, _post, toDownload);
     if (!mounted || batch == null) return;
     // User chose "后台下载": the batch keeps running, stay on the preview.
     if (!batch.isTerminal) return;
@@ -352,7 +362,7 @@ class _PreviewPageState extends State<PreviewPage> {
 
   @override
   Widget build(BuildContext context) {
-    final post = widget.post;
+    final post = _post;
     final captionText = [
       if ((post.title ?? '').isNotEmpty) post.title!,
       if ((post.caption ?? '').isNotEmpty) post.caption!,

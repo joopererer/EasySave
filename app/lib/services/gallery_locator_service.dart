@@ -1,3 +1,4 @@
+import 'verified_media.dart';
 // Gallery locator service: scans EasySave album using photo_manager,
 // builds in-memory filename/postId index once per session, and locates
 // saved files for history records without repeated disk queries.
@@ -16,6 +17,14 @@ import 'media_header_service.dart';
 import 'settings.dart';
 
 class GalleryLocatorService extends ChangeNotifier {
+  final Set<String> _unreadableIds = {};
+  void markUnreadable(String id) {
+    _unreadableIds.add(id);
+    evictMediaIds([id]);
+    notifyListeners();
+  }
+  Future<bool> isPresent(String id) async => !_unreadableIds.contains(id) && await mediaExists(id);
+
   GalleryLocatorService._();
 
   static final GalleryLocatorService instance = GalleryLocatorService._();
@@ -457,10 +466,7 @@ class GalleryLocatorService extends ChangeNotifier {
         } catch (_) {}
       }
       if (cached != null) {
-        bool exists = true;
-        try {
-          exists = await cached.exists;
-        } catch (_) {}
+        final exists = await isPresent(cached.id);
         if (exists) {
           final title = (cached.title ?? '').trim().toLowerCase();
           final baseName = title.split('/').last.split('\\').last;
@@ -771,10 +777,7 @@ class GalleryLocatorService extends ChangeNotifier {
             platform: record.platform,
           );
           if (asset != null) {
-            bool exists = true;
-            try {
-              exists = await asset.exists;
-            } catch (_) {}
+            final exists = await isPresent(asset.id);
             if (!exists) {
               evictMediaIds([asset.id]);
               continue;
@@ -810,10 +813,7 @@ class GalleryLocatorService extends ChangeNotifier {
             }).toList();
             if (matched.isNotEmpty) {
               final candidate = matched.first;
-              bool exists = true;
-              try {
-                exists = await candidate.exists;
-              } catch (_) {}
+              final exists = await isPresent(candidate.id);
               if (exists) {
                 result[i] = candidate;
               } else {
@@ -882,6 +882,8 @@ class GalleryLocatorService extends ChangeNotifier {
         authorName: post.author.name,
         title: post.title,
         caption: post.caption,
+        aiLabel: post.aiLabel?.text,
+        aiLabelSource: post.aiLabel?.source,
         postUrl: post.url,
         fileCount: files.length,
         createdAt: DateTime.now(),
@@ -889,6 +891,7 @@ class GalleryLocatorService extends ChangeNotifier {
         files: files,
       ),
       restoreDeleted: restoreDeleted,
+      userSave: restoreDeleted,
     );
     return files.length;
   }

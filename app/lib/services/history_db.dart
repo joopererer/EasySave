@@ -602,11 +602,11 @@ class HistoryDb {
           id: existing.id,
           platform: record.platform,
           postId: record.postId,
-          authorName: record.authorName ?? existing.authorName,
+          authorName: record.authorName?.trim().isNotEmpty == true ? record.authorName : existing.authorName,
           title: (record.title?.isNotEmpty == true) ? record.title : existing.title,
           caption: (record.caption?.isNotEmpty == true) ? record.caption : existing.caption,
-          aiLabel: record.aiLabel ?? existing.aiLabel,
-          aiLabelSource: record.aiLabel != null ? record.aiLabelSource : existing.aiLabelSource,
+          aiLabel: record.aiLabel?.trim().isNotEmpty == true ? record.aiLabel : existing.aiLabel,
+          aiLabelSource: record.aiLabelSource?.trim().isNotEmpty == true ? record.aiLabelSource : existing.aiLabelSource,
           thumbnailUrl: record.thumbnailUrl ?? existing.thumbnailUrl,
           postUrl: record.postUrl,
           fileCount: mergedFiles.length,
@@ -632,6 +632,30 @@ class HistoryDb {
       );
     });
     notifyChanged('upsert post=${record.postId}');
+  }
+
+
+  /// Refresh only metadata of an existing record; never restore deletion or
+  /// change its saved time merely because a preview was opened.
+  Future<ParsedPost> mergeParsedPost(ParsedPost fresh) async {
+    final old = await getByPostUrl(fresh.url) ?? await getByPostId(fresh.id);
+    if (old == null) return fresh;
+    String? nonempty(String? value, String? fallback) =>
+        value?.trim().isNotEmpty == true ? value : fallback;
+    final oldPost = old.toPost();
+    final merged = ParsedPost(platform: fresh.platform, id: fresh.id, url: fresh.url,
+      author: PostAuthor(name: nonempty(fresh.author.name, old.authorName), id: fresh.author.id),
+      items: fresh.items.isNotEmpty ? fresh.items : oldPost.items,
+      title: nonempty(fresh.title, old.title), caption: nonempty(fresh.caption, old.caption),
+      publishedAt: fresh.publishedAt,
+      aiLabel: fresh.aiLabel?.text.trim().isNotEmpty == true ? fresh.aiLabel : oldPost.aiLabel);
+    await _db.update('history_records', {
+      'author_name': merged.author.name, 'title': merged.title, 'caption': merged.caption,
+      'ai_label': merged.aiLabel?.text, 'ai_label_source': merged.aiLabel?.source,
+      if (fresh.items.isNotEmpty) 'items_json': jsonEncode([for (final item in fresh.items) item.toJson()]),
+    }, where: 'id = ?', whereArgs: [old.id]);
+    notifyChanged('metadata refreshed');
+    return merged;
   }
 
   Future<void> updateFiles(int id, List<HistoryFile> files) async {
