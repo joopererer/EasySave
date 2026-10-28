@@ -8,6 +8,7 @@ import 'package:video_player/video_player.dart';
 
 import '../core/models.dart';
 import '../services/preview_video.dart';
+import '../services/saver.dart' show refererFor;
 import '../widgets/shared.dart';
 
 /// Fullscreen video with a control bar. Pauses on backgrounding and
