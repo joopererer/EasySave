@@ -557,7 +557,10 @@ class HistoryDb {
   /// operations **and for user-initiated saves** (the user asked for this post
   /// to be saved again, so a record they had deleted must come back). Recovery
   /// paths (startup, batch adoption) keep the deletion state.
-  Future<void> upsert(HistoryRecord record, {bool restoreDeleted = false}) async {
+  Future<void> upsert(HistoryRecord record, {
+    bool restoreDeleted = false,
+    bool userSave = false,
+  }) async {
     DevLog.write(
       'HIST', // i18n:ignore 日志
       'history write post=${record.postId} files=${record.files.length} '
@@ -589,7 +592,9 @@ class HistoryDb {
             return (a.isImage ? 0 : 1).compareTo(b.isImage ? 0 : 1);
           });
 
-        final resolvedCreatedAt = record.createdAt.isBefore(existing.createdAt)
+        final resolvedCreatedAt = restoreDeleted && userSave && existing.isDeleted
+            ? record.createdAt
+            : record.createdAt.isBefore(existing.createdAt)
             ? record.createdAt
             : existing.createdAt;
 

@@ -627,6 +627,7 @@ Future<void> writeBatchHistory(
     // User-initiated downloads (live updates): restore deleted records.
     // Startup-resumed / interrupted batches: preserve deletion state.
     restoreDeleted: !recovered,
+    userSave: !recovered,
   );
 }
 
@@ -660,6 +661,7 @@ Future<void> writePlaceholderHistory(
     ),
     // A user-initiated download brings a deleted record back.
     restoreDeleted: true,
+    userSave: true,
   );
 }
 
