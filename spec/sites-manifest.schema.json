@@ -1,0 +1,516 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:easysave:sites-manifest:v2",
+  "title": "EasySave v2 signed payload envelope",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "payload",
+    "signature"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": 2
+    },
+    "payload": {
+      "type": "string",
+      "minLength": 2,
+      "maxLength": 1048576,
+      "contentMediaType": "application/json",
+      "contentSchema": {
+        "$ref": "#/$defs/payload"
+      }
+    },
+    "signature": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{128}$"
+    }
+  },
+  "$defs": {
+    "host": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "domain": {
+          "type": "string",
+          "pattern": "^[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?$"
+        },
+        "includeSubdomains": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "domain",
+        "includeSubdomains"
+      ]
+    },
+    "site": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]{0,63}$"
+        },
+        "platform": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]{0,63}$"
+        },
+        "displayName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048
+        },
+        "creditName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048
+        },
+        "icon": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "assetKey": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9_]{0,63}$"
+            }
+          },
+          "required": [
+            "assetKey"
+          ]
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "notice": {
+          "type": "string",
+          "maxLength": 300
+        },
+        "minAppVersion": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$"
+        },
+        "requiredCapabilities": {
+          "type": "array",
+          "maxItems": 128,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_]{0,63}$"
+          }
+        },
+        "match": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "routes"
+          ],
+          "properties": {
+            "routes": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 32,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "hosts": {
+                    "type": "array",
+                    "maxItems": 128,
+                    "uniqueItems": true,
+                    "items": {
+                      "$ref": "#/$defs/host"
+                    }
+                  },
+                  "pathPatterns": {
+                    "type": "array",
+                    "maxItems": 128,
+                    "uniqueItems": true,
+                    "items": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 256
+                    }
+                  }
+                },
+                "required": [
+                  "hosts",
+                  "pathPatterns"
+                ]
+              }
+            }
+          }
+        },
+        "shortLinks": {
+          "type": "array",
+          "maxItems": 128,
+          "uniqueItems": true,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "host": {
+                "$ref": "#/$defs/host"
+              },
+              "strategy": {
+                "enum": [
+                  "http",
+                  "webview"
+                ]
+              },
+              "maxRedirects": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 5
+              }
+            },
+            "required": [
+              "host",
+              "strategy",
+              "maxRedirects"
+            ]
+          }
+        },
+        "normalize": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "sourceId": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "source": {
+                  "enum": [
+                    "path",
+                    "query"
+                  ]
+                },
+                "pattern": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 2048
+                },
+                "queryKey": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 2048
+                }
+              },
+              "required": [
+                "source",
+                "pattern"
+              ]
+            },
+            "canonicalTemplate": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 2048
+            },
+            "preserveLoadQuery": {
+              "type": "array",
+              "maxItems": 128,
+              "uniqueItems": true,
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 2048
+              }
+            }
+          },
+          "required": [
+            "sourceId",
+            "canonicalTemplate",
+            "preserveLoadQuery"
+          ]
+        },
+        "load": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "mode": {
+              "enum": [
+                "webview",
+                "json"
+              ]
+            },
+            "entryTemplate": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 2048
+            },
+            "endpointTemplate": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 2048
+            },
+            "userAgent": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 2048
+            },
+            "timeoutMs": {
+              "type": "integer",
+              "minimum": 1000,
+              "maximum": 60000
+            },
+            "readyHook": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9_]{0,63}$"
+            },
+            "prepareHook": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9_]{0,63}$"
+            }
+          },
+          "required": [
+            "mode",
+            "timeoutMs"
+          ]
+        },
+        "auth": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "mode": {
+              "enum": [
+                "none",
+                "optional",
+                "required"
+              ]
+            },
+            "loginUrl": {
+              "type": "string",
+              "format": "uri",
+              "pattern": "^https://"
+            },
+            "sessionCookieNames": {
+              "type": "array",
+              "maxItems": 128,
+              "uniqueItems": true,
+              "items": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9_-]{1,80}$"
+              }
+            },
+            "stateHook": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9_]{0,63}$"
+            }
+          },
+          "required": [
+            "mode",
+            "sessionCookieNames"
+          ]
+        },
+        "parserModule": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]{0,63}$"
+        },
+        "download": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "mediaHosts": {
+              "type": "array",
+              "maxItems": 128,
+              "uniqueItems": true,
+              "items": {
+                "$ref": "#/$defs/host"
+              }
+            },
+            "headers": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "Referer": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 2048
+                },
+                "Origin": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 2048
+                },
+                "User-Agent": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 2048
+                },
+                "Range": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 2048
+                }
+              },
+              "required": []
+            },
+            "cookieDomains": {
+              "type": "array",
+              "maxItems": 128,
+              "uniqueItems": true,
+              "items": {
+                "type": "string",
+                "pattern": "^[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?$"
+              }
+            },
+            "transport": {
+              "enum": [
+                "background",
+                "session"
+              ]
+            },
+            "resumable": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "mediaHosts",
+            "headers",
+            "cookieDomains",
+            "transport",
+            "resumable"
+          ]
+        },
+        "metadata": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "authorIdRule": {
+              "enum": [
+                "numeric",
+                "opaque",
+                "omit"
+              ]
+            }
+          },
+          "required": [
+            "authorIdRule"
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "platform",
+        "displayName",
+        "creditName",
+        "enabled",
+        "notice",
+        "minAppVersion",
+        "requiredCapabilities",
+        "match",
+        "shortLinks",
+        "normalize",
+        "load",
+        "auth",
+        "parserModule",
+        "download",
+        "metadata"
+      ]
+    },
+    "payload": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "manifestVersion": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "parserVersion": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$"
+        },
+        "parserAbi": {
+          "const": 1
+        },
+        "minAppVersion": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$"
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "parserUrl": {
+          "type": "string",
+          "format": "uri",
+          "pattern": "^https://"
+        },
+        "sites": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 128,
+          "items": {
+            "$ref": "#/$defs/site"
+          }
+        },
+        "platforms": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "enabled",
+              "notice"
+            ],
+            "properties": {
+              "enabled": {
+                "type": "boolean"
+              },
+              "notice": {
+                "type": "string"
+              },
+              "endpoint": {
+                "type": "string"
+              },
+              "tokenFormula": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "headers": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "Referer": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 2048
+              },
+              "Origin": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 2048
+              },
+              "User-Agent": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 2048
+              },
+              "Range": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 2048
+              }
+            },
+            "required": []
+          }
+        }
+      },
+      "required": [
+        "manifestVersion",
+        "parserVersion",
+        "parserAbi",
+        "minAppVersion",
+        "sha256",
+        "parserUrl",
+        "sites"
+      ]
+    }
+  }
+}
