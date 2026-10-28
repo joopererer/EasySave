@@ -452,7 +452,13 @@ class HistoryDb {
       // active, and busy_timeout makes a writer wait for the lock instead of
       // failing with SQLITE_BUSY.
       onConfigure: (db) => _applyPragmas(db),
-      onOpen: (db) => _applyPragmas(db),
+      onOpen: (db) async {
+        await _applyPragmas(db);
+        // Operational barrier, separate from backed-up history schema/data.
+        await db.execute('CREATE TABLE IF NOT EXISTS download_delete_barriers('
+            'platform TEXT NOT NULL, post_id TEXT NOT NULL, deleted_at INTEGER NOT NULL,'
+            'PRIMARY KEY(platform, post_id))');
+      },
       onCreate: (db, version) => db.execute(
         'CREATE TABLE history_records('
         'id INTEGER PRIMARY KEY AUTOINCREMENT,'
@@ -560,6 +566,7 @@ class HistoryDb {
   Future<void> upsert(HistoryRecord record, {
     bool restoreDeleted = false,
     bool userSave = false,
+    int? downloadStartedAt,
   }) async {
     DevLog.write(
       'HIST', // i18n:ignore 日志
@@ -567,6 +574,11 @@ class HistoryDb {
       'restoreDeleted=$restoreDeleted',
     );
     await _db.transaction((txn) async {
+      if (downloadStartedAt != null) {
+        final barriers = await txn.query('download_delete_barriers',
+          where: 'platform = ? AND post_id = ?', whereArgs: [record.platform, record.postId]);
+        if (barriers.isNotEmpty && (barriers.first['deleted_at'] as int) >= downloadStartedAt) return;
+      }
       final existing = await _getByPostUrl(txn, record.postUrl) ??
           await _getByPostId(txn, record.postId);
       if (existing != null) {
@@ -749,12 +761,14 @@ class HistoryDb {
     // Soft delete: mark as deleted instead of removing. The row count is logged
     // because a caller passing an id that does not exist silently changes
     // nothing — that used to look like "the list did not refresh".
-    final rows = await _db.update(
-      'history_records',
-      {'is_deleted': 1},
-      where: 'id = ?',
-      whereArgs: [id],
-    );
+    final rows = await _db.transaction((txn) async {
+      final records = await txn.query('history_records', columns: ['platform', 'post_id'], where: 'id = ?', whereArgs: [id]);
+      if (records.isNotEmpty) await txn.insert('download_delete_barriers', {
+        'platform': records.first['platform'], 'post_id': records.first['post_id'],
+        'deleted_at': DateTime.now().microsecondsSinceEpoch,
+      }, conflictAlgorithm: ConflictAlgorithm.replace);
+      return txn.update('history_records', {'is_deleted': 1}, where: 'id = ?', whereArgs: [id]);
+    });
     notifyChanged('delete id=$id rows=$rows');
   }
 

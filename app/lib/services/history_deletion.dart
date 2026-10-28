@@ -8,6 +8,7 @@ Future<void> deleteHistoryRecords(
 ) async {
   for (final record in records) {
     if (record.id == null) continue;
+    await DownloadManager.instance.cancelPostDownloads(record.platform, record.postId);
     await db.delete(record.id!);
     await DownloadManager.instance.clearTerminalBatchesForPost(record.postId);
   }

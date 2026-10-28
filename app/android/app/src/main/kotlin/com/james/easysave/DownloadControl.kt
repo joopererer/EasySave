@@ -11,6 +11,8 @@ object DownloadControl {
                 "reserve" -> result.success(claims.reserve(call.argument<String>("batch")!!,
                     call.argument<List<String>>("keys")!!, call.argument<Map<String, String>>("existing") ?: emptyMap()))
                 "release" -> { claims.release(call.argument<String>("batch")!!); result.success(null) }
+                "cancelPost" -> result.success(claims.cancelPost(call.argument<String>("prefix")!!))
+                "isCancelled" -> result.success(claims.isCancelled(call.argument<String>("batch")!!))
                 else -> result.notImplemented()
             }
         }

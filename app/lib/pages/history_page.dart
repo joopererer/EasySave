@@ -792,6 +792,7 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
       context,
       recordCount: records.length,
       fileCount: media.length,
+      cancelDownloads: true,
     );
     if (result == null || !mounted) return;
 

@@ -11,6 +11,32 @@ class AlreadyDownloading implements Exception {
 class DownloadClaims {
   static const _channel = MethodChannel('easysave/download_control');
   static final _owners = <String, String>{};
+  static final _cancelled = <String>{};
+  static Future<void> cancelPost(String platform, String postId) async {
+    final prefix = '$platform:$postId:';
+    if (Platform.isAndroid) {
+      await _channel
+          .invokeMethod<Object?>('cancelPost', {'prefix': prefix})
+          .timeout(const Duration(seconds: 5));
+    } else {
+      _cancelled.addAll(
+        _owners.entries
+            .where((e) => e.key.startsWith(prefix))
+            .map((e) => e.value),
+      );
+      _owners.removeWhere((key, owner) => _cancelled.contains(owner));
+    }
+  }
+
+  static Future<bool> isCancelled(String batch) async {
+    if (Platform.isAndroid)
+      return await _channel
+              .invokeMethod<bool>('isCancelled', {'batch': batch})
+              .timeout(const Duration(seconds: 5)) ??
+          false;
+    return _cancelled.contains(batch);
+  }
+
   static Future<List<String>> reserve(
     String batch,
     List<String> keys,
@@ -25,7 +51,10 @@ class DownloadClaims {
           })
           .timeout(const Duration(seconds: 5)))!;
     }
-    for (final entry in existing.entries) {
+    if (_cancelled.contains(batch)) return [];
+    for (final entry in existing.entries.where(
+      (e) => !_cancelled.contains(e.value),
+    )) {
       _owners.putIfAbsent(entry.key, () => entry.value);
     }
     return keys.where((key) {

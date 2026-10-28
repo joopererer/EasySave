@@ -254,7 +254,11 @@ class DownloadBatch {
     this.source = sourceMain,
     this.updatedAt = 0,
     required this.jobs,
-  });
+    int? startedAt,
+  }) : startedAt = startedAt ?? DateTime.now().microsecondsSinceEpoch;
+
+  final int startedAt;
+  bool cancelledByDeletion = false;
 
   /// Which engine owns this batch. The main UI isolate and the background
   /// isolate each keep their own [DownloadManager] instance but share the
@@ -397,11 +401,14 @@ class DownloadBatch {
     'updatedAt': updatedAt,
     'jobs': [for (final j in jobs) j.toJson()],
     'historyWritten': historyWritten,
+    'startedAt': startedAt,
+    'cancelledByDeletion': cancelledByDeletion,
     'settledBy': settledBy,
   };
 
   static DownloadBatch fromJson(Map<String, Object?> map) => DownloadBatch(
     batchId: map['batchId'] as String,
+    startedAt: (map['startedAt'] as num?)?.toInt() ?? 0,
     album: map['album'] as String,
     postUrl: map['postUrl'] as String,
     platform: map['platform'] as String,
@@ -426,6 +433,7 @@ class DownloadBatch {
         .toList(),
   )
     ..historyWritten = map['historyWritten'] as bool? ?? false
+    ..cancelledByDeletion = map['cancelledByDeletion'] as bool? ?? false
     ..settledBy = map['settledBy'] as String?;
 }
 
@@ -588,6 +596,7 @@ Future<void> writeBatchHistory(
   DownloadBatch batch, {
   required bool recovered,
 }) async {
+  if (batch.cancelledByDeletion) return;
   final thumb = _thumbnailFor(batch);
   final files = [
     for (final job in batch.jobs)
@@ -634,6 +643,7 @@ Future<void> writeBatchHistory(
     // Startup-resumed / interrupted batches: preserve deletion state.
     restoreDeleted: !recovered,
     userSave: !recovered,
+    downloadStartedAt: batch.startedAt,
   );
 }
 
@@ -645,6 +655,7 @@ Future<void> writePlaceholderHistory(
   HistoryDb db,
   DownloadBatch batch,
 ) async {
+  if (batch.cancelledByDeletion) return;
   await db.upsert(
     HistoryRecord(
       platform: batch.platform,
@@ -668,6 +679,7 @@ Future<void> writePlaceholderHistory(
     // A user-initiated download brings a deleted record back.
     restoreDeleted: true,
     userSave: true,
+    downloadStartedAt: batch.startedAt,
   );
 }
 
@@ -1130,6 +1142,11 @@ class DownloadManager extends ChangeNotifier {
 
 
   Future<void> _enqueueAttempt(DownloadBatch batch, DownloadJob job) async {
+    if (batch.cancelledByDeletion || await DownloadClaims.isCancelled(batch.batchId)) {
+      batch.cancelledByDeletion = true;
+      job.state = JobState.canceled;
+      return;
+    }
     if ((await _reserve(batch, [job])).isEmpty) throw AlreadyDownloading();
     if (enqueueForTesting != null) { await enqueueForTesting!(batch, job); return; }
     if (needsSessionDownload(batch, job)) {
@@ -1290,7 +1307,7 @@ class DownloadManager extends ChangeNotifier {
     if (job == null) return;
     // A paused job has no live task; a late update of the cancelled one must
     // not flip it back to active/canceled/failed.
-    if (job.state == JobState.paused) return;
+    if (job.state == JobState.paused || batch.cancelledByDeletion || job.state == JobState.canceled) return;
     job.lastProgressAt = DateTime.now().millisecondsSinceEpoch;
     if (update is TaskProgressUpdate) {
       if (update.progress >= 0) {
@@ -1356,6 +1373,7 @@ class DownloadManager extends ChangeNotifier {
     DownloadJob job,
     Task task,
   ) async {
+    if (batch.cancelledByDeletion || await DownloadClaims.isCancelled(batch.batchId)) return;
     final String path;
     try {
       path = await task.filePath();
@@ -1536,6 +1554,7 @@ class DownloadManager extends ChangeNotifier {
   }) async {
     if (!batch.isTerminal) return;
     await DownloadClaims.release(batch.batchId);
+    if (batch.cancelledByDeletion || await DownloadClaims.isCancelled(batch.batchId)) return;
     if (!batch.historyWritten) {
       batch.historyWritten = true;
       final db = await HistoryDb.instance();
@@ -1649,6 +1668,33 @@ class DownloadManager extends ChangeNotifier {
     await _persist(batch);
     notifyListeners();
     await _afterTerminal(batch, recovered: false);
+  }
+
+  /// User-confirmed history deletion also cancels foreign engine work. Native
+  /// controls stop pending starts; the database barrier rejects late writes.
+  Future<void> cancelPostDownloads(String platform, String postId) async {
+    await DownloadClaims.cancelPost(platform, postId);
+    final ids = <String>[];
+    for (final batch in await liveBatches()) {
+      if (batch.platform != platform || batch.postId != postId || batch.isTerminal) continue;
+      batch.cancelledByDeletion = true;
+      batch.historyWritten = true;
+      for (final job in batch.jobs.where((job) => !job.isTerminal)) {
+        job.state = JobState.canceled;
+        if (job.currentTaskId != null) ids.add(job.currentTaskId!);
+        final transfer = _sessionTransfers[job.key];
+        if (transfer != null) await transfer.cancel();
+        if (needsSessionDownload(batch, job)) {
+          final prefs = await SharedPreferences.getInstance();
+          await prefs.setBool('session_cancel_${job.key}', true);
+        }
+      }
+      _batches[batch.batchId] = batch;
+      await _persist(batch);
+      await DownloadClaims.release(batch.batchId);
+    }
+    notifyListeners();
+    if (ids.isNotEmpty) await FileDownloader().cancelTasksWithIds(ids);
   }
 
   /// Pause a batch: running files are stopped (they restart from zero on

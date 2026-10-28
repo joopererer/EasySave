@@ -66,7 +66,7 @@ void main() {
   }
 
   test(
-    'history deletion clears terminal batches, snapshots and success hint while retaining active work',
+    'history deletion clears terminal batches and cancels active work',
     () async {
       await db.upsert(
         HistoryRecord(
@@ -99,12 +99,9 @@ void main() {
       expect(manager.onBatchSuccess.value, isNull);
       final remaining = await manager.liveBatches();
       expect(remaining.map((b) => b.batchId).toSet(), {
-        'active',
-        'queued',
-        'paused',
         'other',
       });
-      expect(manager.batchById('active')!.jobs.first.state, JobState.active);
+      expect(manager.batchById('active'), isNull);
       final prefs = await SharedPreferences.getInstance();
       for (final id in ['done', 'failed', 'mixed', 'canceled']) {
         expect(prefs.containsKey('easysave_batch_$id'), isFalse);

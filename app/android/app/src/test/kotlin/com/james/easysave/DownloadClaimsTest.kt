@@ -6,6 +6,16 @@ import java.util.concurrent.Executors
 import java.util.concurrent.CountDownLatch
 
 class DownloadClaimsTest {
+    @Test fun deletionCancelsPendingStartsAcrossEnginesWithoutBlockingNewSaves() {
+        val registry = DownloadClaims()
+        registry.reserve("background", listOf("tiktok:123:1:image"), emptyMap())
+        registry.reserve("main", listOf("xhs:123:1:image"), emptyMap())
+        assertEquals(listOf("background"), registry.cancelPost("tiktok:123:"))
+        assertTrue(registry.isCancelled("background"))
+        assertFalse(registry.isCancelled("main"))
+        assertTrue(registry.reserve("background", listOf("tiktok:123:1:image"), emptyMap()).isEmpty())
+        assertEquals(1, registry.reserve("fresh", listOf("tiktok:123:1:image"), emptyMap()).size)
+    }
     @Test fun tenConcurrentEngineRequestsHaveOneWinner() {
         val registry = DownloadClaims()
         val pool = Executors.newFixedThreadPool(10)
