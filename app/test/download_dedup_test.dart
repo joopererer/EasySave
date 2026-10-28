@@ -62,6 +62,44 @@ void main() {
     expect(await manager.liveBatches(), hasLength(1));
     expect(enqueued, 1);
   });
+  test('preview shows active work ahead of newer failed snapshots', () {
+    DownloadBatch b(String id, JobState state, {String platform = 'tiktok'}) =>
+        DownloadBatch(
+          batchId: id,
+          album: 'EasySave',
+          postUrl: 'https://example.invalid',
+          platform: platform,
+          postId: '123',
+          jobs: [
+            DownloadJob(
+              key: id,
+              label: '图片',
+              filename: 'same.jpg',
+              urls: [],
+              isImage: true,
+              itemIndex: 1,
+            )..state = state,
+          ],
+        );
+    final failed = b('old', JobState.failed),
+        active = b('active', JobState.active);
+    expect(
+      previewBatchForPost([failed, active], 'tiktok', '123'),
+      same(active),
+    );
+    expect(
+      previewBatchForPost(
+        [b('other', JobState.active, platform: 'xhs'), failed],
+        'tiktok',
+        '123',
+      ),
+      same(failed),
+    );
+    expect(
+      previewBatchForPost([b('done', JobState.done)], 'tiktok', '123'),
+      isNull,
+    );
+  });
   test('different batches and jobs cannot share a temporary path', () {
     final paths = [
       for (final batch in ['main-1', 'background-2'])

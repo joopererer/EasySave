@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'package:easysave/services/download_manager.dart';
 import 'package:easysave/services/history_db.dart';
 import 'package:easysave/services/history_deletion.dart';
+import 'package:easysave/services/history_io.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
@@ -95,6 +96,7 @@ void main() {
       }
       manager.onBatchSuccess.value = done;
       await deleteHistoryRecords(db, [record]);
+      await historyBackgroundSettled();
       expect(await db.recent(), isEmpty);
       expect(manager.onBatchSuccess.value, isNull);
       final remaining = await manager.liveBatches();

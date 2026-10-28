@@ -23,6 +23,7 @@ import 'backup/local_auto_backup.dart';
 import 'backup/saf_service.dart';
 import 'gallery_locator_service.dart';
 import 'history_db.dart';
+import 'history_io.dart';
 import 'parse_service.dart';
 import 'saver.dart';
 import 'download_provenance.dart';
@@ -138,6 +139,14 @@ const Duration kFinishFileTimeout = Duration(seconds: 60);
 
 /// `paused` is appended last: job states are persisted by index.
 enum JobState { queued, active, done, failed, canceled, paused }
+
+/// Running work takes precedence over an old failure, regardless of snapshot
+/// timestamps (a late failure may be newer than the current download).
+DownloadBatch? previewBatchForPost(Iterable<DownloadBatch> batches, String platform, String postId) {
+  final matching = batches.where((b) => b.platform == platform && b.postId == postId).toList();
+  return matching.where((b) => !b.isTerminal).firstOrNull ??
+      matching.where((b) => b.failedCount > 0).firstOrNull;
+}
 
 class DownloadJob {
   DownloadJob({
@@ -1005,7 +1014,8 @@ class DownloadManager extends ChangeNotifier {
   Future<void> _cancelNotification(DownloadBatch batch) async {
     _lastShownPercent.remove(batch.batchId);
     try {
-      await _notifications.cancel(id: _notificationId(batch));
+      await historyStep('cancel-notification', () => _notifications.cancel(id: _notificationId(batch)),
+          timeout: const Duration(seconds: 1));
     } catch (_) {
       // Best effort.
     }
@@ -1141,7 +1151,14 @@ class DownloadManager extends ChangeNotifier {
   }
 
 
+  final _enqueuePending = <String>{};
   Future<void> _enqueueAttempt(DownloadBatch batch, DownloadJob job) async {
+    if (!_enqueuePending.add(job.key)) return;
+    try { await _enqueueAttemptOnce(batch, job); }
+    finally { _enqueuePending.remove(job.key); }
+  }
+
+  Future<void> _enqueueAttemptOnce(DownloadBatch batch, DownloadJob job) async {
     if (batch.cancelledByDeletion || await DownloadClaims.isCancelled(batch.batchId)) {
       batch.cancelledByDeletion = true;
       job.state = JobState.canceled;
@@ -1179,7 +1196,7 @@ class DownloadManager extends ChangeNotifier {
       url: url,
       filename: job.filename,
       headers: _headersFor(batch.platform),
-      directory: downloadTempDirectory(batch.batchId, job.key),
+      directory: downloadTempDirectory(batch.batchId, taskId),
       baseDirectory: BaseDirectory.temporary,
       group: batch.batchId,
       updates: Updates.statusAndProgress,
@@ -1368,11 +1385,18 @@ class DownloadManager extends ChangeNotifier {
   }
 
   /// Gallery import for a finished file, then temp cleanup.
+  final _finishing = <String>{};
   Future<void> _finishFile(
     DownloadBatch batch,
     DownloadJob job,
     Task task,
   ) async {
+    if (job.isTerminal || !_finishing.add(job.key)) return;
+    try { await _finishFileOnce(batch, job, task); }
+    finally { _finishing.remove(job.key); }
+  }
+
+  Future<void> _finishFileOnce(DownloadBatch batch, DownloadJob job, Task task) async {
     if (batch.cancelledByDeletion || await DownloadClaims.isCancelled(batch.batchId)) return;
     final String path;
     try {
@@ -1596,6 +1620,9 @@ class DownloadManager extends ChangeNotifier {
   /// are refreshed; fall back to the stored URLs when parsing fails.
   Future<void> retryJob(DownloadBatch batch, DownloadJob job) async {
     if (job.state != JobState.failed && job.state != JobState.canceled) return;
+    // Claim the retry synchronously, before parsing or any plugin await.
+    job.state = JobState.queued;
+    notifyListeners();
     // The batch becomes active again: let its terminal handler write the
     // history record once more when it finishes.
     batch.historyWritten = false;
@@ -1610,6 +1637,7 @@ class DownloadManager extends ChangeNotifier {
       }
     } catch (_) {
       if (needsSessionDownload(batch, job)) {
+        job.state = JobState.failed;
         job.error = interruptedMediaMessage;
         await _persist(batch);
         notifyListeners();
@@ -1694,7 +1722,16 @@ class DownloadManager extends ChangeNotifier {
       await DownloadClaims.release(batch.batchId);
     }
     notifyListeners();
-    if (ids.isNotEmpty) await FileDownloader().cancelTasksWithIds(ids);
+    if (ids.isNotEmpty) await FileDownloader().cancelTasksWithIds(ids).timeout(const Duration(seconds: 2));
+  }
+
+  /// Synchronous cancellation intent: no plugin or other engine can delay it.
+  void markPostDeletion(String platform, String postId) {
+    for (final batch in _batches.values) {
+      if (batch.platform == platform && batch.postId == postId && !batch.isTerminal) {
+        batch.cancelledByDeletion = true;
+      }
+    }
   }
 
   /// Pause a batch: running files are stopped (they restart from zero on

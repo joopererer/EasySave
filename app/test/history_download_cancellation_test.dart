@@ -1,6 +1,7 @@
 import 'package:easysave/services/download_manager.dart';
 import 'package:easysave/services/history_db.dart';
 import 'package:easysave/services/history_deletion.dart';
+import 'package:easysave/services/history_io.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
@@ -50,6 +51,7 @@ void main() {
       await writePlaceholderHistory(db, running);
       final record = (await db.recent()).single;
       await deleteHistoryRecords(db, [record]);
+    await historyBackgroundSettled();
       expect(running.cancelledByDeletion, isTrue);
       expect(running.jobs.single.state, JobState.canceled);
       stale.jobs.single

@@ -79,15 +79,7 @@ class _PreviewPageState extends State<PreviewPage> {
     if (!mounted || _batchBusy) return;
     try {
       final batches = await DownloadManager.instance.liveBatches();
-      DownloadBatch? found;
-      for (final b in batches) {
-        if (b.postId != _post.id) continue;
-        // Keep a finished batch visible only while it has failures to retry.
-        if (!b.isTerminal || b.failedCount > 0) {
-          found = b;
-          break;
-        }
-      }
+      final found = previewBatchForPost(batches, _post.platform, _post.id);
       if (!mounted) return;
       setState(() => _activeBatch = found);
     } catch (_) {
