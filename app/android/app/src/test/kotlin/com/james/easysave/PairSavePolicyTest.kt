@@ -4,16 +4,16 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class PairSavePolicyTest {
-    @Test fun uniquePairPreservesFullMediaExtension() {
-        val name = PairSavePolicy.mediaName("post.photo.jpg", "abc-123")
-        assertEquals("post.photo_abc-123.jpg", name)
-        assertEquals("post.photo_abc-123.jpg.xmp", ProvenancePairWriter.sidecarName(name))
+    @Test fun finalPairUsesCleanIdentityName() {
+        val name = PairSavePolicy.mediaName("7674898126922140959_1.jpg")
+        assertEquals("7674898126922140959_1.jpg", name)
+        assertEquals("7674898126922140959_1.jpg.xmp", ProvenancePairWriter.sidecarName(name))
     }
     @Test fun rejectsInvalidNamesAndUniqueSuffixes() {
         for (name in listOf("", "../a.jpg", "a", ".jpg", "a.")) {
-            assertTrue(runCatching { PairSavePolicy.mediaName(name, "abc") }.isFailure)
+            assertTrue(runCatching { PairSavePolicy.mediaName(name) }.isFailure)
         }
-        assertTrue(runCatching { PairSavePolicy.mediaName("a.jpg", "../bad") }.isFailure)
+        assertTrue(runCatching { PairSavePolicy.mediaName("123_1_550e8400-e29b-41d4-a716-446655440000.jpg") }.isFailure)
     }
     @Test fun binarySidecarMimeAvoidsRdfExtensionMapping() {
         assertEquals("application/octet-stream", PairSavePolicy.SIDECAR_MIME)

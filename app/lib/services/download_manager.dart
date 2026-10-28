@@ -27,6 +27,7 @@ import 'history_io.dart';
 import 'parse_service.dart';
 import 'saver.dart';
 import 'download_provenance.dart';
+import 'export_names.dart';
 import 'download_claims.dart';
 import 'provenance_pair.dart';
 import 'auth.dart';
@@ -1377,11 +1378,12 @@ class DownloadManager extends ChangeNotifier {
         // Indexing is best effort.
       }
     }
-    final name = job.filename;
+    final name = cleanMediaFilename(batch.postId, job.itemIndex, job.isImage ? 'jpg' : 'mp4');
     final dot = name.lastIndexOf('.');
     final base = dot > 0 ? name.substring(0, dot) : name;
     final asset = locator.assetByBaseName(base);
-    return asset != null && await locator.isPresent(asset.id) ? asset : null;
+    final matchesType = asset != null && (job.isImage ? asset.type == AssetType.image : asset.type == AssetType.video);
+    return matchesType && await locator.isPresent(asset.id) ? asset : null;
   }
 
   /// Gallery import for a finished file, then temp cleanup.
@@ -1479,10 +1481,11 @@ class DownloadManager extends ChangeNotifier {
             existingAssetId: existingAssetId,
             itemIndex: itemIndex ?? job.itemIndex,
           );
+          final finalName = await exportNameFor(path, batch.postId, itemIndex ?? job.itemIndex);
           
           final saved = job.metadataNotice != null
-              ? await saveProvenancePair(path, expectedAssetId: writtenAssetId)
-              : await saveToGallery(path, isImage, batch.album);
+              ? await saveProvenancePair(path, expectedAssetId: writtenAssetId, finalName: finalName)
+              : await saveToGallery(path, isImage, batch.album, finalName: finalName);
           _log('gallery import done: ${job.filename} -> ${saved.mediaId}');
           job.mediaId = saved.mediaId;
           job.savedTitle = saved.title;

@@ -509,8 +509,8 @@ class _MinePageState extends State<MinePage> with WidgetsBindingObserver {
         SnackBar(
           content: Text(
             result.cancelled
-                ? '已取消：${result.created} 新建，${result.merged} 合并，${result.skipped} 跳过，${result.readFailures} 读取失败'
-                : '已完成：${result.created} 新建，${result.merged} 合并，${result.skipped} 跳过，${result.readFailures} 读取失败${result.needsFixedDirectoryAccess ? "，请授权固定目录后重试" : ""}',
+                ? '已取消：${result.created} 新建，${result.merged} 合并，${result.readFailures} 读取失败'
+                : '已完成：${result.created} 新建，${result.merged} 合并，${result.skipped} 跳过，${result.readFailures} 读取失败，修复命名 ${result.renamedMedia} 项，${result.renameFailures} 修复失败${result.needsFixedDirectoryAccess ? "，请授权固定目录后重试" : ""}',
           ),
         ),
       );
@@ -716,12 +716,7 @@ class _MinePageState extends State<MinePage> with WidgetsBindingObserver {
                 ),
                 ListTile(
                   title: const Text('文件名格式'),
-                  subtitle: Text(_settings.namePattern),
-                  onTap: () => _editText(
-                    title: '文件名格式（{id} {seq} {date} {author}）',
-                    initial: _settings.namePattern,
-                    onSave: (v) => _settings.namePattern = v,
-                  ),
+                  subtitle: const Text('帖子ID_序号.扩展名'),
                 ),
                 SwitchListTile(
                   title: const Text('保存来源信息（图片和视频）'),

@@ -90,7 +90,11 @@ object FixedRebuildAccess {
         try {
             val folder = tree(context)
             diagnostics.add(mapOf("diagnostic" to true, "stage" to "authorized-directory", "visible" to (folder != null)))
-            folder?.listFiles()?.filter { it.isFile }?.forEach { add(it.name ?: "") }
+            folder?.listFiles()?.filter { it.isFile }?.let { docs ->
+                val actualNames = docs.mapNotNull { it.name }.toSet()
+                rows.keys.retainAll(actualNames)
+                actualNames.forEach { add(it) }
+            }
         } catch (e: Exception) {
             diagnostics.add(mapOf("diagnostic" to true, "stage" to "authorized-directory", "visible" to false, "errorClass" to e.javaClass.simpleName))
         }

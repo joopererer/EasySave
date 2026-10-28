@@ -35,13 +35,15 @@ object ProvenancePairWriter {
 
     fun register(context: Context, messenger: BinaryMessenger) {
         MethodChannel(messenger, "easysave/provenance_pair").setMethodCallHandler { call, result ->
-            if (call.method !in setOf("savePair", "readSidecar", "readSidecarDetailed", "queryFixedMedia", "deletePair", "setFixedTree", "readFixedHeader")) {
+            if (call.method !in setOf("savePair", "saveMedia", "repairLegacyNames", "readSidecar", "readSidecarDetailed", "queryFixedMedia", "deletePair", "setFixedTree", "readFixedHeader")) {
                 result.notImplemented()
                 return@setMethodCallHandler
             }
             Thread {
                 try {
-                    val value = if (call.method == "setFixedTree") {
+                    val value = if (call.method == "repairLegacyNames") {
+                        LegacyNameRepair.run(context, call.argument<List<String>>("albums") ?: emptyList())
+                    } else if (call.method == "setFixedTree") {
                         FixedRebuildAccess.grant(context, call.argument<String>("treeUri")!!); true
                     } else if (call.method == "readFixedHeader") {
                         val id = call.argument<String>("mediaId")!!
@@ -66,7 +68,11 @@ object ProvenancePairWriter {
                         val path = call.argument<String>("path")!!
                         val source = File(path).canonicalFile
                         require(source.path.startsWith(File(context.applicationInfo.dataDir).canonicalPath + File.separator))
-                        save(context, source, call.argument<String>("mime")!!)
+                        if (call.method == "saveMedia") PublicMediaWriter.save(context, source, call.argument<String>("mime")!!,
+                            call.argument<String>("album")!!, call.argument<String>("filename")!!)
+                        else synchronized(PublicMediaWriter.lock) {
+                            save(context, source, call.argument<String>("mime")!!, call.argument<String>("filename") ?: source.name)
+                        }
                     }
                     Handler(Looper.getMainLooper()).post { result.success(value) }
                 } catch (e: Exception) {
@@ -111,11 +117,13 @@ object ProvenancePairWriter {
         }
     }
 
-    private fun save(context: Context, source: File, mime: String): Map<String, String> {
+    private fun save(context: Context, source: File, mime: String, requestedName: String): Map<String, String> {
         val sidecar = File(source.path + ".xmp")
         require(source.isFile && sidecar.isFile && sidecar.length() in 1..1048576)
         require(mime in setOf("image/jpeg", "image/png", "image/webp", "video/mp4"))
-        if (Build.VERSION.SDK_INT < 29) return saveLegacy(context, source, sidecar, mime)
+        val name = PairSavePolicy.mediaName(requestedName)
+        PublicMediaWriter.available(context, C2paStoragePolicy.RELATIVE_PATH, name)
+        if (Build.VERSION.SDK_INT < 29) return saveLegacy(context, source, sidecar, mime, name)
         val resolver = context.contentResolver
         val collection = MediaStore.Downloads.EXTERNAL_CONTENT_URI
         val relative = C2paStoragePolicy.RELATIVE_PATH
@@ -153,13 +161,12 @@ object ProvenancePairWriter {
                 }
                 return uri
             }
-            // Unique pair name prevents a pre-existing .xmp from being overwritten
-            // or the provider renaming it independently from its media partner.
-            val name = PairSavePolicy.mediaName(source.name, java.util.UUID.randomUUID().toString())
+            // Names are deterministic. Collisions fail without replacing old files.
             val media = insert(name, mime, source, "图片")
             val storedName = step("回读校验图片文件名") { resolver.query(media, arrayOf(MediaStore.MediaColumns.DISPLAY_NAME), null, null, null)!!.use {
                 check(it.moveToFirst()); it.getString(0)
             } }
+            check(storedName == name) { "Provider changed final filename" }
             val xmp = insert(sidecarName(storedName), PairSavePolicy.SIDECAR_MIME, sidecar, "边车")
             step("回读校验边车文件名") { resolver.query(xmp, arrayOf(MediaStore.MediaColumns.DISPLAY_NAME), null, null, null)!!.use {
                 check(it.moveToFirst() && it.getString(0) == sidecarName(storedName))
@@ -185,10 +192,10 @@ object ProvenancePairWriter {
     }
 
     @Suppress("DEPRECATION")
-    private fun saveLegacy(context: Context, source: File, sidecar: File, mime: String): Map<String, String> {
+    private fun saveLegacy(context: Context, source: File, sidecar: File, mime: String, name: String): Map<String, String> {
         val directory = fixedDirectory()
         check(directory.isDirectory || directory.mkdirs())
-        val media = File(directory, PairSavePolicy.mediaName(source.name, java.util.UUID.randomUUID().toString()))
+        val media = File(directory, name)
         val xmp = File(directory, sidecarName(media.name))
         try {
             step("创建图片") { check(media.createNewFile()) }

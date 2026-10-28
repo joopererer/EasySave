@@ -6,13 +6,7 @@ object PairSavePolicy {
     // to .rdf/.xml and changing the full-filename .xmp pairing convention.
     const val SIDECAR_MIME = "application/octet-stream"
 
-    fun mediaName(original: String, unique: String): String {
-        ProvenancePairWriter.sidecarName(original) // validate before constructing
-        require(unique.matches(Regex("[a-zA-Z0-9-]+")))
-        val dot = original.lastIndexOf('.')
-        require(dot > 0 && dot < original.lastIndex)
-        return original.substring(0, dot) + "_" + unique + original.substring(dot)
-    }
+    fun mediaName(original: String): String = ExportNames.requireClean(original)
 
     fun errorMessage(step: String, error: Exception): String {
         // Do not attach the Throwable to Log.w: its stack/cause may hold credentials.

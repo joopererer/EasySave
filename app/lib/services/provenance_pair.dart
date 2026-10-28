@@ -6,13 +6,14 @@ import 'package:photo_manager/photo_manager.dart';
 import '../metadata/metadata_service.dart';
 import 'download_provenance.dart';
 import '../core/dev_log.dart';
+import 'media_delete_service.dart';
 
 const _channel = MethodChannel('easysave/provenance_pair');
 const c2paRelativePath = 'Download/EasySave/';
 const c2paSavedNotice = '该图片带有内容凭证，已保存到 Download/EasySave';
 
 Future<({String? mediaId, String? title, String? relativePath})>
-saveProvenancePair(String path, {String? expectedAssetId}) async {
+saveProvenancePair(String path, {String? expectedAssetId, String? finalName}) async {
   // Gal requests legacy WRITE_EXTERNAL_STORAGE only where Android requires it.
   if (!await Gal.hasAccess(toAlbum: true))
     await Gal.requestAccess(toAlbum: true);
@@ -27,6 +28,7 @@ saveProvenancePair(String path, {String? expectedAssetId}) async {
   final result = await _channel.invokeMapMethod<String, String>('savePair', {
     'path': path,
     'mime': mime,
+    'filename': finalName ?? File(path).uri.pathSegments.last,
   });
   if (result?['mediaId'] == null) throw StateError('来源信息边车保存失败');
   if (expectedAssetId != null) {
@@ -116,6 +118,54 @@ Future<SidecarReadResult> readRebuildSidecar(AssetEntity asset, String? relative
 
 Future<bool> authorizeFixedRebuildDirectory(String treeUri) async =>
     await _channel.invokeMethod<bool>('setFixedTree', {'treeUri': treeUri}) ?? false;
+
+class LegacyRepairResult {
+  const LegacyRepairResult({this.renamed = 0, this.skipped = 0, this.failures = 0, this.requiresAccess = false, this.changedIds = const []});
+  final int renamed, skipped, failures;
+  final bool requiresAccess;
+  final List<String> changedIds;
+}
+
+Future<LegacyRepairResult> repairLegacyExportNames(Iterable<String> albums) async {
+  try {
+    Future<List<dynamic>> run() async => await _channel.invokeListMethod<dynamic>('repairLegacyNames', {'albums': albums.toList()}) ?? [];
+    var rows = await run();
+    final writable = <MediaRef>[];
+    for (final row in rows.whereType<Map>()) {
+      if (row['status'] == 'error' && '${row['path']}'.startsWith('Pictures/') && row['mediaId'] is String &&
+          '${row['errorClass']}'.contains('SecurityException')) {
+        writable.add(MediaRef(mediaId: row['mediaId'] as String, isImage: row['isImage'] == true));
+      }
+    }
+    if (writable.isNotEmpty && await MediaDeleteService.instance.requestWriteAccess(writable)) {
+      final priorSuccess = rows.whereType<Map>().where((r) => r['status'] == 'renamed').toList();
+      rows = [...priorSuccess, ...await run()];
+    }
+    var renamed = 0, skipped = 0, failures = 0;
+    var access = false;
+    final changed = <String>[];
+    for (final row in rows.whereType<Map>()) {
+      final status = row['status'];
+      DevLog.write('HistoryRebuild', 'file=${row['file']} path=${row['path']} stage=legacy-name-repair '
+        'result=$status target=${row['target'] ?? "-"} exception=${row['errorClass'] ?? "-"} candidates=${row['candidates'] ?? "-"}');
+      if (status == 'renamed') renamed++;
+      if (status == 'target_exists' || status == 'missing_sidecar') skipped++;
+      if (status == 'error' || status == 'rollback_failed') failures++;
+      access |= row['requiresAccess'] == true;
+      if (status == 'renamed' && row['mediaId'] is String) {
+        changed.add(row['mediaId'] as String);
+      }
+    }
+    return LegacyRepairResult(renamed: renamed, skipped: skipped, failures: failures, requiresAccess: access, changedIds: changed);
+  } on MissingPluginException {
+    if (!Platform.isAndroid) return const LegacyRepairResult();
+    DevLog.write('HistoryRebuild', 'file=<directory> path=$c2paRelativePath stage=legacy-name-repair exception=MissingPluginException');
+    return const LegacyRepairResult(failures: 1);
+  } catch (e) {
+    DevLog.write('HistoryRebuild', 'file=<directory> path=$c2paRelativePath stage=legacy-name-repair exception=${e.runtimeType}');
+    return const LegacyRepairResult(failures: 1);
+  }
+}
 
 bool isFixedFileReference(String id) => id.startsWith('fixed:');
 Future<Uint8List> readFixedRebuildHeader(String mediaId, String? mimeType) async =>

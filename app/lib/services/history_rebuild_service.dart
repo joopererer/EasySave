@@ -25,6 +25,7 @@ class RebuildResult {
   final int skipped;
   final int readFailures;
   final bool needsFixedDirectoryAccess;
+  final int renamedMedia, renameSkipped, renameFailures;
 
   /// True when the user cancelled: everything processed up to that point was
   /// still written, only the remaining files were not scanned.
@@ -38,6 +39,7 @@ class RebuildResult {
     required this.skipped,
     this.readFailures = 0,
     this.needsFixedDirectoryAccess = false,
+    this.renamedMedia = 0, this.renameSkipped = 0, this.renameFailures = 0,
     this.cancelled = false,
   });
 
@@ -117,6 +119,10 @@ class HistoryRebuildService {
     final selectedAlbums = (albums == null)
         ? settings.effectiveAlbumNames
         : albums.toSet();
+    final repair = assetsOverride == null
+        ? await repairLegacyExportNames(settings.effectiveAlbumNames)
+        : const LegacyRepairResult();
+    if (repair.changedIds.isNotEmpty) locator.evictMediaIds(repair.changedIds);
 
     final startedAt = DateTime.now();
     final assets = assetsOverride ??
@@ -139,7 +145,7 @@ class HistoryRebuildService {
     var merged = 0;
     var skipped = 0;
     var readFailures = 0;
-    var needsFixedDirectoryAccess = false;
+    var needsFixedDirectoryAccess = repair.requiresAccess;
     var cancelled = false;
 
     final identifiedImages = <_AssetWithXmp>[];
@@ -586,6 +592,7 @@ class HistoryRebuildService {
       skipped: skipped,
       readFailures: readFailures,
       needsFixedDirectoryAccess: needsFixedDirectoryAccess,
+      renamedMedia: repair.renamed, renameSkipped: repair.skipped, renameFailures: repair.failures,
       cancelled: cancelled,
     );
   }
