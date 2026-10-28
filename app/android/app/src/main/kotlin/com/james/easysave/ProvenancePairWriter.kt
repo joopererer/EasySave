@@ -8,6 +8,7 @@ import android.os.Environment
 import android.os.Handler
 import android.os.Looper
 import android.provider.MediaStore
+import android.util.Log
 import io.flutter.plugin.common.BinaryMessenger
 import io.flutter.plugin.common.MethodChannel
 import java.io.File
@@ -16,6 +17,16 @@ import java.io.File
  * Downloads accepts both real MIME types under scoped storage. No broad grant.
  */
 object ProvenancePairWriter {
+    private class StepFailure(message: String) : Exception(message)
+
+    private inline fun <T> step(name: String, action: () -> T): T {
+        try { return action() } catch (e: Exception) {
+            if (e is StepFailure) throw e
+            val message = PairSavePolicy.errorMessage(name, e)
+            Log.w("EasySavePair", message)
+            throw StepFailure(message)
+        }
+    }
     fun sidecarName(mediaName: String): String {
         require(mediaName.isNotBlank() && mediaName !in setOf(".", "..") &&
             mediaName.none { it == '/' || it == '\\' || it == '\u0000' })
@@ -41,9 +52,11 @@ object ProvenancePairWriter {
                         save(context, source, call.argument<String>("mime")!!)
                     }
                     Handler(Looper.getMainLooper()).post { result.success(value) }
-                } catch (_: Exception) {
+                } catch (e: Exception) {
+                    val message = if (e is StepFailure) e.message!! else PairSavePolicy.errorMessage(call.method, e)
+                    if (e !is StepFailure) Log.w("EasySavePair", message)
                     Handler(Looper.getMainLooper()).post {
-                        result.error("provenance_pair", "来源信息边车保存或读取失败", null)
+                        result.error("provenance_pair", message, null)
                     }
                 }
             }.start()
@@ -60,19 +73,24 @@ object ProvenancePairWriter {
         val relative = C2paStoragePolicy.RELATIVE_PATH
         val inserted = mutableListOf<Uri>()
         try {
-            fun insert(name: String, type: String, file: File): Uri {
+            fun insert(name: String, type: String, file: File, kind: String): Uri {
                 val values = ContentValues().apply {
                     put(MediaStore.MediaColumns.DISPLAY_NAME, name)
                     put(MediaStore.MediaColumns.MIME_TYPE, type)
                     put(MediaStore.MediaColumns.RELATIVE_PATH, relative)
                     put(MediaStore.MediaColumns.IS_PENDING, 1)
                 }
-                val uri = checkNotNull(resolver.insert(collection, values))
+                val uri = step("创建$kind") {
+                    checkNotNull(resolver.insert(collection, values)) { "MediaStore insert returned null" }
+                }
                 inserted.add(uri)
-                checkNotNull(resolver.openOutputStream(uri, "w")).use { out ->
-                    file.inputStream().use { it.copyTo(out) }
+                step("写入$kind") {
+                    checkNotNull(resolver.openOutputStream(uri, "w")).use { out ->
+                        file.inputStream().use { it.copyTo(out) }
+                    }
                 }
                 // Confirm the stored bytes, including C2PA credentials, are intact.
+                step("回读校验$kind") {
                 val expected = java.security.MessageDigest.getInstance("SHA-256")
                 val actual = java.security.MessageDigest.getInstance("SHA-256")
                 fun digest(input: java.io.InputStream, md: java.security.MessageDigest) {
@@ -84,26 +102,36 @@ object ProvenancePairWriter {
                 digest(file.inputStream(), expected)
                 digest(checkNotNull(resolver.openInputStream(uri)), actual)
                 check(expected.digest().contentEquals(actual.digest()))
+                }
                 return uri
             }
             // Unique pair name prevents a pre-existing .xmp from being overwritten
             // or the provider renaming it independently from its media partner.
-            val base = source.nameWithoutExtension
-            val name = "${base}_${java.util.UUID.randomUUID()}.${source.extension}"
-            val media = insert(name, mime, source)
-            val storedName = resolver.query(media, arrayOf(MediaStore.MediaColumns.DISPLAY_NAME), null, null, null)!!.use {
+            val name = PairSavePolicy.mediaName(source.name, java.util.UUID.randomUUID().toString())
+            val media = insert(name, mime, source, "图片")
+            val storedName = step("回读校验图片文件名") { resolver.query(media, arrayOf(MediaStore.MediaColumns.DISPLAY_NAME), null, null, null)!!.use {
                 check(it.moveToFirst()); it.getString(0)
-            }
-            val xmp = insert(sidecarName(storedName), "application/rdf+xml", sidecar)
-            resolver.query(xmp, arrayOf(MediaStore.MediaColumns.DISPLAY_NAME), null, null, null)!!.use {
+            } }
+            val xmp = insert(sidecarName(storedName), PairSavePolicy.SIDECAR_MIME, sidecar, "边车")
+            step("回读校验边车文件名") { resolver.query(xmp, arrayOf(MediaStore.MediaColumns.DISPLAY_NAME), null, null, null)!!.use {
                 check(it.moveToFirst() && it.getString(0) == sidecarName(storedName))
+            } }
+            for ((index, uri) in inserted.withIndex()) step("清除 IS_PENDING ${if (index == 0) "图片" else "边车"}") {
+                check(resolver.update(uri, ContentValues().apply {
+                    put(MediaStore.MediaColumns.IS_PENDING, 0)
+                }, null, null) == 1) { "MediaStore update affected no row" }
             }
-            for (uri in inserted) resolver.update(uri, ContentValues().apply {
-                put(MediaStore.MediaColumns.IS_PENDING, 0)
-            }, null, null)
             return mapOf("mediaId" to media.lastPathSegment!!, "title" to storedName, "relativePath" to relative)
         } catch (e: Exception) {
-            for (uri in inserted) runCatching { resolver.delete(uri, null, null) }
+            val failures = inserted.mapNotNull { uri ->
+                runCatching { step("失败清理") {
+                    resolver.delete(uri, null, null)
+                    resolver.query(uri, arrayOf("_id"), null, null, null)?.use {
+                        check(!it.moveToFirst()) { "MediaStore row remains after rollback" }
+                    }
+                } }.exceptionOrNull()?.message
+            }
+            if (failures.isNotEmpty()) throw StepFailure("${e.message}; ${failures.joinToString("; ")}")
             throw e
         }
     }
@@ -112,12 +140,14 @@ object ProvenancePairWriter {
     private fun saveLegacy(context: Context, source: File, sidecar: File, mime: String): Map<String, String> {
         val directory = fixedDirectory()
         check(directory.isDirectory || directory.mkdirs())
-        val media = File(directory, "${source.nameWithoutExtension}_${java.util.UUID.randomUUID()}.${source.extension}")
+        val media = File(directory, PairSavePolicy.mediaName(source.name, java.util.UUID.randomUUID().toString()))
         val xmp = File(directory, sidecarName(media.name))
         try {
-            source.copyTo(media)
-            sidecar.copyTo(xmp)
-            check(media.length() == source.length() && xmp.readBytes().contentEquals(sidecar.readBytes()))
+            step("创建图片") { check(media.createNewFile()) }
+            step("写入图片") { source.copyTo(media, overwrite = true) }
+            step("创建边车") { check(xmp.createNewFile()) }
+            step("写入边车") { sidecar.copyTo(xmp, overwrite = true) }
+            step("回读校验") { check(media.readBytes().contentEquals(source.readBytes()) && xmp.readBytes().contentEquals(sidecar.readBytes())) }
             val latch = java.util.concurrent.CountDownLatch(1)
             var saved: Uri? = null
             android.media.MediaScannerConnection.scanFile(context, arrayOf(media.path), arrayOf(mime)) { _, uri ->
@@ -128,7 +158,10 @@ object ProvenancePairWriter {
             return mapOf("mediaId" to checkNotNull(saved).lastPathSegment!!,
                 "title" to media.name, "relativePath" to C2paStoragePolicy.RELATIVE_PATH)
         } catch (e: Exception) {
-            media.delete(); xmp.delete()
+            val failures = listOf(media, xmp).mapNotNull { file ->
+                runCatching { step("失败清理") { check(!file.exists() || file.delete()) } }.exceptionOrNull()?.message
+            }
+            if (failures.isNotEmpty()) throw StepFailure("${e.message}; ${failures.joinToString("; ")}")
             throw e
         }
     }
