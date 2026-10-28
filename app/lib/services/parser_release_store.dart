@@ -18,12 +18,14 @@ class ParserReleaseStore {
     this.directory,
     this.publicKeyHex,
     this.appVersion,
-    this.schema,
-  );
+    this.schema, {
+    this.builtinManifest,
+  });
   final Directory directory;
   final String publicKeyHex;
   final String appVersion;
   final Map<String, dynamic> schema;
+  final SignedParserManifest? builtinManifest;
   File get _stateFile => File('${directory.path}/state.json');
 
   Map<String, dynamic>? readState() {
@@ -33,7 +35,7 @@ class ParserReleaseStore {
     if (state['highestAcceptedManifestVersion'] is! int ||
         (state['highestAcceptedManifestVersion'] as int) < 1 ||
         !RegExp(r'^[a-f0-9]{64}$').hasMatch(state['contentHash'] as String) ||
-        !_validReference(state['current']) ||
+        (state['current'] != 'builtin' && !_validReference(state['current'])) ||
         (state['previous'] != null && !_validReference(state['previous']))) {
       throw const FormatException('parser_state');
     }
@@ -43,6 +45,62 @@ class ParserReleaseStore {
   bool _validReference(Object? value) =>
       value is String &&
       RegExp(r'^[0-9]+-[a-f0-9]{64}-[0-9]+$').hasMatch(value);
+
+  /// Foreground only. Scan every complete cryptographically valid cached bundle;
+  /// never infer a watermark from directory names or unverified JSON fields.
+  Future<void> recoverStateIfNeeded() async {
+    try {
+      if (readState() != null) return;
+      if (!Directory('${directory.path}/releases').existsSync()) return;
+    } catch (_) {
+      // Corrupt state is repaired below; readers do not call this method.
+    }
+    final valid = <ParserRelease>[];
+    final releases = Directory('${directory.path}/releases');
+    if (releases.existsSync()) {
+      for (final entity in releases.listSync(followLinks: false)) {
+        if (entity is! Directory) continue;
+        final ref = entity.uri.pathSegments.where((s) => s.isNotEmpty).last;
+        try {
+          valid.add(await _read(ref, requireCompatible: false));
+        } catch (_) {
+          /* Unverified/incomplete bundles cannot raise the floor. */
+        }
+      }
+    }
+    valid.sort((a, b) {
+      final version = b.manifest.version.compareTo(a.manifest.version);
+      return version != 0
+          ? version
+          : a.manifest.payloadHash.compareTo(b.manifest.payloadHash);
+    });
+    final cached = valid.firstOrNull;
+    final builtin = builtinManifest;
+    if (cached == null && builtin == null) {
+      throw const FormatException('parser_recovery_no_verified_version');
+    }
+    final useBuiltin =
+        builtin != null &&
+        (cached == null || builtin.version > cached.manifest.version);
+    final highest = useBuiltin ? builtin : cached!.manifest;
+    final current = useBuiltin ? 'builtin' : cached!.reference;
+    final previous = valid
+        .where(
+          (r) => r.reference != current && r.manifest.supportsApp(appVersion),
+        )
+        .firstOrNull;
+    _atomicWrite(
+      _stateFile,
+      utf8.encode(
+        jsonEncode({
+          'current': current,
+          'previous': previous?.reference,
+          'highestAcceptedManifestVersion': highest.version,
+          'contentHash': highest.payloadHash,
+        }),
+      ),
+    );
+  }
 
   void checkWatermark(
     SignedParserManifest manifest,
@@ -84,7 +142,10 @@ class ParserReleaseStore {
     return null;
   }
 
-  Future<ParserRelease> _read(String reference) async {
+  Future<ParserRelease> _read(
+    String reference, {
+    bool requireCompatible = true,
+  }) async {
     if (!_validReference(reference)) {
       throw const FormatException('parser_reference');
     }
@@ -95,7 +156,7 @@ class ParserReleaseStore {
       schema: schema,
     );
     if (!reference.startsWith('${manifest.version}-${manifest.payloadHash}-') ||
-        !manifest.supportsApp(appVersion)) {
+        (requireCompatible && !manifest.supportsApp(appVersion))) {
       throw const FormatException('parser_compatibility');
     }
     final scriptBytes = File('$base/parser.js').readAsBytesSync();

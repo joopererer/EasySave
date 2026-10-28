@@ -18,6 +18,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../generated/parser_version.dart';
 import 'signed_parser_manifest.dart';
 import 'parser_release_store.dart';
+import 'https_parser_download.dart';
 
 /// Ed25519 public key (32 bytes raw, hex encoded) for parser bundle verification.
 /// Replace this constant with your generated public key.
@@ -276,7 +277,18 @@ class ParserManager {
             )
             as Map<String, dynamic>;
     _appVersion ??= (await PackageInfo.fromPlatform()).version;
-    return ParserReleaseStore(base, _publicKeyHex, _appVersion!, _schema!);
+    final builtin = SignedParserManifest.fromBuiltin(
+      await rootBundle.loadString('assets/parser/builtin-manifest.json'),
+      (await rootBundle.load('assets/parser/parser.js')).buffer.asUint8List(),
+      _schema!,
+    );
+    return ParserReleaseStore(
+      base,
+      _publicKeyHex,
+      _appVersion!,
+      _schema!,
+      builtinManifest: builtin,
+    );
   }
 
   Future<void> init({bool canUpdate = false}) async {
@@ -320,7 +332,9 @@ class ParserManager {
 
   Future<ParserRelease?> _selectVerified() async {
     try {
-      final release = await (await _store()).load();
+      final store = await _store();
+      if (_canUpdate) await store.recoverStateIfNeeded();
+      final release = await store.load();
       if (release != null) {
         _useRemote(release);
         return release;
@@ -361,6 +375,7 @@ class ParserManager {
   Future<bool> _checkForUpdates(bool force) async {
     try {
       final store = await _store();
+      await store.recoverStateIfNeeded();
       final prefs = _prefs ??= await SharedPreferences.getInstance();
       final now = DateTime.now().millisecondsSinceEpoch;
       final last = prefs.getInt(kPrefKeyLastUpdateCheckMs) ?? 0;
@@ -405,9 +420,10 @@ class ParserManager {
           current.manifest.payloadHash == manifest.payloadHash) {
         return false;
       }
-      final parser = await _client
-          .get(Uri.parse(manifest.parserUrl))
-          .timeout(const Duration(seconds: 30));
+      final parser = await downloadParserHttps(
+        _client,
+        Uri.parse(manifest.parserUrl),
+      ).timeout(const Duration(seconds: 30));
       if (parser.statusCode != 200 ||
           parser.bodyBytes.length > 10 * 1024 * 1024) {
         return false;

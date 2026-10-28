@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
-import { buildRelease } from './build_release.js';
+import { buildRelease, createPayload } from './build_release.js';
 import { verifyRelease } from './verify_release.js';
 
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
@@ -76,6 +76,16 @@ test('configuration errors cannot create signed artifacts', (t) => {
   assert.throws(() => buildRelease({ root, seed }), /Invalid manifest/);
   assert.equal(existsSync(resolve(root, 'extension/dist')), false);
 });
+
+test('canonical templates must be unchanged by actual provenance_dart before output', (t) => {
+  const { root, seed } = fixture(t);
+  const path = resolve(root, 'config/sites.json');
+  const sites = JSON.parse(readFileSync(path));
+  sites[1].normalize.canonicalTemplate = 'https://www.instagram.com/reel/{id}/';
+  writeFileSync(path, JSON.stringify(sites));
+  assert.throws(() => buildRelease({ root, seed }), /canonicalTemplate/);
+  assert.equal(existsSync(resolve(root, 'extension/dist')), false);
+});
 test('CLI missing-key failure has nonzero status', () => {
   const env = { ...process.env };
   delete env.PARSER_SIGNING_KEY;
@@ -89,6 +99,10 @@ test('frozen v1.2.4 channel bytes remain unchanged', () => {
     'spec/manifest.json': '7e04cdf8d489b9f03482884fe5da0d23f92465415a95d3af4d1766408101912b',
     'spec/parser.js': 'db469d347e2ffd54264ac0ac88f74ca935dfe60df14d57241e043d9e04b42a66',
   })) assert.equal(crypto.createHash('sha256').update(readFileSync(resolve(repo, name))).digest('hex'), hash);
+});
+
+test('APK-bundled manifest is generated from current configuration and parser bytes', () => {
+  assert.equal(readFileSync(resolve(repo, 'app/assets/parser/builtin-manifest.json'), 'utf8'), JSON.stringify(createPayload(repo)));
 });
 
 test('shared signature vector covers UTF-8 payload verbatim', () => {

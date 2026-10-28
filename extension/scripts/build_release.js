@@ -3,9 +3,20 @@ import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import crypto from 'node:crypto';
 import { validatePayload } from './sites_config.js';
+import { validateCanonicalTemplates } from './validate_canonical.js';
 
 const repository = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const json = (path) => JSON.parse(readFileSync(path, 'utf8'));
+
+export function createPayload(root = repository) {
+  const { parserUrlTemplate, ...settings } = json(resolve(root, 'config/parser-release.json'));
+  const parserVersion = readFileSync(resolve(root, 'spec/PARSER_VERSION'), 'utf8').trim();
+  const parser = readFileSync(resolve(root, 'app/assets/parser/parser.js'));
+  return { ...settings, parserVersion,
+    parserUrl: parserUrlTemplate.replaceAll('{parserVersion}', parserVersion),
+    sha256: crypto.createHash('sha256').update(parser).digest('hex'),
+    sites: json(resolve(root, 'config/sites.json')) };
+}
 
 export function signingKey(seed, publicKeyHex) {
   if (!/^[a-fA-F0-9]{64}$/.test(seed ?? '')) {
@@ -26,19 +37,14 @@ export function buildRelease({ root = repository, candidate = false, seed = proc
   const publicKey = /kDefaultParserPublicKeyHex\s*=\s*'([a-f0-9]{64})'/.exec(appSource)?.[1];
   if (!publicKey) throw new Error('Cannot read App public key');
   const key = candidate ? null : signingKey(seed, publicKey);
-  const { parserUrlTemplate, ...settings } = json(resolve(root, 'config/parser-release.json'));
-  const parserVersion = readFileSync(resolve(root, 'spec/PARSER_VERSION'), 'utf8').trim();
+  const payloadObject = createPayload(root);
+  const { parserVersion } = payloadObject;
   if (process.env.GITHUB_REF_TYPE === 'tag' && process.env.GITHUB_REF_NAME !== 'parser-v' + parserVersion) {
     throw new Error('Release tag must match spec/PARSER_VERSION');
   }
   const parser = readFileSync(resolve(root, 'app/assets/parser/parser.js'));
-  const payloadObject = {
-    ...settings, parserVersion,
-    parserUrl: parserUrlTemplate.replaceAll('{parserVersion}', parserVersion),
-    sha256: crypto.createHash('sha256').update(parser).digest('hex'),
-    sites: json(resolve(root, 'config/sites.json')),
-  };
   validatePayload(payloadObject, json(resolve(root, 'spec/sites-manifest.schema.json')));
+  validateCanonicalTemplates(payloadObject.sites);
   const payload = JSON.stringify(payloadObject);
   const envelope = { schemaVersion: 2, payload };
   // Candidates deliberately have no signature field and are never accepted by the App.

@@ -81,7 +81,8 @@
       "preserveLoadQuery": [
         "xsec_token",
         "xsec_source"
-      ]
+      ],
+      "exampleId": "670f1a2b000000001e028b12"
     },
     "load": {
       "mode": "webview",
@@ -156,7 +157,8 @@
         "pattern": "^/(?:p|reel|tv)/([A-Za-z0-9_-]+)"
       },
       "canonicalTemplate": "https://www.instagram.com/p/{id}/",
-      "preserveLoadQuery": []
+      "preserveLoadQuery": [],
+      "exampleId": "AbC123"
     },
     "load": {
       "mode": "webview",
@@ -251,7 +253,8 @@
         "pattern": "^/[^/]+/status/([0-9]+)"
       },
       "canonicalTemplate": "https://x.com/i/status/{id}",
-      "preserveLoadQuery": []
+      "preserveLoadQuery": [],
+      "exampleId": "1234567890123456789"
     },
     "load": {
       "mode": "json",
@@ -346,7 +349,8 @@
         "pattern": "^/@[^/]+/(?:video|photo)/([0-9]+)"
       },
       "canonicalTemplate": "https://www.tiktok.com/@/video/{id}",
-      "preserveLoadQuery": []
+      "preserveLoadQuery": [],
+      "exampleId": "1234567890123456789"
     },
     "load": {
       "mode": "webview",
@@ -440,7 +444,8 @@
         "pattern": "^/(?:video|note|share/video)/([0-9]+)"
       },
       "canonicalTemplate": "https://www.douyin.com/video/{id}",
-      "preserveLoadQuery": []
+      "preserveLoadQuery": [],
+      "exampleId": "1234567890123456789"
     },
     "load": {
       "mode": "webview",

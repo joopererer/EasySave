@@ -16,6 +16,30 @@ class SignedParserManifest {
   List<Map<String, dynamic>> get sites =>
       (payload['sites'] as List).cast<Map<String, dynamic>>();
 
+  /// APK-bundled metadata is trusted by the App signature, never accepted from
+  /// network/cache as an unsigned envelope. Its parser hash is still checked.
+  static SignedParserManifest fromBuiltin(
+    String text,
+    List<int> parser,
+    Map<String, dynamic> schema,
+  ) {
+    final payload = jsonDecode(text) as Map<String, dynamic>;
+    validateManifestSchema(
+      payload,
+      (schema[r'$defs'] as Map)['payload'] as Map,
+      schema,
+    );
+    _validateSemantics(payload);
+    if (crypto.sha256.convert(parser).toString() != payload['sha256']) {
+      throw const FormatException('builtin_parser_hash');
+    }
+    return SignedParserManifest._(
+      Map.unmodifiable(payload),
+      Uint8List(0),
+      crypto.sha256.convert(utf8.encode(text)).toString(),
+    );
+  }
+
   static Future<SignedParserManifest> verify(
     List<int> bytes, {
     required String publicKeyHex,

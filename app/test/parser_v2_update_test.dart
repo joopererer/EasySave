@@ -353,13 +353,130 @@ void main() {
       expect(File('${directory.path}/state.json').existsSync(), isFalse);
     },
   );
-  test('malformed state cannot reset anti-rollback watermark', () async {
-    await install(10);
-    File('${directory.path}/state.json').writeAsStringSync('{}');
-    await prepare();
-    expect(manager.activeSource, ParserSource.builtin);
-    remote = await sign(payload(1));
-    expect(await manager.checkForUpdates(force: true), isFalse);
+  test(
+    'malformed state recovers highest verified local watermark and allows newer updates',
+    () async {
+      await install(10);
+      File('${directory.path}/state.json').writeAsStringSync('{}');
+      await prepare();
+      expect(manager.activeSource, ParserSource.remote);
+      expect(state()['highestAcceptedManifestVersion'], 10);
+      remote = await sign(payload(1));
+      expect(await manager.checkForUpdates(force: true), isFalse);
+      remote = await sign(payload(11));
+      expect(await manager.checkForUpdates(force: true), isTrue);
+      expect(state()['highestAcceptedManifestVersion'], 11);
+    },
+  );
+
+  test(
+    'recovery ignores corrupt cache but includes a verified built-in floor',
+    () async {
+      await install(5);
+      await install(6);
+      releaseFile(
+        state()['current'] as String,
+        'parser.js',
+      ).writeAsStringSync('bad');
+      File('${directory.path}/state.json').writeAsStringSync('invalid');
+      await prepare();
+      expect(state()['highestAcceptedManifestVersion'], 5);
+      remote = await sign(payload(4));
+      expect(await manager.checkForUpdates(force: true), isFalse);
+      // Remove all cached candidates: the APK-bundled manifest still supplies a floor.
+      Directory('${directory.path}/releases').deleteSync(recursive: true);
+      File('${directory.path}/state.json').writeAsStringSync('{}');
+      await prepare();
+      expect(state()['current'], 'builtin');
+      expect(
+        state()['highestAcceptedManifestVersion'],
+        greaterThanOrEqualTo(1),
+      );
+      remote = await sign(payload(7));
+      expect(await manager.checkForUpdates(force: true), isTrue);
+    },
+  );
+
+  test(
+    'parser follows HTTPS Release redirect and hashes the final bytes',
+    () async {
+      manager.configure(
+        client: MockClient((request) async {
+          if (request.url.path.endsWith('manifest.json')) {
+            return http.Response.bytes(remote, 200);
+          }
+          expect(request.followRedirects, isFalse);
+          if (request.url.host == 'github.com') {
+            return http.Response(
+              '',
+              302,
+              headers: {
+                'location': 'https://objects.githubusercontent.com/parser.js',
+              },
+            );
+          }
+          return http.Response.bytes(scriptBytes, 200);
+        }),
+      );
+      expect(await manager.checkForUpdates(force: true), isTrue);
+      expect(await manager.getActiveScript(), script);
+    },
+  );
+
+  test(
+    'parser rejects HTTP downgrade, more than five redirects, and redirected wrong bytes',
+    () async {
+      for (final mode in ['http', 'loop', 'hash']) {
+        var redirects = 0;
+        manager.configure(
+          client: MockClient((request) async {
+            if (request.url.path.endsWith('manifest.json')) {
+              return http.Response.bytes(remote, 200);
+            }
+            if (mode == 'loop' || redirects++ == 0) {
+              return http.Response(
+                '',
+                302,
+                headers: {
+                  'location': mode == 'http'
+                      ? 'http://objects.githubusercontent.com/parser.js'
+                      : 'https://objects.githubusercontent.com/parser.js',
+                },
+              );
+            }
+            return http.Response('incorrect bytes', 200);
+          }),
+        );
+        expect(
+          await manager.checkForUpdates(force: true),
+          isFalse,
+          reason: mode,
+        );
+        expect(File('${directory.path}/state.json').existsSync(), isFalse);
+      }
+    },
+  );
+
+  test('parser permits exactly five HTTPS redirects', () async {
+    var redirects = 0;
+    manager.configure(
+      client: MockClient((request) async {
+        if (request.url.path.endsWith('manifest.json')) {
+          return http.Response.bytes(remote, 200);
+        }
+        if (redirects++ < 5) {
+          return http.Response(
+            '',
+            307,
+            headers: {
+              'location': 'https://objects.githubusercontent.com/parser.js',
+            },
+          );
+        }
+        return http.Response.bytes(scriptBytes, 200);
+      }),
+    );
+    expect(await manager.checkForUpdates(force: true), isTrue);
   });
   test(
     'damaged current cache does not send ETag and can be repaired at the same watermark',

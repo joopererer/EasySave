@@ -216,6 +216,11 @@
                 "minLength": 1,
                 "maxLength": 2048
               }
+            },
+            "exampleId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
             }
           },
           "required": [
