@@ -20,6 +20,7 @@ import '../services/download_manager.dart';
 import '../services/gallery_locator_service.dart';
 import '../services/history_backfill_service.dart';
 import '../services/history_db.dart';
+import '../services/history_deletion.dart';
 import '../services/host_bridge.dart';
 import '../services/media_delete_service.dart';
 import '../services/parse_service.dart';
@@ -796,9 +797,7 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
 
     final db = await HistoryDb.instance();
     if (!result.deleteFiles) {
-      for (final id in ids) {
-        await db.delete(id);
-      }
+      await deleteHistoryRecords(db, records);
       await _reload();
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -826,9 +825,7 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
       if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('${e.message}')));
       return;
     }
-    for (final id in ids) {
-      await db.delete(id);
-    }
+    await deleteHistoryRecords(db, records);
     await _reload();
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(

@@ -745,10 +745,15 @@ class DownloadManager extends ChangeNotifier {
   /// the other engine is running only exists as a snapshot here.
   Future<List<DownloadBatch>> liveBatches() async {
     final snapshots = <DownloadBatch>[];
+    final dismissed = <String>{};
     try {
       final prefs = await SharedPreferences.getInstance();
       await prefs.reload();
+      dismissed.addAll(prefs.getKeys().where((key) => key.startsWith(_dismissedPrefix))
+          .map((key) => key.substring(_dismissedPrefix.length)));
+      _batches.removeWhere((id, batch) => dismissed.contains(id) && batch.isTerminal);
       for (final id in prefs.getStringList(_batchIndexKey) ?? const []) {
+        if (dismissed.contains(id)) continue;
         final raw = prefs.getString(_batchKey(id));
         if (raw == null) continue;
         try {
@@ -787,6 +792,26 @@ class DownloadManager extends ChangeNotifier {
 
   static String _batchKey(String batchId) => 'easysave_batch_$batchId';
   static const _batchIndexKey = 'easysave_batches';
+  static const _dismissedPrefix = 'easysave_dismissed_batch_';
+
+  /// History deletion dismisses only terminal work, without adopting/canceling
+  /// a batch owned by the other engine. Tombstones prevent stale engine memory
+  /// from recreating its snapshot or failure strip after deletion.
+  Future<void> clearTerminalBatchesForPost(String postId) async {
+    for (final batch in await liveBatches()) {
+      if (batch.postId != postId || !batch.isTerminal) continue;
+      final local = _batches[batch.batchId];
+      if (local != null && !local.isTerminal) continue;
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setBool('$_dismissedPrefix${batch.batchId}', true);
+      _batches.remove(batch.batchId);
+      _lastShownPercent.remove(batch.batchId);
+      if (onBatchSuccess.value?.batchId == batch.batchId) onBatchSuccess.value = null;
+      await _removeSnapshot(batch.batchId);
+      await _cancelNotification(batch);
+    }
+    notifyListeners();
+  }
 
   Future<void> init() async {
     if (_ready) return;
@@ -1805,10 +1830,12 @@ class DownloadManager extends ChangeNotifier {
   Future<void> _loadAndReconcile() async {
     try {
       final prefs = await SharedPreferences.getInstance();
+      await prefs.reload();
       final index = prefs.getStringList(_batchIndexKey) ?? [];
       var changed = false;
       var adopted = 0;
       for (final batchId in index) {
+        if (prefs.getBool('$_dismissedPrefix$batchId') == true) continue;
         final raw = prefs.getString(_batchKey(batchId));
         if (raw == null) continue;
         final batch = DownloadBatch.fromJson(
@@ -1952,6 +1979,8 @@ class DownloadManager extends ChangeNotifier {
     try {
       batch.updatedAt = DateTime.now().millisecondsSinceEpoch;
       final prefs = await SharedPreferences.getInstance();
+      await prefs.reload();
+      if (prefs.getBool('$_dismissedPrefix${batch.batchId}') == true) return;
       await prefs.setString(
         _batchKey(batch.batchId),
         jsonEncode(batch.toJson()),
