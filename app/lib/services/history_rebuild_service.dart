@@ -12,6 +12,7 @@ import '../metadata/metadata_service.dart';
 import 'gallery_locator_service.dart';
 import 'history_db.dart';
 import 'media_header_service.dart';
+import 'provenance_pair.dart';
 import 'settings.dart';
 
 /// Result of a rebuild operation.
@@ -184,6 +185,7 @@ class HistoryRebuildService {
         }
       }
 
+      provenance ??= await readProvenanceSidecar(asset.id);
       if (provenance != null &&
           provenance.platform != null &&
           provenance.sourceId != null) {

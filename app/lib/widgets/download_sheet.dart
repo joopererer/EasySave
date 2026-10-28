@@ -275,7 +275,7 @@ class _DownloadSheetState extends State<DownloadSheet> {
             ? '下载中 ${(job.progress * 100).round()}%'
             : '下载中…';
       case JobState.done:
-        return '已完成';
+        return job.metadataNotice ?? '已完成';
       case JobState.failed:
         final attempt = '（已试 ${job.attempts}/$kMaxAttempts）';
         return '失败$attempt：${job.error ?? '未知错误'}';

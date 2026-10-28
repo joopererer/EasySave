@@ -25,6 +25,8 @@ import 'gallery_locator_service.dart';
 import 'history_db.dart';
 import 'parse_service.dart';
 import 'saver.dart';
+import 'download_provenance.dart';
+import 'provenance_pair.dart';
 import 'auth.dart';
 import 'session_media_download.dart';
 import 'settings.dart';
@@ -171,6 +173,7 @@ class DownloadJob {
   /// relying on a filename that the system may have changed.
   String? mediaId;
   String? savedTitle;
+  String? metadataNotice;
   String? relativePath;
 
   /// Last time this job showed life (enqueued, progress or status update), in
@@ -201,6 +204,7 @@ class DownloadJob {
     'assetId': assetId,
     'mediaId': mediaId,
     'savedTitle': savedTitle,
+    'metadataNotice': metadataNotice,
     'relativePath': relativePath,
   };
 
@@ -223,6 +227,7 @@ class DownloadJob {
     job.assetId = map['assetId'] as String?;
     job.mediaId = map['mediaId'] as String?;
     job.savedTitle = map['savedTitle'] as String?;
+    job.metadataNotice = map['metadataNotice'] as String?;
     job.relativePath = map['relativePath'] as String?;
     job.lastProgressAt = (map['lastProgressAt'] as num?)?.toInt() ?? 0;
     return job;
@@ -1283,7 +1288,8 @@ class DownloadManager extends ChangeNotifier {
     final name = job.filename;
     final dot = name.lastIndexOf('.');
     final base = dot > 0 ? name.substring(0, dot) : name;
-    return locator.assetByBaseName(base);
+    final asset = locator.assetByBaseName(base);
+    return asset != null && await locator.isPresent(asset.id) ? asset : null;
   }
 
   /// Gallery import for a finished file, then temp cleanup.
@@ -1335,7 +1341,18 @@ class DownloadManager extends ChangeNotifier {
         // album, the import already happened (e.g. the process died between
         // the copy and the snapshot write) — reuse it instead of saving a
         // second copy.
-        final existing = await _findExistingAlbumAsset(batch, job);
+        var existing = await _findExistingAlbumAsset(batch, job);
+        if (existing != null && (await AppSettings.load()).saveProvenanceInImages) {
+          // A same-name file may be the result of an older skipped write.
+          // Reuse only after checking its credentials against this save.
+          final local = await existing.originFile;
+          final read = (local == null ? null : await MetadataService.readProvenance(local.path))
+              ?? await readProvenanceSidecar(existing.id);
+          final expected = provenanceForBatchItem(batch, itemIndex: itemIndex ?? job.itemIndex);
+          if (read == null || read.platform != expected.platform ||
+              read.sourceId != expected.sourceId || read.aiLabel != expected.aiLabel ||
+              read.aiLabelSource != expected.aiLabelSource) existing = null;
+        }
         if (existing != null) {
           _log('gallery import skipped, already saved: ${job.filename}');
           job.mediaId = existing.id;
@@ -1363,7 +1380,9 @@ class DownloadManager extends ChangeNotifier {
             itemIndex: itemIndex ?? job.itemIndex,
           );
           
-          final saved = await saveToGallery(path, isImage, batch.album);
+          final saved = job.metadataNotice != null
+              ? await saveProvenancePair(path, batch.album)
+              : await saveToGallery(path, isImage, batch.album);
           _log('gallery import done: ${job.filename} -> ${saved.mediaId}');
           job.mediaId = saved.mediaId;
           job.savedTitle = saved.title;
@@ -1391,7 +1410,7 @@ class DownloadManager extends ChangeNotifier {
   }
   
   /// Embed provenance metadata into an image or video file.
-  /// Returns the assetId if written, null if skipped or failed.
+  /// Returns the assetId if written, null only when disabled by the user.
   Future<String?> _embedProvenance({
     required String filePath,
     required DownloadBatch batch,
@@ -1399,7 +1418,7 @@ class DownloadManager extends ChangeNotifier {
     String? existingAssetId,
     required int itemIndex,
   }) async {
-    try {
+      job.metadataNotice = null;
       // Check setting
       final settings = await AppSettings.load();
       if (!settings.saveProvenanceInImages) {
@@ -1421,26 +1440,14 @@ class DownloadManager extends ChangeNotifier {
       );
       
       // Embed into file (videos use Mp4WriteMode.rewrite in private cache)
-      final result = await MetadataService.embedProvenance(
-        filePath: filePath,
-        provenance: provenance,
-        checkC2pa: true,
-        mp4WriteMode: Mp4WriteMode.rewrite,
-      );
-      
-      if (result.errorCode == EmbedErrorCode.c2paDetected) {
-        _log('provenance skipped (C2PA detected): ${job.filename}');
-      } else if (result.success) {
-        _log('provenance embedded: ${job.filename}');
-        return provenance.assetId;
+      final sidecar = await prepareDownloadProvenance(filePath, provenance);
+      if (sidecar) {
+        job.metadataNotice = '来源信息已保存为同目录 .xmp 边车';
+        _log('provenance sidecar prepared: ${job.filename}');
       } else {
-        _log('provenance embed failed: ${job.filename} - ${result.errorMessage}');
+        _log('provenance embedded and verified: ${job.filename}');
       }
-    } catch (e) {
-      _log('provenance embed error: ${job.filename} - $e');
-      // Metadata failures are logged but do not block the save
-    }
-    return null;
+      return provenance.assetId;
   }
 
   Future<void> _failAttempt(
