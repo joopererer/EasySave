@@ -13,9 +13,10 @@ class AiLabelBadge extends StatelessWidget {
       child: InkWell(
         borderRadius: BorderRadius.circular(8),
         child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+          padding: const EdgeInsets.symmetric(horizontal: 4),
           decoration: BoxDecoration(
-            color: Theme.of(context).colorScheme.primary,
+            color: Colors.transparent,
+            border: Border.all(color: Theme.of(context).colorScheme.primary, width: 2),
             borderRadius: BorderRadius.circular(8),
           ),
           child: const Text('AI', style: TextStyle(
