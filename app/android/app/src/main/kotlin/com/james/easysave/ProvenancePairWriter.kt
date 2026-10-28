@@ -35,17 +35,31 @@ object ProvenancePairWriter {
 
     fun register(context: Context, messenger: BinaryMessenger) {
         MethodChannel(messenger, "easysave/provenance_pair").setMethodCallHandler { call, result ->
-            if (call.method !in setOf("savePair", "readSidecar", "queryFixedMedia", "deletePair")) {
+            if (call.method !in setOf("savePair", "readSidecar", "readSidecarDetailed", "queryFixedMedia", "deletePair", "setFixedTree", "readFixedHeader")) {
                 result.notImplemented()
                 return@setMethodCallHandler
             }
             Thread {
                 try {
-                    val value = if (call.method == "deletePair") {
+                    val value = if (call.method == "setFixedTree") {
+                        FixedRebuildAccess.grant(context, call.argument<String>("treeUri")!!); true
+                    } else if (call.method == "readFixedHeader") {
+                        val id = call.argument<String>("mediaId")!!
+                        require(id.startsWith(FixedRebuildAccess.PREFIX))
+                        val name = Uri.decode(id.removePrefix(FixedRebuildAccess.PREFIX))
+                        MediaHeaderReader.readHeader(context.contentResolver, FixedRebuildAccess.mediaUri(context, name), call.argument<String>("mimeType")) ?: byteArrayOf()
+                    } else if (call.method == "readSidecarDetailed") {
+                        if (Build.VERSION.SDK_INT >= 29) FixedRebuildAccess.readSidecar(context,
+                            call.argument<String>("mediaId")!!, call.argument<String>("filename"), call.argument<String>("relativePath"))
+                        else {
+                            val xml = read(context, call.argument<String>("mediaId")!!)
+                            mapOf("status" to if (xml == null) "not_found" else "success", "found" to (xml != null), "stage" to "legacy-sidecar-read", "xml" to xml)
+                        }
+                    } else if (call.method == "deletePair") {
                         deletePair(context, call.argument<String>("mediaId")!!)
                         null
                     } else if (call.method == "queryFixedMedia") {
-                        queryFixedMedia(context)
+                        if (Build.VERSION.SDK_INT >= 29) FixedRebuildAccess.query(context) else queryFixedMedia(context)
                     } else if (call.method == "readSidecar") {
                         read(context, call.argument<String>("mediaId")!!)
                     } else {

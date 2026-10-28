@@ -12,6 +12,8 @@ import '../services/bubble_service.dart';
 import '../services/gallery_locator_service.dart';
 import '../services/history_backfill_service.dart';
 import '../services/history_rebuild_service.dart';
+import '../services/provenance_pair.dart';
+import '../services/backup/saf_service.dart';
 import '../services/settings.dart';
 import '../services/tile_service.dart';
 import '../services/update_service.dart';
@@ -399,6 +401,7 @@ class _MinePageState extends State<MinePage> with WidgetsBindingObserver {
 
     final selected = <String>{...used};
     var allAlbums = false;
+    var fixedAuthorized = false;
 
     final result = await showDialog<({Set<String> albums, bool allAlbums})>(
       context: context,
@@ -410,11 +413,18 @@ class _MinePageState extends State<MinePage> with WidgetsBindingObserver {
             child: ListView(
               shrinkWrap: true,
               children: [
-                const CheckboxListTile(
+                CheckboxListTile(
                   value: true,
                   onChanged: null,
                   title: Text('Download/EasySave'),
-                  subtitle: Text('内容凭证图片，始终扫描'),
+                  subtitle: Text(fixedAuthorized ? '已授权文件夹，始终扫描' : '内容凭证图片，始终扫描'),
+                ),
+                TextButton(
+                  onPressed: () async {
+                    final granted = await _authorizeFixedDirectory();
+                    if (dialogContext.mounted && granted) setLocal(() => fixedAuthorized = true);
+                  },
+                  child: const Text('授权 Download/EasySave 文件夹（清除数据后恢复边车）'),
                 ),
                 for (final option in options)
                   CheckboxListTile(
@@ -499,8 +509,8 @@ class _MinePageState extends State<MinePage> with WidgetsBindingObserver {
         SnackBar(
           content: Text(
             result.cancelled
-                ? '已取消：${result.created} 新建，${result.merged} 合并，${result.skipped} 跳过'
-                : '已完成：${result.created} 新建，${result.merged} 合并，${result.skipped} 跳过',
+                ? '已取消：${result.created} 新建，${result.merged} 合并，${result.skipped} 跳过，${result.readFailures} 读取失败'
+                : '已完成：${result.created} 新建，${result.merged} 合并，${result.skipped} 跳过，${result.readFailures} 读取失败${result.needsFixedDirectoryAccess ? "，请授权固定目录后重试" : ""}',
           ),
         ),
       );
@@ -510,6 +520,18 @@ class _MinePageState extends State<MinePage> with WidgetsBindingObserver {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('重建失败：$e')),
       );
+    }
+  }
+
+  Future<bool> _authorizeFixedDirectory() async {
+    try {
+      final uri = await SafService.pickDirectory();
+      if (uri == null) return false;
+      return await authorizeFixedRebuildDirectory(uri);
+    } catch (e) {
+      DevLog.write('HistoryRebuild', 'file=<directory> path=$c2paRelativePath stage=directory-authorization exception=${e.runtimeType}');
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('请选择 Download/EasySave 文件夹，其他目录不会被读取')));
+      return false;
     }
   }
 

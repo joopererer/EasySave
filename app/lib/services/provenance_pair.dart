@@ -1,9 +1,11 @@
 import 'dart:io';
+import 'dart:typed_data';
 import 'package:flutter/services.dart';
 import 'package:gal/gal.dart';
 import 'package:photo_manager/photo_manager.dart';
 import '../metadata/metadata_service.dart';
 import 'download_provenance.dart';
+import '../core/dev_log.dart';
 
 const _channel = MethodChannel('easysave/provenance_pair');
 const c2paRelativePath = 'Download/EasySave/';
@@ -79,16 +81,58 @@ Future<String?> readProvenanceSidecarXml(String mediaId) async {
   } on MissingPluginException {
     return null;
   } on PlatformException {
-    return null;
+    rethrow;
   } on FormatException {
-    return null;
+    rethrow;
   }
 }
+
+class SidecarReadResult {
+  const SidecarReadResult({this.xml, required this.status, required this.found,
+    required this.stage, this.errorClass, this.requiresAccess = false});
+  final String? xml, errorClass;
+  final String status, stage;
+  final bool found, requiresAccess;
+}
+
+Future<SidecarReadResult> readRebuildSidecar(AssetEntity asset, String? relativePath) async {
+  try {
+    Map<String, dynamic>? raw;
+    try {
+      raw = await _channel.invokeMapMethod<String, dynamic>('readSidecarDetailed', {
+        'mediaId': asset.id, 'filename': asset.title, 'relativePath': relativePath,
+      });
+    } on MissingPluginException {
+      if (Platform.isAndroid) rethrow;
+    }
+    if (raw != null) return SidecarReadResult(xml: raw['xml'] as String?, status: raw['status'] as String,
+      found: raw['found'] == true, stage: raw['stage'] as String, errorClass: raw['errorClass'] as String?, requiresAccess: raw['requiresAccess'] == true);
+    final xml = await readProvenanceSidecarXml(asset.id);
+    return SidecarReadResult(xml: xml, status: xml == null ? 'not_found' : 'success', found: xml != null, stage: 'legacy-sidecar-read');
+  } catch (e) {
+    return SidecarReadResult(status: 'error', found: false, stage: 'sidecar-channel', errorClass: e.runtimeType.toString(), requiresAccess: e is PlatformException);
+  }
+}
+
+Future<bool> authorizeFixedRebuildDirectory(String treeUri) async =>
+    await _channel.invokeMethod<bool>('setFixedTree', {'treeUri': treeUri}) ?? false;
+
+bool isFixedFileReference(String id) => id.startsWith('fixed:');
+Future<Uint8List> readFixedRebuildHeader(String mediaId, String? mimeType) async =>
+    await _channel.invokeMethod<Uint8List>('readFixedHeader', {'mediaId': mediaId, 'mimeType': mimeType}) ?? Uint8List(0);
 
 Future<List<AssetEntity>> fixedC2paAssets() async {
   try {
     final rows =
         await _channel.invokeListMethod<dynamic>('queryFixedMedia') ?? [];
+    for (final row in rows) {
+      if (row is Map && row['diagnostic'] == true) {
+        DevLog.write('HistoryRebuild', 'queryFixedMedia path=$c2paRelativePath file=${row['file'] ?? "-"} '
+          'stage=${row['stage']} visible=${row['visible']} owned=${row['owned'] ?? "unknown"} '
+          'count=${row['count'] ?? "-"} exception=${row['errorClass'] ?? "-"}');
+      }
+    }
+    DevLog.write('HistoryRebuild', 'queryFixedMedia path=$c2paRelativePath returned=${rows.where((r) => r is Map && r["diagnostic"] != true).length}');
     return [
       for (final row in rows)
         if (row is Map &&
