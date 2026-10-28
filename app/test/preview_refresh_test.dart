@@ -17,7 +17,8 @@ void main() {
   });
   testWidgets('unverifiable local thumbnail falls back without broken image', (tester) async {
     final asset = AssetEntity(id: 'missing', typeInt: 1, width: 10, height: 10);
-    await tester.pumpWidget(MaterialApp(home: VerifiedAssetImage(asset, fallback: const Text('network thumbnail'))));
+    await tester.pumpWidget(MaterialApp(home: VerifiedAssetImage(asset,
+      verifyExistence: (_) async => false, fallback: const Text('network thumbnail'))));
     await tester.pumpAndSettle();
     expect(find.text('network thumbnail'), findsOneWidget);
     expect(find.byIcon(Icons.broken_image), findsNothing);
