@@ -10,6 +10,7 @@ import 'package:flutter/services.dart';
 import '../core/dev_log.dart';
 import '../core/models.dart';
 import '../services/download_manager.dart';
+import '../services/download_claims.dart';
 import '../services/gallery_locator_service.dart';
 import '../services/history_db.dart';
 import '../services/host_bridge.dart';
@@ -107,6 +108,12 @@ class _PreviewPageState extends State<PreviewPage> {
   }
 
   Widget _downloadStrip() {
+    if (_saving) {
+      return const Padding(
+        padding: EdgeInsets.all(12),
+        child: Column(children: [Text('处理中…'), LinearProgressIndicator()]),
+      );
+    }
     final batch = _activeBatch;
     if (batch == null) return const SizedBox.shrink();
     final running = !batch.isTerminal;
@@ -277,8 +284,22 @@ class _PreviewPageState extends State<PreviewPage> {
     }
   }
 
+  bool _saving = false;
   Future<void> _save() async {
-    if (_order.isEmpty) return;
+    if (_order.isEmpty || _saving) return;
+    setState(() => _saving = true);
+    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('正在处理保存请求')));
+    try { await _saveSelection(); }
+    on AlreadyDownloading {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('已在下载中')));
+    } catch (e) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('保存失败：$e')));
+    } finally {
+      if (mounted) { setState(() => _saving = false); await _refreshBatch(); }
+    }
+  }
+
+  Future<void> _saveSelection() async {
     final locator = GalleryLocatorService.instance;
     // Re-check which selected items are already in the album right before
     // saving: those are associated with the history record instead of being
@@ -614,8 +635,8 @@ class _PreviewPageState extends State<PreviewPage> {
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 4, 16, 16),
             child: GradientButton(
-              label: '保存到相册（${_order.length}）',
-              onPressed: _selected ? _save : null,
+              label: _saving ? '处理中…' : '保存到相册（${_order.length}）',
+              onPressed: _selected && !_saving ? _save : null,
             ),
           ),
         ],

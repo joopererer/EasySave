@@ -26,6 +26,7 @@ import 'history_db.dart';
 import 'parse_service.dart';
 import 'saver.dart';
 import 'download_provenance.dart';
+import 'download_claims.dart';
 import 'provenance_pair.dart';
 import 'auth.dart';
 import 'session_media_download.dart';
@@ -702,6 +703,7 @@ class DownloadManager extends ChangeNotifier {
     DevLog.write(logTag, '[$owner] $message');
   }
 
+  static int _batchSequence = 0;
   final Map<String, DownloadBatch> _batches = {};
   final Map<String, SessionMediaDownload> _sessionTransfers = {};
   StreamSubscription<TaskUpdate>? _updatesSub;
@@ -997,6 +999,22 @@ class DownloadManager extends ChangeNotifier {
     }
   }
 
+  @visibleForTesting
+  Future<void> Function()? prepareStartForTesting;
+  @visibleForTesting
+  Future<void> Function(DownloadBatch, DownloadJob)? enqueueForTesting;
+
+  Future<List<String>> _reserve(DownloadBatch batch, List<DownloadJob> jobs) async {
+    final existing = <String, String>{};
+    for (final other in await liveBatches()) {
+      for (final job in other.jobs.where((job) => !job.isTerminal)) {
+        existing[downloadIdentity(other.platform, other.postId, job.itemIndex, job.isImage)] = other.batchId;
+      }
+    }
+    return DownloadClaims.reserve(batch.batchId, [for (final j in jobs)
+      downloadIdentity(batch.platform, batch.postId, j.itemIndex, j.isImage)], existing);
+  }
+
   Future<DownloadBatch> startBatch(
     ParsedPost post,
     List<int> selected, {
@@ -1004,28 +1022,10 @@ class DownloadManager extends ChangeNotifier {
     required String Function(String label, int seq, String ext) nameFor,
     bool requestGalleryAccess = true,
   }) async {
-    await init();
-    // Best effort: without the permission downloads still run, only the
-    // notification progress is missing.
-    try {
-      await FileDownloader().permissions.request(PermissionType.notifications);
-    } catch (_) {
-      // Ignore: proceed without notifications.
-    }
-    if (!await Gal.hasAccess()) {
-      // The background flow must never raise a system permission dialog;
-      // callers there pass requestGalleryAccess:false and surface the
-      // missing-permission error to the user instead.
-      if (!requestGalleryAccess) {
-        throw const FileSystemException('NO_GALLERY_ACCESS');
-      }
-      final granted = await Gal.requestAccess();
-      if (!granted) throw const FileSystemException('没有相册访问权限');
-    }
     // The batch id carries the owner so ownership is visible in the shared
     // snapshot store (SharedPreferences) and in the plugin's task groups.
     final batchId =
-        '${DownloadManager.owner}-${DateTime.now().millisecondsSinceEpoch}';
+        '${DownloadManager.owner}-${DateTime.now().microsecondsSinceEpoch}-${_batchSequence++}';
     final planned = planFiles(post, selected, nameFor);
     final batch = DownloadBatch(
       batchId: batchId,
@@ -1056,7 +1056,38 @@ class DownloadManager extends ChangeNotifier {
           ),
       ],
     );
+    final accepted = (await _reserve(batch, batch.jobs)).toSet();
+    batch.jobs.removeWhere((j) => !accepted.contains(downloadIdentity(batch.platform, batch.postId, j.itemIndex, j.isImage)));
+    if (batch.jobs.isEmpty) throw AlreadyDownloading();
+    try {
+      if (prepareStartForTesting != null) {
+        await prepareStartForTesting!();
+      } else {
+    await init();
+    // Best effort: without the permission downloads still run, only the
+    // notification progress is missing.
+    try {
+      await FileDownloader().permissions.request(PermissionType.notifications);
+    } catch (_) {
+      // Ignore: proceed without notifications.
+    }
+    if (!await Gal.hasAccess()) {
+      // The background flow must never raise a system permission dialog;
+      // callers there pass requestGalleryAccess:false and surface the
+      // missing-permission error to the user instead.
+      if (!requestGalleryAccess) {
+        throw const FileSystemException('NO_GALLERY_ACCESS');
+      }
+      final granted = await Gal.requestAccess();
+      if (!granted) throw const FileSystemException('没有相册访问权限');
+    }
+      }
+    } catch (_) {
+      await DownloadClaims.release(batchId);
+      rethrow;
+    }
     _batches[batchId] = batch;
+    notifyListeners();
     _log('batch start id=$batchId source=${batch.source} post=${batch.postId}');
     unawaited(_refreshNotification(batch));
     await _persist(batch);
@@ -1099,6 +1130,8 @@ class DownloadManager extends ChangeNotifier {
 
 
   Future<void> _enqueueAttempt(DownloadBatch batch, DownloadJob job) async {
+    if ((await _reserve(batch, [job])).isEmpty) throw AlreadyDownloading();
+    if (enqueueForTesting != null) { await enqueueForTesting!(batch, job); return; }
     if (needsSessionDownload(batch, job)) {
       await _startSessionDownload(batch, job);
       return;
@@ -1129,7 +1162,7 @@ class DownloadManager extends ChangeNotifier {
       url: url,
       filename: job.filename,
       headers: _headersFor(batch.platform),
-      directory: 'easysave',
+      directory: downloadTempDirectory(batch.batchId, job.key),
       baseDirectory: BaseDirectory.temporary,
       group: batch.batchId,
       updates: Updates.statusAndProgress,
@@ -1502,6 +1535,7 @@ class DownloadManager extends ChangeNotifier {
     required bool recovered,
   }) async {
     if (!batch.isTerminal) return;
+    await DownloadClaims.release(batch.batchId);
     if (!batch.historyWritten) {
       batch.historyWritten = true;
       final db = await HistoryDb.instance();

@@ -40,6 +40,7 @@ class DownloadSheet extends StatefulWidget {
           settings.fileName(postId: post.id, seq: seq, author: author),
     );
     if (!context.mounted) return batch;
+    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('已加入下载队列')));
     await showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
