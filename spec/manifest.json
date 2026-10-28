@@ -1,7 +1,7 @@
 {
-  "parserVersion": "1.2.1",
+  "parserVersion": "1.2.2",
   "minAppVersion": "1.9.0",
-  "sha256": "51e04bcf044c0983ac62df8e63fc8027424494af059b51960160cbfbe9ab572f",
+  "sha256": "ff92a83aa33c40e3e824aade036685cee3850150b62839969cef16fde018268e",
   "signature": "",
   "platforms": {
     "tiktok": {
