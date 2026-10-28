@@ -3,16 +3,17 @@ import 'package:flutter/services.dart';
 import 'package:gal/gal.dart';
 import 'package:photo_manager/photo_manager.dart';
 import '../metadata/metadata_service.dart';
+import 'download_provenance.dart';
 
 const _channel = MethodChannel('easysave/provenance_pair');
 const c2paRelativePath = 'Download/EasySave/';
 const c2paSavedNotice = '该图片带有内容凭证，已保存到 Download/EasySave';
 
-Future<({String? mediaId, String? title, String? relativePath})> saveProvenancePair(
-  String path,
-) async {
+Future<({String? mediaId, String? title, String? relativePath})>
+saveProvenancePair(String path, {String? expectedAssetId}) async {
   // Gal requests legacy WRITE_EXTERNAL_STORAGE only where Android requires it.
-  if (!await Gal.hasAccess(toAlbum: true)) await Gal.requestAccess(toAlbum: true);
+  if (!await Gal.hasAccess(toAlbum: true))
+    await Gal.requestAccess(toAlbum: true);
   final format = await MetadataService.detectFormat(path);
   final mime = switch (format) {
     MediaFormat.jpeg => 'image/jpeg',
@@ -22,13 +23,47 @@ Future<({String? mediaId, String? title, String? relativePath})> saveProvenanceP
     _ => throw StateError('该格式无法写入来源信息'),
   };
   final result = await _channel.invokeMapMethod<String, String>('savePair', {
-    'path': path, 'mime': mime,
+    'path': path,
+    'mime': mime,
   });
   if (result?['mediaId'] == null) throw StateError('来源信息边车保存失败');
-  for (final file in [File(path), File('$path.xmp')]) {
-    try { await file.delete(); } catch (_) { /* Saved pair is already verified. */ }
+  if (expectedAssetId != null) {
+    try {
+      // Signed image bytes intentionally have no newly embedded provenance.
+      final read = await readProvenanceSidecar(result!['mediaId']!);
+      if (read?.assetId != expectedAssetId) {
+        throw StateError(
+          provenanceVerificationMessage(
+            '${result['title'] ?? File(path).uri.pathSegments.last}.xmp',
+            expectedAssetId,
+            read?.assetId,
+          ),
+        );
+      }
+    } catch (e) {
+      // System-saved media and sidecar form one unit, including Dart failures.
+      try {
+        await _channel.invokeMethod<void>('deletePair', {
+          'mediaId': result!['mediaId'],
+        });
+      } catch (_) {
+        throw StateError('$e；图片与边车成组清理失败');
+      }
+      rethrow;
+    }
   }
-  return (mediaId: result!['mediaId'], title: result['title'], relativePath: result['relativePath']);
+  for (final file in [File(path), File('$path.xmp')]) {
+    try {
+      await file.delete();
+    } catch (_) {
+      /* Saved pair is already verified. */
+    }
+  }
+  return (
+    mediaId: result!['mediaId'],
+    title: result['title'],
+    relativePath: result['relativePath'],
+  );
 }
 
 Future<XmpProvenance?> readProvenanceSidecar(String mediaId) async {
@@ -38,7 +73,9 @@ Future<XmpProvenance?> readProvenanceSidecar(String mediaId) async {
 
 Future<String?> readProvenanceSidecarXml(String mediaId) async {
   try {
-    return await _channel.invokeMethod<String>('readSidecar', {'mediaId': mediaId});
+    return await _channel.invokeMethod<String>('readSidecar', {
+      'mediaId': mediaId,
+    });
   } on MissingPluginException {
     return null;
   } on PlatformException {
@@ -50,18 +87,31 @@ Future<String?> readProvenanceSidecarXml(String mediaId) async {
 
 Future<List<AssetEntity>> fixedC2paAssets() async {
   try {
-    final rows = await _channel.invokeListMethod<dynamic>('queryFixedMedia') ?? [];
-    return [for (final row in rows)
-      if (row is Map && row['relativePath'] == c2paRelativePath &&
-          (row['typeInt'] == 1 || row['typeInt'] == 2))
-        AssetEntity(id: row['id'] as String, typeInt: row['typeInt'] as int,
-          width: row['width'] as int? ?? 0, height: row['height'] as int? ?? 0,
-          title: row['title'] as String?, mimeType: row['mimeType'] as String?, relativePath: c2paRelativePath),
+    final rows =
+        await _channel.invokeListMethod<dynamic>('queryFixedMedia') ?? [];
+    return [
+      for (final row in rows)
+        if (row is Map &&
+            row['relativePath'] == c2paRelativePath &&
+            (row['typeInt'] == 1 || row['typeInt'] == 2))
+          AssetEntity(
+            id: row['id'] as String,
+            typeInt: row['typeInt'] as int,
+            width: row['width'] as int? ?? 0,
+            height: row['height'] as int? ?? 0,
+            title: row['title'] as String?,
+            mimeType: row['mimeType'] as String?,
+            relativePath: c2paRelativePath,
+          ),
     ];
   } on MissingPluginException {
     return [];
   }
 }
 
-List<AssetEntity> unionMedia(Iterable<AssetEntity> normal, Iterable<AssetEntity> fixed) =>
-    {for (final asset in [...normal, ...fixed]) asset.id: asset}.values.toList();
+List<AssetEntity> unionMedia(
+  Iterable<AssetEntity> normal,
+  Iterable<AssetEntity> fixed,
+) => {
+  for (final asset in [...normal, ...fixed]) asset.id: asset,
+}.values.toList();

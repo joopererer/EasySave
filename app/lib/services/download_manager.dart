@@ -1439,7 +1439,7 @@ class DownloadManager extends ChangeNotifier {
           );
           
           final saved = job.metadataNotice != null
-              ? await saveProvenancePair(path)
+              ? await saveProvenancePair(path, expectedAssetId: writtenAssetId)
               : await saveToGallery(path, isImage, batch.album);
           _log('gallery import done: ${job.filename} -> ${saved.mediaId}');
           job.mediaId = saved.mediaId;

@@ -60,6 +60,6 @@ void main() {
     MetadataService.embedOverride = ({required filePath, required provenance,
       checkC2pa = true, mp4WriteMode = Mp4WriteMode.rewrite}) async => const EmbedResult(success: true);
     await expectLater(prepareDownloadProvenance(file.path, provenance),
-      throwsA(isA<StateError>().having((e) => e.message, 'message', '来源信息回读校验失败，请重试')));
+      throwsA(isA<StateError>().having((e) => e.message, 'message', contains('实际assetId存在=false'))));
   });
 }

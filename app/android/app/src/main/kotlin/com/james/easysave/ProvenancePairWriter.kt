@@ -35,13 +35,16 @@ object ProvenancePairWriter {
 
     fun register(context: Context, messenger: BinaryMessenger) {
         MethodChannel(messenger, "easysave/provenance_pair").setMethodCallHandler { call, result ->
-            if (call.method !in setOf("savePair", "readSidecar", "queryFixedMedia")) {
+            if (call.method !in setOf("savePair", "readSidecar", "queryFixedMedia", "deletePair")) {
                 result.notImplemented()
                 return@setMethodCallHandler
             }
             Thread {
                 try {
-                    val value = if (call.method == "queryFixedMedia") {
+                    val value = if (call.method == "deletePair") {
+                        deletePair(context, call.argument<String>("mediaId")!!)
+                        null
+                    } else if (call.method == "queryFixedMedia") {
                         queryFixedMedia(context)
                     } else if (call.method == "readSidecar") {
                         read(context, call.argument<String>("mediaId")!!)
@@ -60,6 +63,37 @@ object ProvenancePairWriter {
                     }
                 }
             }.start()
+        }
+    }
+
+    private fun deletePair(context: Context, id: String) = step("Dart校验失败成组清理") {
+        require(id.all { it.isDigit() } && id.isNotEmpty())
+        val resolver = context.contentResolver
+        val files = MediaStore.Files.getContentUri("external")
+        val media = Uri.withAppendedPath(files, id)
+        if (Build.VERSION.SDK_INT >= 29) {
+            resolver.query(media, arrayOf("relative_path"), null, null, null)?.use {
+                check(it.moveToFirst() && it.getString(0) == C2paStoragePolicy.RELATIVE_PATH)
+            } ?: error("Media row unavailable")
+            val sidecars = sidecarsFor(context, listOf(id))
+            val errors = (sidecars + media).mapNotNull { uri -> runCatching {
+                resolver.delete(uri, null, null)
+                resolver.query(uri, arrayOf("_id"), null, null, null)?.use {
+                    check(!it.moveToFirst()) { "Pair row remains after cleanup" }
+                }
+            }.exceptionOrNull() }
+            check(errors.isEmpty()) { errors.joinToString { "${it.javaClass.simpleName}: ${it.message}" } }
+        } else {
+            @Suppress("DEPRECATION")
+            val path = resolver.query(media, arrayOf("_data"), null, null, null)?.use {
+                check(it.moveToFirst()); it.getString(0)
+            } ?: error("Media row unavailable")
+            check(File(path).parentFile?.canonicalPath == fixedDirectory().canonicalPath)
+            val errors = listOf(File(path), File(path + ".xmp")).mapNotNull { file ->
+                runCatching { check(!file.exists() || file.delete()) }.exceptionOrNull()
+            }
+            resolver.delete(media, null, null)
+            check(errors.isEmpty()) { "Pair file cleanup failed" }
         }
     }
 
