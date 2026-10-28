@@ -49,6 +49,46 @@ var EasySaveParser = (() => {
     }
   }
 
+  // src/xhs-diagnostic.ts
+  var paths = /* @__PURE__ */ new WeakMap();
+  function rememberXhsPath(note, path) {
+    paths.set(note, path);
+    return note;
+  }
+  function xhsDiagnostic(note) {
+    if (!globalThis.__EasySaveXhsDiagnostic) return;
+    const fields = [];
+    const seen = /* @__PURE__ */ new Set();
+    const sensitive = /cookie|token|session|account|password|email|phone|^(?:author|user|profile|nickname)(?:$|[_-]?(?:id|name|info|avatar|detail|data)$)/i;
+    const wanted = /illegal|ai|aigc|declare|statement|label|tag|notice|tip/i;
+    const body = /^(title|desc|description|caption|content|body|text|plaintext)$/i;
+    function visit(value, path, depth) {
+      if (!value || typeof value !== "object" || seen.has(value) || depth > 24) return;
+      seen.add(value);
+      for (const [key, child] of Object.entries(value)) {
+        if (!/^[A-Za-z_$][A-Za-z0-9_$]*$/.test(key) && !/^\d+$/.test(key)) continue;
+        if (sensitive.test(key)) continue;
+        const childPath = /^\d+$/.test(key) ? `${path}[index]` : `${path}.${key}`;
+        if (wanted.test(key)) {
+          const field = {
+            path: childPath,
+            type: child === null ? "null" : Array.isArray(child) ? "array" : typeof child
+          };
+          if (typeof child === "string" && /AI|声明/i.test(child) && !body.test(key)) {
+            field.text = Array.from(child).slice(0, 50).join("");
+          }
+          fields.push(field);
+        }
+        visit(child, childPath, depth + 1);
+      }
+    }
+    visit(note, "note", 0);
+    console.info("EasySaveXhsDiagnostic:" + JSON.stringify({
+      dataPath: paths.get(note) ?? "HTML.noteDetailMap[id]",
+      fields
+    }));
+  }
+
   // src/xhs.ts
   var NOTE_ID_PATTERN = /\/(?:explore|discovery\/item|user\/profile\/[^/]+)\/([a-f0-9]{24})/i;
   var STATE_MARKERS = ["__INITIAL_STATE__", "__NEXT_DATA__", "__NUXT__"];
@@ -452,21 +492,22 @@ var EasySaveParser = (() => {
       const byMap = isRecord(state["note"]) && isRecord(state["note"]["noteDetailMap"]) ? state["note"]["noteDetailMap"][wantedId ?? ""] : void 0;
       const fromMap = isRecord(byMap) && isRecord(byMap["note"]) ? byMap["note"] : isRecord(byMap) ? byMap : void 0;
       if (fromMap && (!wantedId || !nonBlank(fromMap["noteId"]) || fromMap["noteId"] === wantedId)) {
-        return fromMap;
+        return rememberXhsPath(fromMap, isRecord(byMap) && isRecord(byMap["note"]) ? "note.noteDetailMap[id].note" : "note.noteDetailMap[id]");
       }
       const mobile = isRecord(state["noteData"]) && isRecord(state["noteData"]["data"]) ? state["noteData"]["data"]["noteData"] : void 0;
       const mobileNote = isRecord(mobile) && isRecord(mobile["note"]) ? mobile["note"] : isRecord(mobile) ? mobile : void 0;
       if (mobileNote && (!wantedId || !nonBlank(mobileNote["noteId"]) || mobileNote["noteId"] === wantedId)) {
-        return mobileNote;
+        return rememberXhsPath(mobileNote, isRecord(mobile) && isRecord(mobile["note"]) ? "noteData.data.noteData.note" : "noteData.data.noteData");
       }
     }
     for (const state of states) {
       const note = deepFindNote(state, wantedId);
-      if (note && (!wantedId || !nonBlank(note["noteId"]) || note["noteId"] === wantedId)) return note;
+      if (note && (!wantedId || !nonBlank(note["noteId"]) || note["noteId"] === wantedId)) return rememberXhsPath(note, "state.deepFindNote");
     }
     return void 0;
   }
   function buildNoteFromRecord(note, noteId, pageUrl) {
+    xhsDiagnostic(note);
     const user = isRecord(note["user"]) ? note["user"] : isRecord(note["author"]) ? note["author"] : {};
     const author = {};
     const authorName = pickString(user, ["nickname", "nickName", "name", "userName"]);

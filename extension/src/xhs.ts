@@ -5,6 +5,7 @@
 // Implements the XHS section of spec/parsing.md.
 
 import { xhsAiLabel, type AiLabel } from './ai-label';
+import { rememberXhsPath, xhsDiagnostic } from './xhs-diagnostic';
 
 export type XhsErrorCode =
   | "LOGIN_REQUIRED"
@@ -604,7 +605,8 @@ export function findNoteInStates(
         ? byMap
         : undefined;
     if (fromMap && (!wantedId || !nonBlank(fromMap["noteId"]) || fromMap["noteId"] === wantedId)) {
-      return fromMap;
+      return rememberXhsPath(fromMap, isRecord(byMap) && isRecord(byMap['note'])
+        ? 'note.noteDetailMap[id].note' : 'note.noteDetailMap[id]');
     }
     const mobile =
       isRecord(state["noteData"]) &&
@@ -620,12 +622,13 @@ export function findNoteInStates(
       mobileNote &&
       (!wantedId || !nonBlank(mobileNote["noteId"]) || mobileNote["noteId"] === wantedId)
     ) {
-      return mobileNote;
+      return rememberXhsPath(mobileNote, isRecord(mobile) && isRecord(mobile['note'])
+        ? 'noteData.data.noteData.note' : 'noteData.data.noteData');
     }
   }
   for (const state of states) {
     const note = deepFindNote(state, wantedId);
-    if (note && (!wantedId || !nonBlank(note["noteId"]) || note["noteId"] === wantedId)) return note;
+    if (note && (!wantedId || !nonBlank(note["noteId"]) || note["noteId"] === wantedId)) return rememberXhsPath(note, 'state.deepFindNote');
   }
   return undefined;
 }
@@ -639,7 +642,7 @@ export function buildNoteFromRecord(
   noteId: string,
   pageUrl?: string,
 ): XhsResult {
-
+  xhsDiagnostic(note);
   const user = isRecord(note["user"])
     ? (note["user"] as Record<string, unknown>)
     : isRecord(note["author"])

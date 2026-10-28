@@ -611,6 +611,7 @@ Future<ParseOutcome> _headlessParse(String targetUrl, {required bool isXhs}) asy
         source: '''
 (() => {
   try {
+    globalThis.__EasySaveXhsDiagnostic = true;
     const res = JSON.parse(EasySaveParser.parsePage());
     if (res && res.ok) return JSON.stringify(res);
   } catch (_) {}
