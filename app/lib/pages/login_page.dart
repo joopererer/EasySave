@@ -16,11 +16,15 @@ import 'package:flutter/material.dart';
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 
 import '../services/auth.dart';
+import '../services/login_navigation.dart';
 
 class LoginPage extends StatefulWidget {
-  const LoginPage({super.key, required this.platform});
+  const LoginPage({super.key, required this.platform, this.windowId});
 
   final PlatformKind platform;
+  /// Attach OAuth windows to their original WebView transport so window.opener
+  /// and window.close work. Loading their URL in the parent loses that context.
+  final int? windowId;
 
   @override
   State<LoginPage> createState() => _LoginPageState();
@@ -32,9 +36,11 @@ class _LoginPageState extends State<LoginPage> {
   bool _verifying = false;
   bool _handlingCallback = false;
   bool _callbackNoticeShown = false;
+  bool _googleNoticeOpen = false;
 
   /// Set when the main document failed to load; shows the retry card.
   String? _loadError;
+  bool _httpFailure = false;
   bool _dnsRetried = false;
 
   /// First successful paint of the page, so the placeholder disappears even if
@@ -46,6 +52,41 @@ class _LoginPageState extends State<LoginPage> {
   bool get _isXhs => widget.platform == PlatformKind.xhs;
 
   String get _entryUrl => loginEntryUrl(widget.platform);
+
+  Future<void> _showGoogleLoginNotice() async {
+    if (!mounted || _googleNoticeOpen) return;
+    _googleNoticeOpen = true;
+    await showDialog<void>(context: context, builder: (context) => AlertDialog(
+      title: const Text('请使用 TikTok 邮箱或手机号登录'),
+      content: const Text(googleWebViewLoginMessage),
+      actions: [TextButton(onPressed: () => Navigator.pop(context), child: const Text('返回登录'))],
+    ));
+    if (!mounted) return;
+    _googleNoticeOpen = false;
+    if (widget.windowId != null) {
+      Navigator.of(context).pop(false);
+    } else {
+      _reload();
+    }
+  }
+
+  Future<bool> _openWindow(CreateWindowAction action) async {
+    if (widget.platform == PlatformKind.tiktok && action.request.url != null &&
+        requiresExternalGoogleLogin(Uri.parse(action.request.url.toString()))) {
+      unawaited(_showGoogleLoginNotice());
+      return false;
+    }
+    if (!mounted) return false;
+    unawaited(Navigator.of(context).push<bool>(MaterialPageRoute(
+      builder: (_) => LoginPage(platform: widget.platform, windowId: action.windowId),
+    )).then((loggedIn) {
+      if (loggedIn == true && mounted) {
+        LoginExpiredBus.clear(widget.platform);
+        Navigator.of(context).pop(true);
+      }
+    }));
+    return true;
+  }
 
   /// XHS keeps `__INITIAL_STATE__` in sync with the actual session, so we can
   /// watch it while the user types/logs in: no reload needed, and the "完成"
@@ -212,7 +253,9 @@ class _LoginPageState extends State<LoginPage> {
             child: Text(
               _isXhs
                   ? '页面加载后输入手机号获取验证码登录（也可切换密码登录），登录成功会自动返回。登录状态保存在本机，重启 App 依然有效。'
-                  : '请在此页面完成登录，成功后点右上角“完成”。登录状态保存在本机，重启 App 依然有效。',
+                  : widget.platform == PlatformKind.tiktok
+                      ? '请选择 TikTok 的手机号 / 邮箱 / 用户名登录。Google 授权暂不支持在此页面完成。成功后点右上角“完成”。'
+                      : '请在此页面完成登录，成功后点右上角“完成”。登录状态保存在本机，重启 App 依然有效。',
               style: TextStyle(fontSize: 12, color: bannerText, height: 1.5),
             ),
           ),
@@ -222,9 +265,13 @@ class _LoginPageState extends State<LoginPage> {
             child: Stack(
               children: [
                 InAppWebView(
-                  initialUrlRequest: URLRequest(url: WebUri(_entryUrl)),
+                  windowId: widget.windowId,
+                  initialUrlRequest: widget.windowId == null ? URLRequest(url: WebUri(_entryUrl)) : null,
                   initialSettings: InAppWebViewSettings(
                     javaScriptEnabled: true,
+                    supportMultipleWindows: true,
+                    javaScriptCanOpenWindowsAutomatically: true,
+                    useShouldOverrideUrlLoading: true,
                     domStorageEnabled: true,
                     databaseEnabled: true,
                     thirdPartyCookiesEnabled: true,
@@ -236,6 +283,19 @@ class _LoginPageState extends State<LoginPage> {
                     userAgent: loginUserAgent(widget.platform),
                   ),
                   onWebViewCreated: (controller) => _controller = controller,
+                  onLoadStart: (_, _) {
+                    if (!mounted) return;
+                    setState(() {
+                      _httpFailure = false;
+                      _loadError = null;
+                    });
+                  },
+                  onCreateWindow: (_, action) => _openWindow(action),
+                  onCloseWindow: (_) async {
+                    if (widget.windowId == null) return;
+                    final loggedIn = await checkLogin(widget.platform);
+                    if (context.mounted) Navigator.of(context).pop(loggedIn);
+                  },
                   onProgressChanged: (controller, progress) {
                     if (!mounted) return;
                     setState(() => _progress = progress / 100);
@@ -243,6 +303,14 @@ class _LoginPageState extends State<LoginPage> {
                   shouldOverrideUrlLoading: (controller, navigationAction) async {
                     final uri = navigationAction.request.url;
                     if (uri == null) return NavigationActionPolicy.ALLOW;
+                    if (widget.platform == PlatformKind.tiktok &&
+                        requiresExternalGoogleLogin(Uri.parse(uri.toString()))) {
+                      unawaited(_showGoogleLoginNotice());
+                      return NavigationActionPolicy.CANCEL;
+                    }
+                    if (widget.windowId != null && uri.toString() == 'about:blank') {
+                      return NavigationActionPolicy.ALLOW;
+                    }
                     // XHS hands the finished login off to a desktop-client
                     // listener on localhost. Only main-frame navigations are
                     // meaningful here: probe requests to loopback must be
@@ -295,11 +363,18 @@ class _LoginPageState extends State<LoginPage> {
                     if (!mounted) return;
                     setState(() => _loadError = error.description);
                   },
+                  onReceivedHttpError: (controller, request, response) {
+                    if (request.isForMainFrame != true || !mounted) return;
+                    setState(() {
+                      _httpFailure = true;
+                      _loadError = '登录页面请求失败（HTTP ${response.statusCode}）';
+                    });
+                  },
                   onLoadStop: (controller, url) {
                     // A real page finished loading: allow one more loopback
                     // notice if the hand-off happens again later.
                     _callbackNoticeShown = false;
-                    if (mounted &&
+                    if (mounted && !_httpFailure &&
                         (_loadError != null || !_pageReady)) {
                       setState(() {
                         _loadError = null;
@@ -356,7 +431,7 @@ class _LoginPageState extends State<LoginPage> {
               const Icon(Icons.wifi_off, size: 40, color: Colors.grey),
               const SizedBox(height: 16),
               Text(
-                isDns ? '无法解析小红书域名' : '登录页面加载失败',
+                isDns ? '无法解析${platformLabel(widget.platform)}域名' : '登录页面加载失败',
                 style: const TextStyle(
                   fontSize: 16,
                   fontWeight: FontWeight.w600,
@@ -365,7 +440,7 @@ class _LoginPageState extends State<LoginPage> {
               const SizedBox(height: 8),
               Text(
                 isDns
-                    ? '当前网络无法解析 xiaohongshu.com（常见于部分网络环境或代理未开启）。\n请切换网络/开启代理后重试。'
+                    ? '当前网络无法解析 ${Uri.parse(_entryUrl).host}。\n请切换网络/开启代理后重试。'
                     : detail,
                 textAlign: TextAlign.center,
                 style: const TextStyle(fontSize: 12, color: Colors.grey),

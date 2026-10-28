@@ -4,6 +4,8 @@
 // so the same code works in content scripts and in Vitest.
 // Implements the XHS section of spec/parsing.md.
 
+import { xhsAiLabel, type AiLabel, unknownAiLabel } from './ai-label';
+
 export type XhsErrorCode =
   | "LOGIN_REQUIRED"
   | "PRIVATE_OR_UNAVAILABLE"
@@ -36,6 +38,7 @@ export interface XhsItem {
 }
 
 export interface XhsNote {
+  aiLabel?: AiLabel;
   platform: "xhs";
   id: string;
   url: string;
@@ -636,7 +639,6 @@ export function buildNoteFromRecord(
   noteId: string,
   pageUrl?: string,
 ): XhsResult {
-
   const user = isRecord(note["user"])
     ? (note["user"] as Record<string, unknown>)
     : isRecord(note["author"])
@@ -771,6 +773,14 @@ export function buildNoteFromRecord(
     author,
     items,
   };
+  const platformLabel = xhsAiLabel(isRecord(note.illegalInfo) ? note.illegalInfo.desc : undefined, noteId);
+  const statement = note.noteStatement;
+  const authorLabel = typeof statement === 'string' && statement.startsWith('作者声明') && /ai/i.test(statement)
+    ? { text: statement, source: 'author' as const } : undefined;
+  if (typeof statement === 'string' && statement.trim() && !authorLabel) unknownAiLabel(noteId, statement);
+  if (authorLabel && platformLabel) unknownAiLabel(noteId, platformLabel.text);
+  const label = authorLabel ?? platformLabel;
+  if (label) data.aiLabel = label;
   if (nonBlank(note["title"])) data.title = note["title"] as string;
   const caption = pickString(note, ["desc", "description"]);
   if (caption !== undefined) data.caption = caption;

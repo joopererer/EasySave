@@ -8,6 +8,7 @@ const internalPlatformToSpec = <String, String>{
   'xhs': 'xiaohongshu',
   'instagram': 'instagram',
   'x': 'x',
+  'tiktok': 'tiktok',
 };
 
 /// Map of platform identifiers to spec-compliant names.
@@ -42,6 +43,7 @@ const appPlatformToDisplayName = {
   'xiaohongshu': '小红书',
   'instagram': 'Instagram',
   'x': 'X',
+  'tiktok': 'TikTok',
 };
 
 /// Returns the localized display name for a platform.

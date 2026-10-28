@@ -12,6 +12,9 @@ import '../services/gallery_locator_service.dart';
 import '../services/history_db.dart';
 import '../theme/app_theme.dart';
 import 'shared.dart';
+import 'verified_asset_image.dart';
+import '../services/saver.dart';
+import 'ai_label_badge.dart';
 
 /// Short saved-time label, e.g. "今天 18:24", "昨天 09:10", "10-12 09:10".
 String formatSavedAt(DateTime time) {
@@ -90,6 +93,9 @@ class HistoryThumb extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final locator = GalleryLocatorService.instance;
+    final items = record.toPost().items;
+    final index = itemIndex == null ? 0 : (record.files.every((f) => f.itemIndex > 0) ? itemIndex! - 1 : itemIndex!);
+    final remote = index >= 0 && index < items.length ? items[index] : coverItemFor(record);
 
     AssetEntity? asset;
     for (final f in record.files) {
@@ -101,8 +107,9 @@ class HistoryThumb extends StatelessWidget {
     }
 
     if (asset != null) {
-      return AssetEntityImage(
+      return VerifiedAssetImage(
         asset,
+        fallback: CoverImage(item: remote ?? MediaItem(type: 'image', url: ''), referer: refererFor(record.platform), fit: fit, width: width, height: height),
         isOriginal: false,
         thumbnailSize: const ThumbnailSize.square(400),
         fit: fit,
@@ -110,6 +117,8 @@ class HistoryThumb extends StatelessWidget {
         height: height,
       );
     }
+
+    if (remote != null && remote.url.startsWith('http')) return CoverImage(item: remote, referer: refererFor(record.platform), fit: fit, width: width, height: height);
 
     final isUnlocated = record.files.any(
       (f) =>
@@ -485,7 +494,10 @@ class WaterfallPostCard extends StatelessWidget {
                           crossAxisAlignment: CrossAxisAlignment.start,
                           mainAxisSize: MainAxisSize.min,
                           children: [
-                            PlatformTag(platform: record.platform),
+                            Wrap(crossAxisAlignment: WrapCrossAlignment.center, children: [
+                              PlatformTag(platform: record.platform),
+                              AiLabelBadge(text: record.aiLabel, source: record.aiLabelSource),
+                            ]),
                             const SizedBox(height: 4),
                             Text(
                               title,
@@ -724,7 +736,10 @@ class ListPostRow extends StatelessWidget {
                   children: [
                     Row(
                       children: [
-                        PlatformTag(platform: record.platform),
+                        Wrap(crossAxisAlignment: WrapCrossAlignment.center, children: [
+                              PlatformTag(platform: record.platform),
+                              AiLabelBadge(text: record.aiLabel, source: record.aiLabelSource),
+                            ]),
                         const SizedBox(width: 6),
                         Flexible(
                           child: Text(
@@ -873,6 +888,9 @@ class AllMediaCard extends StatelessWidget {
                   left: 6,
                   child: _TranslucentBadge(label: badge),
                 ),
+              if (record.aiLabel != null)
+                Positioned(bottom: 6, left: 6,
+                  child: AiLabelBadge(text: record.aiLabel, source: record.aiLabelSource)),
               if (selectionMode)
                 Positioned(
                   top: 6,

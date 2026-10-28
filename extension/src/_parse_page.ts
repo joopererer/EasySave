@@ -1,6 +1,7 @@
 import { parseXhs, findNoteInStates, buildNoteFromRecord } from './xhs';
 import { parseInstagram, buildPostFromProduct } from './instagram';
 import { parseX, calculateToken, extractTweetId } from './x';
+import { parseTiktok, isTiktokLink } from './tiktok';
 import { hostnameOf, isXhsHost, isInstagramHost, isXHost } from './_utils';
 
 function noteIdFromUrl(url: string): string | undefined {
@@ -98,6 +99,15 @@ export function parseInstagramFromDom(doc: Document, pageUrl: string): { ok: tru
 export function parsePage(): string {
   const url = window.location.href;
   const html = document.documentElement.outerHTML;
+  if (isTiktokLink(url)) {
+    const result = parseTiktok(html, url);
+    if (result.ok) return JSON.stringify(result);
+    const state = (window as any).__UNIVERSAL_DATA_FOR_REHYDRATION__;
+    if (state && typeof state === 'object') {
+      return JSON.stringify(parseTiktok(JSON.stringify(state), url));
+    }
+    return JSON.stringify(result);
+  }
   if (isXhsHost(url)) {
     const state = (window as any).__INITIAL_STATE__;
     if (state !== undefined) {
@@ -142,6 +152,7 @@ export function parsePage(): string {
 }
 
 export function parse(input: string, pageUrl: string): string {
+  if (isTiktokLink(pageUrl)) return JSON.stringify(parseTiktok(input, pageUrl));
   const host = hostnameOf(pageUrl);
   if (!host) {
     return JSON.stringify({ ok: false, error: { code: 'UNSUPPORTED_URL', message: `Cannot parse URL: ${pageUrl}` } });

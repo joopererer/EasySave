@@ -3,6 +3,7 @@
 // (no storage permission needed on Android 10+) and saves captions.
 
 import 'dart:io';
+import 'package:flutter/services.dart';
 
 import 'package:gal/gal.dart';
 import 'package:path_provider/path_provider.dart';
@@ -10,8 +11,11 @@ import 'package:photo_manager/photo_manager.dart';
 
 import '../core/models.dart';
 import 'media_header_service.dart';
+import '../metadata/metadata_service.dart';
+import 'export_names.dart';
 
 String refererFor(String platform) {
+  if (platform == 'tiktok') return 'https://www.tiktok.com/';
   if (platform == 'xhs') return 'https://www.xiaohongshu.com/';
   if (platform == 'instagram') return 'https://www.instagram.com/';
   if (platform == 'x') return 'https://x.com/';
@@ -30,18 +34,36 @@ Future<({String? mediaId, String? title, String? relativePath})> saveToGallery(
   String path,
   bool isImage,
   String album,
+  {String? finalName, bool? nativeAndroid}
 ) async {
-  final basename = path.split(Platform.pathSeparator).last;
+  final basename = finalName ?? File(path).uri.pathSegments.last;
   final expectedName = _stripExtension(basename);
+  File? exportCopy;
   try {
+    if (nativeAndroid ?? Platform.isAndroid) {
+      final mime = exportMime(await MetadataService.detectFormat(path));
+      final result = await const MethodChannel('easysave/provenance_pair').invokeMapMethod<String, String>('saveMedia', {
+        'path': path, 'mime': mime, 'album': album, 'filename': basename,
+      });
+      if (result?['mediaId'] == null || result?['title'] != basename) throw StateError('最终文件名校验失败');
+      return (mediaId: result!['mediaId'], title: result['title'], relativePath: result['relativePath']);
+    }
+    var source = path;
+    if (File(path).uri.pathSegments.last != basename) {
+      exportCopy = File('${File(path).parent.path}/$basename');
+      if (await exportCopy.exists()) throw StateError('临时导出文件已存在');
+      await File(path).copy(exportCopy.path);
+      source = exportCopy.path;
+    }
     if (isImage) {
-      await Gal.putImage(path, album: album);
+      await Gal.putImage(source, album: album);
     } else {
-      await Gal.putVideo(path, album: album);
+      await Gal.putVideo(source, album: album);
     }
     final saved = await _locateJustSaved(expectedName, isImage, album);
     return saved;
   } finally {
+    if (exportCopy != null) { try { await exportCopy.delete(); } catch (_) {} }
     try {
       await File(path).delete();
     } catch (_) {

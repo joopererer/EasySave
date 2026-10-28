@@ -53,7 +53,10 @@ class MediaDeleteService {
         unawaited(GalleryLocatorService.instance.scanAlbum(force: true));
       }
       return approved;
-    } on PlatformException {
+    } on PlatformException catch (e) {
+      if (e.code == 'sidecar_delete_failed') {
+        throw StateError('图片已删除，但来源边车删除失败，请检查 Download/EasySave');
+      }
       return false;
     } on MissingPluginException {
       return false;

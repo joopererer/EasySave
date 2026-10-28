@@ -2,6 +2,7 @@
 // handling. Kept free of Flutter / database imports so they are unit-tested.
 
 import 'links.dart';
+import 'tiktok_links.dart';
 
 /// A history entry reduced to what link matching needs.
 typedef KnownPost = ({String postUrl, String postId});
@@ -21,6 +22,8 @@ String linkKey(String url) {
 /// Best-effort post identity for a link: XHS note id (24-hex or alphanumeric),
 /// Douyin/TikTok video/note id, Instagram shortcode, X status id, Bilibili BV/av id, Weibo detail id.
 String? postIdOfUrl(String url) {
+  final tiktok = canonicalTiktokUrl(url);
+  if (tiktok != null) return Uri.parse(tiktok).pathSegments.last;
   final uri = Uri.tryParse(url.trim());
   if (uri == null) return null;
   final hex = RegExp(r'[0-9a-fA-F]{24}').firstMatch(uri.path)?.group(0);

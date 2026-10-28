@@ -19,6 +19,7 @@ Future<DeleteSheetResult?> showDeleteRecordsSheet(
   BuildContext context, {
   required int recordCount,
   required int fileCount,
+  bool cancelDownloads = false,
 }) {
   return showModalBottomSheet<DeleteSheetResult>(
     context: context,
@@ -30,12 +31,14 @@ Future<DeleteSheetResult?> showDeleteRecordsSheet(
     builder: (context) => _DeleteSheet(
       recordCount: recordCount,
       fileCount: fileCount,
+      cancelDownloads: cancelDownloads,
     ),
   );
 }
 
 class _DeleteSheet extends StatefulWidget {
-  const _DeleteSheet({required this.recordCount, required this.fileCount});
+  const _DeleteSheet({required this.recordCount, required this.fileCount, required this.cancelDownloads});
+  final bool cancelDownloads;
 
   final int recordCount;
   final int fileCount;
@@ -67,6 +70,10 @@ class _DeleteSheetState extends State<_DeleteSheet> {
               style: TextStyle(fontSize: 12, color: AppTokens.textSecondary),
             ),
             const SizedBox(height: 16),
+            if (widget.cancelDownloads) const Padding(
+              padding: EdgeInsets.only(bottom: 12),
+              child: Text('同时取消正在进行的下载'),
+            ),
             if (canDeleteFiles)
               Container(
                 padding: const EdgeInsets.all(12),

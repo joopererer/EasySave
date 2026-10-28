@@ -140,6 +140,8 @@ class HostService : Service() {
             }
 
             val e = FlutterEngine(applicationContext, null, true)
+            ProvenancePairWriter.register(applicationContext, e.dartExecutor.binaryMessenger)
+            DownloadControl.register(e.dartExecutor.binaryMessenger)
             engine = e
             val ch = MethodChannel(e.dartExecutor.binaryMessenger, "easysave/bgtask")
             channel = ch

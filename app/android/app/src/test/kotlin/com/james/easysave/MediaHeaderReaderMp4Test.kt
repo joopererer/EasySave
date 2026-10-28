@@ -12,20 +12,12 @@ import java.io.RandomAccessFile
 
 class MediaHeaderReaderMp4Test {
 
-    private val videoFiles = listOf(
-        "local-video.mp4",
-        "mov-no-xmp.mov",
-        "mov-xmp-uuid.mov",
-        "mp4-64bit-box.mp4",
-        "mp4-interrupted-append.mp4",
-        "mp4-mdat-uuid-noise.mp4",
-        "mp4-multiple-xmp.mp4",
-        "mp4-no-xmp.mp4",
-        "mp4-size-zero-mdat.mp4",
-        "mp4-truncated-mdat.mp4",
-        "mp4-truncated-xmp.mp4",
-        "mp4-xmp-uuid.mp4",
-    )
+    // Discover expected records independently from media files so newly added
+    // spec vectors are exercised and missing media/expected pairs still fail.
+    private val videoFiles: List<String>
+        get() = findVectorsDir().listFiles { _, name ->
+            name.endsWith(".mp4.expected.json") || name.endsWith(".mov.expected.json")
+        }?.map { it.name.removeSuffix(".expected.json") }?.sorted() ?: emptyList()
 
     private fun findVectorsDir(): File {
         val candidates = listOf(
@@ -40,18 +32,18 @@ class MediaHeaderReaderMp4Test {
     }
 
     @Test
-    fun testAllTwelveVideoVectorsCovered() {
+    fun testAllVideoVectorsCovered() {
         val dir = findVectorsDir()
         val foundVideos = dir.listFiles { _, name -> name.endsWith(".mp4") || name.endsWith(".mov") }
             ?.map { it.name }
             ?.sorted() ?: emptyList()
 
-        assertEquals("Expected exactly 12 video test files in spec test-vectors", 12, foundVideos.size)
+        assertTrue("Spec must contain video vectors", videoFiles.isNotEmpty())
         assertEquals(videoFiles.sorted(), foundVideos)
     }
 
     @Test
-    fun testReadMp4OnAllTwelveVideoFilesAgainstExpectedJson() {
+    fun testReadMp4OnAllVideoFilesAgainstExpectedJson() {
         val dir = findVectorsDir()
 
         for (filename in videoFiles) {

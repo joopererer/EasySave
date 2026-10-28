@@ -11,6 +11,7 @@ import 'package:flutter/widgets.dart';
 import '../core/dev_log.dart';
 import '../core/models.dart';
 import '../services/download_manager.dart';
+import '../services/download_claims.dart';
 import '../services/history_db.dart';
 import '../services/links.dart';
 import '../services/parse_service.dart';
@@ -258,6 +259,13 @@ Future<void> _handleSubmit(MethodChannel channel, Map<dynamic, dynamic> args) as
       await _log(channel, 'DOWNLOAD started ${batch.jobs.length} files :: $url');
       if (toasts) await _toast(channel, '开始下载 ${batch.jobs.length} 个文件');
       unawaited(_awaitBatchAndNotify(channel, batch, started, url, toasts));
+    } on AlreadyDownloading {
+      if (toasts) await _toast(channel, '已在下载中');
+      await _tile(channel, false, null);
+      await _bubble(channel, false, 0, 0, null, false);
+      await _invoke(channel, 'idle');
+      // This request is handled by an existing batch, not a parse failure.
+      anyStarted = true;
     } on ParseFailure catch (e) {
       await _log(channel, 'PARSE FAIL[${e.code}] (${sw.elapsedMilliseconds}ms) ${e.message} :: $url');
       if (e.code == ParseErrorCode.loginRequired) {

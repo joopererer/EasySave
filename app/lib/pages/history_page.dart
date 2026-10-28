@@ -20,6 +20,8 @@ import '../services/download_manager.dart';
 import '../services/gallery_locator_service.dart';
 import '../services/history_backfill_service.dart';
 import '../services/history_db.dart';
+import '../services/history_deletion.dart';
+import '../services/history_io.dart';
 import '../services/host_bridge.dart';
 import '../services/media_delete_service.dart';
 import '../services/parse_service.dart';
@@ -167,7 +169,7 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
     if (_refreshingDownloads || !mounted) return;
     _refreshingDownloads = true;
     try {
-      final all = await DownloadManager.instance.liveBatches();
+      final all = await DownloadManager.instance.liveBatches().timeout(const Duration(seconds: 2));
       if (!mounted) return;
       final unfinished = [for (final b in all) if (!b.isTerminal) b];
       final progress = <String, double>{
@@ -203,6 +205,7 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
 
   @override
   void dispose() {
+    _historyRefresh.dispose();
     WidgetsBinding.instance.removeObserver(this);
     GalleryLocatorService.instance.removeListener(_onLocatorChanged);
     HostBridge.historyRevision.removeListener(_onHostHistoryChanged);
@@ -268,6 +271,7 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
 
   Future<void> _initPermissionsAndLoad() async {
     await _reload();
+    if (!mounted) return;
     final locator = GalleryLocatorService.instance;
     await locator.checkPermission();
     if (!locator.permission.hasAccess) {
@@ -295,7 +299,17 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
     await _reload();
   }
 
-  Future<void> _reload() async {
+  final _historyRefresh = HistoryRefreshController();
+  Future<void> _reload() => _historyRefresh.refresh(_reloadRecords, () async {
+    final locator = GalleryLocatorService.instance;
+    if (locator.hasAccess) {
+      await locator.preloadMediaIds(_records);
+      if (mounted) setState(() {});
+    }
+  });
+
+  Future<void> _reloadRecords() async {
+    if (!mounted) return;
     final silent = _records.isNotEmpty;
     if (!silent) {
       setState(() {
@@ -304,17 +318,14 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
       });
     }
     try {
-      final records = await HistoryDb.instance().then((db) => db.recent(limit: 10000));
+      final records = await historyStep('refresh-db',
+          () => HistoryDb.instance().then((db) => db.recent(limit: 10000)),
+          timeout: const Duration(seconds: 4), deadline: _historyRefresh.deadline);
       if (!mounted) return;
       setState(() {
         _records = records;
         _loading = false;
       });
-      final locator = GalleryLocatorService.instance;
-      if (locator.hasAccess) {
-        await locator.preloadMediaIds(records);
-        if (mounted) setState(() {});
-      }
     } catch (e) {
       if (!mounted) return;
       setState(() {
@@ -700,6 +711,8 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
                 : record.postId,
             platform: record.platform,
             postUrl: record.postUrl,
+            aiLabel: record.aiLabel,
+            aiLabelSource: record.aiLabelSource,
             onReparse: () {
               Navigator.of(context).pop();
               _reparse(record);
@@ -789,15 +802,13 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
       context,
       recordCount: records.length,
       fileCount: media.length,
+      cancelDownloads: true,
     );
     if (result == null || !mounted) return;
 
     final db = await HistoryDb.instance();
     if (!result.deleteFiles) {
-      for (final id in ids) {
-        await db.delete(id);
-      }
-      await _reload();
+      if (!await _deleteDatabaseRecords(db, records)) return;
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
@@ -817,11 +828,14 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
     }
 
     // Delete album files first (no undo), then the records.
-    final approved = await MediaDeleteService.instance.deleteMedia(media);
-    for (final id in ids) {
-      await db.delete(id);
+    final bool approved;
+    try {
+      approved = await MediaDeleteService.instance.deleteMedia(media);
+    } on StateError catch (e) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('${e.message}')));
+      return;
     }
-    await _reload();
+    if (!await _deleteDatabaseRecords(db, records)) return;
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
@@ -835,6 +849,20 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
   }
 
   // ------------------------------------------------------------- grouping
+  Future<bool> _deleteDatabaseRecords(HistoryDb db, List<HistoryRecord> records) async {
+    try {
+      await deleteHistoryRecords(db, records);
+      if (mounted) {
+        final ids = records.map((record) => record.id).toSet();
+        setState(() => _records = _records.where((record) => !ids.contains(record.id)).toList());
+        unawaited(_reload());
+      }
+      return true;
+    } catch (_) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('删除未完成，请重试')));
+      return false;
+    }
+  }
 
   String _dateGroupTitle(DateTime time) {
     final now = DateTime.now();
@@ -1513,6 +1541,7 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
         PopupMenuItem(value: 'all', child: Text('全部')),
         PopupMenuItem(value: 'xhs', child: Text('小红书')),
         PopupMenuItem(value: 'instagram', child: Text('Instagram')),
+        PopupMenuItem(value: 'tiktok', child: Text('TikTok')),
         PopupMenuItem(value: 'x', child: Text('X')),
       ],
       child: _toolbarButtonInner(
@@ -1560,6 +1589,7 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
   String _platformLabel(String key) => switch (key) {
     'xhs' => '小红书',
     'instagram' => 'Instagram',
+    'tiktok' => 'TikTok',
     'x' => 'X',
     _ => '全部',
   };
@@ -1635,11 +1665,12 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
   Widget _refreshWrapper(Widget child) {
     return RefreshIndicator(
       onRefresh: () async {
-        final locator = GalleryLocatorService.instance;
-        if (locator.hasAccess) {
-          await locator.scanAlbum(force: true);
-        }
         await _reload();
+        historyBackground('refresh-scan', () async {
+          final locator = GalleryLocatorService.instance;
+          if (locator.hasAccess) await locator.scanAlbum(force: true);
+          if (mounted) setState(() {});
+        }, timeout: const Duration(seconds: 5), deadline: _historyRefresh.deadline);
       },
       child: child,
     );
@@ -1703,7 +1734,7 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
                   downloadProgress: _downloadProgress[record.postId],
                   downloadPaused: _isPaused(record.postId),
                   downloadStalled: _isStalled(record.postId),
-                  onToggleDownload: () => _toggleDownload(record.postId),
+                  onToggleDownload: _downloadBatches[record.postId]?.supportsPause == false ? null : () => _toggleDownload(record.postId),
                   onCancelDownload: () => _cancelDownload(record.postId),
                   onTap: () => _openRecord(record),
                   onLongPress: () => _enterSelection(key),
@@ -1771,8 +1802,7 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
                         downloadProgress: _downloadProgress[record.postId],
                         downloadPaused: _isPaused(record.postId),
                         downloadStalled: _isStalled(record.postId),
-                        onToggleDownload: () =>
-                            _toggleDownload(record.postId),
+                        onToggleDownload: _downloadBatches[record.postId]?.supportsPause == false ? null : () => _toggleDownload(record.postId),
                         onCancelDownload: () =>
                             _cancelDownload(record.postId),
                         onTap: () => _openRecord(record),

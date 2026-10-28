@@ -16,7 +16,10 @@ import '../core/models.dart';
 import '../services/gallery_locator_service.dart';
 import '../services/history_db.dart';
 import '../services/saver.dart';
+import '../services/preview_video.dart';
 import 'shared.dart';
+import 'verified_asset_image.dart';
+import 'ai_label_badge.dart';
 
 class GalleryBrowserItem {
   GalleryBrowserItem({
@@ -78,6 +81,8 @@ class GalleryBrowserPage extends StatefulWidget {
     this.onRedownload,
     this.onReparse,
     this.showSave = false,
+    this.aiLabel,
+    this.aiLabelSource,
   });
 
   final List<GalleryBrowserItem> items;
@@ -86,6 +91,8 @@ class GalleryBrowserPage extends StatefulWidget {
   final String title;
   final String platform;
   final String postUrl;
+  final String? aiLabel;
+  final String? aiLabelSource;
   final Set<int>? selectedIndices;
   final ValueChanged<Set<int>>? onSelectionChanged;
   final Future<void> Function(int index)? onRedownload;
@@ -338,6 +345,7 @@ class _GalleryBrowserPageState extends State<GalleryBrowserPage> {
                           ),
                         ),
                         const SizedBox(width: 8),
+                        AiLabelBadge(text: widget.aiLabel, source: widget.aiLabelSource),
                         // Checkbox
                         GestureDetector(
                           onTap: currentItem != null
@@ -477,6 +485,13 @@ class _GalleryBrowserPageState extends State<GalleryBrowserPage> {
                               ),
                               const Spacer(),
                               // Actions
+                              if (widget.onRedownload != null && currentItem != null)
+                                IconButton(
+                                  tooltip: '重新下载',
+                                  color: Colors.white,
+                                  icon: const Icon(Icons.download_outlined),
+                                  onPressed: () => widget.onRedownload!(currentItem.index),
+                                ),
                               if (!widget.showSave && widget.onReparse != null)
                                 Padding(
                                   padding: const EdgeInsets.only(right: 8),
@@ -602,15 +617,15 @@ class _ThumbnailImage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    if (item.status == FileStatus.notFound) {
+    if (item.status == FileStatus.notFound && !item.url.startsWith('http')) {
       return Container(
         color: Colors.grey.shade800,
         child: const Icon(Icons.broken_image, size: 18, color: Colors.white54),
       );
     }
     if (item.asset != null) {
-      return AssetEntityImage(
-        item.asset!,
+      return VerifiedAssetImage(item.asset!,
+ fallback: CoverImage(item: item.toMediaItem(), referer: refererFor(platform), fit: BoxFit.contain),
         isOriginal: false,
         thumbnailSize: const ThumbnailSize.square(120),
         fit: BoxFit.cover,
@@ -663,7 +678,7 @@ class _BrowserItemViewState extends State<_BrowserItemView> {
       _checkAssetExistence();
     }
 
-    if (widget.item.status == FileStatus.found) {
+    if (widget.item.status == FileStatus.found || widget.item.url.startsWith('http')) {
       if (widget.item.isGif || widget.item.type == 'video') {
         _initVideo();
       }
@@ -674,7 +689,7 @@ class _BrowserItemViewState extends State<_BrowserItemView> {
     final a = widget.item.asset;
     if (a != null) {
       try {
-        final exists = await a.exists;
+        final exists = await GalleryLocatorService.instance.isPresent(a.id);
         if (!exists && mounted) {
           setState(() => _isNotFound = true);
         }
@@ -698,6 +713,10 @@ class _BrowserItemViewState extends State<_BrowserItemView> {
   void _onVideoValue() {
     final c = _videoController;
     if (c == null || !mounted) return;
+    if (c.value.hasError) {
+      setState(() => _error = previewPlaybackError(widget.platform));
+      return;
+    }
     final playing = c.value.isPlaying;
     if (playing == _isPlaying && (playing || _controlsVisible)) return;
     if (!playing) _hideTimer?.cancel();
@@ -729,17 +748,11 @@ class _BrowserItemViewState extends State<_BrowserItemView> {
           controller = VideoPlayerController.file(f);
         } else {
           final targetUrl = it.videoUrl ?? it.url;
-          controller = VideoPlayerController.networkUrl(
-            Uri.parse(targetUrl),
-            httpHeaders: {'Referer': refererFor(widget.platform)},
-          );
+          controller = await networkPreviewController(targetUrl, widget.platform);
         }
       } else {
         final targetUrl = it.videoUrl ?? it.url;
-        controller = VideoPlayerController.networkUrl(
-          Uri.parse(targetUrl),
-          httpHeaders: {'Referer': refererFor(widget.platform)},
-        );
+        controller = await networkPreviewController(targetUrl, widget.platform);
       }
 
       await controller.initialize();
@@ -764,7 +777,7 @@ class _BrowserItemViewState extends State<_BrowserItemView> {
       setState(() => _videoController = controller);
       _attachVideoListener(controller);
     } catch (e) {
-      if (mounted) setState(() => _error = '$e');
+      if (mounted) setState(() => _error = previewPlaybackError(widget.platform));
     }
   }
 
@@ -783,12 +796,12 @@ class _BrowserItemViewState extends State<_BrowserItemView> {
         } else {
           final videoUrl = it.videoUrl;
           if (videoUrl == null || videoUrl.isEmpty) return;
-          controller = _createPlayerController(videoUrl);
+          controller = await _createPlayerController(videoUrl);
         }
       } else {
         final videoUrl = it.videoUrl;
         if (videoUrl == null || videoUrl.isEmpty) return;
-        controller = _createPlayerController(videoUrl);
+        controller = await _createPlayerController(videoUrl);
       }
 
       await controller.initialize();
@@ -806,12 +819,9 @@ class _BrowserItemViewState extends State<_BrowserItemView> {
     }
   }
 
-  VideoPlayerController _createPlayerController(String target) {
+  Future<VideoPlayerController> _createPlayerController(String target) async {
     if (target.startsWith('http://') || target.startsWith('https://')) {
-      return VideoPlayerController.networkUrl(
-        Uri.parse(target),
-        httpHeaders: {'Referer': refererFor(widget.platform)},
-      );
+      return await networkPreviewController(target, widget.platform);
     } else if (target.startsWith('content://')) {
       return VideoPlayerController.contentUri(Uri.parse(target));
     } else {
@@ -835,7 +845,7 @@ class _BrowserItemViewState extends State<_BrowserItemView> {
     final it = widget.item;
 
     // 1. Missing file: "已从相册删除" placeholder + [重新下载]
-    if (it.status == FileStatus.notFound || _isNotFound) {
+    if ((it.status == FileStatus.notFound || _isNotFound) && !it.url.startsWith('http')) {
       return Center(
         child: Column(
           mainAxisSize: MainAxisSize.min,
@@ -1119,8 +1129,8 @@ class _BrowserItemViewState extends State<_BrowserItemView> {
                 maxScale: 4.0,
                 child: Center(
                   child: it.asset != null
-                      ? AssetEntityImage(
-                          it.asset!,
+                      ? VerifiedAssetImage(it.asset!,
+ fallback: CoverImage(item: it.toMediaItem(), referer: refererFor(widget.platform), fit: BoxFit.contain),
                           isOriginal: true,
                           fit: BoxFit.contain,
                         )
@@ -1287,8 +1297,8 @@ class _ZoomableImageViewState extends State<_ZoomableImageView>
         clipBehavior: Clip.none,
         child: Center(
           child: widget.item.asset != null
-              ? AssetEntityImage(
-                  widget.item.asset!,
+              ? VerifiedAssetImage(widget.item.asset!,
+ fallback: CoverImage(item: widget.item.toMediaItem(), referer: refererFor(widget.platform), fit: BoxFit.contain),
                   isOriginal: true,
                   fit: BoxFit.contain,
                 )

@@ -40,9 +40,9 @@ class ShareToBackgroundActivity : Activity() {
         // tokens) — only its length and the host of the first URL.
         Log.i(TAG, "share text=${LogSanitizer.summarize(text)}")
 
-        // Cheap guard: a share with no URL at all should not spin up the host.
-        // The authoritative supported-host check runs in Dart (platformFromUrl).
-        if (text.isNullOrBlank() || !text.contains("http", ignoreCase = true)) {
+        // Reject unsupported hosts before starting the background engine.
+        // Dart handles canonicalization and resolves platform short links.
+        if (text.isNullOrBlank() || !SupportedLinks.containsSupportedUrl(text)) {
             Toast.makeText(this, "没有可解析的链接", Toast.LENGTH_SHORT).show()
         } else {
             HostService.submitText(this, text, "all", "background")

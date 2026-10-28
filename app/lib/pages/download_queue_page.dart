@@ -291,13 +291,13 @@ class _BatchCard extends StatelessWidget {
         trailing: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            IconButton(
+            if (batch.supportsPause) IconButton(
               tooltip: toggleTip,
               icon: Icon(toggleIcon),
               onPressed: busy ? null : onToggle,
             ),
             IconButton(
-              tooltip: '删除任务',
+              tooltip: batch.supportsPause ? '删除任务' : '取消',
               icon: const Icon(Icons.delete_outline),
               onPressed: busy ? null : onRemove,
             ),

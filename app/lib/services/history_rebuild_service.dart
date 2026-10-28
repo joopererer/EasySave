@@ -6,12 +6,14 @@ import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:photo_manager/photo_manager.dart';
+import 'package:xml/xml.dart' as xml;
 
 import '../core/dev_log.dart';
 import '../metadata/metadata_service.dart';
 import 'gallery_locator_service.dart';
 import 'history_db.dart';
 import 'media_header_service.dart';
+import 'provenance_pair.dart';
 import 'settings.dart';
 
 /// Result of a rebuild operation.
@@ -21,6 +23,9 @@ class RebuildResult {
   final int created;
   final int merged;
   final int skipped;
+  final int readFailures;
+  final bool needsFixedDirectoryAccess;
+  final int renamedMedia, renameSkipped, renameFailures;
 
   /// True when the user cancelled: everything processed up to that point was
   /// still written, only the remaining files were not scanned.
@@ -32,12 +37,15 @@ class RebuildResult {
     required this.created,
     required this.merged,
     required this.skipped,
+    this.readFailures = 0,
+    this.needsFixedDirectoryAccess = false,
+    this.renamedMedia = 0, this.renameSkipped = 0, this.renameFailures = 0,
     this.cancelled = false,
   });
 
   @override
   String toString() =>
-      '$processed/$total processed, $created new, $merged merged (including recovered), $skipped skipped'
+      '$processed/$total processed, $created new, $merged merged (including recovered), $skipped skipped, $readFailures read failures'
       '${cancelled ? ' (cancelled)' : ''}';
 }
 
@@ -104,16 +112,17 @@ class HistoryRebuildService {
 
     // Check permission (only needed when the album really has to be read).
     if (assetsOverride == null && !locator.hasAccess) {
-      await PhotoManager.requestPermissionExtend();
-      if (!locator.hasAccess) {
-        throw Exception('没有相册访问权限');
-      }
+      await locator.requestPermission(scan: false);
     }
 
     final settings = await AppSettings.load();
-    final selectedAlbums = (albums == null || albums.isEmpty)
+    final selectedAlbums = (albums == null)
         ? settings.effectiveAlbumNames
         : albums.toSet();
+    final repair = assetsOverride == null
+        ? await repairLegacyExportNames(settings.effectiveAlbumNames)
+        : const LegacyRepairResult();
+    if (repair.changedIds.isNotEmpty) locator.evictMediaIds(repair.changedIds);
 
     final startedAt = DateTime.now();
     final assets = assetsOverride ??
@@ -121,11 +130,12 @@ class HistoryRebuildService {
             ? await locator.allImages()
             : await locator.assetsInAlbums(selectedAlbums));
     final total = assets.length;
+    if (assetsOverride == null && !locator.hasAccess && assets.isEmpty) throw Exception('没有相册访问权限，固定目录中也未找到可读取的媒体');
 
     DevLog.write(
       _logTag, // i18n:ignore 日志
       'scan start albums=${includeAllAlbums ? '<all>' : selectedAlbums.join(',')} '
-      'files=$total at=${startedAt.toIso8601String()}',
+      'fixedDirectory=$c2paRelativePath diagnosticVersion=2 files=$total at=${startedAt.toIso8601String()}',
     );
 
     final reader = readHeader ?? MediaHeaderService.readHeader;
@@ -134,6 +144,8 @@ class HistoryRebuildService {
     var created = 0;
     var merged = 0;
     var skipped = 0;
+    var readFailures = 0;
+    var needsFixedDirectoryAccess = repair.requiresAccess;
     var cancelled = false;
 
     final identifiedImages = <_AssetWithXmp>[];
@@ -152,41 +164,44 @@ class HistoryRebuildService {
       final mime = asset.mimeType?.toLowerCase();
       final isVideo = _isVideoAsset(asset);
 
-      // Only the formats the XMP readers understand are worth opening.
-      if (mime != null && !supportedMimes.contains(mime)) {
-        skipped++;
-        fileDiags[asset.id] = _FileDiag(
-          filename: asset.title ?? asset.id,
-          mime: mime,
-          pairing: 'skipped',
-          reason: 'unsupported MIME',
-        );
-        continue;
-      }
-
       final queryMime = mime ?? (isVideo ? 'video/mp4' : 'image/jpeg');
+      String? sourcePath;
+      try { sourcePath = await locator.getRelativePath(asset); } catch (_) {}
+      var failed = false;
+      final sidecar = await readRebuildSidecar(asset, sourcePath);
+      if (sidecar.status == 'error') {
+        failed = true;
+        needsFixedDirectoryAccess |= sidecar.requiresAccess;
+        DevLog.write(_logTag, 'file=${asset.title ?? asset.id} path=${sourcePath ?? "<MediaStore>"} '
+          'stage=${sidecar.stage} exception=${sidecar.errorClass}');
+      }
 
       // Read only the file header: the XMP lives there.
       Uint8List bytes = Uint8List(0);
       try {
-        bytes = await reader(asset.id, queryMime);
-      } catch (e) {
-        DevLog.write(_logTag, 'Failed to read header of ${asset.title}: $e'); // i18n:ignore 日志
-      }
-
-      // Parse XMP from the header bytes.
-      XmpProvenance? provenance;
-      if (bytes.isNotEmpty) {
-        try {
-          provenance = MetadataService.readProvenanceFromBytes(bytes);
-        } catch (e) {
-          DevLog.write(_logTag, 'Failed to parse XMP of ${asset.title}: $e'); // i18n:ignore 日志
+        if (mime == null || supportedMimes.contains(mime)) {
+          bytes = isFixedFileReference(asset.id) ? await readFixedRebuildHeader(asset.id, queryMime) : await reader(asset.id, queryMime);
         }
+      } catch (e) {
+        failed = true;
+        DevLog.write(_logTag, 'file=${asset.title ?? asset.id} path=${sourcePath ?? "<MediaStore>"} stage=header-read exception=${e.runtimeType}');
       }
 
+      // Merge raw XMP so embedded user fields without prov:assetId survive.
+      XmpProvenance? provenance;
+      try {
+        if (sidecar.xml != null) xml.XmlDocument.parse(sidecar.xml!);
+        provenance = mergeProvenanceXml(MetadataService.readXmpXmlFromBytes(bytes), sidecar.xml);
+      } catch (e) {
+        failed = true;
+        DevLog.write(_logTag, 'file=${asset.title ?? asset.id} path=${sourcePath ?? "<MediaStore>"} stage=xmp-parse exception=${e.runtimeType}');
+      }
+      if (failed) readFailures++;
+      final grouped = provenance?.platform?.isNotEmpty == true && provenance?.sourceId?.isNotEmpty == true;
+      DevLog.write(_logTag, 'file=${asset.title ?? asset.id} path=${sourcePath ?? "<MediaStore>"} '
+          'stage=rebuild-read sidecarFound=${sidecar.found} result=${failed ? "error" : sidecar.status} grouped=$grouped');
       if (provenance != null &&
-          provenance.platform != null &&
-          provenance.sourceId != null) {
+          grouped) {
         final gKey = '${provenance.platform!}:${provenance.sourceId!}';
         fileDiags[asset.id] = _FileDiag(
           filename: asset.title ?? asset.id,
@@ -211,9 +226,9 @@ class HistoryRebuildService {
           reason: 'no XMP provenance',
         );
         if (isVideo) {
-          unidentifiedVideos.add(asset);
+          if (!failed) unidentifiedVideos.add(asset);
         } else {
-          skipped++;
+          if (!failed) skipped++;
         }
       }
     }
@@ -415,11 +430,12 @@ class HistoryRebuildService {
         files.add(HistoryFile(
           filename: awx.asset.title ?? '',
           savedAt: savedAtTime.millisecondsSinceEpoch,
-          mediaId: awx.asset.id,
+          mediaId: isFixedFileReference(awx.asset.id) ? null : awx.asset.id,
           itemIndex: awx.provenance.itemIndex ?? 1,
           isImage: awx.asset.type == AssetType.image,
           assetId: awx.provenance.assetId,
-          status: FileStatus.found,
+          relativePath: await locator.getRelativePath(awx.asset),
+          status: isFixedFileReference(awx.asset.id) ? FileStatus.unknown : FileStatus.found,
         ));
       }
 
@@ -521,6 +537,8 @@ class HistoryRebuildService {
           authorName: existing.authorName,
           title: existing.title,
           caption: existing.caption,
+          aiLabel: existing.aiLabel ?? earliestAwx.provenance.aiLabel,
+          aiLabelSource: existing.aiLabel != null ? existing.aiLabelSource : earliestAwx.provenance.aiLabelSource,
           thumbnailUrl: existing.thumbnailUrl,
           postUrl: existing.postUrl,
           fileCount: mergedList.length,
@@ -541,6 +559,8 @@ class HistoryRebuildService {
           authorName: firstProv.creators?.firstOrNull,
           title: firstProv.title,
           caption: firstProv.description,
+          aiLabel: firstProv.aiLabel,
+          aiLabelSource: firstProv.aiLabelSource,
           thumbnailUrl: null, // Will be populated by history page
           postUrl: firstProv.sourceUrl ?? 'https://unknown',
           fileCount: files.length,
@@ -560,7 +580,7 @@ class HistoryRebuildService {
     DevLog.write(
       _logTag, // i18n:ignore 日志
       'scan end files=$total processed=$processed created=$created '
-      'merged=$merged skipped=$skipped cancelled=$cancelled '
+      'merged=$merged skipped=$skipped readFailures=$readFailures cancelled=$cancelled '
       'elapsedMs=$elapsed at=${finishedAt.toIso8601String()}',
     );
 
@@ -570,6 +590,9 @@ class HistoryRebuildService {
       created: created,
       merged: merged,
       skipped: skipped,
+      readFailures: readFailures,
+      needsFixedDirectoryAccess: needsFixedDirectoryAccess,
+      renamedMedia: repair.renamed, renameSkipped: repair.skipped, renameFailures: repair.failures,
       cancelled: cancelled,
     );
   }

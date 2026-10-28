@@ -4,6 +4,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import '../widgets/ai_label_badge.dart';
 import 'package:flutter/services.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:photo_manager/photo_manager.dart';
@@ -356,9 +357,13 @@ class ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
   /// matches the record stored under its canonical url.
   Future<bool> _alreadyDownloaded(String link) async {
     if (isLinkKnown(link, _knownPosts)) return true;
+    try {
+      final db = await HistoryDb.instance();
+      if (await db.findRecordByLink(link) != null) return true;
+    } catch (_) {}
     String? resolved;
     try {
-      resolved = await resolveShortLink(link);
+      resolved = await resolveShortLink(link, forHistoryLookup: true);
       if (isLinkKnown(link, _knownPosts, resolvedUrl: resolved)) return true;
     } catch (_) {}
     try {
@@ -810,6 +815,11 @@ class ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
             ),
             ListTile(
               leading: const Icon(Icons.login),
+              title: const Text('TikTok'),
+              onTap: () => Navigator.of(context).pop(PlatformKind.tiktok),
+            ),
+            ListTile(
+              leading: const Icon(Icons.login),
               title: const Text('X'),
               onTap: () => Navigator.of(context).pop(PlatformKind.x),
             ),
@@ -863,7 +873,7 @@ class ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
                       minLines: 1,
                       maxLines: 3,
                       decoration: InputDecoration(
-                        hintText: '粘贴小红书 / Instagram 链接',
+                        hintText: '粘贴小红书 / Instagram / X / TikTok 链接',
                         filled: true,
                         fillColor: Theme.of(context).scaffoldBackgroundColor,
                         border: const OutlineInputBorder(
@@ -977,7 +987,10 @@ class ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
                             height: 20,
                             child: CircularProgressIndicator(strokeWidth: 2),
                           )
-                        : PlatformTag(platform: record.platform),
+                        : Row(mainAxisSize: MainAxisSize.min, children: [
+                            PlatformTag(platform: record.platform),
+                            AiLabelBadge(text: record.aiLabel, source: record.aiLabelSource),
+                          ]),
                   ),
                 ),
               ),
@@ -1189,6 +1202,8 @@ class ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
                 : record.postId,
             platform: record.platform,
             postUrl: record.postUrl,
+            aiLabel: record.aiLabel,
+            aiLabelSource: record.aiLabelSource,
             onReparse: () {
               // Pop GalleryBrowser first, then reparse with feedback.
               Navigator.of(context).pop();

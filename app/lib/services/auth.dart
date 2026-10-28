@@ -15,7 +15,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-enum PlatformKind { xhs, instagram, x }
+enum PlatformKind { xhs, instagram, x, tiktok }
 
 String platformLabel(PlatformKind platform) {
   switch (platform) {
@@ -25,12 +25,16 @@ String platformLabel(PlatformKind platform) {
       return 'Instagram';
     case PlatformKind.x:
       return 'X';
+    case PlatformKind.tiktok:
+      return 'TikTok';
   }
 }
 
 /// Map a history record's `platform` key back to a [PlatformKind].
 PlatformKind platformFromKey(String key) {
   switch (key) {
+    case 'tiktok':
+      return PlatformKind.tiktok;
     case 'instagram':
       return PlatformKind.instagram;
     case 'x':
@@ -44,6 +48,7 @@ PlatformKind platformFromKey(String key) {
 PlatformKind? platformFromUrl(String url) {
   final host = Uri.tryParse(url)?.host.toLowerCase() ?? '';
   if (host.isEmpty) return null;
+  if (host == 'tiktok.com' || host.endsWith('.tiktok.com')) return PlatformKind.tiktok;
   if (host == 'xiaohongshu.com' ||
       host.endsWith('.xiaohongshu.com') ||
       host == 'rednote.com' ||
@@ -90,6 +95,8 @@ String loginEntryUrl(PlatformKind platform) {
       return 'https://www.instagram.com/accounts/login/';
     case PlatformKind.x:
       return 'https://x.com/i/flow/login';
+    case PlatformKind.tiktok:
+      return 'https://www.tiktok.com/login';
   }
 }
 
@@ -104,6 +111,7 @@ String? loginUserAgent(PlatformKind platform) {
     case PlatformKind.instagram:
       return 'Mozilla/5.0 (Linux; Android 12; Pixel 6) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Mobile Safari/537.36';
     case PlatformKind.x:
+    case PlatformKind.tiktok:
       return null;
   }
 }
@@ -116,6 +124,8 @@ String _cookieUrl(PlatformKind platform) {
       return 'https://www.instagram.com';
     case PlatformKind.x:
       return 'https://x.com';
+    case PlatformKind.tiktok:
+      return 'https://www.tiktok.com';
   }
 }
 
@@ -135,6 +145,7 @@ bool _isSessionCookie(PlatformKind platform, String name) {
     }.contains(name);
   }
   if (platform == PlatformKind.instagram) return name == 'sessionid';
+  if (platform == PlatformKind.tiktok) return name == 'sessionid' || name == 'sessionid_ss';
   return name == 'auth_token';
 }
 

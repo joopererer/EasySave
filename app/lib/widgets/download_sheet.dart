@@ -40,6 +40,7 @@ class DownloadSheet extends StatefulWidget {
           settings.fileName(postId: post.id, seq: seq, author: author),
     );
     if (!context.mounted) return batch;
+    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('已加入下载队列')));
     await showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
@@ -73,6 +74,7 @@ class _DownloadSheetState extends State<DownloadSheet> {
       items: const [],
       title: batch.title,
       caption: batch.caption,
+      aiLabel: batch.aiLabel == null ? null : AiLabel(text: batch.aiLabel!, source: batch.aiLabelSource ?? 'unknown'),
     );
     if ((post.title ?? '').isEmpty && (post.caption ?? '').isEmpty) return;
     final path = await saveCaptionTxt(post);
@@ -274,7 +276,7 @@ class _DownloadSheetState extends State<DownloadSheet> {
             ? '下载中 ${(job.progress * 100).round()}%'
             : '下载中…';
       case JobState.done:
-        return '已完成';
+        return job.metadataNotice ?? '已完成';
       case JobState.failed:
         final attempt = '（已试 ${job.attempts}/$kMaxAttempts）';
         return '失败$attempt：${job.error ?? '未知错误'}';

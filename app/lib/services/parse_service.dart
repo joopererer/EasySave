@@ -14,8 +14,11 @@ import 'package:http/http.dart' as http;
 import '../core/models.dart';
 import '../core/parse.dart';
 import 'auth.dart';
+import 'ai_label_log.dart';
 import 'links.dart';
 import 'update_service.dart';
+import 'tiktok_links.dart';
+import 'history_db.dart';
 
 class ParseFailure implements Exception {
   ParseFailure(this.code, this.message);
@@ -43,6 +46,8 @@ void _checkPlatform(String url) {
     platform = 'instagram';
   } else if (isXHost(host)) {
     platform = 'x';
+  } else if (isTiktokHost(host)) {
+    platform = 'tiktok';
   }
 
   if (platform.isNotEmpty && !ParserManager.instance.isPlatformEnabled(platform)) {
@@ -87,15 +92,7 @@ String calculateXToken(String id) {
 
 /// Load [url] and parse the post it resolves to.
 Future<ParsedPost> parsePostUrl(String url) {
-  _checkPlatform(url);
-  return _withTimeout(() async {
-    final resolved = await _resolveForParse(url);
-    try {
-      return (await _parseInner(resolved)).data;
-    } on ParseFailure catch (e) {
-      throw await _reclassifyFailure(resolved, e);
-    }
-  }, '加载页面');
+  return parsePostOutcome(url).then((result) => result.data);
 }
 
 /// Same as [parsePostUrl] but keeps the raw image entries for diagnostics.
@@ -104,7 +101,14 @@ Future<ParseOutcome> parsePostOutcome(String url) {
   return _withTimeout(() async {
     final resolved = await _resolveForParse(url);
     try {
-      return await _parseInner(resolved);
+      final result = await _parseInner(resolved);
+      final host = Uri.tryParse(url)?.host.toLowerCase();
+      if (result.data.platform == 'tiktok' && {'vm.tiktok.com', 'vt.tiktok.com'}.contains(host)) {
+        try {
+          await HistoryDb.instance().then((db) => db.rememberParsedLink(url, result.data)).timeout(const Duration(seconds: 2));
+        } catch (_) { /* Optional local shortcut must not fail a successful parse. */ }
+      }
+      return result;
     } on ParseFailure catch (e) {
       throw await _reclassifyFailure(resolved, e);
     }
@@ -156,6 +160,7 @@ Future<ParseFailure> _reclassifyFailure(String url, ParseFailure e) async {
 /// a real browser engine follows the redirect to the actual note page.
 /// Resolve short links to their final URL.
 Future<String> _resolveForParse(String url) async {
+  if (isTiktokLink(url)) return canonicalTiktokUrl(url) ?? url;
   try {
     return await resolveShortLink(
       url,
@@ -231,6 +236,7 @@ Future<ParseOutcome> _runParserJs(String input, String pageUrl) async {
   try {
     headless = HeadlessInAppWebView(
       initialData: InAppWebViewInitialData(data: '<html><body></body></html>'),
+      onConsoleMessage: (_, message) => logUnknownAiLabel(message.message),
       onLoadStop: (controller, uri) {
         readyController ??= controller;
         if (!loaded.isCompleted) loaded.complete();
@@ -462,11 +468,14 @@ const String _kNetworkSniffScript = '''
 
 Future<ParseOutcome> _headlessParse(String targetUrl, {required bool isXhs}) async {
   final loaded = Completer<void>();
+  final isTiktok = isTiktokLink(targetUrl);
+  var canonicalNavigationStarted = false;
   InAppWebViewController? readyController;
   HeadlessInAppWebView? headless;
   try {
     headless = HeadlessInAppWebView(
       initialUrlRequest: URLRequest(url: WebUri.uri(Uri.parse(targetUrl))),
+      onConsoleMessage: (_, message) => logUnknownAiLabel(message.message),
       initialUserScripts: UnmodifiableListView<UserScript>([
         UserScript(
           source: _kNetworkSniffScript,
@@ -481,7 +490,7 @@ Future<ParseOutcome> _headlessParse(String targetUrl, {required bool isXhs}) asy
         sharedCookiesEnabled: true,
         cacheEnabled: true,
         mixedContentMode: MixedContentMode.MIXED_CONTENT_ALWAYS_ALLOW,
-        userAgent: isXhs
+        userAgent: isTiktok ? tiktokParserUserAgent : isXhs
             ? loginUserAgent(PlatformKind.xhs)
             : (isInstagramHost(Uri.tryParse(targetUrl)?.host ?? '')
                 ? loginUserAgent(PlatformKind.instagram)
@@ -514,7 +523,16 @@ Future<ParseOutcome> _headlessParse(String targetUrl, {required bool isXhs}) asy
         }
         return NavigationActionPolicy.CANCEL;
       },
-      onLoadStop: (controller, uri) {
+      onLoadStop: (controller, uri) async {
+        if (isTiktok && !loaded.isCompleted) {
+          final canonical = canonicalTiktokUrl(uri?.toString() ?? '');
+          if (canonical == null) return;
+          if (!canonicalNavigationStarted && targetUrl != canonical) {
+            canonicalNavigationStarted = true;
+            await controller.loadUrl(urlRequest: URLRequest(url: WebUri(canonical)));
+            return;
+          }
+        }
         readyController ??= controller;
         if (!loaded.isCompleted) loaded.complete();
       },
@@ -542,7 +560,12 @@ Future<ParseOutcome> _headlessParse(String targetUrl, {required bool isXhs}) asy
       final liveStr = live?.toString();
       if (liveStr != null && liveStr.isNotEmpty) currentUrl = liveStr;
     } catch (_) {}
-    await _waitForNoteState(controller, currentUrl);
+    if (isTiktok) {
+      await waitForTiktokState(() async =>
+        await controller.evaluateJavascript(source: tiktokStateReadyScript) == true);
+    } else {
+      await _waitForNoteState(controller, currentUrl);
+    }
 
     // For Instagram: auto-dismiss age-gated / sensitive content warnings if present
     final isIg = isInstagramHost(Uri.tryParse(currentUrl)?.host ?? '');

@@ -1,0 +1,16 @@
+{
+  "__DEFAULT_SCOPE__": {
+    "webapp.video-detail": {
+      "statusCode": 0,
+      "itemInfo": {
+        "itemStruct": {
+          "id": "1234567890123456789",
+          "aigcLabelType": "1",
+          "video": {
+            "playAddr": "https://example.invalid/FAKE.mp4"
+          }
+        }
+      }
+    }
+  }
+}

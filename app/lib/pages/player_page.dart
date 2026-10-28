@@ -7,7 +7,7 @@ import 'package:flutter/material.dart';
 import 'package:video_player/video_player.dart';
 
 import '../core/models.dart';
-import '../services/saver.dart';
+import '../services/preview_video.dart';
 import '../widgets/shared.dart';
 
 /// Fullscreen video with a control bar. Pauses on backgrounding and
@@ -35,21 +35,29 @@ class _VideoPlayerPageState extends State<VideoPlayerPage>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    final url = widget.item.videoUrl ?? widget.item.url;
-    _controller =
-        VideoPlayerController.networkUrl(
-            Uri.parse(url),
-            httpHeaders: {'Referer': refererFor(widget.platform)},
-          )
-          ..initialize()
-              .then((_) {
-                if (!mounted) return;
-                setState(() {});
-                _controller?.play();
-              })
-              .catchError((Object e) {
-                if (mounted) setState(() => _error = '$e');
-              });
+    unawaited(_initialize());
+  }
+
+  Future<void> _initialize() async {
+    VideoPlayerController? controller;
+    try {
+      controller = await networkPreviewController(widget.item.videoUrl ?? widget.item.url, widget.platform);
+      if (!mounted) { await controller.dispose(); return; }
+      _controller = controller;
+      final active = controller;
+      active.addListener(() {
+        if (mounted && active.value.hasError) {
+          setState(() => _error = previewPlaybackError(widget.platform));
+        }
+      });
+      await controller.initialize();
+      if (!mounted) return;
+      setState(() {});
+      await controller.play();
+    } catch (_) {
+      await controller?.dispose();
+      if (mounted) setState(() { _controller = null; _error = previewPlaybackError(widget.platform); });
+    }
   }
 
   @override
@@ -79,7 +87,7 @@ class _VideoPlayerPageState extends State<VideoPlayerPage>
             ? Padding(
                 padding: const EdgeInsets.all(24),
                 child: Text(
-                  '播放失败：$_error',
+                  _error!,
                   style: const TextStyle(color: Colors.white),
                 ),
               )
@@ -209,10 +217,7 @@ class _LivePlayerPageState extends State<LivePlayerPage>
     if (videoUrl == null || _playing || _starting) return;
     setState(() => _starting = true);
     try {
-      final controller = VideoPlayerController.networkUrl(
-        Uri.parse(videoUrl),
-        httpHeaders: {'Referer': refererFor(widget.platform)},
-      );
+      final controller = await networkPreviewController(videoUrl, widget.platform);
       await controller.initialize();
       await controller.setVolume(0);
       await controller.setLooping(true);

@@ -177,6 +177,8 @@ class HistoryRecord {
     this.authorName,
     this.title,
     this.caption,
+    this.aiLabel,
+    this.aiLabelSource,
     this.thumbnailUrl,
     required this.postUrl,
     required this.fileCount,
@@ -192,6 +194,8 @@ class HistoryRecord {
   final String? authorName;
   final String? title;
   final String? caption;
+  final String? aiLabel;
+  final String? aiLabelSource;
   final String? thumbnailUrl;
   final String postUrl;
   final int fileCount;
@@ -283,6 +287,7 @@ class HistoryRecord {
       items: items,
       title: title,
       caption: caption,
+      aiLabel: aiLabel == null ? null : AiLabel(text: aiLabel!, source: aiLabelSource ?? 'unknown'),
     );
   }
 
@@ -292,6 +297,8 @@ class HistoryRecord {
     'author_name': authorName,
     'title': title,
     'caption': caption,
+    'ai_label': aiLabel,
+    'ai_label_source': aiLabelSource,
     'thumbnail_url': thumbnailUrl,
     'post_url': postUrl,
     'file_count': fileCount,
@@ -338,6 +345,8 @@ class HistoryRecord {
       authorName: authorName,
       title: map['title'] as String?,
       caption: map['caption'] as String?,
+      aiLabel: map['ai_label'] as String?,
+      aiLabelSource: map['ai_label_source'] as String?,
       thumbnailUrl: map['thumbnail_url'] as String?,
       postUrl: map['post_url'] as String,
       fileCount: (map['file_count'] as num).toInt(),
@@ -437,13 +446,21 @@ class HistoryDb {
     final path = dbPath ?? '${await getDatabasesPath()}/easysave_history.db';
     final db = await openDatabase(
       path,
-      version: 3,
+      version: 4,
       // Two engines (main UI isolate + background isolate) can hold a
       // connection to the same file. WAL lets readers work while a writer is
       // active, and busy_timeout makes a writer wait for the lock instead of
       // failing with SQLITE_BUSY.
       onConfigure: (db) => _applyPragmas(db),
-      onOpen: (db) => _applyPragmas(db),
+      onOpen: (db) async {
+        await _applyPragmas(db);
+        // Operational barrier, separate from backed-up history schema/data.
+        await db.execute('CREATE TABLE IF NOT EXISTS download_delete_barriers('
+            'platform TEXT NOT NULL, post_id TEXT NOT NULL, deleted_at INTEGER NOT NULL,'
+            'PRIMARY KEY(platform, post_id))');
+        await db.execute('CREATE TABLE IF NOT EXISTS resolved_post_links('
+            'link_key TEXT PRIMARY KEY, platform TEXT NOT NULL, post_id TEXT NOT NULL)');
+      },
       onCreate: (db, version) => db.execute(
         'CREATE TABLE history_records('
         'id INTEGER PRIMARY KEY AUTOINCREMENT,'
@@ -452,6 +469,8 @@ class HistoryDb {
         'author_name TEXT,'
         'title TEXT,'
         'caption TEXT,'
+        'ai_label TEXT,'
+        'ai_label_source TEXT,'
         'thumbnail_url TEXT,'
         'post_url TEXT NOT NULL UNIQUE,'
         'file_count INTEGER NOT NULL,'
@@ -491,7 +510,10 @@ class HistoryDb {
         if (oldVersion < 3) {
           await db.execute('ALTER TABLE history_records ADD COLUMN is_deleted INTEGER DEFAULT 0');
         }
-        // Future migrations go here
+        if (oldVersion < 4) {
+          await db.execute('ALTER TABLE history_records ADD COLUMN ai_label TEXT');
+          await db.execute('ALTER TABLE history_records ADD COLUMN ai_label_source TEXT');
+        }
       },
     );
     final historyDb = HistoryDb._(db);
@@ -543,13 +565,22 @@ class HistoryDb {
   /// operations **and for user-initiated saves** (the user asked for this post
   /// to be saved again, so a record they had deleted must come back). Recovery
   /// paths (startup, batch adoption) keep the deletion state.
-  Future<void> upsert(HistoryRecord record, {bool restoreDeleted = false}) async {
+  Future<void> upsert(HistoryRecord record, {
+    bool restoreDeleted = false,
+    bool userSave = false,
+    int? downloadStartedAt,
+  }) async {
     DevLog.write(
       'HIST', // i18n:ignore 日志
       'history write post=${record.postId} files=${record.files.length} '
       'restoreDeleted=$restoreDeleted',
     );
     await _db.transaction((txn) async {
+      if (downloadStartedAt != null) {
+        final barriers = await txn.query('download_delete_barriers',
+          where: 'platform = ? AND post_id = ?', whereArgs: [record.platform, record.postId]);
+        if (barriers.isNotEmpty && (barriers.first['deleted_at'] as int) >= downloadStartedAt) return;
+      }
       final existing = await _getByPostUrl(txn, record.postUrl) ??
           await _getByPostId(txn, record.postId);
       if (existing != null) {
@@ -575,7 +606,9 @@ class HistoryDb {
             return (a.isImage ? 0 : 1).compareTo(b.isImage ? 0 : 1);
           });
 
-        final resolvedCreatedAt = record.createdAt.isBefore(existing.createdAt)
+        final resolvedCreatedAt = restoreDeleted && userSave && existing.isDeleted
+            ? record.createdAt
+            : record.createdAt.isBefore(existing.createdAt)
             ? record.createdAt
             : existing.createdAt;
 
@@ -583,9 +616,11 @@ class HistoryDb {
           id: existing.id,
           platform: record.platform,
           postId: record.postId,
-          authorName: record.authorName ?? existing.authorName,
+          authorName: record.authorName?.trim().isNotEmpty == true ? record.authorName : existing.authorName,
           title: (record.title?.isNotEmpty == true) ? record.title : existing.title,
           caption: (record.caption?.isNotEmpty == true) ? record.caption : existing.caption,
+          aiLabel: record.aiLabel?.trim().isNotEmpty == true ? record.aiLabel : existing.aiLabel,
+          aiLabelSource: record.aiLabelSource?.trim().isNotEmpty == true ? record.aiLabelSource : existing.aiLabelSource,
           thumbnailUrl: record.thumbnailUrl ?? existing.thumbnailUrl,
           postUrl: record.postUrl,
           fileCount: mergedFiles.length,
@@ -611,6 +646,30 @@ class HistoryDb {
       );
     });
     notifyChanged('upsert post=${record.postId}');
+  }
+
+
+  /// Refresh only metadata of an existing record; never restore deletion or
+  /// change its saved time merely because a preview was opened.
+  Future<ParsedPost> mergeParsedPost(ParsedPost fresh) async {
+    final old = await getByPostUrl(fresh.url) ?? await getByPostId(fresh.id);
+    if (old == null) return fresh;
+    String? nonempty(String? value, String? fallback) =>
+        value?.trim().isNotEmpty == true ? value : fallback;
+    final oldPost = old.toPost();
+    final merged = ParsedPost(platform: fresh.platform, id: fresh.id, url: fresh.url,
+      author: PostAuthor(name: nonempty(fresh.author.name, old.authorName), id: fresh.author.id),
+      items: fresh.items.isNotEmpty ? fresh.items : oldPost.items,
+      title: nonempty(fresh.title, old.title), caption: nonempty(fresh.caption, old.caption),
+      publishedAt: fresh.publishedAt,
+      aiLabel: fresh.aiLabel?.text.trim().isNotEmpty == true ? fresh.aiLabel : oldPost.aiLabel);
+    await _db.update('history_records', {
+      'author_name': merged.author.name, 'title': merged.title, 'caption': merged.caption,
+      'ai_label': merged.aiLabel?.text, 'ai_label_source': merged.aiLabel?.source,
+      if (fresh.items.isNotEmpty) 'items_json': jsonEncode([for (final item in fresh.items) item.toJson()]),
+    }, where: 'id = ?', whereArgs: [old.id]);
+    notifyChanged('metadata refreshed');
+    return merged;
   }
 
   Future<void> updateFiles(int id, List<HistoryFile> files) async {
@@ -660,10 +719,22 @@ class HistoryDb {
   }
 
   /// Find a history record matching a link (by postId, canonical URL, or resolved URL).
+  Future<void> rememberParsedLink(String link, ParsedPost post) async {
+    final host = Uri.tryParse(link)?.host.toLowerCase();
+    if (post.platform != 'tiktok' || !{'vm.tiktok.com', 'vt.tiktok.com'}.contains(host)) return;
+    await _db.insert('resolved_post_links', {'link_key': linkKey(link), 'platform': post.platform, 'post_id': post.id},
+        conflictAlgorithm: ConflictAlgorithm.replace);
+  }
+
   Future<HistoryRecord?> findRecordByLink(
     String link, {
     String? resolvedUrl,
   }) async {
+    final aliases = await _db.query('resolved_post_links', where: 'link_key = ?', whereArgs: [linkKey(link)], limit: 1);
+    if (aliases.isNotEmpty) {
+      final record = await getByPostId(aliases.first['post_id'] as String);
+      if (record != null && !record.isDeleted && record.platform == aliases.first['platform']) return record;
+    }
     final id = postIdOfUrl(link) ??
         (resolvedUrl != null ? postIdOfUrl(resolvedUrl) : null);
     if (id != null) {
@@ -704,12 +775,14 @@ class HistoryDb {
     // Soft delete: mark as deleted instead of removing. The row count is logged
     // because a caller passing an id that does not exist silently changes
     // nothing — that used to look like "the list did not refresh".
-    final rows = await _db.update(
-      'history_records',
-      {'is_deleted': 1},
-      where: 'id = ?',
-      whereArgs: [id],
-    );
+    final rows = await _db.transaction((txn) async {
+      final records = await txn.query('history_records', columns: ['platform', 'post_id'], where: 'id = ?', whereArgs: [id]);
+      if (records.isNotEmpty) await txn.insert('download_delete_barriers', {
+        'platform': records.first['platform'], 'post_id': records.first['post_id'],
+        'deleted_at': DateTime.now().microsecondsSinceEpoch,
+      }, conflictAlgorithm: ConflictAlgorithm.replace);
+      return txn.update('history_records', {'is_deleted': 1}, where: 'id = ?', whereArgs: [id]);
+    });
     notifyChanged('delete id=$id rows=$rows');
   }
 

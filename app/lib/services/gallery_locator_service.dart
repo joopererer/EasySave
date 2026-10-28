@@ -1,3 +1,4 @@
+import 'verified_media.dart';
 // Gallery locator service: scans EasySave album using photo_manager,
 // builds in-memory filename/postId index once per session, and locates
 // saved files for history records without repeated disk queries.
@@ -13,9 +14,18 @@ import '../metadata/metadata_service.dart';
 import '../metadata/url_normalizer.dart';
 import 'history_db.dart';
 import 'media_header_service.dart';
+import 'provenance_pair.dart';
 import 'settings.dart';
 
 class GalleryLocatorService extends ChangeNotifier {
+  final Set<String> _unreadableIds = {};
+  void markUnreadable(String id) {
+    _unreadableIds.add(id);
+    evictMediaIds([id]);
+    notifyListeners();
+  }
+  Future<bool> isPresent(String id) async => !_unreadableIds.contains(id) && await mediaExists(id);
+
   GalleryLocatorService._();
 
   static final GalleryLocatorService instance = GalleryLocatorService._();
@@ -142,11 +152,11 @@ class GalleryLocatorService extends ChangeNotifier {
   }
 
   /// Request photo permission. If granted, automatically triggers album scan.
-  Future<PermissionState> requestPermission() async {
+  Future<PermissionState> requestPermission({bool scan = true}) async {
     try {
       _permission = await PhotoManager.requestPermissionExtend(requestOption: _defaultOption);
       notifyListeners();
-      if (_permission.hasAccess) {
+      if (_permission.hasAccess && scan) {
         await scanAlbum();
       }
     } catch (e) {
@@ -215,6 +225,9 @@ class GalleryLocatorService extends ChangeNotifier {
 
       final assetsToIndex = <AssetEntity>[];
       final seenIds = <String>{};
+      for (final asset in await fixedC2paAssets()) {
+        if (seenIds.add(asset.id)) assetsToIndex.add(asset);
+      }
 
       for (final p in paths) {
         if (p.isAll) continue;
@@ -393,9 +406,8 @@ class GalleryLocatorService extends ChangeNotifier {
       if (!_xmpCache.containsKey(asset.id)) {
         final mime = asset.type == AssetType.video ? 'video/mp4' : 'image/jpeg';
         final bytes = await MediaHeaderService.readHeader(asset.id, mime);
-        if (bytes.isNotEmpty) {
-          prov = MetadataService.readProvenanceFromBytes(bytes);
-        }
+        prov = mergeProvenanceXml(MetadataService.readXmpXmlFromBytes(bytes),
+            await readProvenanceSidecarXml(asset.id));
         _xmpCache[asset.id] = prov;
       }
 
@@ -457,10 +469,7 @@ class GalleryLocatorService extends ChangeNotifier {
         } catch (_) {}
       }
       if (cached != null) {
-        bool exists = true;
-        try {
-          exists = await cached.exists;
-        } catch (_) {}
+        final exists = await isPresent(cached.id);
         if (exists) {
           final title = (cached.title ?? '').trim().toLowerCase();
           final baseName = title.split('/').last.split('\\').last;
@@ -771,10 +780,7 @@ class GalleryLocatorService extends ChangeNotifier {
             platform: record.platform,
           );
           if (asset != null) {
-            bool exists = true;
-            try {
-              exists = await asset.exists;
-            } catch (_) {}
+            final exists = await isPresent(asset.id);
             if (!exists) {
               evictMediaIds([asset.id]);
               continue;
@@ -810,10 +816,7 @@ class GalleryLocatorService extends ChangeNotifier {
             }).toList();
             if (matched.isNotEmpty) {
               final candidate = matched.first;
-              bool exists = true;
-              try {
-                exists = await candidate.exists;
-              } catch (_) {}
+              final exists = await isPresent(candidate.id);
               if (exists) {
                 result[i] = candidate;
               } else {
@@ -882,6 +885,8 @@ class GalleryLocatorService extends ChangeNotifier {
         authorName: post.author.name,
         title: post.title,
         caption: post.caption,
+        aiLabel: post.aiLabel?.text,
+        aiLabelSource: post.aiLabel?.source,
         postUrl: post.url,
         fileCount: files.length,
         createdAt: DateTime.now(),
@@ -889,6 +894,7 @@ class GalleryLocatorService extends ChangeNotifier {
         files: files,
       ),
       restoreDeleted: restoreDeleted,
+      userSave: restoreDeleted,
     );
     return files.length;
   }
@@ -911,13 +917,13 @@ class GalleryLocatorService extends ChangeNotifier {
         type: RequestType.image,
         hasAll: false,
       );
-      final options = <({String name, int count})>[];
+      final counts = <String, int>{};
       for (final path in paths) {
         if (path.isAll) continue;
         final count = await path.assetCountAsync;
-        options.add((name: path.name, count: count));
+        counts.update(path.name, (n) => n + count, ifAbsent: () => count);
       }
-      return options;
+      return [for (final entry in counts.entries) (name: entry.key, count: entry.value)];
     } catch (e) {
       debugPrint('albumOptions error: $e');
       return const [];
@@ -950,15 +956,16 @@ class GalleryLocatorService extends ChangeNotifier {
   /// index: the rebuild scan must not leave the app pointing at a different
   /// set of assets than [scanAlbum] would.
   Future<List<AssetEntity>> assetsInAlbums(Iterable<String> albumNames) async {
+    final fixed = await fixedC2paAssets();
     if (!_permission.hasAccess) {
       await checkPermission();
-      if (!_permission.hasAccess) return const [];
+      if (!_permission.hasAccess) return fixed;
     }
     final wanted = {
       for (final name in albumNames)
         if (name.trim().isNotEmpty) name.trim().toLowerCase(),
     };
-    if (wanted.isEmpty) return const [];
+    if (wanted.isEmpty) return fixed;
     try {
       final paths = await PhotoManager.getAssetPathList(
         type: RequestType.common,
@@ -980,18 +987,19 @@ class GalleryLocatorService extends ChangeNotifier {
           if (seen.add(asset.id)) assets.add(asset);
         }
       }
-      return assets;
+      return unionMedia(assets, fixed);
     } catch (e) {
       debugPrint('assetsInAlbums error: $e');
-      return const [];
+      return fixed;
     }
   }
 
   /// Every media item on the device (explicit "全部相册" rebuild only).
   Future<List<AssetEntity>> allImages() async {
+    final fixed = await fixedC2paAssets();
     if (!_permission.hasAccess) {
       await checkPermission();
-      if (!_permission.hasAccess) return const [];
+      if (!_permission.hasAccess) return fixed;
     }
     try {
       final paths = await PhotoManager.getAssetPathList(
@@ -1005,14 +1013,14 @@ class GalleryLocatorService extends ChangeNotifier {
       for (final path in paths) {
         if (path.isAll) {
           final count = await path.assetCountAsync;
-          if (count <= 0) return const [];
-          return path.getAssetListRange(start: 0, end: count);
+          if (count <= 0) return fixed;
+          return unionMedia(await path.getAssetListRange(start: 0, end: count), fixed);
         }
       }
     } catch (e) {
       debugPrint('allImages error: $e');
     }
-    return const [];
+    return fixed;
   }
 }
 

@@ -3,8 +3,10 @@
 import { parseInstagram, type InstagramResult } from "./instagram";
 import { parseXhs, type XhsResult } from "./xhs";
 import { parseX, type XResult } from "./x";
+import { parseTiktok, isTiktokLink, type TiktokResult } from './tiktok';
 
 export type ParseErrorCode =
+  | 'DELETED' | 'PRIVATE' | 'REGION_RESTRICTED' | 'UNKNOWN'
   | "LOGIN_REQUIRED"
   | "PRIVATE_OR_UNAVAILABLE"
   | "BLOCKED"
@@ -21,6 +23,7 @@ export type ParseResult =
   | XhsResult
   | InstagramResult
   | XResult
+  | TiktokResult
   | { ok: false; error: ParseError };
 
 function hostnameOf(pageUrl: string): string | undefined {
@@ -79,6 +82,7 @@ export function parse(input: string, pageUrl: string): ParseResult {
   if (isXhsHost(host)) return parseXhs(input, pageUrl);
   if (isInstagramHost(host)) return parseInstagram(input, pageUrl);
   if (isXHost(host)) return parseX(input, pageUrl);
+  if (isTiktokLink(pageUrl)) return parseTiktok(input, pageUrl);
   return {
     ok: false,
     error: { code: "UNSUPPORTED_URL", message: `Unsupported host: ${host}` },
