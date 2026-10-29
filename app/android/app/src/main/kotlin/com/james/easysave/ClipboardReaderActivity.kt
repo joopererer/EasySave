@@ -76,6 +76,11 @@ class ClipboardReaderActivity : Activity() {
         // Never log the clipboard content itself (it can contain a share link
         // with tokens) — only its length and the host of the first URL.
         Log.i(TAG, "CLIPBOARD=${LogSanitizer.summarize(text)}")
+        if (ExternalHandlers.handle(this, text)) {
+            deliver(null)
+            finish()
+            return
+        }
         // Shown from this (foreground) activity so it isn't suppressed the way a
         // background toast would be. This shares the supported-host guard
         // with the share and bubble entry points; Dart resolves short links.

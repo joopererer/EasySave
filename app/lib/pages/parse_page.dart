@@ -207,11 +207,8 @@ class ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
   ///
   /// [entry] is passed on to the dedup decision so the log names the door.
   Future<void> _handleLinks(String text, {String entry = 'input'}) async {
-    final yt = extractYouTubeLink(text);
-    if (yt != null) {
-      await _showYouTubeSheet(yt);
-      return;
-    }
+    if (await routeExternalText(text, present: _showYouTubeSheet)) return;
+    if (!mounted) return;
     final links = extractLinks(text);
     if (links.length > 1) {
       final go = await showDialog<bool>(
@@ -502,6 +499,8 @@ class ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
     try {
       final text = files.map((f) => f.path).join('\n');
       if (text.trim().isEmpty || !mounted) return;
+      if (await routeExternalText(text, present: _showYouTubeSheet)) return;
+      if (!mounted) return;
 
       // Extract single link and resolve directly (shows loading state)
       final links = extractLinks(text);

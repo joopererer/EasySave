@@ -5,10 +5,6 @@
 import 'dart:io';
 import 'site_registry.dart';
 
-final _urlPattern = RegExp(
-  r"https?://[^\s<>"
-  "'，。！？；：）】”　]+",
-);
 final _candidatePattern = RegExp(
   r"https?://[^\s<>"
   "'，。！？；：）】”　]+|(?<![a-zA-Z0-9_@./:-])(?:[a-zA-Z0-9-]+\\.)+[a-zA-Z]{2,}(?:[/？?#][^\\s<>"
@@ -61,7 +57,12 @@ List<String> extractLinks(String text, {int limit = 9}) {
 bool isYouTubeLink(String url) {
   final uri = Uri.tryParse(url);
   final host = uri?.host.toLowerCase() ?? '';
-  if (host.isEmpty || uri == null) return false;
+  if (host.isEmpty ||
+      uri == null ||
+      !{'http', 'https'}.contains(uri.scheme) ||
+      uri.userInfo.isNotEmpty) {
+    return false;
+  }
   final isHost =
       host == 'youtube.com' ||
       host.endsWith('.youtube.com') ||
@@ -73,23 +74,35 @@ bool isYouTubeLink(String url) {
     return uri.pathSegments.isNotEmpty;
   }
   final path = uri.path.toLowerCase();
-  if (path == '/watch') return uri.queryParameters.containsKey('v');
-  if (path.startsWith('/shorts/')) return true;
+  if (path == '/watch') return (uri.queryParameters['v'] ?? '').isNotEmpty;
+  if (RegExp(r'^/shorts/[^/]+/?$').hasMatch(path)) return true;
   return false;
 }
 
 /// Extract the first YouTube URL from free text. Separate from extractLink
 /// because YouTube links are not "supported" — they route to Seal.
 String? extractYouTubeLink(String text) {
-  for (final match in _urlPattern.allMatches(text)) {
+  for (final match in _candidatePattern.allMatches(text)) {
     var url = match.group(0)!;
     while (url.isNotEmpty &&
         _trailingPunctuation.contains(url[url.length - 1])) {
       url = url.substring(0, url.length - 1);
     }
+    if (!url.contains('://')) url = 'https://$url';
     if (isYouTubeLink(url)) return url;
   }
   return null;
+}
+
+/// All foreground entrances check the local external policy before the site registry.
+Future<bool> routeExternalText(
+  String text, {
+  required Future<void> Function(String) present,
+}) async {
+  final url = extractYouTubeLink(text);
+  if (url == null) return false;
+  await present(url);
+  return true;
 }
 
 /// Resolve xhslink short links to the final page URL with plain HTTP

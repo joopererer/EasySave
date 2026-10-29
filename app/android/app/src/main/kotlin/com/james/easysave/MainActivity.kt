@@ -616,6 +616,7 @@ class MainActivity : FlutterActivity() {
     }
 
     private fun sendToSeal(url: String): Boolean {
+        if (!ExternalHandlers.accepts(url) || !isSealInstalled()) return false
         return try {
             val intent = Intent(Intent.ACTION_SEND).apply {
                 type = "text/plain"

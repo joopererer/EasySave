@@ -3,6 +3,7 @@
 // explicit ACTION_SEND intent, or the user gets install guidance.
 
 import 'package:flutter/services.dart';
+import 'links.dart' show isYouTubeLink;
 
 class SealMissing implements Exception {
   const SealMissing();
@@ -28,6 +29,9 @@ Future<bool> isSealInstalled() async {
 /// Send the URL to Seal with an explicit package intent. Throws [SealMissing]
 /// when Seal is not installed so the caller shows install guidance instead.
 Future<void> sendToSeal(String url) async {
+  if (!isYouTubeLink(url)) {
+    throw ArgumentError('Unsupported external-handler URL');
+  }
   try {
     final sent = await _channel.invokeMethod<bool>('send', {'url': url});
     if (sent != true) throw const SealMissing();
