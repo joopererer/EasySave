@@ -1,3 +1,5 @@
+import 'media_request.dart';
+
 // Unified parsing models shared by the XHS and Instagram parsers.
 // Mirrors extension/src/*.ts; serialized forms match spec/fixtures expected
 // JSON exactly (absent optional fields are omitted, like TS `undefined`).
@@ -15,10 +17,8 @@ abstract final class ParseErrorCode {
 class PostAuthor {
   PostAuthor({this.name, this.id});
 
-  factory PostAuthor.fromJson(Map<String, dynamic> json) => PostAuthor(
-    name: json['name'] as String?,
-    id: json['id'] as String?,
-  );
+  factory PostAuthor.fromJson(Map<String, dynamic> json) =>
+      PostAuthor(name: json['name'] as String?, id: json['id'] as String?);
 
   final String? name;
   final String? id;
@@ -42,9 +42,19 @@ class MediaItem {
     this.height,
     this.duration,
     this.fallbacks = const [],
+    this.requestResources,
   });
 
   factory MediaItem.fromJson(Map<String, dynamic> json) => MediaItem(
+    requestResources: json['resources'] == null
+        ? null
+        : (json['resources'] as List)
+              .map(
+                (r) => MediaRequestResource.fromJson(
+                  (r as Map).cast<String, dynamic>(),
+                ),
+              )
+              .toList(),
     type: json['type'] as String? ?? 'image',
     url: json['url'] as String? ?? '',
     isGif: json['isGif'] as bool?,
@@ -54,8 +64,7 @@ class MediaItem {
     height: json['height'] as num?,
     duration: json['duration'] as num?,
     fallbacks:
-        (json['fallbacks'] as List?)?.whereType<String>().toList() ??
-        const [],
+        (json['fallbacks'] as List?)?.whereType<String>().toList() ?? const [],
   );
 
   final String type;
@@ -78,6 +87,10 @@ class MediaItem {
   /// Never serialized: toJson must keep matching the spec fixtures exactly.
   final List<String> fallbacks;
 
+  /// v2 request declarations. Deliberately excluded from legacy/history/backup
+  /// JSON; step 2 will persist task requirements separately, never Cookie values.
+  final List<MediaRequestResource>? requestResources;
+
   Map<String, Object?> toJson() {
     final map = <String, Object?>{'type': type};
     if (isGif == true) map['isGif'] = true;
@@ -90,7 +103,9 @@ class MediaItem {
     // Fallbacks must survive the history round-trip: posts reopened from
     // history rebuild their items from this JSON, and without the backup
     // URLs a single slow CDN host hangs every cell.
-    if (fallbacks.isNotEmpty) map['fallbacks'] = fallbacks;
+    if (fallbacks.isNotEmpty) {
+      map['fallbacks'] = fallbacks;
+    }
     return map;
   }
 }
@@ -106,8 +121,10 @@ class AiLabel {
     if (value is! Map) return null;
     final text = value['text'];
     final source = value['source'];
-    if (text is! String || text.trim().isEmpty ||
-        (source != 'platform' && source != 'author')) return null;
+    if (text is! String ||
+        text.trim().isEmpty ||
+        (source != 'platform' && source != 'author'))
+      return null;
     return AiLabel(text: text, source: source as String);
   }
 
@@ -138,8 +155,7 @@ class ParsedPost {
     items: [
       if (json['items'] is List)
         for (final item in json['items'] as List)
-          if (item is Map)
-            MediaItem.fromJson(item.cast<String, dynamic>()),
+          if (item is Map) MediaItem.fromJson(item.cast<String, dynamic>()),
     ],
     title: json['title'] as String?,
     caption: json['caption'] as String?,
@@ -148,6 +164,7 @@ class ParsedPost {
   );
 
   final String platform;
+
   /// Local display snapshot; excluded from parser/backup JSON.
   final String? platformDisplayName;
   final String id;

@@ -1,10 +1,11 @@
+import { withMediaResources } from './media-resources';
 import { parseX, calculateToken, extractTweetId } from './x';
-import { parseTiktok, extractTiktokPostId } from './tiktok';
+import { parseTiktok, extractTiktokPostId, tiktokExpiresAt } from './tiktok';
 import { parsePageForModule as legacyPage, parse as legacyParse } from './_parse_page';
 import { installIgSniff, readXhsAccount, tiktokReady } from './page-hooks';
 
 type Context = { url: string; input?: string; site: any; error?: any; loggedIn?: boolean; statusCode?: number; location?: string };
-type Hooks = Partial<Record<'install' | 'request' | 'ready' | 'navigate' | 'prepare' | 'parsePage' | 'parse' | 'classify' | 'account' | 'probeSession', (c: Context) => any>>;
+type Hooks = Partial<Record<'install' | 'request' | 'ready' | 'navigate' | 'prepare' | 'parsePage' | 'parse' | 'classify' | 'account' | 'probeSession' | 'expiresAt', (c: Context) => any>>;
 const page = () => window as any;
 const failure = (code: string, message: string) => ({ code, message });
 
@@ -65,6 +66,7 @@ const modules: Record<string, Hooks> = {
         ? c.error.message : '未能读取帖子内容（可能包含受限内容或已被删除）') : c.error,
   },
   tiktok: {
+    expiresAt: (c) => tiktokExpiresAt(c.url),
     ready: () => tiktokReady(),
     navigate: (c) => {
       const id = extractTiktokPostId(c.url);
@@ -81,7 +83,12 @@ export function moduleCall(moduleId: string, hook: string, context: Context): st
     context = { ...context, error: failure('LOGIN_REQUIRED', '可能需要登录' + context.site.displayName) };
   }
   const module = modules[moduleId];
-  if (Object.hasOwn(module, hook)) return JSON.stringify({ value: (module as any)[hook](context) ?? null });
+  const output = (value: any) => JSON.stringify({ value:
+    hook === 'parse' || hook === 'parsePage'
+      ? withMediaResources(value, context.site, (url) =>
+          module.expiresAt?.({ ...context, url }))
+      : value });
+  if (Object.hasOwn(module, hook)) return output((module as any)[hook](context) ?? null);
   switch (hook) {
     case 'install': case 'navigate': case 'account': return JSON.stringify({ value: null });
     case 'prepare': return JSON.stringify({ value: false });
@@ -89,13 +96,13 @@ export function moduleCall(moduleId: string, hook: string, context: Context): st
     case 'parsePage': {
       try {
         const result = JSON.parse(legacyPage(moduleId));
-        if (result.ok) return JSON.stringify({ value: result });
+        if (result.ok) return output(result);
       } catch (_) {
         // A stale page cache must not prevent the independent HTML fallback.
       }
-      return JSON.stringify({ value: JSON.parse(legacyParse(document.documentElement.outerHTML, context.url, moduleId)) });
+      return output(JSON.parse(legacyParse(document.documentElement.outerHTML, context.url, moduleId)));
     }
-    case 'parse': return JSON.stringify({ value: JSON.parse(legacyParse(context.input || '', context.url, moduleId)) });
+    case 'parse': return output(JSON.parse(legacyParse(context.input || '', context.url, moduleId)));
     case 'classify': {
       const error = context.error;
       return JSON.stringify({ value: error?.code === 'PRIVATE_OR_UNAVAILABLE' &&

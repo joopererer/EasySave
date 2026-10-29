@@ -132,3 +132,19 @@ export function parseTiktok(input: string, pageUrl: string): TiktokResult {
     publishedAt: created > 0 && !isNaN(date.getTime()) ? date.toISOString().replace('.000Z', 'Z') : undefined,
     items } };
 }
+
+
+// Known TikTok URL expiry fields, not a generic App query-parameter heuristic.
+// Repeated/case-varied fields use the earliest valid timestamp conservatively.
+export function tiktokExpiresAt(url: string): string | undefined {
+  try {
+    let earliest = Infinity;
+    new URL(url).searchParams.forEach((value, key) => {
+      if (!['expire', 'x-expires'].includes(key.toLowerCase()) || !/^[0-9]+$/.test(value)) return;
+      const seconds = Number(value), ms = seconds * 1000;
+      if (Number.isSafeInteger(seconds) && Number.isSafeInteger(ms) &&
+          !Number.isNaN(new Date(ms).getTime())) earliest = Math.min(earliest, ms);
+    });
+    return Number.isFinite(earliest) ? new Date(earliest).toISOString() : undefined;
+  } catch { return undefined; }
+}

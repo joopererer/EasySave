@@ -117,6 +117,10 @@
           "includeSubdomains": true
         },
         {
+          "domain": "xhscdn.net",
+          "includeSubdomains": true
+        },
+        {
           "domain": "xiaohongshu.com",
           "includeSubdomains": true
         }
@@ -414,6 +418,18 @@
         {
           "domain": "tiktok.com",
           "includeSubdomains": true
+        },
+        {
+          "domain": "tiktokcdn.com",
+          "includeSubdomains": true
+        },
+        {
+          "domain": "tiktokcdn-eu.com",
+          "includeSubdomains": true
+        },
+        {
+          "domain": "tiktokcdn-us.com",
+          "includeSubdomains": true
         }
       ],
       "headers": {
@@ -423,7 +439,19 @@
         "tiktok.com"
       ],
       "transport": "session",
-      "resumable": false
+      "resumable": false,
+      "resourceDefaults": {
+        "image": {
+          "cookieDomains": [],
+          "transport": "background",
+          "resumable": true
+        },
+        "poster": {
+          "cookieDomains": [],
+          "transport": "background",
+          "resumable": true
+        }
+      }
     },
     "metadata": {
       "authorIdRule": "numeric"

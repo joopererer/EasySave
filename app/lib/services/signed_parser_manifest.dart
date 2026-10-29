@@ -269,6 +269,15 @@ void _validateSemantics(Map<String, dynamic> payload) {
       }
     }
     _validateHeaderValues(download['headers'] as Map);
+
+    final declaredCookies = (download['cookieDomains'] as List).cast<String>().toSet();
+    for (final entry in ((download['resourceDefaults'] as Map?) ?? {}).values) {
+      final defaults = entry as Map;
+      _validateHeaderValues(defaults['headers'] as Map? ?? {});
+      if ((defaults['cookieDomains'] as List? ?? []).any((d) => !declaredCookies.contains(d))) {
+        throw const FormatException('manifest_cookie_domain');
+      }
+    }
     final auth = site['auth'] as Map;
     if (auth['mode'] != 'none' && auth['loginUrl'] == null) {
       throw const FormatException('manifest_login_url');

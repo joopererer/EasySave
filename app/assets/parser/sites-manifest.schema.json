@@ -439,6 +439,24 @@
             },
             "resumable": {
               "type": "boolean"
+            },
+            "resourceDefaults": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "image": {
+                  "$ref": "#/$defs/resourceRequestDefaults"
+                },
+                "video": {
+                  "$ref": "#/$defs/resourceRequestDefaults"
+                },
+                "motion": {
+                  "$ref": "#/$defs/resourceRequestDefaults"
+                },
+                "poster": {
+                  "$ref": "#/$defs/resourceRequestDefaults"
+                }
+              }
             }
           },
           "required": [
@@ -596,6 +614,57 @@
         "parserUrl",
         "sites"
       ]
+    },
+    "resourceRequestDefaults": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "headers": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "Referer": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 2048
+            },
+            "Origin": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 2048
+            },
+            "User-Agent": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 2048
+            },
+            "Range": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 2048
+            }
+          },
+          "required": []
+        },
+        "cookieDomains": {
+          "type": "array",
+          "maxItems": 128,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "pattern": "^[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?$"
+          }
+        },
+        "transport": {
+          "enum": [
+            "background",
+            "session"
+          ]
+        },
+        "resumable": {
+          "type": "boolean"
+        }
+      }
     }
   }
 }

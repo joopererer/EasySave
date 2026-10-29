@@ -61,6 +61,11 @@ export function validatePayload(payload, schema) {
       }
     }
     if (Object.values(site.download.headers).some((v) => /[\r\n\x00]/.test(v))) throw new Error('Invalid request header value');
+    for (const defaults of Object.values(site.download.resourceDefaults || {})) {
+      if (Object.values(defaults.headers || {}).some(v => /[\r\n\x00]/.test(v))) throw new Error('Invalid request header value');
+      if ((defaults.cookieDomains || []).some(d => !site.download.cookieDomains.includes(d))) throw new Error('Unauthorized resource cookie domain');
+    }
+
     if (site.auth.mode !== 'none' && !site.auth.loginUrl) throw new Error('Missing login URL');
     for (const raw of [site.auth.loginUrl, ...(site.auth.cookieUrls || [])].filter(Boolean)) {
       const u = new URL(raw);

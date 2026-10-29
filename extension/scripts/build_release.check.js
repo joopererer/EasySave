@@ -167,3 +167,18 @@ test('workflow publishes channel only after upload and readback; release jobs ne
   assert.match(workflow, /git add spec\/v2\/manifest\.json/);
   assert.doesNotMatch(workflow, /git add spec\/manifest\.json|always\(\)|continue-on-error/);
 });
+
+test('resource defaults cannot widen cookies or inject headers', async () => {
+  const { validatePayload } = await import('./sites_config.js');
+  const schema = JSON.parse(readFileSync(resolve(repo, 'spec/sites-manifest.schema.json'), 'utf8'));
+  for (const invalid of [
+    { headers: { Cookie: 'secret' } },
+    { headers: { Referer: 'bad\r\nvalue' } },
+    { cookieDomains: ['com'] },
+    { cookieDomains: ['instagram.com'] },
+  ]) {
+    const payload = createPayload();
+    payload.sites.find(s => s.id === 'tiktok').download.resourceDefaults.image = invalid;
+    assert.throws(() => validatePayload(payload, schema));
+  }
+});

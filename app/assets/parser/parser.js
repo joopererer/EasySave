@@ -1107,6 +1107,19 @@ var EasySaveParser = (() => {
       items
     } };
   }
+  function tiktokExpiresAt(url) {
+    try {
+      let earliest = Infinity;
+      new URL(url).searchParams.forEach((value, key) => {
+        if (!["expire", "x-expires"].includes(key.toLowerCase()) || !/^[0-9]+$/.test(value)) return;
+        const seconds = Number(value), ms = seconds * 1e3;
+        if (Number.isSafeInteger(seconds) && Number.isSafeInteger(ms) && !Number.isNaN(new Date(ms).getTime())) earliest = Math.min(earliest, ms);
+      });
+      return Number.isFinite(earliest) ? new Date(earliest).toISOString() : void 0;
+    } catch {
+      return void 0;
+    }
+  }
 
   // src/_utils.ts
   function hostnameOf(url) {
@@ -1125,6 +1138,43 @@ var EasySaveParser = (() => {
   }
   function isXHost(host) {
     return /x\.com|twitter\.com/.test(host);
+  }
+
+  // src/media-resources.ts
+  function withMediaResources(result, site, expiry = () => void 0) {
+    if (!result?.ok || !Array.isArray(result.data?.items)) return result;
+    const defaults = site.download;
+    const request = (role, url) => {
+      const extra = defaults.resourceDefaults?.[role] ?? {};
+      return {
+        headers: { ...defaults.headers, ...extra.headers },
+        cookieDomains: [...extra.cookieDomains ?? defaults.cookieDomains],
+        expiresAt: expiry(url),
+        transport: extra.transport ?? defaults.transport,
+        resumable: extra.resumable ?? defaults.resumable
+      };
+    };
+    return { ...result, data: { ...result.data, items: result.data.items.map((item) => {
+      const video = item.type === "video";
+      const primary = video ? item.videoUrl && item.videoUrl !== item.url ? "poster" : "video" : "image";
+      const resources = [{ role: primary, url: item.url, request: request(primary, item.url) }];
+      if (item.videoUrl && (!video || item.videoUrl !== item.url)) {
+        const role = video ? "video" : "motion";
+        resources.push({ role, url: item.videoUrl, request: request(role, item.videoUrl) });
+      }
+      if (item.posterUrl) resources.push({
+        role: "poster",
+        url: item.posterUrl,
+        request: request("poster", item.posterUrl)
+      });
+      for (const url of item.fallbacks ?? []) resources.push({
+        role: "fallback",
+        fallbackFor: primary,
+        url,
+        request: request(primary, url)
+      });
+      return { ...item, resources };
+    }) } };
   }
 
   // src/page-hooks.js
@@ -1303,6 +1353,7 @@ var EasySaveParser = (() => {
       classify: (c) => c.error?.code === "LOGIN_REQUIRED" && c.loggedIn ? failure2("PRIVATE_OR_UNAVAILABLE", /敏感内容|年龄限制/.test(c.error.message || "") ? c.error.message : "\u672A\u80FD\u8BFB\u53D6\u5E16\u5B50\u5185\u5BB9\uFF08\u53EF\u80FD\u5305\u542B\u53D7\u9650\u5185\u5BB9\u6216\u5DF2\u88AB\u5220\u9664\uFF09") : c.error
     },
     tiktok: {
+      expiresAt: (c) => tiktokExpiresAt(c.url),
       ready: () => tiktokReady(),
       navigate: (c) => {
         const id = extractTiktokPostId(c.url);
@@ -1317,7 +1368,8 @@ var EasySaveParser = (() => {
       context = { ...context, error: failure2("LOGIN_REQUIRED", "\u53EF\u80FD\u9700\u8981\u767B\u5F55" + context.site.displayName) };
     }
     const module = modules[moduleId];
-    if (Object.hasOwn(module, hook)) return JSON.stringify({ value: module[hook](context) ?? null });
+    const output = (value) => JSON.stringify({ value: hook === "parse" || hook === "parsePage" ? withMediaResources(value, context.site, (url) => module.expiresAt?.({ ...context, url })) : value });
+    if (Object.hasOwn(module, hook)) return output(module[hook](context) ?? null);
     switch (hook) {
       case "install":
       case "navigate":
@@ -1330,13 +1382,13 @@ var EasySaveParser = (() => {
       case "parsePage": {
         try {
           const result = JSON.parse(parsePageForModule(moduleId));
-          if (result.ok) return JSON.stringify({ value: result });
+          if (result.ok) return output(result);
         } catch (_) {
         }
-        return JSON.stringify({ value: JSON.parse(parse(document.documentElement.outerHTML, context.url, moduleId)) });
+        return output(JSON.parse(parse(document.documentElement.outerHTML, context.url, moduleId)));
       }
       case "parse":
-        return JSON.stringify({ value: JSON.parse(parse(context.input || "", context.url, moduleId)) });
+        return output(JSON.parse(parse(context.input || "", context.url, moduleId)));
       case "classify": {
         const error = context.error;
         return JSON.stringify({ value: error?.code === "PRIVATE_OR_UNAVAILABLE" && context.site.auth.mode !== "none" && !context.loggedIn ? failure2("LOGIN_REQUIRED", "\u53EF\u80FD\u9700\u8981\u767B\u5F55" + context.site.displayName) : error });
