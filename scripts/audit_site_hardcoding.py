@@ -12,6 +12,7 @@ OUT = ROOT / "docs/tasks/v1.10-audit"
 ROOTS = {
     "app/lib": {".dart"},
     "app/android/app/src/main": {".kt", ".xml", ".json"},
+    "app/vendor/background_downloader/android/src/main": {".kt", ".xml"},
     "extension/src": {".ts", ".js"},
     "extension/entrypoints": {".ts"},
     "extension/public": {".json"},
@@ -43,10 +44,6 @@ EXTERNAL = {
     "app/lib/services/clipboard_guard.dart", "app/lib/pages/parse_page.dart",
     "app/lib/pages/batch_page.dart",
 }
-MEDIA = {
-    "app/lib/services/download_manager.dart", "app/lib/services/saver.dart",
-    "app/lib/services/preview_video.dart", "app/lib/services/session_media_download.dart",
-}
 LEGACY_TS = {
     "extension/src/index.ts", "extension/src/_utils.ts",
     "extension/src/manifest.ts", "extension/src/errors.ts",
@@ -61,8 +58,6 @@ def classify(path, text):
         return "清单源配置", "允许维护站点数据的源配置；parser-release 的 platforms/headers 是旧 ABI 兼容投影。"
     if path == "app/lib/widgets/shared.dart":
         return "内置图标资源", "本地 Material assetKey 注册表；清单只能选择已打包字形，不能加载远程图标。"
-    if path in MEDIA:
-        return "延期 2b-2（超类说明）", "重试/会话/Cookie/Referer/续传策略；用户明确禁止本轮改变下载和预览请求策略，须在 2b-2 连同逐请求授权一起迁移。"
     if path == "app/lib/services/update_service.dart":
         return "旧通道兼容代码", "旧 platforms/headers ABI 的 X 默认 endpoint/UA；v2 解析入口从 site.load 获取数据，本轮保留旧调用契约。"
     if path == "app/lib/services/login_navigation.dart":

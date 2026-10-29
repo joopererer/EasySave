@@ -1,9 +1,10 @@
 {
   "pattern": "xiaohongshu|xhs|instagram|instagr[.]am|tiktok|twitter|rednote|douyin|小红书|抖音|youtube|youtu[.]be|\\bseal\\b|SealMissing|SealInstalled|sendToSeal|sealPackage|sealReleases|SEAL_|twimg|cdninstagram|fbcdn|xhscdn|xsec_token|xsec_source|web_session|sessionid|auth_token|(?<![A-Za-z0-9_])(?:x[.]com|t[.]co)(?![A-Za-z0-9_])|['\"]x['\"]|accounts[.]google[.](?:com|cn)",
   "scanned": {
-    "app/lib": 77,
-    "app/android/app/src/main": 50,
-    "extension/src": 16,
+    "app/lib": 80,
+    "app/android/app/src/main": 51,
+    "app/vendor/background_downloader/android/src/main": 36,
+    "extension/src": 17,
     "extension/entrypoints": 3,
     "extension/public": 1,
     ".github/workflows": 1
@@ -160,13 +161,13 @@
     {
       "file": "app/assets/parser/builtin-manifest.json",
       "line": 1,
-      "source": "{\"manifestVersion\":1,\"parserAbi\":1,\"minAppVersion\":\"1.9.0\",\"platforms\":{\"tiktok\":{\"enabled\":true,\"notice\":\"TikTok 解析服务维护中，请稍后再试\"},\"xhs\":{\"enabled\":true,\"notice\":\"小红书解析服务维护中，请稍后再试\"},\"instagram\":{\"enabled\":true,\"notice\":\"Instagram 解析服务维护中，请稍后再试\"},\"x\":{\"enabled\":true,\"notice\":\"X 解析服务维护中，请稍后再试\",\"endpoint\":\"https://cdn.syndication.twimg.com/tweet-result?id={id}&lang=en&token={token}\"}},\"headers\":{\"tiktok\":{\"Referer\":\"https://www.tiktok.com/\"},\"xhs\":{\"User-Agent\":\"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36\"},\"instagram\":{\"User-Agent\":\"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36\"},\"x\":{\"User-Agent\":\"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36\"}},\"parserVersion\":\"1.3.0\",\"parserUrl\":\"https://github.com/joopererer/EasySave/releases/download/parser-v1.3.0/parser.js\",\"sha256\":\"e52934513e65a174c2a918ffb5df75466e1f5e602ddb984963f2047b4552b9c1\",\"sites\":[{\"id\":\"xhs\",\"platform\":\"xiaohongshu\",\"displayName\":\"小红书\",\"creditName\":\"小红书\",\"enabled\":true,\"notice\":\"服务维护中，请稍后再试\",\"minAppVersion\":\"1.9.0\",\"requiredCapabilities\":[],\"match\":{\"routes\":[{\"hosts\":[{\"domain\":\"xiaohongshu.com\",\"includeSubdomains\":true},{\"domain\":\"rednote.com\",\"includeSubdomains\":true}],\"pathPatterns\":[\"^/(?:explore|discovery/item)/([A-Za-z0-9]+)\"]},{\"hosts\":[{\"domain\":\"xhs.cn\",\"includeSubdomains\":false},{\"domain\":\"xhslink.cn\",\"includeSubdomains\":false},{\"domain\":\"xhslink.com\",\"includeSubdomains\":false}],\"pathPatterns\":[\"^/(?:(?:a|o)/)?[^/]+/?$\"]}]},\"shortLinks\":[{\"host\":{\"domain\":\"xhslink.com\",\"includeSubdomains\":false},\"strategy\":\"webview\",\"maxRedirects\":5},{\"host\":{\"domain\":\"xhslink.cn\",\"includeSubdomains\":false},\"strategy\":\"webview\",\"maxRedirects\":5},{\"host\":{\"domain\":\"xhs.cn\",\"includeSubdomains\":false},\"strategy\":\"webview\",\"maxRedirects\":5}],\"normalize\":{\"sourceId\":{\"source\":\"path\",\"pattern\":\"^/(?:explore|discovery/item)/([A-Za-z0-9]+)\"},\"canonicalTemplate\":\"https://www.xiaohongshu.com/explore/{id}\",\"preserveLoadQuery\":[\"xsec_token\",\"xsec_source\"],\"exampleId\":\"670f1a2b000000001e028b12\"},\"load\":{\"mode\":\"webview\",\"timeoutMs\":30000,\"readyHook\":\"xhs_ready\",\"userAgent\":\"Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36\"},\"auth\":{\"mode\":\"optional\",\"sessionCookieNames\":[\"web_session\",\"customer-sso-sid\",\"galaxy_creator_session_id\",\"login_token\"],\"loginUrl\":\"https://www.xiaohongshu.com/explore\",\"userAgent\":\"Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36\",\"stateHook\":\"account\",\"cookieUrls\":[\"https://www.xiaohongshu.com/\",\"https://www.xiaohongshu.com/explore\",\"https://edith.xiaohongshu.com/\"],\"probeHook\":\"probeSession\",\"loginHint\":\"页面加载后输入手机号获取验证码登录（也可切换密码登录），登录成功会自动返回。登录状态保存在本机，重启 App 依然有效。\"},\"parserModule\":\"xhs\",\"download\":{\"mediaHosts\":[{\"domain\":\"xhscdn.com\",\"includeSubdomains\":true},{\"domain\":\"xiaohongshu.com\",\"includeSubdomains\":true}],\"headers\":{\"Referer\":\"https://www.xiaohongshu.com/\"},\"cookieDomains\":[],\"transport\":\"background\",\"resumable\":true},\"metadata\":{\"authorIdRule\":\"opaque\"},\"icon\":{\"assetKey\":\"xhs\"},\"tagColor\":\"#EA1C42\"},{\"id\":\"instagram\",\"platform\":\"instagram\",\"displayName\":\"Instagram\",\"creditName\":\"Instagram\",\"enabled\":true,\"notice\":\"服务维护中，请稍后再试\",\"minAppVersion\":\"1.9.0\",\"requiredCapabilities\":[],\"match\":{\"routes\":[{\"hosts\":[{\"domain\":\"instagram.com\",\"includeSubdomains\":true},{\"domain\":\"instagr.am\",\"includeSubdomains\":true}],\"pathPatterns\":[\"^/(?:p|reels?|tv)/([A-Za-z0-9_-]+)\"]}]},\"shortLinks\":[],\"normalize\":{\"sourceId\":{\"source\":\"path\",\"pattern\":\"^/(?:p|reels?|tv)/([A-Za-z0-9_-]+)\"},\"canonicalTemplate\":\"https://www.instagram.com/p/{id}/\",\"preserveLoadQuery\":[],\"exampleId\":\"AbC123\"},\"load\":{\"mode\":\"webview\",\"timeoutMs\":30000,\"readyHook\":\"instagram_ready\",\"userAgent\":\"Mozilla/5.0 (Linux; Android 12; Pixel 6) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Mobile Safari/537.36\"},\"auth\":{\"mode\":\"optional\",\"sessionCookieNames\":[\"sessionid\"],\"loginUrl\":\"https://www.instagram.com/accounts/login/\",\"userAgent\":\"Mozilla/5.0 (Linux; Android 12; Pixel 6) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Mobile Safari/537.36\"},\"parserModule\":\"instagram\",\"download\":{\"mediaHosts\":[{\"domain\":\"cdninstagram.com\",\"includeSubdomains\":true},{\"domain\":\"fbcdn.net\",\"includeSubdomains\":true}],\"headers\":{\"Referer\":\"https://www.instagram.com/\"},\"cookieDomains\":[],\"transport\":\"background\",\"resumable\":true},\"metadata\":{\"authorIdRule\":\"numeric\"},\"icon\":{\"assetKey\":\"instagram\"},\"tagColor\":\"#CE35A8\"},{\"id\":\"x\",\"platform\":\"x\",\"displayName\":\"X\",\"creditName\":\"X\",\"enabled\":true,\"notice\":\"服务维护中，请稍后再试\",\"minAppVersion\":\"1.9.0\",\"requiredCapabilities\":[],\"match\":{\"routes\":[{\"hosts\":[{\"domain\":\"x.com\",\"includeSubdomains\":true},{\"domain\":\"twitter.com\",\"includeSubdomains\":true}],\"pathPatterns\":[\"^/[^/]+/status/([0-9]+)\"]},{\"hosts\":[{\"domain\":\"t.co\",\"includeSubdomains\":false}],\"pathPatterns\":[\"^/[^/]+/?$\"]}]},\"shortLinks\":[{\"host\":{\"domain\":\"t.co\",\"includeSubdomains\":false},\"strategy\":\"http\",\"maxRedirects\":5}],\"normalize\":{\"sourceId\":{\"source\":\"path\",\"pattern\":\"^/[^/]+/status/([0-9]+)\"},\"canonicalTemplate\":\"https://x.com/i/status/{id}\",\"preserveLoadQuery\":[],\"exampleId\":\"1234567890123456789\"},\"load\":{\"mode\":\"json\",\"timeoutMs\":30000,\"endpointTemplate\":\"https://cdn.syndication.twimg.com/tweet-result?id={id}&lang=en&token={token}\",\"prepareHook\":\"x_build_request\",\"headers\":{\"User-Agent\":\"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36\"}},\"auth\":{\"mode\":\"optional\",\"sessionCookieNames\":[\"auth_token\"],\"loginUrl\":\"https://x.com/i/flow/login\"},\"parserModule\":\"x\",\"download\":{\"mediaHosts\":[{\"domain\":\"twimg.com\",\"includeSubdomains\":true}],\"headers\":{},\"cookieDomains\":[],\"transport\":\"background\",\"resumable\":true},\"metadata\":{\"authorIdRule\":\"numeric\"},\"icon\":{\"assetKey\":\"x\"},\"tagColor\":\"#0F1419\"},{\"id\":\"tiktok\",\"platform\":\"tiktok\",\"displayName\":\"TikTok\",\"creditName\":\"TikTok\",\"enabled\":true,\"notice\":\"服务维护中，请稍后再试\",\"minAppVersion\":\"1.9.0\",\"requiredCapabilities\":[],\"match\":{\"routes\":[{\"hosts\":[{\"domain\":\"tiktok.com\",\"includeSubdomains\":true}],\"pathPatterns\":[\"^/(?:@[^/]*/(?:video|photo)/([0-9]+)|share/video/([0-9]+)|v/([0-9]+)\\\\.html)/?$\",\"^/t/[^/]+/?$\"]},{\"hosts\":[{\"domain\":\"vm.tiktok.com\",\"includeSubdomains\":false},{\"domain\":\"vt.tiktok.com\",\"includeSubdomains\":false}],\"pathPatterns\":[\"^/[^/]+/?$\"]}]},\"shortLinks\":[{\"host\":{\"domain\":\"vm.tiktok.com\",\"includeSubdomains\":false},\"strategy\":\"webview\",\"maxRedirects\":5,\"historyStrategy\":\"http\"},{\"host\":{\"domain\":\"vt.tiktok.com\",\"includeSubdomains\":false},\"strategy\":\"webview\",\"maxRedirects\":5,\"historyStrategy\":\"http\"},{\"host\":{\"domain\":\"tiktok.com\",\"includeSubdomains\":true},\"strategy\":\"webview\",\"historyStrategy\":\"http\",\"pathPatterns\":[\"^/t/[^/]+/?$\"],\"maxRedirects\":5}],\"normalize\":{\"sourceId\":{\"source\":\"path\",\"pattern\":\"^/(?:@[^/]*/(?:video|photo)/([0-9]+)|share/video/([0-9]+)|v/([0-9]+)\\\\.html)/?$\"},\"canonicalTemplate\":\"https://www.tiktok.com/@/video/{id}\",\"preserveLoadQuery\":[],\"exampleId\":\"1234567890123456789\"},\"load\":{\"mode\":\"webview\",\"timeoutMs\":30000,\"readyHook\":\"tiktok_ready\",\"userAgent\":\"Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36\"},\"auth\":{\"mode\":\"optional\",\"sessionCookieNames\":[\"sessionid\",\"sessionid_ss\"],\"loginUrl\":\"https://www.tiktok.com/login\",\"externalGoogleNotice\":true,\"loginHint\":\"请选择 TikTok 的手机号 / 邮箱 / 用户名登录。Google 授权暂不支持在此页面完成。成功后点右上角“完成”。\",\"externalGoogleMessage\":\"Google 授权不能在此内嵌登录页完成。请返回 TikTok，选择“手机号 / 邮箱 / 用户名”登录。如果使用 Gmail 地址，请输入 TikTok 账号密码，不是 Google 密码。在外部浏览器登录也不会自动同步到 EasySave。\"},\"parserModule\":\"tiktok\",\"download\":{\"mediaHosts\":[{\"domain\":\"tiktok.com\",\"includeSubdomains\":true}],\"headers\":{\"Referer\":\"https://www.tiktok.com/\"},\"cookieDomains\":[\"tiktok.com\"],\"transport\":\"session\",\"resumable\":false},\"metadata\":{\"authorIdRule\":\"numeric\"},\"icon\":{\"assetKey\":\"tiktok\"},\"tagColor\":\"#0F1419\",\"previewErrorMessage\":\"TikTok 在线预览可能受平台限制，请下载后观看\"},{\"id\":\"douyin\",\"platform\":\"douyin\",\"displayName\":\"抖音\",\"creditName\":\"抖音\",\"enabled\":false,\"notice\":\"待匿名实测，禁止启用\",\"minAppVersion\":\"1.9.0\",\"requiredCapabilities\":[],\"match\":{\"routes\":[{\"hosts\":[{\"domain\":\"douyin.com\",\"includeSubdomains\":true},{\"domain\":\"iesdouyin.com\",\"includeSubdomains\":true}],\"pathPatterns\":[\"^/(?:video|note|share/video)/([0-9]+)\"]},{\"hosts\":[{\"domain\":\"v.douyin.com\",\"includeSubdomains\":false}],\"pathPatterns\":[\"^/[^/]+/?$\"]}]},\"shortLinks\":[{\"host\":{\"domain\":\"v.douyin.com\",\"includeSubdomains\":false},\"strategy\":\"webview\",\"maxRedirects\":5}],\"normalize\":{\"sourceId\":{\"source\":\"path\",\"pattern\":\"^/(?:video|note|share/video)/([0-9]+)\"},\"canonicalTemplate\":\"https://www.douyin.com/video/{id}\",\"preserveLoadQuery\":[],\"exampleId\":\"1234567890123456789\"},\"load\":{\"mode\":\"webview\",\"timeoutMs\":30000,\"readyHook\":\"douyin_ready\"},\"auth\":{\"mode\":\"none\",\"sessionCookieNames\":[]},\"parserModule\":\"douyin\",\"download\":{\"mediaHosts\":[],\"headers\":{\"Referer\":\"https://www.douyin.com/\"},\"cookieDomains\":[],\"transport\":\"background\",\"resumable\":true},\"metadata\":{\"authorIdRule\":\"numeric\"}}]}",
+      "source": "{\"manifestVersion\":1,\"parserAbi\":1,\"minAppVersion\":\"1.9.0\",\"platforms\":{\"tiktok\":{\"enabled\":true,\"notice\":\"TikTok 解析服务维护中，请稍后再试\"},\"xhs\":{\"enabled\":true,\"notice\":\"小红书解析服务维护中，请稍后再试\"},\"instagram\":{\"enabled\":true,\"notice\":\"Instagram 解析服务维护中，请稍后再试\"},\"x\":{\"enabled\":true,\"notice\":\"X 解析服务维护中，请稍后再试\",\"endpoint\":\"https://cdn.syndication.twimg.com/tweet-result?id={id}&lang=en&token={token}\"}},\"headers\":{\"tiktok\":{\"Referer\":\"https://www.tiktok.com/\"},\"xhs\":{\"User-Agent\":\"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36\"},\"instagram\":{\"User-Agent\":\"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36\"},\"x\":{\"User-Agent\":\"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36\"}},\"parserVersion\":\"1.3.0\",\"parserUrl\":\"https://github.com/joopererer/EasySave/releases/download/parser-v1.3.0/parser.js\",\"sha256\":\"41a859e72e32d161873e76cfdc1c8c5cf62301e40f938ae38544f47c7def8e00\",\"sites\":[{\"id\":\"xhs\",\"platform\":\"xiaohongshu\",\"displayName\":\"小红书\",\"creditName\":\"小红书\",\"enabled\":true,\"notice\":\"服务维护中，请稍后再试\",\"minAppVersion\":\"1.9.0\",\"requiredCapabilities\":[],\"match\":{\"routes\":[{\"hosts\":[{\"domain\":\"xiaohongshu.com\",\"includeSubdomains\":true},{\"domain\":\"rednote.com\",\"includeSubdomains\":true}],\"pathPatterns\":[\"^/(?:explore|discovery/item)/([A-Za-z0-9]+)\"]},{\"hosts\":[{\"domain\":\"xhs.cn\",\"includeSubdomains\":false},{\"domain\":\"xhslink.cn\",\"includeSubdomains\":false},{\"domain\":\"xhslink.com\",\"includeSubdomains\":false}],\"pathPatterns\":[\"^/(?:(?:a|o)/)?[^/]+/?$\"]}]},\"shortLinks\":[{\"host\":{\"domain\":\"xhslink.com\",\"includeSubdomains\":false},\"strategy\":\"webview\",\"maxRedirects\":5},{\"host\":{\"domain\":\"xhslink.cn\",\"includeSubdomains\":false},\"strategy\":\"webview\",\"maxRedirects\":5},{\"host\":{\"domain\":\"xhs.cn\",\"includeSubdomains\":false},\"strategy\":\"webview\",\"maxRedirects\":5}],\"normalize\":{\"sourceId\":{\"source\":\"path\",\"pattern\":\"^/(?:explore|discovery/item)/([A-Za-z0-9]+)\"},\"canonicalTemplate\":\"https://www.xiaohongshu.com/explore/{id}\",\"preserveLoadQuery\":[\"xsec_token\",\"xsec_source\"],\"exampleId\":\"670f1a2b000000001e028b12\"},\"load\":{\"mode\":\"webview\",\"timeoutMs\":30000,\"readyHook\":\"xhs_ready\",\"userAgent\":\"Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36\"},\"auth\":{\"mode\":\"optional\",\"sessionCookieNames\":[\"web_session\",\"customer-sso-sid\",\"galaxy_creator_session_id\",\"login_token\"],\"loginUrl\":\"https://www.xiaohongshu.com/explore\",\"userAgent\":\"Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36\",\"stateHook\":\"account\",\"cookieUrls\":[\"https://www.xiaohongshu.com/\",\"https://www.xiaohongshu.com/explore\",\"https://edith.xiaohongshu.com/\"],\"probeHook\":\"probeSession\",\"loginHint\":\"页面加载后输入手机号获取验证码登录（也可切换密码登录），登录成功会自动返回。登录状态保存在本机，重启 App 依然有效。\"},\"parserModule\":\"xhs\",\"download\":{\"mediaHosts\":[{\"domain\":\"xhscdn.com\",\"includeSubdomains\":true},{\"domain\":\"xhscdn.net\",\"includeSubdomains\":true},{\"domain\":\"xiaohongshu.com\",\"includeSubdomains\":true}],\"headers\":{\"Referer\":\"https://www.xiaohongshu.com/\"},\"cookieDomains\":[],\"transport\":\"background\",\"resumable\":true},\"metadata\":{\"authorIdRule\":\"opaque\"},\"icon\":{\"assetKey\":\"xhs\"},\"tagColor\":\"#EA1C42\"},{\"id\":\"instagram\",\"platform\":\"instagram\",\"displayName\":\"Instagram\",\"creditName\":\"Instagram\",\"enabled\":true,\"notice\":\"服务维护中，请稍后再试\",\"minAppVersion\":\"1.9.0\",\"requiredCapabilities\":[],\"match\":{\"routes\":[{\"hosts\":[{\"domain\":\"instagram.com\",\"includeSubdomains\":true},{\"domain\":\"instagr.am\",\"includeSubdomains\":true}],\"pathPatterns\":[\"^/(?:p|reels?|tv)/([A-Za-z0-9_-]+)\"]}]},\"shortLinks\":[],\"normalize\":{\"sourceId\":{\"source\":\"path\",\"pattern\":\"^/(?:p|reels?|tv)/([A-Za-z0-9_-]+)\"},\"canonicalTemplate\":\"https://www.instagram.com/p/{id}/\",\"preserveLoadQuery\":[],\"exampleId\":\"AbC123\"},\"load\":{\"mode\":\"webview\",\"timeoutMs\":30000,\"readyHook\":\"instagram_ready\",\"userAgent\":\"Mozilla/5.0 (Linux; Android 12; Pixel 6) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Mobile Safari/537.36\"},\"auth\":{\"mode\":\"optional\",\"sessionCookieNames\":[\"sessionid\"],\"loginUrl\":\"https://www.instagram.com/accounts/login/\",\"userAgent\":\"Mozilla/5.0 (Linux; Android 12; Pixel 6) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Mobile Safari/537.36\"},\"parserModule\":\"instagram\",\"download\":{\"mediaHosts\":[{\"domain\":\"cdninstagram.com\",\"includeSubdomains\":true},{\"domain\":\"fbcdn.net\",\"includeSubdomains\":true}],\"headers\":{\"Referer\":\"https://www.instagram.com/\"},\"cookieDomains\":[],\"transport\":\"background\",\"resumable\":true},\"metadata\":{\"authorIdRule\":\"numeric\"},\"icon\":{\"assetKey\":\"instagram\"},\"tagColor\":\"#CE35A8\"},{\"id\":\"x\",\"platform\":\"x\",\"displayName\":\"X\",\"creditName\":\"X\",\"enabled\":true,\"notice\":\"服务维护中，请稍后再试\",\"minAppVersion\":\"1.9.0\",\"requiredCapabilities\":[],\"match\":{\"routes\":[{\"hosts\":[{\"domain\":\"x.com\",\"includeSubdomains\":true},{\"domain\":\"twitter.com\",\"includeSubdomains\":true}],\"pathPatterns\":[\"^/[^/]+/status/([0-9]+)\"]},{\"hosts\":[{\"domain\":\"t.co\",\"includeSubdomains\":false}],\"pathPatterns\":[\"^/[^/]+/?$\"]}]},\"shortLinks\":[{\"host\":{\"domain\":\"t.co\",\"includeSubdomains\":false},\"strategy\":\"http\",\"maxRedirects\":5}],\"normalize\":{\"sourceId\":{\"source\":\"path\",\"pattern\":\"^/[^/]+/status/([0-9]+)\"},\"canonicalTemplate\":\"https://x.com/i/status/{id}\",\"preserveLoadQuery\":[],\"exampleId\":\"1234567890123456789\"},\"load\":{\"mode\":\"json\",\"timeoutMs\":30000,\"endpointTemplate\":\"https://cdn.syndication.twimg.com/tweet-result?id={id}&lang=en&token={token}\",\"prepareHook\":\"x_build_request\",\"headers\":{\"User-Agent\":\"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36\"}},\"auth\":{\"mode\":\"optional\",\"sessionCookieNames\":[\"auth_token\"],\"loginUrl\":\"https://x.com/i/flow/login\"},\"parserModule\":\"x\",\"download\":{\"mediaHosts\":[{\"domain\":\"twimg.com\",\"includeSubdomains\":true}],\"headers\":{},\"cookieDomains\":[],\"transport\":\"background\",\"resumable\":true},\"metadata\":{\"authorIdRule\":\"numeric\"},\"icon\":{\"assetKey\":\"x\"},\"tagColor\":\"#0F1419\"},{\"id\":\"tiktok\",\"platform\":\"tiktok\",\"displayName\":\"TikTok\",\"creditName\":\"TikTok\",\"enabled\":true,\"notice\":\"服务维护中，请稍后再试\",\"minAppVersion\":\"1.9.0\",\"requiredCapabilities\":[],\"match\":{\"routes\":[{\"hosts\":[{\"domain\":\"tiktok.com\",\"includeSubdomains\":true}],\"pathPatterns\":[\"^/(?:@[^/]*/(?:video|photo)/([0-9]+)|share/video/([0-9]+)|v/([0-9]+)\\\\.html)/?$\",\"^/t/[^/]+/?$\"]},{\"hosts\":[{\"domain\":\"vm.tiktok.com\",\"includeSubdomains\":false},{\"domain\":\"vt.tiktok.com\",\"includeSubdomains\":false}],\"pathPatterns\":[\"^/[^/]+/?$\"]}]},\"shortLinks\":[{\"host\":{\"domain\":\"vm.tiktok.com\",\"includeSubdomains\":false},\"strategy\":\"webview\",\"maxRedirects\":5,\"historyStrategy\":\"http\"},{\"host\":{\"domain\":\"vt.tiktok.com\",\"includeSubdomains\":false},\"strategy\":\"webview\",\"maxRedirects\":5,\"historyStrategy\":\"http\"},{\"host\":{\"domain\":\"tiktok.com\",\"includeSubdomains\":true},\"strategy\":\"webview\",\"historyStrategy\":\"http\",\"pathPatterns\":[\"^/t/[^/]+/?$\"],\"maxRedirects\":5}],\"normalize\":{\"sourceId\":{\"source\":\"path\",\"pattern\":\"^/(?:@[^/]*/(?:video|photo)/([0-9]+)|share/video/([0-9]+)|v/([0-9]+)\\\\.html)/?$\"},\"canonicalTemplate\":\"https://www.tiktok.com/@/video/{id}\",\"preserveLoadQuery\":[],\"exampleId\":\"1234567890123456789\"},\"load\":{\"mode\":\"webview\",\"timeoutMs\":30000,\"readyHook\":\"tiktok_ready\",\"userAgent\":\"Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36\"},\"auth\":{\"mode\":\"optional\",\"sessionCookieNames\":[\"sessionid\",\"sessionid_ss\"],\"loginUrl\":\"https://www.tiktok.com/login\",\"externalGoogleNotice\":true,\"loginHint\":\"请选择 TikTok 的手机号 / 邮箱 / 用户名登录。Google 授权暂不支持在此页面完成。成功后点右上角“完成”。\",\"externalGoogleMessage\":\"Google 授权不能在此内嵌登录页完成。请返回 TikTok，选择“手机号 / 邮箱 / 用户名”登录。如果使用 Gmail 地址，请输入 TikTok 账号密码，不是 Google 密码。在外部浏览器登录也不会自动同步到 EasySave。\"},\"parserModule\":\"tiktok\",\"download\":{\"mediaHosts\":[{\"domain\":\"tiktok.com\",\"includeSubdomains\":true},{\"domain\":\"tiktokcdn.com\",\"includeSubdomains\":true},{\"domain\":\"tiktokcdn-eu.com\",\"includeSubdomains\":true},{\"domain\":\"tiktokcdn-us.com\",\"includeSubdomains\":true}],\"headers\":{\"Referer\":\"https://www.tiktok.com/\"},\"cookieDomains\":[\"tiktok.com\"],\"urlOrder\":\"primaryFirst\",\"transport\":\"session\",\"resumable\":false,\"resourceDefaults\":{\"image\":{\"cookieDomains\":[],\"transport\":\"background\",\"resumable\":true},\"poster\":{\"cookieDomains\":[],\"transport\":\"background\",\"resumable\":true}}},\"metadata\":{\"authorIdRule\":\"numeric\"},\"icon\":{\"assetKey\":\"tiktok\"},\"tagColor\":\"#0F1419\",\"previewErrorMessage\":\"TikTok 在线预览可能受平台限制，请下载后观看\"},{\"id\":\"douyin\",\"platform\":\"douyin\",\"displayName\":\"抖音\",\"creditName\":\"抖音\",\"enabled\":false,\"notice\":\"待匿名实测，禁止启用\",\"minAppVersion\":\"1.9.0\",\"requiredCapabilities\":[],\"match\":{\"routes\":[{\"hosts\":[{\"domain\":\"douyin.com\",\"includeSubdomains\":true},{\"domain\":\"iesdouyin.com\",\"includeSubdomains\":true}],\"pathPatterns\":[\"^/(?:video|note|share/video)/([0-9]+)\"]},{\"hosts\":[{\"domain\":\"v.douyin.com\",\"includeSubdomains\":false}],\"pathPatterns\":[\"^/[^/]+/?$\"]}]},\"shortLinks\":[{\"host\":{\"domain\":\"v.douyin.com\",\"includeSubdomains\":false},\"strategy\":\"webview\",\"maxRedirects\":5}],\"normalize\":{\"sourceId\":{\"source\":\"path\",\"pattern\":\"^/(?:video|note|share/video)/([0-9]+)\"},\"canonicalTemplate\":\"https://www.douyin.com/video/{id}\",\"preserveLoadQuery\":[],\"exampleId\":\"1234567890123456789\"},\"load\":{\"mode\":\"webview\",\"timeoutMs\":30000,\"readyHook\":\"douyin_ready\"},\"auth\":{\"mode\":\"none\",\"sessionCookieNames\":[]},\"parserModule\":\"douyin\",\"download\":{\"mediaHosts\":[],\"headers\":{\"Referer\":\"https://www.douyin.com/\"},\"cookieDomains\":[],\"transport\":\"background\",\"resumable\":true},\"metadata\":{\"authorIdRule\":\"numeric\"}}]}",
       "category": "生成配置",
       "reason": "由 config/sites.json 与构建器生成；不是独立维护的平台表。"
     },
     {
       "file": "app/lib/background/background_entry.dart",
-      "line": 65,
+      "line": 81,
       "source": "/// query parameters (xsec_token, share_id, ...) and cookie/token-ish values",
       "category": "词法候选",
       "reason": "注释、导入或符号声明；不独立执行站点数据规则。"
@@ -187,21 +188,21 @@
     },
     {
       "file": "app/lib/core/models.dart",
-      "line": 1,
+      "line": 3,
       "source": "// Unified parsing models shared by the XHS and Instagram parsers.",
       "category": "词法候选",
       "reason": "注释、导入或符号声明；不独立执行站点数据规则。"
     },
     {
       "file": "app/lib/core/models.dart",
-      "line": 66,
+      "line": 75,
       "source": "  /// Still-image cover for a video item (XHS `imageList[0]`). IG video",
       "category": "词法候选",
       "reason": "注释、导入或符号声明；不独立执行站点数据规则。"
     },
     {
       "file": "app/lib/core/models.dart",
-      "line": 72,
+      "line": 81,
       "source": "  /// Video length in seconds, from `video.capa.duration` (XHS) or",
       "category": "词法候选",
       "reason": "注释、导入或符号声明；不独立执行站点数据规则。"
@@ -209,7 +210,7 @@
     {
       "file": "app/lib/generated/builtin_sites.dart",
       "line": 2,
-      "source": "const builtinSitesJson = \"[{\\\"id\\\":\\\"xhs\\\",\\\"platform\\\":\\\"xiaohongshu\\\",\\\"displayName\\\":\\\"小红书\\\",\\\"creditName\\\":\\\"小红书\\\",\\\"enabled\\\":true,\\\"notice\\\":\\\"服务维护中，请稍后再试\\\",\\\"minAppVersion\\\":\\\"1.9.0\\\",\\\"requiredCapabilities\\\":[],\\\"match\\\":{\\\"routes\\\":[{\\\"hosts\\\":[{\\\"domain\\\":\\\"xiaohongshu.com\\\",\\\"includeSubdomains\\\":true},{\\\"domain\\\":\\\"rednote.com\\\",\\\"includeSubdomains\\\":true}],\\\"pathPatterns\\\":[\\\"^/(?:explore|discovery/item)/([A-Za-z0-9]+)\\\"]},{\\\"hosts\\\":[{\\\"domain\\\":\\\"xhs.cn\\\",\\\"includeSubdomains\\\":false},{\\\"domain\\\":\\\"xhslink.cn\\\",\\\"includeSubdomains\\\":false},{\\\"domain\\\":\\\"xhslink.com\\\",\\\"includeSubdomains\\\":false}],\\\"pathPatterns\\\":[\\\"^/(?:(?:a|o)/)?[^/]+/?\\$\\\"]}]},\\\"shortLinks\\\":[{\\\"host\\\":{\\\"domain\\\":\\\"xhslink.com\\\",\\\"includeSubdomains\\\":false},\\\"strategy\\\":\\\"webview\\\",\\\"maxRedirects\\\":5},{\\\"host\\\":{\\\"domain\\\":\\\"xhslink.cn\\\",\\\"includeSubdomains\\\":false},\\\"strategy\\\":\\\"webview\\\",\\\"maxRedirects\\\":5},{\\\"host\\\":{\\\"domain\\\":\\\"xhs.cn\\\",\\\"includeSubdomains\\\":false},\\\"strategy\\\":\\\"webview\\\",\\\"maxRedirects\\\":5}],\\\"normalize\\\":{\\\"sourceId\\\":{\\\"source\\\":\\\"path\\\",\\\"pattern\\\":\\\"^/(?:explore|discovery/item)/([A-Za-z0-9]+)\\\"},\\\"canonicalTemplate\\\":\\\"https://www.xiaohongshu.com/explore/{id}\\\",\\\"preserveLoadQuery\\\":[\\\"xsec_token\\\",\\\"xsec_source\\\"],\\\"exampleId\\\":\\\"670f1a2b000000001e028b12\\\"},\\\"load\\\":{\\\"mode\\\":\\\"webview\\\",\\\"timeoutMs\\\":30000,\\\"readyHook\\\":\\\"xhs_ready\\\",\\\"userAgent\\\":\\\"Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36\\\"},\\\"auth\\\":{\\\"mode\\\":\\\"optional\\\",\\\"sessionCookieNames\\\":[\\\"web_session\\\",\\\"customer-sso-sid\\\",\\\"galaxy_creator_session_id\\\",\\\"login_token\\\"],\\\"loginUrl\\\":\\\"https://www.xiaohongshu.com/explore\\\",\\\"userAgent\\\":\\\"Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36\\\",\\\"stateHook\\\":\\\"account\\\",\\\"cookieUrls\\\":[\\\"https://www.xiaohongshu.com/\\\",\\\"https://www.xiaohongshu.com/explore\\\",\\\"https://edith.xiaohongshu.com/\\\"],\\\"probeHook\\\":\\\"probeSession\\\",\\\"loginHint\\\":\\\"页面加载后输入手机号获取验证码登录（也可切换密码登录），登录成功会自动返回。登录状态保存在本机，重启 App 依然有效。\\\"},\\\"parserModule\\\":\\\"xhs\\\",\\\"download\\\":{\\\"mediaHosts\\\":[{\\\"domain\\\":\\\"xhscdn.com\\\",\\\"includeSubdomains\\\":true},{\\\"domain\\\":\\\"xiaohongshu.com\\\",\\\"includeSubdomains\\\":true}],\\\"headers\\\":{\\\"Referer\\\":\\\"https://www.xiaohongshu.com/\\\"},\\\"cookieDomains\\\":[],\\\"transport\\\":\\\"background\\\",\\\"resumable\\\":true},\\\"metadata\\\":{\\\"authorIdRule\\\":\\\"opaque\\\"},\\\"icon\\\":{\\\"assetKey\\\":\\\"xhs\\\"},\\\"tagColor\\\":\\\"#EA1C42\\\"},{\\\"id\\\":\\\"instagram\\\",\\\"platform\\\":\\\"instagram\\\",\\\"displayName\\\":\\\"Instagram\\\",\\\"creditName\\\":\\\"Instagram\\\",\\\"enabled\\\":true,\\\"notice\\\":\\\"服务维护中，请稍后再试\\\",\\\"minAppVersion\\\":\\\"1.9.0\\\",\\\"requiredCapabilities\\\":[],\\\"match\\\":{\\\"routes\\\":[{\\\"hosts\\\":[{\\\"domain\\\":\\\"instagram.com\\\",\\\"includeSubdomains\\\":true},{\\\"domain\\\":\\\"instagr.am\\\",\\\"includeSubdomains\\\":true}],\\\"pathPatterns\\\":[\\\"^/(?:p|reels?|tv)/([A-Za-z0-9_-]+)\\\"]}]},\\\"shortLinks\\\":[],\\\"normalize\\\":{\\\"sourceId\\\":{\\\"source\\\":\\\"path\\\",\\\"pattern\\\":\\\"^/(?:p|reels?|tv)/([A-Za-z0-9_-]+)\\\"},\\\"canonicalTemplate\\\":\\\"https://www.instagram.com/p/{id}/\\\",\\\"preserveLoadQuery\\\":[],\\\"exampleId\\\":\\\"AbC123\\\"},\\\"load\\\":{\\\"mode\\\":\\\"webview\\\",\\\"timeoutMs\\\":30000,\\\"readyHook\\\":\\\"instagram_ready\\\",\\\"userAgent\\\":\\\"Mozilla/5.0 (Linux; Android 12; Pixel 6) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Mobile Safari/537.36\\\"},\\\"auth\\\":{\\\"mode\\\":\\\"optional\\\",\\\"sessionCookieNames\\\":[\\\"sessionid\\\"],\\\"loginUrl\\\":\\\"https://www.instagram.com/accounts/login/\\\",\\\"userAgent\\\":\\\"Mozilla/5.0 (Linux; Android 12; Pixel 6) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Mobile Safari/537.36\\\"},\\\"parserModule\\\":\\\"instagram\\\",\\\"download\\\":{\\\"mediaHosts\\\":[{\\\"domain\\\":\\\"cdninstagram.com\\\",\\\"includeSubdomains\\\":true},{\\\"domain\\\":\\\"fbcdn.net\\\",\\\"includeSubdomains\\\":true}],\\\"headers\\\":{\\\"Referer\\\":\\\"https://www.instagram.com/\\\"},\\\"cookieDomains\\\":[],\\\"transport\\\":\\\"background\\\",\\\"resumable\\\":true},\\\"metadata\\\":{\\\"authorIdRule\\\":\\\"numeric\\\"},\\\"icon\\\":{\\\"assetKey\\\":\\\"instagram\\\"},\\\"tagColor\\\":\\\"#CE35A8\\\"},{\\\"id\\\":\\\"x\\\",\\\"platform\\\":\\\"x\\\",\\\"displayName\\\":\\\"X\\\",\\\"creditName\\\":\\\"X\\\",\\\"enabled\\\":true,\\\"notice\\\":\\\"服务维护中，请稍后再试\\\",\\\"minAppVersion\\\":\\\"1.9.0\\\",\\\"requiredCapabilities\\\":[],\\\"match\\\":{\\\"routes\\\":[{\\\"hosts\\\":[{\\\"domain\\\":\\\"x.com\\\",\\\"includeSubdomains\\\":true},{\\\"domain\\\":\\\"twitter.com\\\",\\\"includeSubdomains\\\":true}],\\\"pathPatterns\\\":[\\\"^/[^/]+/status/([0-9]+)\\\"]},{\\\"hosts\\\":[{\\\"domain\\\":\\\"t.co\\\",\\\"includeSubdomains\\\":false}],\\\"pathPatterns\\\":[\\\"^/[^/]+/?\\$\\\"]}]},\\\"shortLinks\\\":[{\\\"host\\\":{\\\"domain\\\":\\\"t.co\\\",\\\"includeSubdomains\\\":false},\\\"strategy\\\":\\\"http\\\",\\\"maxRedirects\\\":5}],\\\"normalize\\\":{\\\"sourceId\\\":{\\\"source\\\":\\\"path\\\",\\\"pattern\\\":\\\"^/[^/]+/status/([0-9]+)\\\"},\\\"canonicalTemplate\\\":\\\"https://x.com/i/status/{id}\\\",\\\"preserveLoadQuery\\\":[],\\\"exampleId\\\":\\\"1234567890123456789\\\"},\\\"load\\\":{\\\"mode\\\":\\\"json\\\",\\\"timeoutMs\\\":30000,\\\"endpointTemplate\\\":\\\"https://cdn.syndication.twimg.com/tweet-result?id={id}&lang=en&token={token}\\\",\\\"prepareHook\\\":\\\"x_build_request\\\",\\\"headers\\\":{\\\"User-Agent\\\":\\\"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36\\\"}},\\\"auth\\\":{\\\"mode\\\":\\\"optional\\\",\\\"sessionCookieNames\\\":[\\\"auth_token\\\"],\\\"loginUrl\\\":\\\"https://x.com/i/flow/login\\\"},\\\"parserModule\\\":\\\"x\\\",\\\"download\\\":{\\\"mediaHosts\\\":[{\\\"domain\\\":\\\"twimg.com\\\",\\\"includeSubdomains\\\":true}],\\\"headers\\\":{},\\\"cookieDomains\\\":[],\\\"transport\\\":\\\"background\\\",\\\"resumable\\\":true},\\\"metadata\\\":{\\\"authorIdRule\\\":\\\"numeric\\\"},\\\"icon\\\":{\\\"assetKey\\\":\\\"x\\\"},\\\"tagColor\\\":\\\"#0F1419\\\"},{\\\"id\\\":\\\"tiktok\\\",\\\"platform\\\":\\\"tiktok\\\",\\\"displayName\\\":\\\"TikTok\\\",\\\"creditName\\\":\\\"TikTok\\\",\\\"enabled\\\":true,\\\"notice\\\":\\\"服务维护中，请稍后再试\\\",\\\"minAppVersion\\\":\\\"1.9.0\\\",\\\"requiredCapabilities\\\":[],\\\"match\\\":{\\\"routes\\\":[{\\\"hosts\\\":[{\\\"domain\\\":\\\"tiktok.com\\\",\\\"includeSubdomains\\\":true}],\\\"pathPatterns\\\":[\\\"^/(?:@[^/]*/(?:video|photo)/([0-9]+)|share/video/([0-9]+)|v/([0-9]+)\\\\\\\\.html)/?\\$\\\",\\\"^/t/[^/]+/?\\$\\\"]},{\\\"hosts\\\":[{\\\"domain\\\":\\\"vm.tiktok.com\\\",\\\"includeSubdomains\\\":false},{\\\"domain\\\":\\\"vt.tiktok.com\\\",\\\"includeSubdomains\\\":false}],\\\"pathPatterns\\\":[\\\"^/[^/]+/?\\$\\\"]}]},\\\"shortLinks\\\":[{\\\"host\\\":{\\\"domain\\\":\\\"vm.tiktok.com\\\",\\\"includeSubdomains\\\":false},\\\"strategy\\\":\\\"webview\\\",\\\"maxRedirects\\\":5,\\\"historyStrategy\\\":\\\"http\\\"},{\\\"host\\\":{\\\"domain\\\":\\\"vt.tiktok.com\\\",\\\"includeSubdomains\\\":false},\\\"strategy\\\":\\\"webview\\\",\\\"maxRedirects\\\":5,\\\"historyStrategy\\\":\\\"http\\\"},{\\\"host\\\":{\\\"domain\\\":\\\"tiktok.com\\\",\\\"includeSubdomains\\\":true},\\\"strategy\\\":\\\"webview\\\",\\\"historyStrategy\\\":\\\"http\\\",\\\"pathPatterns\\\":[\\\"^/t/[^/]+/?\\$\\\"],\\\"maxRedirects\\\":5}],\\\"normalize\\\":{\\\"sourceId\\\":{\\\"source\\\":\\\"path\\\",\\\"pattern\\\":\\\"^/(?:@[^/]*/(?:video|photo)/([0-9]+)|share/video/([0-9]+)|v/([0-9]+)\\\\\\\\.html)/?\\$\\\"},\\\"canonicalTemplate\\\":\\\"https://www.tiktok.com/@/video/{id}\\\",\\\"preserveLoadQuery\\\":[],\\\"exampleId\\\":\\\"1234567890123456789\\\"},\\\"load\\\":{\\\"mode\\\":\\\"webview\\\",\\\"timeoutMs\\\":30000,\\\"readyHook\\\":\\\"tiktok_ready\\\",\\\"userAgent\\\":\\\"Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36\\\"},\\\"auth\\\":{\\\"mode\\\":\\\"optional\\\",\\\"sessionCookieNames\\\":[\\\"sessionid\\\",\\\"sessionid_ss\\\"],\\\"loginUrl\\\":\\\"https://www.tiktok.com/login\\\",\\\"externalGoogleNotice\\\":true,\\\"loginHint\\\":\\\"请选择 TikTok 的手机号 / 邮箱 / 用户名登录。Google 授权暂不支持在此页面完成。成功后点右上角“完成”。\\\",\\\"externalGoogleMessage\\\":\\\"Google 授权不能在此内嵌登录页完成。请返回 TikTok，选择“手机号 / 邮箱 / 用户名”登录。如果使用 Gmail 地址，请输入 TikTok 账号密码，不是 Google 密码。在外部浏览器登录也不会自动同步到 EasySave。\\\"},\\\"parserModule\\\":\\\"tiktok\\\",\\\"download\\\":{\\\"mediaHosts\\\":[{\\\"domain\\\":\\\"tiktok.com\\\",\\\"includeSubdomains\\\":true}],\\\"headers\\\":{\\\"Referer\\\":\\\"https://www.tiktok.com/\\\"},\\\"cookieDomains\\\":[\\\"tiktok.com\\\"],\\\"transport\\\":\\\"session\\\",\\\"resumable\\\":false},\\\"metadata\\\":{\\\"authorIdRule\\\":\\\"numeric\\\"},\\\"icon\\\":{\\\"assetKey\\\":\\\"tiktok\\\"},\\\"tagColor\\\":\\\"#0F1419\\\",\\\"previewErrorMessage\\\":\\\"TikTok 在线预览可能受平台限制，请下载后观看\\\"},{\\\"id\\\":\\\"douyin\\\",\\\"platform\\\":\\\"douyin\\\",\\\"displayName\\\":\\\"抖音\\\",\\\"creditName\\\":\\\"抖音\\\",\\\"enabled\\\":false,\\\"notice\\\":\\\"待匿名实测，禁止启用\\\",\\\"minAppVersion\\\":\\\"1.9.0\\\",\\\"requiredCapabilities\\\":[],\\\"match\\\":{\\\"routes\\\":[{\\\"hosts\\\":[{\\\"domain\\\":\\\"douyin.com\\\",\\\"includeSubdomains\\\":true},{\\\"domain\\\":\\\"iesdouyin.com\\\",\\\"includeSubdomains\\\":true}],\\\"pathPatterns\\\":[\\\"^/(?:video|note|share/video)/([0-9]+)\\\"]},{\\\"hosts\\\":[{\\\"domain\\\":\\\"v.douyin.com\\\",\\\"includeSubdomains\\\":false}],\\\"pathPatterns\\\":[\\\"^/[^/]+/?\\$\\\"]}]},\\\"shortLinks\\\":[{\\\"host\\\":{\\\"domain\\\":\\\"v.douyin.com\\\",\\\"includeSubdomains\\\":false},\\\"strategy\\\":\\\"webview\\\",\\\"maxRedirects\\\":5}],\\\"normalize\\\":{\\\"sourceId\\\":{\\\"source\\\":\\\"path\\\",\\\"pattern\\\":\\\"^/(?:video|note|share/video)/([0-9]+)\\\"},\\\"canonicalTemplate\\\":\\\"https://www.douyin.com/video/{id}\\\",\\\"preserveLoadQuery\\\":[],\\\"exampleId\\\":\\\"1234567890123456789\\\"},\\\"load\\\":{\\\"mode\\\":\\\"webview\\\",\\\"timeoutMs\\\":30000,\\\"readyHook\\\":\\\"douyin_ready\\\"},\\\"auth\\\":{\\\"mode\\\":\\\"none\\\",\\\"sessionCookieNames\\\":[]},\\\"parserModule\\\":\\\"douyin\\\",\\\"download\\\":{\\\"mediaHosts\\\":[],\\\"headers\\\":{\\\"Referer\\\":\\\"https://www.douyin.com/\\\"},\\\"cookieDomains\\\":[],\\\"transport\\\":\\\"background\\\",\\\"resumable\\\":true},\\\"metadata\\\":{\\\"authorIdRule\\\":\\\"numeric\\\"}}]\";",
+      "source": "const builtinSitesJson = \"[{\\\"id\\\":\\\"xhs\\\",\\\"platform\\\":\\\"xiaohongshu\\\",\\\"displayName\\\":\\\"小红书\\\",\\\"creditName\\\":\\\"小红书\\\",\\\"enabled\\\":true,\\\"notice\\\":\\\"服务维护中，请稍后再试\\\",\\\"minAppVersion\\\":\\\"1.9.0\\\",\\\"requiredCapabilities\\\":[],\\\"match\\\":{\\\"routes\\\":[{\\\"hosts\\\":[{\\\"domain\\\":\\\"xiaohongshu.com\\\",\\\"includeSubdomains\\\":true},{\\\"domain\\\":\\\"rednote.com\\\",\\\"includeSubdomains\\\":true}],\\\"pathPatterns\\\":[\\\"^/(?:explore|discovery/item)/([A-Za-z0-9]+)\\\"]},{\\\"hosts\\\":[{\\\"domain\\\":\\\"xhs.cn\\\",\\\"includeSubdomains\\\":false},{\\\"domain\\\":\\\"xhslink.cn\\\",\\\"includeSubdomains\\\":false},{\\\"domain\\\":\\\"xhslink.com\\\",\\\"includeSubdomains\\\":false}],\\\"pathPatterns\\\":[\\\"^/(?:(?:a|o)/)?[^/]+/?\\$\\\"]}]},\\\"shortLinks\\\":[{\\\"host\\\":{\\\"domain\\\":\\\"xhslink.com\\\",\\\"includeSubdomains\\\":false},\\\"strategy\\\":\\\"webview\\\",\\\"maxRedirects\\\":5},{\\\"host\\\":{\\\"domain\\\":\\\"xhslink.cn\\\",\\\"includeSubdomains\\\":false},\\\"strategy\\\":\\\"webview\\\",\\\"maxRedirects\\\":5},{\\\"host\\\":{\\\"domain\\\":\\\"xhs.cn\\\",\\\"includeSubdomains\\\":false},\\\"strategy\\\":\\\"webview\\\",\\\"maxRedirects\\\":5}],\\\"normalize\\\":{\\\"sourceId\\\":{\\\"source\\\":\\\"path\\\",\\\"pattern\\\":\\\"^/(?:explore|discovery/item)/([A-Za-z0-9]+)\\\"},\\\"canonicalTemplate\\\":\\\"https://www.xiaohongshu.com/explore/{id}\\\",\\\"preserveLoadQuery\\\":[\\\"xsec_token\\\",\\\"xsec_source\\\"],\\\"exampleId\\\":\\\"670f1a2b000000001e028b12\\\"},\\\"load\\\":{\\\"mode\\\":\\\"webview\\\",\\\"timeoutMs\\\":30000,\\\"readyHook\\\":\\\"xhs_ready\\\",\\\"userAgent\\\":\\\"Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36\\\"},\\\"auth\\\":{\\\"mode\\\":\\\"optional\\\",\\\"sessionCookieNames\\\":[\\\"web_session\\\",\\\"customer-sso-sid\\\",\\\"galaxy_creator_session_id\\\",\\\"login_token\\\"],\\\"loginUrl\\\":\\\"https://www.xiaohongshu.com/explore\\\",\\\"userAgent\\\":\\\"Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36\\\",\\\"stateHook\\\":\\\"account\\\",\\\"cookieUrls\\\":[\\\"https://www.xiaohongshu.com/\\\",\\\"https://www.xiaohongshu.com/explore\\\",\\\"https://edith.xiaohongshu.com/\\\"],\\\"probeHook\\\":\\\"probeSession\\\",\\\"loginHint\\\":\\\"页面加载后输入手机号获取验证码登录（也可切换密码登录），登录成功会自动返回。登录状态保存在本机，重启 App 依然有效。\\\"},\\\"parserModule\\\":\\\"xhs\\\",\\\"download\\\":{\\\"mediaHosts\\\":[{\\\"domain\\\":\\\"xhscdn.com\\\",\\\"includeSubdomains\\\":true},{\\\"domain\\\":\\\"xhscdn.net\\\",\\\"includeSubdomains\\\":true},{\\\"domain\\\":\\\"xiaohongshu.com\\\",\\\"includeSubdomains\\\":true}],\\\"headers\\\":{\\\"Referer\\\":\\\"https://www.xiaohongshu.com/\\\"},\\\"cookieDomains\\\":[],\\\"transport\\\":\\\"background\\\",\\\"resumable\\\":true},\\\"metadata\\\":{\\\"authorIdRule\\\":\\\"opaque\\\"},\\\"icon\\\":{\\\"assetKey\\\":\\\"xhs\\\"},\\\"tagColor\\\":\\\"#EA1C42\\\"},{\\\"id\\\":\\\"instagram\\\",\\\"platform\\\":\\\"instagram\\\",\\\"displayName\\\":\\\"Instagram\\\",\\\"creditName\\\":\\\"Instagram\\\",\\\"enabled\\\":true,\\\"notice\\\":\\\"服务维护中，请稍后再试\\\",\\\"minAppVersion\\\":\\\"1.9.0\\\",\\\"requiredCapabilities\\\":[],\\\"match\\\":{\\\"routes\\\":[{\\\"hosts\\\":[{\\\"domain\\\":\\\"instagram.com\\\",\\\"includeSubdomains\\\":true},{\\\"domain\\\":\\\"instagr.am\\\",\\\"includeSubdomains\\\":true}],\\\"pathPatterns\\\":[\\\"^/(?:p|reels?|tv)/([A-Za-z0-9_-]+)\\\"]}]},\\\"shortLinks\\\":[],\\\"normalize\\\":{\\\"sourceId\\\":{\\\"source\\\":\\\"path\\\",\\\"pattern\\\":\\\"^/(?:p|reels?|tv)/([A-Za-z0-9_-]+)\\\"},\\\"canonicalTemplate\\\":\\\"https://www.instagram.com/p/{id}/\\\",\\\"preserveLoadQuery\\\":[],\\\"exampleId\\\":\\\"AbC123\\\"},\\\"load\\\":{\\\"mode\\\":\\\"webview\\\",\\\"timeoutMs\\\":30000,\\\"readyHook\\\":\\\"instagram_ready\\\",\\\"userAgent\\\":\\\"Mozilla/5.0 (Linux; Android 12; Pixel 6) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Mobile Safari/537.36\\\"},\\\"auth\\\":{\\\"mode\\\":\\\"optional\\\",\\\"sessionCookieNames\\\":[\\\"sessionid\\\"],\\\"loginUrl\\\":\\\"https://www.instagram.com/accounts/login/\\\",\\\"userAgent\\\":\\\"Mozilla/5.0 (Linux; Android 12; Pixel 6) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Mobile Safari/537.36\\\"},\\\"parserModule\\\":\\\"instagram\\\",\\\"download\\\":{\\\"mediaHosts\\\":[{\\\"domain\\\":\\\"cdninstagram.com\\\",\\\"includeSubdomains\\\":true},{\\\"domain\\\":\\\"fbcdn.net\\\",\\\"includeSubdomains\\\":true}],\\\"headers\\\":{\\\"Referer\\\":\\\"https://www.instagram.com/\\\"},\\\"cookieDomains\\\":[],\\\"transport\\\":\\\"background\\\",\\\"resumable\\\":true},\\\"metadata\\\":{\\\"authorIdRule\\\":\\\"numeric\\\"},\\\"icon\\\":{\\\"assetKey\\\":\\\"instagram\\\"},\\\"tagColor\\\":\\\"#CE35A8\\\"},{\\\"id\\\":\\\"x\\\",\\\"platform\\\":\\\"x\\\",\\\"displayName\\\":\\\"X\\\",\\\"creditName\\\":\\\"X\\\",\\\"enabled\\\":true,\\\"notice\\\":\\\"服务维护中，请稍后再试\\\",\\\"minAppVersion\\\":\\\"1.9.0\\\",\\\"requiredCapabilities\\\":[],\\\"match\\\":{\\\"routes\\\":[{\\\"hosts\\\":[{\\\"domain\\\":\\\"x.com\\\",\\\"includeSubdomains\\\":true},{\\\"domain\\\":\\\"twitter.com\\\",\\\"includeSubdomains\\\":true}],\\\"pathPatterns\\\":[\\\"^/[^/]+/status/([0-9]+)\\\"]},{\\\"hosts\\\":[{\\\"domain\\\":\\\"t.co\\\",\\\"includeSubdomains\\\":false}],\\\"pathPatterns\\\":[\\\"^/[^/]+/?\\$\\\"]}]},\\\"shortLinks\\\":[{\\\"host\\\":{\\\"domain\\\":\\\"t.co\\\",\\\"includeSubdomains\\\":false},\\\"strategy\\\":\\\"http\\\",\\\"maxRedirects\\\":5}],\\\"normalize\\\":{\\\"sourceId\\\":{\\\"source\\\":\\\"path\\\",\\\"pattern\\\":\\\"^/[^/]+/status/([0-9]+)\\\"},\\\"canonicalTemplate\\\":\\\"https://x.com/i/status/{id}\\\",\\\"preserveLoadQuery\\\":[],\\\"exampleId\\\":\\\"1234567890123456789\\\"},\\\"load\\\":{\\\"mode\\\":\\\"json\\\",\\\"timeoutMs\\\":30000,\\\"endpointTemplate\\\":\\\"https://cdn.syndication.twimg.com/tweet-result?id={id}&lang=en&token={token}\\\",\\\"prepareHook\\\":\\\"x_build_request\\\",\\\"headers\\\":{\\\"User-Agent\\\":\\\"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36\\\"}},\\\"auth\\\":{\\\"mode\\\":\\\"optional\\\",\\\"sessionCookieNames\\\":[\\\"auth_token\\\"],\\\"loginUrl\\\":\\\"https://x.com/i/flow/login\\\"},\\\"parserModule\\\":\\\"x\\\",\\\"download\\\":{\\\"mediaHosts\\\":[{\\\"domain\\\":\\\"twimg.com\\\",\\\"includeSubdomains\\\":true}],\\\"headers\\\":{},\\\"cookieDomains\\\":[],\\\"transport\\\":\\\"background\\\",\\\"resumable\\\":true},\\\"metadata\\\":{\\\"authorIdRule\\\":\\\"numeric\\\"},\\\"icon\\\":{\\\"assetKey\\\":\\\"x\\\"},\\\"tagColor\\\":\\\"#0F1419\\\"},{\\\"id\\\":\\\"tiktok\\\",\\\"platform\\\":\\\"tiktok\\\",\\\"displayName\\\":\\\"TikTok\\\",\\\"creditName\\\":\\\"TikTok\\\",\\\"enabled\\\":true,\\\"notice\\\":\\\"服务维护中，请稍后再试\\\",\\\"minAppVersion\\\":\\\"1.9.0\\\",\\\"requiredCapabilities\\\":[],\\\"match\\\":{\\\"routes\\\":[{\\\"hosts\\\":[{\\\"domain\\\":\\\"tiktok.com\\\",\\\"includeSubdomains\\\":true}],\\\"pathPatterns\\\":[\\\"^/(?:@[^/]*/(?:video|photo)/([0-9]+)|share/video/([0-9]+)|v/([0-9]+)\\\\\\\\.html)/?\\$\\\",\\\"^/t/[^/]+/?\\$\\\"]},{\\\"hosts\\\":[{\\\"domain\\\":\\\"vm.tiktok.com\\\",\\\"includeSubdomains\\\":false},{\\\"domain\\\":\\\"vt.tiktok.com\\\",\\\"includeSubdomains\\\":false}],\\\"pathPatterns\\\":[\\\"^/[^/]+/?\\$\\\"]}]},\\\"shortLinks\\\":[{\\\"host\\\":{\\\"domain\\\":\\\"vm.tiktok.com\\\",\\\"includeSubdomains\\\":false},\\\"strategy\\\":\\\"webview\\\",\\\"maxRedirects\\\":5,\\\"historyStrategy\\\":\\\"http\\\"},{\\\"host\\\":{\\\"domain\\\":\\\"vt.tiktok.com\\\",\\\"includeSubdomains\\\":false},\\\"strategy\\\":\\\"webview\\\",\\\"maxRedirects\\\":5,\\\"historyStrategy\\\":\\\"http\\\"},{\\\"host\\\":{\\\"domain\\\":\\\"tiktok.com\\\",\\\"includeSubdomains\\\":true},\\\"strategy\\\":\\\"webview\\\",\\\"historyStrategy\\\":\\\"http\\\",\\\"pathPatterns\\\":[\\\"^/t/[^/]+/?\\$\\\"],\\\"maxRedirects\\\":5}],\\\"normalize\\\":{\\\"sourceId\\\":{\\\"source\\\":\\\"path\\\",\\\"pattern\\\":\\\"^/(?:@[^/]*/(?:video|photo)/([0-9]+)|share/video/([0-9]+)|v/([0-9]+)\\\\\\\\.html)/?\\$\\\"},\\\"canonicalTemplate\\\":\\\"https://www.tiktok.com/@/video/{id}\\\",\\\"preserveLoadQuery\\\":[],\\\"exampleId\\\":\\\"1234567890123456789\\\"},\\\"load\\\":{\\\"mode\\\":\\\"webview\\\",\\\"timeoutMs\\\":30000,\\\"readyHook\\\":\\\"tiktok_ready\\\",\\\"userAgent\\\":\\\"Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36\\\"},\\\"auth\\\":{\\\"mode\\\":\\\"optional\\\",\\\"sessionCookieNames\\\":[\\\"sessionid\\\",\\\"sessionid_ss\\\"],\\\"loginUrl\\\":\\\"https://www.tiktok.com/login\\\",\\\"externalGoogleNotice\\\":true,\\\"loginHint\\\":\\\"请选择 TikTok 的手机号 / 邮箱 / 用户名登录。Google 授权暂不支持在此页面完成。成功后点右上角“完成”。\\\",\\\"externalGoogleMessage\\\":\\\"Google 授权不能在此内嵌登录页完成。请返回 TikTok，选择“手机号 / 邮箱 / 用户名”登录。如果使用 Gmail 地址，请输入 TikTok 账号密码，不是 Google 密码。在外部浏览器登录也不会自动同步到 EasySave。\\\"},\\\"parserModule\\\":\\\"tiktok\\\",\\\"download\\\":{\\\"mediaHosts\\\":[{\\\"domain\\\":\\\"tiktok.com\\\",\\\"includeSubdomains\\\":true},{\\\"domain\\\":\\\"tiktokcdn.com\\\",\\\"includeSubdomains\\\":true},{\\\"domain\\\":\\\"tiktokcdn-eu.com\\\",\\\"includeSubdomains\\\":true},{\\\"domain\\\":\\\"tiktokcdn-us.com\\\",\\\"includeSubdomains\\\":true}],\\\"headers\\\":{\\\"Referer\\\":\\\"https://www.tiktok.com/\\\"},\\\"cookieDomains\\\":[\\\"tiktok.com\\\"],\\\"urlOrder\\\":\\\"primaryFirst\\\",\\\"transport\\\":\\\"session\\\",\\\"resumable\\\":false,\\\"resourceDefaults\\\":{\\\"image\\\":{\\\"cookieDomains\\\":[],\\\"transport\\\":\\\"background\\\",\\\"resumable\\\":true},\\\"poster\\\":{\\\"cookieDomains\\\":[],\\\"transport\\\":\\\"background\\\",\\\"resumable\\\":true}}},\\\"metadata\\\":{\\\"authorIdRule\\\":\\\"numeric\\\"},\\\"icon\\\":{\\\"assetKey\\\":\\\"tiktok\\\"},\\\"tagColor\\\":\\\"#0F1419\\\",\\\"previewErrorMessage\\\":\\\"TikTok 在线预览可能受平台限制，请下载后观看\\\"},{\\\"id\\\":\\\"douyin\\\",\\\"platform\\\":\\\"douyin\\\",\\\"displayName\\\":\\\"抖音\\\",\\\"creditName\\\":\\\"抖音\\\",\\\"enabled\\\":false,\\\"notice\\\":\\\"待匿名实测，禁止启用\\\",\\\"minAppVersion\\\":\\\"1.9.0\\\",\\\"requiredCapabilities\\\":[],\\\"match\\\":{\\\"routes\\\":[{\\\"hosts\\\":[{\\\"domain\\\":\\\"douyin.com\\\",\\\"includeSubdomains\\\":true},{\\\"domain\\\":\\\"iesdouyin.com\\\",\\\"includeSubdomains\\\":true}],\\\"pathPatterns\\\":[\\\"^/(?:video|note|share/video)/([0-9]+)\\\"]},{\\\"hosts\\\":[{\\\"domain\\\":\\\"v.douyin.com\\\",\\\"includeSubdomains\\\":false}],\\\"pathPatterns\\\":[\\\"^/[^/]+/?\\$\\\"]}]},\\\"shortLinks\\\":[{\\\"host\\\":{\\\"domain\\\":\\\"v.douyin.com\\\",\\\"includeSubdomains\\\":false},\\\"strategy\\\":\\\"webview\\\",\\\"maxRedirects\\\":5}],\\\"normalize\\\":{\\\"sourceId\\\":{\\\"source\\\":\\\"path\\\",\\\"pattern\\\":\\\"^/(?:video|note|share/video)/([0-9]+)\\\"},\\\"canonicalTemplate\\\":\\\"https://www.douyin.com/video/{id}\\\",\\\"preserveLoadQuery\\\":[],\\\"exampleId\\\":\\\"1234567890123456789\\\"},\\\"load\\\":{\\\"mode\\\":\\\"webview\\\",\\\"timeoutMs\\\":30000,\\\"readyHook\\\":\\\"douyin_ready\\\"},\\\"auth\\\":{\\\"mode\\\":\\\"none\\\",\\\"sessionCookieNames\\\":[]},\\\"parserModule\\\":\\\"douyin\\\",\\\"download\\\":{\\\"mediaHosts\\\":[],\\\"headers\\\":{\\\"Referer\\\":\\\"https://www.douyin.com/\\\"},\\\"cookieDomains\\\":[],\\\"transport\\\":\\\"background\\\",\\\"resumable\\\":true},\\\"metadata\\\":{\\\"authorIdRule\\\":\\\"numeric\\\"}}]\";",
       "category": "生成配置",
       "reason": "由 config/sites.json 与构建器生成；不是独立维护的平台表。"
     },
@@ -334,133 +335,133 @@
     },
     {
       "file": "app/lib/pages/parse_page.dart",
-      "line": 206,
+      "line": 212,
       "source": "  /// YouTube links detour to Seal, multiple links open the batch queue,",
       "category": "词法候选",
       "reason": "注释、导入或符号声明；不独立执行站点数据规则。"
     },
     {
       "file": "app/lib/pages/parse_page.dart",
-      "line": 211,
+      "line": 217,
       "source": "    if (await routeExternalText(text, present: _showYouTubeSheet)) return;",
       "category": "外部转交许可表",
       "reason": "YouTube 仅交给本地许可包 Seal；包括域/路径许可、包可见性、显式 Intent 及安装指引，不能由远程清单扩展为任意包。"
     },
     {
       "file": "app/lib/pages/parse_page.dart",
-      "line": 266,
+      "line": 272,
       "source": "  Future<void> _showYouTubeSheet(String url) async {",
       "category": "外部转交许可表",
       "reason": "YouTube 仅交给本地许可包 Seal；包括域/路径许可、包可见性、显式 Intent 及安装指引，不能由远程清单扩展为任意包。"
     },
     {
       "file": "app/lib/pages/parse_page.dart",
-      "line": 267,
+      "line": 273,
       "source": "    final installed = await isSealInstalled();",
       "category": "外部转交许可表",
       "reason": "YouTube 仅交给本地许可包 Seal；包括域/路径许可、包可见性、显式 Intent 及安装指引，不能由远程清单扩展为任意包。"
     },
     {
       "file": "app/lib/pages/parse_page.dart",
-      "line": 279,
+      "line": 285,
       "source": "                'YouTube 视频由 Seal 下载',",
       "category": "外部转交许可表",
       "reason": "YouTube 仅交给本地许可包 Seal；包括域/路径许可、包可见性、显式 Intent 及安装指引，不能由远程清单扩展为任意包。"
     },
     {
       "file": "app/lib/pages/parse_page.dart",
-      "line": 292,
+      "line": 298,
       "source": "                  label: '去 Seal 下载',",
       "category": "外部转交许可表",
       "reason": "YouTube 仅交给本地许可包 Seal；包括域/路径许可、包可见性、显式 Intent 及安装指引，不能由远程清单扩展为任意包。"
     },
     {
       "file": "app/lib/pages/parse_page.dart",
-      "line": 297,
+      "line": 303,
       "source": "                      await sendToSeal(url);",
       "category": "外部转交许可表",
       "reason": "YouTube 仅交给本地许可包 Seal；包括域/路径许可、包可见性、显式 Intent 及安装指引，不能由远程清单扩展为任意包。"
     },
     {
       "file": "app/lib/pages/parse_page.dart",
-      "line": 307,
+      "line": 313,
       "source": "                  '手机上没有检测到 Seal，请先安装：\\n'",
       "category": "外部转交许可表",
       "reason": "YouTube 仅交给本地许可包 Seal；包括域/路径许可、包可见性、显式 Intent 及安装指引，不能由远程清单扩展为任意包。"
     },
     {
       "file": "app/lib/pages/parse_page.dart",
-      "line": 308,
+      "line": 314,
       "source": "                  '· F-Droid 搜索 Seal\\n'",
       "category": "外部转交许可表",
       "reason": "YouTube 仅交给本地许可包 Seal；包括域/路径许可、包可见性、显式 Intent 及安装指引，不能由远程清单扩展为任意包。"
     },
     {
       "file": "app/lib/pages/parse_page.dart",
-      "line": 309,
+      "line": 315,
       "source": "                  '· GitHub JunkFood02/Seal Releases 下载 APK',",
       "category": "外部转交许可表",
       "reason": "YouTube 仅交给本地许可包 Seal；包括域/路径许可、包可见性、显式 Intent 及安装指引，不能由远程清单扩展为任意包。"
     },
     {
       "file": "app/lib/pages/parse_page.dart",
-      "line": 331,
+      "line": 337,
       "source": "                            const ClipboardData(text: sealReleasesUrl),",
       "category": "外部转交许可表",
       "reason": "YouTube 仅交给本地许可包 Seal；包括域/路径许可、包可见性、显式 Intent 及安装指引，不能由远程清单扩展为任意包。"
     },
     {
       "file": "app/lib/pages/parse_page.dart",
-      "line": 354,
+      "line": 360,
       "source": "  /// bubble). Matching is done by post id, so a short link (xhslink) still",
       "category": "词法候选",
       "reason": "注释、导入或符号声明；不独立执行站点数据规则。"
     },
     {
       "file": "app/lib/pages/parse_page.dart",
-      "line": 396,
+      "line": 402,
       "source": "    // YouTube detours to Seal before the supported-link check — otherwise",
       "category": "词法候选",
       "reason": "注释、导入或符号声明；不独立执行站点数据规则。"
     },
     {
       "file": "app/lib/pages/parse_page.dart",
-      "line": 398,
+      "line": 404,
       "source": "    final yt = extractYouTubeLink(text);",
       "category": "外部转交许可表",
       "reason": "YouTube 仅交给本地许可包 Seal；包括域/路径许可、包可见性、显式 Intent 及安装指引，不能由远程清单扩展为任意包。"
     },
     {
       "file": "app/lib/pages/parse_page.dart",
-      "line": 405,
+      "line": 411,
       "source": "          title: const Text('检测到 YouTube 链接'),",
       "category": "外部转交许可表",
       "reason": "YouTube 仅交给本地许可包 Seal；包括域/路径许可、包可见性、显式 Intent 及安装指引，不能由远程清单扩展为任意包。"
     },
     {
       "file": "app/lib/pages/parse_page.dart",
-      "line": 414,
+      "line": 420,
       "source": "              child: const Text('去 Seal'),",
       "category": "外部转交许可表",
       "reason": "YouTube 仅交给本地许可包 Seal；包括域/路径许可、包可见性、显式 Intent 及安装指引，不能由远程清单扩展为任意包。"
     },
     {
       "file": "app/lib/pages/parse_page.dart",
-      "line": 503,
+      "line": 509,
       "source": "      if (await routeExternalText(text, present: _showYouTubeSheet)) return;",
       "category": "外部转交许可表",
       "reason": "YouTube 仅交给本地许可包 Seal；包括域/路径许可、包可见性、显式 Intent 及安装指引，不能由远程清单扩展为任意包。"
     },
     {
       "file": "app/lib/pages/parse_page.dart",
-      "line": 1064,
+      "line": 1085,
       "source": "          // Not a login problem: the share link lost its `xsec_token` (or it",
       "category": "词法候选",
       "reason": "注释、导入或符号声明；不独立执行站点数据规则。"
     },
     {
       "file": "app/lib/pages/parse_page.dart",
-      "line": 1065,
+      "line": 1086,
       "source": "          // expired), so XHS can't serve the note again.",
       "category": "词法候选",
       "reason": "注释、导入或符号声明；不独立执行站点数据规则。"
@@ -537,38 +538,10 @@
     },
     {
       "file": "app/lib/services/download_manager.dart",
-      "line": 44,
-      "source": "    batch.platform == 'tiktok' ? job.urls.length : kMaxAttempts;",
-      "category": "延期 2b-2（超类说明）",
-      "reason": "重试/会话/Cookie/Referer/续传策略；用户明确禁止本轮改变下载和预览请求策略，须在 2b-2 连同逐请求授权一起迁移。"
-    },
-    {
-      "file": "app/lib/services/download_manager.dart",
-      "line": 47,
-      "source": "    batch.platform == 'tiktok' && !job.isImage;",
-      "category": "延期 2b-2（超类说明）",
-      "reason": "重试/会话/Cookie/Referer/续传策略；用户明确禁止本轮改变下载和预览请求策略，须在 2b-2 连同逐请求授权一起迁移。"
-    },
-    {
-      "file": "app/lib/services/download_manager.dart",
-      "line": 59,
-      "source": "    post.platform == 'tiktok'",
-      "category": "延期 2b-2（超类说明）",
-      "reason": "重试/会话/Cookie/Referer/续传策略；用户明确禁止本轮改变下载和预览请求策略，须在 2b-2 连同逐请求授权一起迁移。"
-    },
-    {
-      "file": "app/lib/services/download_manager.dart",
-      "line": 353,
+      "line": 381,
       "source": "  /// Session-only TikTok videos cannot resume a paused transfer.",
       "category": "词法候选",
       "reason": "注释、导入或符号声明；不独立执行站点数据规则。"
-    },
-    {
-      "file": "app/lib/services/download_manager.dart",
-      "line": 1267,
-      "source": "        readCookie: () => cookieHeaderFor(['https://www.tiktok.com/']),",
-      "category": "延期 2b-2（超类说明）",
-      "reason": "重试/会话/Cookie/Referer/续传策略；用户明确禁止本轮改变下载和预览请求策略，须在 2b-2 连同逐请求授权一起迁移。"
     },
     {
       "file": "app/lib/services/links.dart",
@@ -695,48 +668,6 @@
       "source": "  /// no post id of its own (xhslink.com/...), one resolving request is made so",
       "category": "词法候选",
       "reason": "注释、导入或符号声明；不独立执行站点数据规则。"
-    },
-    {
-      "file": "app/lib/services/preview_video.dart",
-      "line": 11,
-      "source": "  if (platform == 'tiktok') {",
-      "category": "延期 2b-2（超类说明）",
-      "reason": "重试/会话/Cookie/Referer/续传策略；用户明确禁止本轮改变下载和预览请求策略，须在 2b-2 连同逐请求授权一起迁移。"
-    },
-    {
-      "file": "app/lib/services/preview_video.dart",
-      "line": 12,
-      "source": "    final cookie = await (readCookie ?? cookieHeaderFor)(['https://www.tiktok.com/']);",
-      "category": "延期 2b-2（超类说明）",
-      "reason": "重试/会话/Cookie/Referer/续传策略；用户明确禁止本轮改变下载和预览请求策略，须在 2b-2 连同逐请求授权一起迁移。"
-    },
-    {
-      "file": "app/lib/services/saver.dart",
-      "line": 18,
-      "source": "  if (platform == 'tiktok') return 'https://www.tiktok.com/';",
-      "category": "延期 2b-2（超类说明）",
-      "reason": "重试/会话/Cookie/Referer/续传策略；用户明确禁止本轮改变下载和预览请求策略，须在 2b-2 连同逐请求授权一起迁移。"
-    },
-    {
-      "file": "app/lib/services/saver.dart",
-      "line": 19,
-      "source": "  if (platform == 'xhs') return 'https://www.xiaohongshu.com/';",
-      "category": "延期 2b-2（超类说明）",
-      "reason": "重试/会话/Cookie/Referer/续传策略；用户明确禁止本轮改变下载和预览请求策略，须在 2b-2 连同逐请求授权一起迁移。"
-    },
-    {
-      "file": "app/lib/services/saver.dart",
-      "line": 20,
-      "source": "  if (platform == 'instagram') return 'https://www.instagram.com/';",
-      "category": "延期 2b-2（超类说明）",
-      "reason": "重试/会话/Cookie/Referer/续传策略；用户明确禁止本轮改变下载和预览请求策略，须在 2b-2 连同逐请求授权一起迁移。"
-    },
-    {
-      "file": "app/lib/services/saver.dart",
-      "line": 21,
-      "source": "  if (platform == 'x') return 'https://x.com/';",
-      "category": "延期 2b-2（超类说明）",
-      "reason": "重试/会话/Cookie/Referer/续传策略；用户明确禁止本轮改变下载和预览请求策略，须在 2b-2 连同逐请求授权一起迁移。"
     },
     {
       "file": "app/lib/services/seal.dart",
@@ -872,20 +803,6 @@
       "reason": "YouTube 仅交给本地许可包 Seal；包括域/路径许可、包可见性、显式 Intent 及安装指引，不能由远程清单扩展为任意包。"
     },
     {
-      "file": "app/lib/services/session_media_download.dart",
-      "line": 67,
-      "source": "      // Do not forward TikTok credentials to a redirect target. A newly parsed",
-      "category": "词法候选",
-      "reason": "注释、导入或符号声明；不独立执行站点数据规则。"
-    },
-    {
-      "file": "app/lib/services/session_media_download.dart",
-      "line": 70,
-      "source": "      request.headers.set(HttpHeaders.refererHeader, 'https://www.tiktok.com/');",
-      "category": "延期 2b-2（超类说明）",
-      "reason": "重试/会话/Cookie/Referer/续传策略；用户明确禁止本轮改变下载和预览请求策略，须在 2b-2 连同逐请求授权一起迁移。"
-    },
-    {
       "file": "app/lib/services/update_service.dart",
       "line": 467,
       "source": "    if (platform == 'x') {",
@@ -908,35 +825,35 @@
     },
     {
       "file": "app/lib/widgets/shared.dart",
-      "line": 64,
+      "line": 67,
       "source": "/// XHS image hosts intermittently blackhole a request (no data, no error)",
       "category": "词法候选",
       "reason": "注释、导入或符号声明；不独立执行站点数据规则。"
     },
     {
       "file": "app/lib/widgets/shared.dart",
-      "line": 238,
+      "line": 280,
       "source": "    'xhs': Icons.menu_book,",
       "category": "内置图标资源",
       "reason": "本地 Material assetKey 注册表；清单只能选择已打包字形，不能加载远程图标。"
     },
     {
       "file": "app/lib/widgets/shared.dart",
-      "line": 239,
+      "line": 281,
       "source": "    'instagram': Icons.photo_camera,",
       "category": "内置图标资源",
       "reason": "本地 Material assetKey 注册表；清单只能选择已打包字形，不能加载远程图标。"
     },
     {
       "file": "app/lib/widgets/shared.dart",
-      "line": 240,
+      "line": 282,
       "source": "    'x': Icons.alternate_email,",
       "category": "内置图标资源",
       "reason": "本地 Material assetKey 注册表；清单只能选择已打包字形，不能加载远程图标。"
     },
     {
       "file": "app/lib/widgets/shared.dart",
-      "line": 241,
+      "line": 283,
       "source": "    'tiktok': Icons.music_note,",
       "category": "内置图标资源",
       "reason": "本地 Material assetKey 注册表；清单只能选择已打包字形，不能加载远程图标。"
@@ -1196,475 +1113,503 @@
     {
       "file": "config/sites.json",
       "line": 120,
+      "source": "          \"domain\": \"xhscdn.net\",",
+      "category": "清单源配置",
+      "reason": "允许维护站点数据的源配置；parser-release 的 platforms/headers 是旧 ABI 兼容投影。"
+    },
+    {
+      "file": "config/sites.json",
+      "line": 124,
       "source": "          \"domain\": \"xiaohongshu.com\",",
       "category": "清单源配置",
       "reason": "允许维护站点数据的源配置；parser-release 的 platforms/headers 是旧 ABI 兼容投影。"
     },
     {
       "file": "config/sites.json",
-      "line": 125,
+      "line": 129,
       "source": "        \"Referer\": \"https://www.xiaohongshu.com/\"",
       "category": "清单源配置",
       "reason": "允许维护站点数据的源配置；parser-release 的 platforms/headers 是旧 ABI 兼容投影。"
     },
     {
       "file": "config/sites.json",
-      "line": 135,
+      "line": 139,
       "source": "      \"assetKey\": \"xhs\"",
       "category": "清单源配置",
       "reason": "允许维护站点数据的源配置；parser-release 的 platforms/headers 是旧 ABI 兼容投影。"
     },
     {
       "file": "config/sites.json",
-      "line": 140,
+      "line": 144,
       "source": "    \"id\": \"instagram\",",
       "category": "清单源配置",
       "reason": "允许维护站点数据的源配置；parser-release 的 platforms/headers 是旧 ABI 兼容投影。"
     },
     {
       "file": "config/sites.json",
-      "line": 141,
+      "line": 145,
       "source": "    \"platform\": \"instagram\",",
       "category": "清单源配置",
       "reason": "允许维护站点数据的源配置；parser-release 的 platforms/headers 是旧 ABI 兼容投影。"
     },
     {
       "file": "config/sites.json",
-      "line": 142,
+      "line": 146,
       "source": "    \"displayName\": \"Instagram\",",
       "category": "清单源配置",
       "reason": "允许维护站点数据的源配置；parser-release 的 platforms/headers 是旧 ABI 兼容投影。"
     },
     {
       "file": "config/sites.json",
-      "line": 143,
+      "line": 147,
       "source": "    \"creditName\": \"Instagram\",",
       "category": "清单源配置",
       "reason": "允许维护站点数据的源配置；parser-release 的 platforms/headers 是旧 ABI 兼容投影。"
     },
     {
       "file": "config/sites.json",
-      "line": 153,
+      "line": 157,
       "source": "              \"domain\": \"instagram.com\",",
       "category": "清单源配置",
       "reason": "允许维护站点数据的源配置；parser-release 的 platforms/headers 是旧 ABI 兼容投影。"
     },
     {
       "file": "config/sites.json",
-      "line": 157,
+      "line": 161,
       "source": "              \"domain\": \"instagr.am\",",
       "category": "清单源配置",
       "reason": "允许维护站点数据的源配置；parser-release 的 platforms/headers 是旧 ABI 兼容投影。"
     },
     {
       "file": "config/sites.json",
-      "line": 173,
+      "line": 177,
       "source": "      \"canonicalTemplate\": \"https://www.instagram.com/p/{id}/\",",
       "category": "清单源配置",
       "reason": "允许维护站点数据的源配置；parser-release 的 platforms/headers 是旧 ABI 兼容投影。"
     },
     {
       "file": "config/sites.json",
-      "line": 180,
+      "line": 184,
       "source": "      \"readyHook\": \"instagram_ready\",",
       "category": "清单源配置",
       "reason": "允许维护站点数据的源配置；parser-release 的 platforms/headers 是旧 ABI 兼容投影。"
     },
     {
       "file": "config/sites.json",
-      "line": 186,
+      "line": 190,
       "source": "        \"sessionid\"",
       "category": "清单源配置",
       "reason": "允许维护站点数据的源配置；parser-release 的 platforms/headers 是旧 ABI 兼容投影。"
     },
     {
       "file": "config/sites.json",
-      "line": 188,
+      "line": 192,
       "source": "      \"loginUrl\": \"https://www.instagram.com/accounts/login/\",",
       "category": "清单源配置",
       "reason": "允许维护站点数据的源配置；parser-release 的 platforms/headers 是旧 ABI 兼容投影。"
     },
     {
       "file": "config/sites.json",
-      "line": 191,
+      "line": 195,
       "source": "    \"parserModule\": \"instagram\",",
       "category": "清单源配置",
       "reason": "允许维护站点数据的源配置；parser-release 的 platforms/headers 是旧 ABI 兼容投影。"
     },
     {
       "file": "config/sites.json",
-      "line": 195,
+      "line": 199,
       "source": "          \"domain\": \"cdninstagram.com\",",
       "category": "清单源配置",
       "reason": "允许维护站点数据的源配置；parser-release 的 platforms/headers 是旧 ABI 兼容投影。"
     },
     {
       "file": "config/sites.json",
-      "line": 199,
+      "line": 203,
       "source": "          \"domain\": \"fbcdn.net\",",
       "category": "清单源配置",
       "reason": "允许维护站点数据的源配置；parser-release 的 platforms/headers 是旧 ABI 兼容投影。"
     },
     {
       "file": "config/sites.json",
-      "line": 204,
+      "line": 208,
       "source": "        \"Referer\": \"https://www.instagram.com/\"",
       "category": "清单源配置",
       "reason": "允许维护站点数据的源配置；parser-release 的 platforms/headers 是旧 ABI 兼容投影。"
     },
     {
       "file": "config/sites.json",
-      "line": 214,
+      "line": 218,
       "source": "      \"assetKey\": \"instagram\"",
       "category": "清单源配置",
       "reason": "允许维护站点数据的源配置；parser-release 的 platforms/headers 是旧 ABI 兼容投影。"
     },
     {
       "file": "config/sites.json",
-      "line": 219,
+      "line": 223,
       "source": "    \"id\": \"x\",",
       "category": "清单源配置",
       "reason": "允许维护站点数据的源配置；parser-release 的 platforms/headers 是旧 ABI 兼容投影。"
     },
     {
       "file": "config/sites.json",
-      "line": 220,
+      "line": 224,
       "source": "    \"platform\": \"x\",",
       "category": "清单源配置",
       "reason": "允许维护站点数据的源配置；parser-release 的 platforms/headers 是旧 ABI 兼容投影。"
     },
     {
       "file": "config/sites.json",
-      "line": 221,
+      "line": 225,
       "source": "    \"displayName\": \"X\",",
       "category": "清单源配置",
       "reason": "允许维护站点数据的源配置；parser-release 的 platforms/headers 是旧 ABI 兼容投影。"
     },
     {
       "file": "config/sites.json",
-      "line": 222,
+      "line": 226,
       "source": "    \"creditName\": \"X\",",
       "category": "清单源配置",
       "reason": "允许维护站点数据的源配置；parser-release 的 platforms/headers 是旧 ABI 兼容投影。"
     },
     {
       "file": "config/sites.json",
-      "line": 232,
+      "line": 236,
       "source": "              \"domain\": \"x.com\",",
       "category": "清单源配置",
       "reason": "允许维护站点数据的源配置；parser-release 的 platforms/headers 是旧 ABI 兼容投影。"
     },
     {
       "file": "config/sites.json",
-      "line": 236,
+      "line": 240,
       "source": "              \"domain\": \"twitter.com\",",
       "category": "清单源配置",
       "reason": "允许维护站点数据的源配置；parser-release 的 platforms/headers 是旧 ABI 兼容投影。"
     },
     {
       "file": "config/sites.json",
-      "line": 247,
+      "line": 251,
       "source": "              \"domain\": \"t.co\",",
       "category": "清单源配置",
       "reason": "允许维护站点数据的源配置；parser-release 的 platforms/headers 是旧 ABI 兼容投影。"
     },
     {
       "file": "config/sites.json",
-      "line": 260,
+      "line": 264,
       "source": "          \"domain\": \"t.co\",",
       "category": "清单源配置",
       "reason": "允许维护站点数据的源配置；parser-release 的 platforms/headers 是旧 ABI 兼容投影。"
     },
     {
       "file": "config/sites.json",
-      "line": 272,
+      "line": 276,
       "source": "      \"canonicalTemplate\": \"https://x.com/i/status/{id}\",",
       "category": "清单源配置",
       "reason": "允许维护站点数据的源配置；parser-release 的 platforms/headers 是旧 ABI 兼容投影。"
     },
     {
       "file": "config/sites.json",
-      "line": 279,
+      "line": 283,
       "source": "      \"endpointTemplate\": \"https://cdn.syndication.twimg.com/tweet-result?id={id}&lang=en&token={token}\",",
       "category": "清单源配置",
       "reason": "允许维护站点数据的源配置；parser-release 的 platforms/headers 是旧 ABI 兼容投影。"
     },
     {
       "file": "config/sites.json",
-      "line": 288,
+      "line": 292,
       "source": "        \"auth_token\"",
       "category": "清单源配置",
       "reason": "允许维护站点数据的源配置；parser-release 的 platforms/headers 是旧 ABI 兼容投影。"
     },
     {
       "file": "config/sites.json",
-      "line": 290,
+      "line": 294,
       "source": "      \"loginUrl\": \"https://x.com/i/flow/login\"",
       "category": "清单源配置",
       "reason": "允许维护站点数据的源配置；parser-release 的 platforms/headers 是旧 ABI 兼容投影。"
     },
     {
       "file": "config/sites.json",
-      "line": 292,
+      "line": 296,
       "source": "    \"parserModule\": \"x\",",
       "category": "清单源配置",
       "reason": "允许维护站点数据的源配置；parser-release 的 platforms/headers 是旧 ABI 兼容投影。"
     },
     {
       "file": "config/sites.json",
-      "line": 296,
+      "line": 300,
       "source": "          \"domain\": \"twimg.com\",",
       "category": "清单源配置",
       "reason": "允许维护站点数据的源配置；parser-release 的 platforms/headers 是旧 ABI 兼容投影。"
     },
     {
       "file": "config/sites.json",
-      "line": 309,
+      "line": 313,
       "source": "      \"assetKey\": \"x\"",
       "category": "清单源配置",
       "reason": "允许维护站点数据的源配置；parser-release 的 platforms/headers 是旧 ABI 兼容投影。"
     },
     {
       "file": "config/sites.json",
-      "line": 314,
+      "line": 318,
       "source": "    \"id\": \"tiktok\",",
       "category": "清单源配置",
       "reason": "允许维护站点数据的源配置；parser-release 的 platforms/headers 是旧 ABI 兼容投影。"
     },
     {
       "file": "config/sites.json",
-      "line": 315,
+      "line": 319,
       "source": "    \"platform\": \"tiktok\",",
       "category": "清单源配置",
       "reason": "允许维护站点数据的源配置；parser-release 的 platforms/headers 是旧 ABI 兼容投影。"
     },
     {
       "file": "config/sites.json",
-      "line": 316,
+      "line": 320,
       "source": "    \"displayName\": \"TikTok\",",
       "category": "清单源配置",
       "reason": "允许维护站点数据的源配置；parser-release 的 platforms/headers 是旧 ABI 兼容投影。"
     },
     {
       "file": "config/sites.json",
-      "line": 317,
+      "line": 321,
       "source": "    \"creditName\": \"TikTok\",",
       "category": "清单源配置",
       "reason": "允许维护站点数据的源配置；parser-release 的 platforms/headers 是旧 ABI 兼容投影。"
     },
     {
       "file": "config/sites.json",
-      "line": 327,
+      "line": 331,
       "source": "              \"domain\": \"tiktok.com\",",
       "category": "清单源配置",
       "reason": "允许维护站点数据的源配置；parser-release 的 platforms/headers 是旧 ABI 兼容投影。"
     },
     {
       "file": "config/sites.json",
-      "line": 339,
+      "line": 343,
       "source": "              \"domain\": \"vm.tiktok.com\",",
       "category": "清单源配置",
       "reason": "允许维护站点数据的源配置；parser-release 的 platforms/headers 是旧 ABI 兼容投影。"
     },
     {
       "file": "config/sites.json",
-      "line": 343,
+      "line": 347,
       "source": "              \"domain\": \"vt.tiktok.com\",",
       "category": "清单源配置",
       "reason": "允许维护站点数据的源配置；parser-release 的 platforms/headers 是旧 ABI 兼容投影。"
     },
     {
       "file": "config/sites.json",
-      "line": 356,
+      "line": 360,
       "source": "          \"domain\": \"vm.tiktok.com\",",
       "category": "清单源配置",
       "reason": "允许维护站点数据的源配置；parser-release 的 platforms/headers 是旧 ABI 兼容投影。"
     },
     {
       "file": "config/sites.json",
-      "line": 365,
+      "line": 369,
       "source": "          \"domain\": \"vt.tiktok.com\",",
       "category": "清单源配置",
       "reason": "允许维护站点数据的源配置；parser-release 的 platforms/headers 是旧 ABI 兼容投影。"
     },
     {
       "file": "config/sites.json",
-      "line": 374,
+      "line": 378,
       "source": "          \"domain\": \"tiktok.com\",",
       "category": "清单源配置",
       "reason": "允许维护站点数据的源配置；parser-release 的 platforms/headers 是旧 ABI 兼容投影。"
     },
     {
       "file": "config/sites.json",
-      "line": 390,
+      "line": 394,
       "source": "      \"canonicalTemplate\": \"https://www.tiktok.com/@/video/{id}\",",
       "category": "清单源配置",
       "reason": "允许维护站点数据的源配置；parser-release 的 platforms/headers 是旧 ABI 兼容投影。"
     },
     {
       "file": "config/sites.json",
-      "line": 397,
+      "line": 401,
       "source": "      \"readyHook\": \"tiktok_ready\",",
       "category": "清单源配置",
       "reason": "允许维护站点数据的源配置；parser-release 的 platforms/headers 是旧 ABI 兼容投影。"
     },
     {
       "file": "config/sites.json",
-      "line": 403,
+      "line": 407,
       "source": "        \"sessionid\",",
       "category": "清单源配置",
       "reason": "允许维护站点数据的源配置；parser-release 的 platforms/headers 是旧 ABI 兼容投影。"
     },
     {
       "file": "config/sites.json",
-      "line": 404,
+      "line": 408,
       "source": "        \"sessionid_ss\"",
       "category": "清单源配置",
       "reason": "允许维护站点数据的源配置；parser-release 的 platforms/headers 是旧 ABI 兼容投影。"
     },
     {
       "file": "config/sites.json",
-      "line": 406,
+      "line": 410,
       "source": "      \"loginUrl\": \"https://www.tiktok.com/login\",",
       "category": "清单源配置",
       "reason": "允许维护站点数据的源配置；parser-release 的 platforms/headers 是旧 ABI 兼容投影。"
     },
     {
       "file": "config/sites.json",
-      "line": 408,
+      "line": 412,
       "source": "      \"loginHint\": \"请选择 TikTok 的手机号 / 邮箱 / 用户名登录。Google 授权暂不支持在此页面完成。成功后点右上角“完成”。\",",
       "category": "清单源配置",
       "reason": "允许维护站点数据的源配置；parser-release 的 platforms/headers 是旧 ABI 兼容投影。"
     },
     {
       "file": "config/sites.json",
-      "line": 409,
+      "line": 413,
       "source": "      \"externalGoogleMessage\": \"Google 授权不能在此内嵌登录页完成。请返回 TikTok，选择“手机号 / 邮箱 / 用户名”登录。如果使用 Gmail 地址，请输入 TikTok 账号密码，不是 Google 密码。在外部浏览器登录也不会自动同步到 EasySave。\"",
       "category": "清单源配置",
       "reason": "允许维护站点数据的源配置；parser-release 的 platforms/headers 是旧 ABI 兼容投影。"
     },
     {
       "file": "config/sites.json",
-      "line": 411,
+      "line": 415,
       "source": "    \"parserModule\": \"tiktok\",",
       "category": "清单源配置",
       "reason": "允许维护站点数据的源配置；parser-release 的 platforms/headers 是旧 ABI 兼容投影。"
     },
     {
       "file": "config/sites.json",
-      "line": 415,
+      "line": 419,
       "source": "          \"domain\": \"tiktok.com\",",
       "category": "清单源配置",
       "reason": "允许维护站点数据的源配置；parser-release 的 platforms/headers 是旧 ABI 兼容投影。"
     },
     {
       "file": "config/sites.json",
-      "line": 420,
+      "line": 423,
+      "source": "          \"domain\": \"tiktokcdn.com\",",
+      "category": "清单源配置",
+      "reason": "允许维护站点数据的源配置；parser-release 的 platforms/headers 是旧 ABI 兼容投影。"
+    },
+    {
+      "file": "config/sites.json",
+      "line": 427,
+      "source": "          \"domain\": \"tiktokcdn-eu.com\",",
+      "category": "清单源配置",
+      "reason": "允许维护站点数据的源配置；parser-release 的 platforms/headers 是旧 ABI 兼容投影。"
+    },
+    {
+      "file": "config/sites.json",
+      "line": 431,
+      "source": "          \"domain\": \"tiktokcdn-us.com\",",
+      "category": "清单源配置",
+      "reason": "允许维护站点数据的源配置；parser-release 的 platforms/headers 是旧 ABI 兼容投影。"
+    },
+    {
+      "file": "config/sites.json",
+      "line": 436,
       "source": "        \"Referer\": \"https://www.tiktok.com/\"",
       "category": "清单源配置",
       "reason": "允许维护站点数据的源配置；parser-release 的 platforms/headers 是旧 ABI 兼容投影。"
     },
     {
       "file": "config/sites.json",
-      "line": 423,
+      "line": 439,
       "source": "        \"tiktok.com\"",
       "category": "清单源配置",
       "reason": "允许维护站点数据的源配置；parser-release 的 platforms/headers 是旧 ABI 兼容投影。"
     },
     {
       "file": "config/sites.json",
-      "line": 432,
+      "line": 461,
       "source": "      \"assetKey\": \"tiktok\"",
       "category": "清单源配置",
       "reason": "允许维护站点数据的源配置；parser-release 的 platforms/headers 是旧 ABI 兼容投影。"
     },
     {
       "file": "config/sites.json",
-      "line": 435,
+      "line": 464,
       "source": "    \"previewErrorMessage\": \"TikTok 在线预览可能受平台限制，请下载后观看\"",
       "category": "清单源配置",
       "reason": "允许维护站点数据的源配置；parser-release 的 platforms/headers 是旧 ABI 兼容投影。"
     },
     {
       "file": "config/sites.json",
-      "line": 438,
+      "line": 467,
       "source": "    \"id\": \"douyin\",",
       "category": "清单源配置",
       "reason": "允许维护站点数据的源配置；parser-release 的 platforms/headers 是旧 ABI 兼容投影。"
     },
     {
       "file": "config/sites.json",
-      "line": 439,
+      "line": 468,
       "source": "    \"platform\": \"douyin\",",
       "category": "清单源配置",
       "reason": "允许维护站点数据的源配置；parser-release 的 platforms/headers 是旧 ABI 兼容投影。"
     },
     {
       "file": "config/sites.json",
-      "line": 440,
+      "line": 469,
       "source": "    \"displayName\": \"抖音\",",
       "category": "清单源配置",
       "reason": "允许维护站点数据的源配置；parser-release 的 platforms/headers 是旧 ABI 兼容投影。"
     },
     {
       "file": "config/sites.json",
-      "line": 441,
+      "line": 470,
       "source": "    \"creditName\": \"抖音\",",
       "category": "清单源配置",
       "reason": "允许维护站点数据的源配置；parser-release 的 platforms/headers 是旧 ABI 兼容投影。"
     },
     {
       "file": "config/sites.json",
-      "line": 451,
+      "line": 480,
       "source": "              \"domain\": \"douyin.com\",",
       "category": "清单源配置",
       "reason": "允许维护站点数据的源配置；parser-release 的 platforms/headers 是旧 ABI 兼容投影。"
     },
     {
       "file": "config/sites.json",
-      "line": 455,
+      "line": 484,
       "source": "              \"domain\": \"iesdouyin.com\",",
       "category": "清单源配置",
       "reason": "允许维护站点数据的源配置；parser-release 的 platforms/headers 是旧 ABI 兼容投影。"
     },
     {
       "file": "config/sites.json",
-      "line": 466,
+      "line": 495,
       "source": "              \"domain\": \"v.douyin.com\",",
       "category": "清单源配置",
       "reason": "允许维护站点数据的源配置；parser-release 的 platforms/headers 是旧 ABI 兼容投影。"
     },
     {
       "file": "config/sites.json",
-      "line": 479,
+      "line": 508,
       "source": "          \"domain\": \"v.douyin.com\",",
       "category": "清单源配置",
       "reason": "允许维护站点数据的源配置；parser-release 的 platforms/headers 是旧 ABI 兼容投影。"
     },
     {
       "file": "config/sites.json",
-      "line": 491,
+      "line": 520,
       "source": "      \"canonicalTemplate\": \"https://www.douyin.com/video/{id}\",",
       "category": "清单源配置",
       "reason": "允许维护站点数据的源配置；parser-release 的 platforms/headers 是旧 ABI 兼容投影。"
     },
     {
       "file": "config/sites.json",
-      "line": 498,
+      "line": 527,
       "source": "      \"readyHook\": \"douyin_ready\"",
       "category": "清单源配置",
       "reason": "允许维护站点数据的源配置；parser-release 的 platforms/headers 是旧 ABI 兼容投影。"
     },
     {
       "file": "config/sites.json",
-      "line": 504,
+      "line": 533,
       "source": "    \"parserModule\": \"douyin\",",
       "category": "清单源配置",
       "reason": "允许维护站点数据的源配置；parser-release 的 platforms/headers 是旧 ABI 兼容投影。"
     },
     {
       "file": "config/sites.json",
-      "line": 508,
+      "line": 537,
       "source": "        \"Referer\": \"https://www.douyin.com/\"",
       "category": "清单源配置",
       "reason": "允许维护站点数据的源配置；parser-release 的 platforms/headers 是旧 ABI 兼容投影。"
@@ -2714,77 +2659,84 @@
     },
     {
       "file": "extension/src/parser-modules.ts",
-      "line": 2,
-      "source": "import { parseTiktok, extractTiktokPostId } from './tiktok';",
+      "line": 3,
+      "source": "import { parseTiktok, extractTiktokPostId, tiktokExpiresAt } from './tiktok';",
       "category": "词法候选",
       "reason": "注释、导入或符号声明；不独立执行站点数据规则。"
     },
     {
       "file": "extension/src/parser-modules.ts",
-      "line": 4,
+      "line": 5,
       "source": "import { installIgSniff, readXhsAccount, tiktokReady } from './page-hooks';",
       "category": "词法候选",
       "reason": "注释、导入或符号声明；不独立执行站点数据规则。"
     },
     {
       "file": "extension/src/parser-modules.ts",
-      "line": 25,
+      "line": 26,
       "source": "  xhs: {",
       "category": "签名解析模块算法（超类说明）",
       "reason": "站点 JSON/DOM 路径、ID/媒体算法、canonical 拼接及模块注册，属于签名 parser 的可执行实现；清单选择 parserModule，不执行任意配置 JS。"
     },
     {
       "file": "extension/src/parser-modules.ts",
-      "line": 35,
+      "line": 36,
       "source": "    account: () => readXhsAccount(),",
       "category": "签名解析模块算法（超类说明）",
       "reason": "站点 JSON/DOM 路径、ID/媒体算法、canonical 拼接及模块注册，属于签名 parser 的可执行实现；清单选择 parserModule，不执行任意配置 JS。"
     },
     {
       "file": "extension/src/parser-modules.ts",
-      "line": 45,
+      "line": 46,
       "source": "        : failure('LOGIN_REQUIRED', '需要先登录小红书才能解析该笔记'))",
       "category": "签名解析模块算法（超类说明）",
       "reason": "站点 JSON/DOM 路径、ID/媒体算法、canonical 拼接及模块注册，属于签名 parser 的可执行实现；清单选择 parserModule，不执行任意配置 JS。"
     },
     {
       "file": "extension/src/parser-modules.ts",
-      "line": 48,
+      "line": 49,
       "source": "  instagram: {",
       "category": "签名解析模块算法（超类说明）",
       "reason": "站点 JSON/DOM 路径、ID/媒体算法、canonical 拼接及模块注册，属于签名 parser 的可执行实现；清单选择 parserModule，不执行任意配置 JS。"
     },
     {
       "file": "extension/src/parser-modules.ts",
-      "line": 67,
+      "line": 68,
       "source": "  tiktok: {",
       "category": "签名解析模块算法（超类说明）",
       "reason": "站点 JSON/DOM 路径、ID/媒体算法、canonical 拼接及模块注册，属于签名 parser 的可执行实现；清单选择 parserModule，不执行任意配置 JS。"
     },
     {
       "file": "extension/src/parser-modules.ts",
-      "line": 68,
-      "source": "    ready: () => tiktokReady(),",
+      "line": 69,
+      "source": "    expiresAt: (c) => tiktokExpiresAt(c.url),",
       "category": "签名解析模块算法（超类说明）",
       "reason": "站点 JSON/DOM 路径、ID/媒体算法、canonical 拼接及模块注册，属于签名 parser 的可执行实现；清单选择 parserModule，不执行任意配置 JS。"
     },
     {
       "file": "extension/src/parser-modules.ts",
       "line": 70,
+      "source": "    ready: () => tiktokReady(),",
+      "category": "签名解析模块算法（超类说明）",
+      "reason": "站点 JSON/DOM 路径、ID/媒体算法、canonical 拼接及模块注册，属于签名 parser 的可执行实现；清单选择 parserModule，不执行任意配置 JS。"
+    },
+    {
+      "file": "extension/src/parser-modules.ts",
+      "line": 72,
       "source": "      const id = extractTiktokPostId(c.url);",
       "category": "签名解析模块算法（超类说明）",
       "reason": "站点 JSON/DOM 路径、ID/媒体算法、canonical 拼接及模块注册，属于签名 parser 的可执行实现；清单选择 parserModule，不执行任意配置 JS。"
     },
     {
       "file": "extension/src/parser-modules.ts",
-      "line": 73,
+      "line": 75,
       "source": "    parse: (c) => parseTiktok(c.input || '', c.url),",
       "category": "签名解析模块算法（超类说明）",
       "reason": "站点 JSON/DOM 路径、ID/媒体算法、canonical 拼接及模块注册，属于签名 parser 的可执行实现；清单选择 parserModule，不执行任意配置 JS。"
     },
     {
       "file": "extension/src/parser-modules.ts",
-      "line": 80,
+      "line": 82,
       "source": "      context.site.auth.mode !== 'none' && !context.loggedIn && moduleId !== 'x') {",
       "category": "签名解析模块算法（超类说明）",
       "reason": "站点 JSON/DOM 路径、ID/媒体算法、canonical 拼接及模块注册，属于签名 parser 的可执行实现；清单选择 parserModule，不执行任意配置 JS。"
@@ -2975,6 +2927,20 @@
       "file": "extension/src/tiktok.ts",
       "line": 131,
       "source": "    aiLabel: tiktokAiLabel(item.aigcLabelType, id),",
+      "category": "签名解析模块算法（超类说明）",
+      "reason": "站点 JSON/DOM 路径、ID/媒体算法、canonical 拼接及模块注册，属于签名 parser 的可执行实现；清单选择 parserModule，不执行任意配置 JS。"
+    },
+    {
+      "file": "extension/src/tiktok.ts",
+      "line": 137,
+      "source": "// Known TikTok URL expiry fields, not a generic App query-parameter heuristic.",
+      "category": "词法候选",
+      "reason": "注释、导入或符号声明；不独立执行站点数据规则。"
+    },
+    {
+      "file": "extension/src/tiktok.ts",
+      "line": 139,
+      "source": "export function tiktokExpiresAt(url: string): string | undefined {",
       "category": "签名解析模块算法（超类说明）",
       "reason": "站点 JSON/DOM 路径、ID/媒体算法、canonical 拼接及模块注册，属于签名 parser 的可执行实现；清单选择 parserModule，不执行任意配置 JS。"
     },

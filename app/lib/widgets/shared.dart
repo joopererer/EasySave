@@ -62,7 +62,7 @@ class GradientButton extends StatelessWidget {
   }
 }
 
-/// Image with CDN fallback rotation, platform Referer and per-URL timeout.
+/// Image with authorized CDN fallback rotation and per-URL timeout.
 ///
 /// XHS image hosts intermittently blackhole a request (no data, no error)
 /// or require a Referer, and Image.network has no timeout — a bare one
@@ -130,7 +130,7 @@ List<String> urlsFor(MediaItem item) {
   return [...item.fallbacks, if (cover != null) cover, item.url];
 }
 
-/// Network image provider with per-URL timeout and Referer. Mirrors the
+/// Network image provider with per-URL timeout and declared headers. Mirrors the
 /// stock NetworkImage memory profile (full bytes only live during the
 /// fetch; the codec decodes at [cacheWidth]).
 @immutable
