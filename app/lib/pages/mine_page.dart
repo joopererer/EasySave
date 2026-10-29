@@ -412,8 +412,9 @@ class _MinePageState extends State<MinePage> with WidgetsBindingObserver {
                 TextButton(
                   onPressed: () async {
                     final granted = await _authorizeFixedDirectory();
-                    if (dialogContext.mounted && granted)
+                    if (dialogContext.mounted && granted) {
                       setLocal(() => fixedAuthorized = true);
+                    }
                   },
                   child: const Text('授权 Download/EasySave 文件夹（清除数据后恢复边车）'),
                 ),
@@ -524,10 +525,11 @@ class _MinePageState extends State<MinePage> with WidgetsBindingObserver {
         'HistoryRebuild',
         'file=<directory> path=$c2paRelativePath stage=directory-authorization exception=${e.runtimeType}',
       );
-      if (mounted)
+      if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('请选择 Download/EasySave 文件夹，其他目录不会被读取')),
         );
+      }
       return false;
     }
   }
