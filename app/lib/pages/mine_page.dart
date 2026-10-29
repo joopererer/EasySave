@@ -28,14 +28,14 @@ class MinePage extends StatefulWidget {
 }
 
 class _MinePageState extends State<MinePage> with WidgetsBindingObserver {
-  final Map<PlatformKind, bool> _loggedIn = {
-    for (final p in PlatformKind.values) p: false,
+  final Map<String, bool> _loggedIn = {
+    for (final p in loginSiteIds) p: false,
   };
   bool _checkingLogin = true;
   AppSettings _settings = AppSettings();
   String _version = '';
   String _nickname = '';
-  Set<PlatformKind> _lastExpired = const {};
+  Set<String> _lastExpired = const {};
   bool _pendingBubbleEnable = false;
 
   @override
@@ -180,11 +180,11 @@ class _MinePageState extends State<MinePage> with WidgetsBindingObserver {
     }
   }
 
-  Future<void> _refreshPlatform(PlatformKind platform) async {
+  Future<void> _refreshPlatform(String platform) async {
     final ok = await checkLogin(platform);
     if (!mounted) return;
     if (ok) LoginExpiredBus.clear(platform);
-    final account = platform == PlatformKind.xhs
+    final account = platform == 'xhs'
         ? XhsAccountCache.value ?? await XhsAccountCache.load()
         : null;
     setState(() {
@@ -197,17 +197,17 @@ class _MinePageState extends State<MinePage> with WidgetsBindingObserver {
     final settings = await AppSettings.load();
     // Cached page-state answer first: instant, and it survives app restarts.
     final cachedXhs = await XhsAccountCache.load();
-    final ig = await isLoggedIn(PlatformKind.instagram);
-    final x = await isLoggedIn(PlatformKind.x);
-    final tiktok = await isLoggedIn(PlatformKind.tiktok);
+    final ig = await isLoggedIn('instagram');
+    final x = await isLoggedIn('x');
+    final tiktok = await isLoggedIn('tiktok');
     final info = await PackageInfo.fromPlatform();
     if (!mounted) return;
     setState(() {
       _settings = settings;
-      _loggedIn[PlatformKind.xhs] = cachedXhs?.loggedIn ?? false;
-      _loggedIn[PlatformKind.instagram] = ig;
-      _loggedIn[PlatformKind.x] = x;
-      _loggedIn[PlatformKind.tiktok] = tiktok;
+      _loggedIn['xhs'] = cachedXhs?.loggedIn ?? false;
+      _loggedIn['instagram'] = ig;
+      _loggedIn['x'] = x;
+      _loggedIn['tiktok'] = tiktok;
       _nickname = cachedXhs?.nickname ?? '';
       _checkingLogin = false;
       _version = '${info.version}+${info.buildNumber}';
@@ -216,9 +216,9 @@ class _MinePageState extends State<MinePage> with WidgetsBindingObserver {
     // was cleared): fall back to the cookie jar plus a network probe. This
     // runs after the first paint, so the tab still renders instantly.
     if (cachedXhs == null) {
-      final cookieLogin = await checkLogin(PlatformKind.xhs);
+      final cookieLogin = await checkLogin('xhs');
       if (!mounted) return;
-      setState(() => _loggedIn[PlatformKind.xhs] = cookieLogin);
+      setState(() => _loggedIn['xhs'] = cookieLogin);
     }
   }
 
@@ -255,7 +255,7 @@ class _MinePageState extends State<MinePage> with WidgetsBindingObserver {
     );
   }
 
-  Future<void> _openLogin(PlatformKind platform) async {
+  Future<void> _openLogin(String platform) async {
     final ok = await Navigator.of(context).push<bool>(
       MaterialPageRoute<bool>(builder: (_) => LoginPage(platform: platform)),
     );
@@ -270,7 +270,7 @@ class _MinePageState extends State<MinePage> with WidgetsBindingObserver {
     } else {
       LoginExpiredBus.markExpired(platform);
     }
-    final account = platform == PlatformKind.xhs
+    final account = platform == 'xhs'
         ? XhsAccountCache.value ?? await XhsAccountCache.load()
         : null;
     setState(() {
@@ -280,7 +280,7 @@ class _MinePageState extends State<MinePage> with WidgetsBindingObserver {
     });
   }
 
-  Future<void> _logout(PlatformKind platform) async {
+  Future<void> _logout(String platform) async {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
@@ -303,7 +303,7 @@ class _MinePageState extends State<MinePage> with WidgetsBindingObserver {
       if (!mounted) return;
       setState(() {
         _loggedIn[platform] = false;
-        if (platform == PlatformKind.xhs) _nickname = '';
+        if (platform == 'xhs') _nickname = '';
       });
     }
   }
@@ -631,7 +631,7 @@ class _MinePageState extends State<MinePage> with WidgetsBindingObserver {
 
   /// Subtitle for a platform row: "已登录" / "未登录", plus a hint when a
   /// parse recently proved the stored session is dead.
-  Widget _loginSubtitle(PlatformKind platform) {
+  Widget _loginSubtitle(String platform) {
     final loggedIn = _loggedIn[platform]!;
     final expired = LoginExpiredBus.expired.value.contains(platform);
     if (expired) {
@@ -641,7 +641,7 @@ class _MinePageState extends State<MinePage> with WidgetsBindingObserver {
       );
     }
     if (loggedIn &&
-        platform == PlatformKind.xhs &&
+        platform == 'xhs' &&
         _nickname.trim().isNotEmpty) {
       return Text(
         '已登录（${_nickname.trim()}）',
@@ -665,7 +665,7 @@ class _MinePageState extends State<MinePage> with WidgetsBindingObserver {
           Card(
             child: Column(
               children: [
-                for (final platform in PlatformKind.values)
+                for (final platform in loginSiteIds)
                   if (_checkingLogin)
                     ListTile(
                       title: Text(platformLabel(platform)),
@@ -680,7 +680,7 @@ class _MinePageState extends State<MinePage> with WidgetsBindingObserver {
                     ListTile(
                       title: Text(platformLabel(platform)),
                       subtitle: _loginSubtitle(platform),
-                      trailing: _loggedIn[platform]!
+                      trailing: (_loggedIn[platform] ?? false)
                           ? TextButton(
                               onPressed: () => _logout(platform),
                               child: const Text('退出登录'),

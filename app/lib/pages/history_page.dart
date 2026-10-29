@@ -26,6 +26,7 @@ import '../services/host_bridge.dart';
 import '../services/media_delete_service.dart';
 import '../services/parse_service.dart';
 import '../services/settings.dart';
+import '../services/site_registry.dart';
 import '../theme/app_theme.dart';
 import '../widgets/delete_records_sheet.dart';
 import '../widgets/download_sheet.dart';
@@ -1537,12 +1538,13 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
     return PopupMenuButton<String>(
       tooltip: '平台筛选',
       onSelected: (v) => setState(() => _platform = v),
-      itemBuilder: (_) => const [
-        PopupMenuItem(value: 'all', child: Text('全部')),
-        PopupMenuItem(value: 'xhs', child: Text('小红书')),
-        PopupMenuItem(value: 'instagram', child: Text('Instagram')),
-        PopupMenuItem(value: 'tiktok', child: Text('TikTok')),
-        PopupMenuItem(value: 'x', child: Text('X')),
+      itemBuilder: (_) => [
+        const PopupMenuItem(value: 'all', child: Text('全部')),
+        for (final siteId in {
+          ...SiteRegistry.current.sites.where((s) => s.enabled).map((s) => s.id),
+          ..._records.map((r) => r.platform),
+        })
+          PopupMenuItem(value: siteId, child: Text(platformLabel(siteId))),
       ],
       child: _toolbarButtonInner(
         icon: Icons.filter_list,
@@ -1586,13 +1588,7 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
     );
   }
 
-  String _platformLabel(String key) => switch (key) {
-    'xhs' => '小红书',
-    'instagram' => 'Instagram',
-    'tiktok' => 'TikTok',
-    'x' => 'X',
-    _ => '全部',
-  };
+  String _platformLabel(String key) => key == 'all' ? '全部' : platformLabel(key);
 
   Widget _body() {
     if (_loading) {

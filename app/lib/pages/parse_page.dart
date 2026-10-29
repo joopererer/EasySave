@@ -786,8 +786,8 @@ class ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
 
   /// Fallback platform chooser (only shown when the link's platform is
   /// unknown). A scrollable list scales to any number of platforms.
-  Future<PlatformKind?> _chooseLoginPlatform() {
-    return showModalBottomSheet<PlatformKind>(
+  Future<String?> _chooseLoginPlatform() {
+    return showModalBottomSheet<String>(
       context: context,
       showDragHandle: true,
       builder: (context) => SafeArea(
@@ -805,22 +805,22 @@ class ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
             ListTile(
               leading: const Icon(Icons.login),
               title: const Text('小红书'),
-              onTap: () => Navigator.of(context).pop(PlatformKind.xhs),
+              onTap: () => Navigator.of(context).pop('xhs'),
             ),
             ListTile(
               leading: const Icon(Icons.login),
               title: const Text('Instagram'),
-              onTap: () => Navigator.of(context).pop(PlatformKind.instagram),
+              onTap: () => Navigator.of(context).pop('instagram'),
             ),
             ListTile(
               leading: const Icon(Icons.login),
               title: const Text('TikTok'),
-              onTap: () => Navigator.of(context).pop(PlatformKind.tiktok),
+              onTap: () => Navigator.of(context).pop('tiktok'),
             ),
             ListTile(
               leading: const Icon(Icons.login),
               title: const Text('X'),
-              onTap: () => Navigator.of(context).pop(PlatformKind.x),
+              onTap: () => Navigator.of(context).pop('x'),
             ),
             const SizedBox(height: 8),
           ],

@@ -21,7 +21,7 @@ import '../services/login_navigation.dart';
 class LoginPage extends StatefulWidget {
   const LoginPage({super.key, required this.platform, this.windowId});
 
-  final PlatformKind platform;
+  final String platform;
   /// Attach OAuth windows to their original WebView transport so window.opener
   /// and window.close work. Loading their URL in the parent loses that context.
   final int? windowId;
@@ -49,7 +49,7 @@ class _LoginPageState extends State<LoginPage> {
 
   Timer? _pollTimer;
 
-  bool get _isXhs => widget.platform == PlatformKind.xhs;
+  bool get _isXhs => widget.platform == 'xhs';
 
   String get _entryUrl => loginEntryUrl(widget.platform);
 
@@ -71,7 +71,7 @@ class _LoginPageState extends State<LoginPage> {
   }
 
   Future<bool> _openWindow(CreateWindowAction action) async {
-    if (widget.platform == PlatformKind.tiktok && action.request.url != null &&
+    if (widget.platform == 'tiktok' && action.request.url != null &&
         requiresExternalGoogleLogin(Uri.parse(action.request.url.toString()))) {
       unawaited(_showGoogleLoginNotice());
       return false;
@@ -253,7 +253,7 @@ class _LoginPageState extends State<LoginPage> {
             child: Text(
               _isXhs
                   ? '页面加载后输入手机号获取验证码登录（也可切换密码登录），登录成功会自动返回。登录状态保存在本机，重启 App 依然有效。'
-                  : widget.platform == PlatformKind.tiktok
+                  : widget.platform == 'tiktok'
                       ? '请选择 TikTok 的手机号 / 邮箱 / 用户名登录。Google 授权暂不支持在此页面完成。成功后点右上角“完成”。'
                       : '请在此页面完成登录，成功后点右上角“完成”。登录状态保存在本机，重启 App 依然有效。',
               style: TextStyle(fontSize: 12, color: bannerText, height: 1.5),
@@ -303,7 +303,7 @@ class _LoginPageState extends State<LoginPage> {
                   shouldOverrideUrlLoading: (controller, navigationAction) async {
                     final uri = navigationAction.request.url;
                     if (uri == null) return NavigationActionPolicy.ALLOW;
-                    if (widget.platform == PlatformKind.tiktok &&
+                    if (widget.platform == 'tiktok' &&
                         requiresExternalGoogleLogin(Uri.parse(uri.toString()))) {
                       unawaited(_showGoogleLoginNotice());
                       return NavigationActionPolicy.CANCEL;

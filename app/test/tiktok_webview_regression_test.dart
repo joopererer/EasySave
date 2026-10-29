@@ -57,7 +57,7 @@ void main() {
       SiteRegistry.current.byId('tiktok')!.load['userAgent'],
       contains('X11; Linux x86_64'),
     );
-    expect(loginUserAgent(PlatformKind.tiktok), isNull);
+    expect(loginUserAgent('tiktok'), isNull);
   });
   test(
     'reported short-link destinations canonicalize video and photo correctly',

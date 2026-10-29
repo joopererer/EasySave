@@ -11,6 +11,7 @@ import 'package:http/http.dart' as http;
 import '../../core/error_copy.dart';
 import '../../core/models.dart';
 import '../../theme/app_theme.dart';
+import '../services/auth.dart';
 
 /// Primary capsule button: red-orange gradient with white text.
 class GradientButton extends StatelessWidget {
@@ -234,7 +235,7 @@ class PlatformTag extends StatelessWidget {
     final color = isXhs
         ? AppTokens.platformXhs
         : (isX || isTiktok ? AppTokens.platformX : AppTokens.platformIg);
-    final label = isTiktok ? 'TikTok' : (isXhs ? '小红书' : (isX ? 'X' : 'Instagram'));
+    final label = platformLabel(platform);
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
       decoration: BoxDecoration(

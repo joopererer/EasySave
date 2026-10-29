@@ -15,40 +15,23 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-enum PlatformKind { xhs, instagram, x, tiktok }
+import 'site_registry.dart';
 
-String platformLabel(PlatformKind platform) {
-  switch (platform) {
-    case PlatformKind.xhs:
-      return '小红书';
-    case PlatformKind.instagram:
-      return 'Instagram';
-    case PlatformKind.x:
-      return 'X';
-    case PlatformKind.tiktok:
-      return 'TikTok';
-  }
-}
+/// Open site identifiers retain the persisted platform key verbatim.
+Iterable<String> get loginSiteIds => SiteRegistry.current.sites
+    .where((site) => site.enabled)
+    .map((site) => site.id);
 
-/// Map a history record's `platform` key back to a [PlatformKind].
-PlatformKind platformFromKey(String key) {
-  switch (key) {
-    case 'tiktok':
-      return PlatformKind.tiktok;
-    case 'instagram':
-      return PlatformKind.instagram;
-    case 'x':
-      return PlatformKind.x;
-    default:
-      return PlatformKind.xhs;
-  }
-}
+String platformLabel(String siteId) =>
+    SiteRegistry.current.byId(siteId)?.displayName ?? siteId;
+
+String platformFromKey(String key) => key;
 
 /// Map a post URL to the platform that serves it, or null if unsupported.
-PlatformKind? platformFromUrl(String url) {
+String? platformFromUrl(String url) {
   final host = Uri.tryParse(url)?.host.toLowerCase() ?? '';
   if (host.isEmpty) return null;
-  if (host == 'tiktok.com' || host.endsWith('.tiktok.com')) return PlatformKind.tiktok;
+  if (host == 'tiktok.com' || host.endsWith('.tiktok.com')) return 'tiktok';
   if (host == 'xiaohongshu.com' ||
       host.endsWith('.xiaohongshu.com') ||
       host == 'rednote.com' ||
@@ -59,18 +42,18 @@ PlatformKind? platformFromUrl(String url) {
       host.endsWith('.xhslink.cn') ||
       host == 'xhs.cn' ||
       host.endsWith('.xhs.cn')) {
-    return PlatformKind.xhs;
+    return 'xhs';
   }
   if (host == 'instagram.com' ||
       host.endsWith('.instagram.com') ||
       host.endsWith('.instagr.am')) {
-    return PlatformKind.instagram;
+    return 'instagram';
   }
   if (host == 'x.com' ||
       host.endsWith('.x.com') ||
       host.endsWith('twitter.com') ||
       host.endsWith('t.co')) {
-    return PlatformKind.x;
+    return 'x';
   }
   return null;
 }
@@ -87,16 +70,18 @@ bool isLoopbackHost(String host) {
       h == '[::1]';
 }
 
-String loginEntryUrl(PlatformKind platform) {
+String loginEntryUrl(String platform) {
   switch (platform) {
-    case PlatformKind.xhs:
+    case 'xhs':
       return 'https://www.xiaohongshu.com/explore';
-    case PlatformKind.instagram:
+    case 'instagram':
       return 'https://www.instagram.com/accounts/login/';
-    case PlatformKind.x:
+    case 'x':
       return 'https://x.com/i/flow/login';
-    case PlatformKind.tiktok:
+    case 'tiktok':
       return 'https://www.tiktok.com/login';
+    default:
+      throw StateError('No login entry for $platform');
   }
 }
 
@@ -104,34 +89,37 @@ String loginEntryUrl(PlatformKind platform) {
 /// UA 改成桌面形态：去掉 `Mobile` / `Version/4.0`，平台段换成 `X11; Linux
 /// x86_64`（与 XHS_Downloader_Android 的做法一致）。
 /// Instagram 使用标准移动 Chrome UA，去除内嵌 WebView 标识（Version/4.0 / ; wv）。
-String? loginUserAgent(PlatformKind platform) {
+String? loginUserAgent(String platform) {
   switch (platform) {
-    case PlatformKind.xhs:
+    case 'xhs':
       return 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36';
-    case PlatformKind.instagram:
+    case 'instagram':
       return 'Mozilla/5.0 (Linux; Android 12; Pixel 6) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Mobile Safari/537.36';
-    case PlatformKind.x:
-    case PlatformKind.tiktok:
+    case 'x':
+    case 'tiktok':
+    default:
       return null;
   }
 }
 
-String _cookieUrl(PlatformKind platform) {
+String _cookieUrl(String platform) {
   switch (platform) {
-    case PlatformKind.xhs:
+    case 'xhs':
       return 'https://www.xiaohongshu.com';
-    case PlatformKind.instagram:
+    case 'instagram':
       return 'https://www.instagram.com';
-    case PlatformKind.x:
+    case 'x':
       return 'https://x.com';
-    case PlatformKind.tiktok:
+    case 'tiktok':
       return 'https://www.tiktok.com';
+    default:
+      throw StateError('No cookie entry for $platform');
   }
 }
 
 /// Session cookie names that only exist after a real login.
-bool _isSessionCookie(PlatformKind platform, String name) {
-  if (platform == PlatformKind.xhs) {
+bool _isSessionCookie(String platform, String name) {
+  if (platform == 'xhs') {
     // XHS sets different session cookies depending on login method:
     // - web_session: desktop web login
     // - customer-sso-sid: SSO/mobile login
@@ -144,8 +132,10 @@ bool _isSessionCookie(PlatformKind platform, String name) {
       'login_token',
     }.contains(name);
   }
-  if (platform == PlatformKind.instagram) return name == 'sessionid';
-  if (platform == PlatformKind.tiktok) return name == 'sessionid' || name == 'sessionid_ss';
+  if (platform == 'instagram') return name == 'sessionid';
+  if (platform == 'tiktok') {
+    return name == 'sessionid' || name == 'sessionid_ss';
+  }
   return name == 'auth_token';
 }
 
@@ -176,10 +166,10 @@ Future<String> xhsCookieHeader([String? pageUrl]) => cookieHeaderFor([
 ]);
 
 /// True when the persistent cookie store holds a session cookie.
-Future<bool> isLoggedIn(PlatformKind platform) async {
+Future<bool> isLoggedIn(String platform) async {
   try {
     final cookieManager = CookieManager.instance();
-    final urls = platform == PlatformKind.xhs
+    final urls = platform == 'xhs'
         ? [
             WebUri('https://www.xiaohongshu.com/'),
             WebUri('https://www.xiaohongshu.com/explore'),
@@ -200,10 +190,10 @@ Future<bool> isLoggedIn(PlatformKind platform) async {
 /// Cookie presence, or (for XHS) the page state when a logged-in WebView is
 /// available, falling back to a cheap network probe.
 Future<bool> checkLogin(
-  PlatformKind platform, {
+  String platform, {
   InAppWebViewController? webViewController,
 }) async {
-  if (platform != PlatformKind.xhs) return isLoggedIn(platform);
+  if (platform != 'xhs') return isLoggedIn(platform);
 
   if (webViewController != null) {
     final account = await readXhsAccount(webViewController);
@@ -340,7 +330,7 @@ abstract final class XhsAccountCache {
 Future<bool> verifyXhsSession({
   Duration timeout = const Duration(seconds: 8),
 }) async {
-  if (!await isLoggedIn(PlatformKind.xhs)) return false;
+  if (!await isLoggedIn('xhs')) return false;
   try {
     return await _probeXhsFeed().timeout(timeout);
   } catch (_) {
@@ -358,11 +348,11 @@ Future<bool> _probeXhsFeed() async {
       Uri.parse('https://www.xiaohongshu.com/explore'),
     );
     request.followRedirects = false;
+    request.headers.set(HttpHeaders.userAgentHeader, loginUserAgent('xhs')!);
     request.headers.set(
-      HttpHeaders.userAgentHeader,
-      loginUserAgent(PlatformKind.xhs)!,
+      HttpHeaders.acceptHeader,
+      'text/html,application/xhtml+xml',
     );
-    request.headers.set(HttpHeaders.acceptHeader, 'text/html,application/xhtml+xml');
     request.headers.set(
       HttpHeaders.acceptLanguageHeader,
       'zh-CN,zh;q=0.9,en;q=0.8',
@@ -373,8 +363,7 @@ Future<bool> _probeXhsFeed() async {
     final response = await request.close();
     final status = response.statusCode;
     if (status >= 300 && status < 400) {
-      final location =
-          response.headers.value(HttpHeaders.locationHeader) ?? '';
+      final location = response.headers.value(HttpHeaders.locationHeader) ?? '';
       await response.drain<void>();
       // Bounced to the login page => the session is dead.
       return !location.contains('/login');
@@ -394,11 +383,11 @@ Future<bool> _probeXhsFeed() async {
 }
 
 /// Clear session cookies for [platform] (logout).
-Future<void> logout(PlatformKind platform) async {
+Future<void> logout(String platform) async {
   try {
     final cookieManager = CookieManager.instance();
     await cookieManager.deleteCookies(url: WebUri(_cookieUrl(platform)));
-    if (platform == PlatformKind.xhs) {
+    if (platform == 'xhs') {
       for (final url in const [
         'https://edith.xiaohongshu.com',
         'https://www.xiaohongshu.com/explore',
@@ -438,19 +427,20 @@ Future<void> logout(PlatformKind platform) async {
 /// rejected, so the Mine tab can mark exactly those as expired. Also used as
 /// a lightweight "login state changed" signal: clearing always notifies.
 abstract final class LoginExpiredBus {
-  static final ValueNotifier<Set<PlatformKind>> expired =
-      ValueNotifier<Set<PlatformKind>>(const {});
+  static final ValueNotifier<Set<String>> expired = ValueNotifier<Set<String>>(
+    const {},
+  );
 
-  static void markExpired(PlatformKind platform) {
+  static void markExpired(String platform) {
     // A rejected session invalidates the cached page-state answer too.
-    if (platform == PlatformKind.xhs) {
+    if (platform == 'xhs') {
       unawaited(XhsAccountCache.clear());
     }
     if (expired.value.contains(platform)) return;
     expired.value = {...expired.value, platform};
   }
 
-  static void clear(PlatformKind platform) {
+  static void clear(String platform) {
     expired.value = {...expired.value}..remove(platform);
   }
 
