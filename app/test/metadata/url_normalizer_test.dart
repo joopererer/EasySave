@@ -6,6 +6,7 @@ import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:easysave/metadata/url_normalizer.dart';
+import '../fixtures/v110_metadata/url_normalizer_24fb900.dart' as legacy;
 
 void main() {
   group('URL Normalizer', () {
@@ -54,7 +55,7 @@ void main() {
     });
 
     test('bidirectional platform conversion derives properly and preserves original value', () {
-      for (final entry in internalPlatformToSpec.entries) {
+      for (final entry in legacy.internalPlatformToSpec.entries) {
         final internalId = entry.key;
         final specName = entry.value;
 

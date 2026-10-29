@@ -18,7 +18,7 @@ import '../core/app_version.dart';
 import '../core/dev_log.dart';
 import '../core/models.dart';
 import '../metadata/metadata_service.dart';
-import '../metadata/url_normalizer.dart';
+import '../metadata/site_provenance.dart';
 import 'backup/local_auto_backup.dart';
 import 'backup/saf_service.dart';
 import 'gallery_locator_service.dart';
@@ -548,9 +548,8 @@ XmpProvenance provenanceForBatchItem(
   String? capturedBy,
   String? pairId,
 }) {
-  final authorId = _shouldWriteAuthorId(batch.platform, batch.authorId) ? batch.authorId : null;
-  return ProvenanceBuilder(
-    platform: toSpecPlatform(batch.platform),
+  return buildSiteProvenance(
+    platform: batch.platform,
     capturedBy: capturedBy ?? AppVersion.capturedBy,
     sourceId: batch.postId,
     sourceUrl: batch.postUrl,
@@ -559,19 +558,12 @@ XmpProvenance provenanceForBatchItem(
     caption: batch.caption,
     aiLabel: batch.aiLabel,
     aiLabelSource: batch.aiLabelSource,
-    authorId: authorId,
-    creditPlatformName: platformDisplayName(batch.platform),
+    authorId: batch.authorId,
     publishedAt: batch.publishedAt,
     itemIndex: itemIndex,
     itemCount: batch.totalItems,
     existingAssetId: existingAssetId,
-  ).build().copyWith(pairId: pairId);
-}
-
-bool _shouldWriteAuthorId(String platform, String? authorId) {
-  if (authorId == null || authorId.isEmpty) return false;
-  if (platform != 'x' && platform != 'tiktok') return true;
-  return RegExp(r'^\d+$').hasMatch(authorId);
+  ).copyWith(pairId: pairId);
 }
 
 /// Extracts the first image from the itemsJson of a batch for the thumbnail.

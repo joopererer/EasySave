@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Instagram 不再把非数字的作者标识写入 prov:authorId。
+
 - Floating ball select panel: type item numbers directly (`1,3,5-8`) without loading previews; thumbnails are off by default and load on demand.
 - Downloads: a history record is written as soon as a download starts, with a progress overlay on the card; a failed enqueue no longer strands the other files.
 - Downloads: a 90 s watchdog imports, retries or fails stuck files, and the gallery import has a 60 s timeout, so a batch can no longer hang at 50%.
