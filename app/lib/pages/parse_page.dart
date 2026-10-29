@@ -15,6 +15,7 @@ import '../core/error_copy.dart';
 import '../core/dev_log.dart';
 import '../core/models.dart';
 import '../services/auth.dart';
+import '../services/site_registry.dart';
 import '../services/clipboard_guard.dart';
 import '../services/gallery_locator_service.dart';
 import '../services/history_db.dart';
@@ -760,7 +761,9 @@ class ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
         // Prefer the platform we can read from the link; only fall back to a
         // chooser when the URL is unknown (keeps the dialog future-proof as
         // more platforms are added).
-        final platform = platformFromUrl(link) ?? await _chooseLoginPlatform();
+        final recognized = platformFromUrl(link);
+        if (recognized != null && !loginSiteIds.contains(recognized)) return;
+        final platform = loginSiteIds.contains(recognized) ? recognized : await _chooseLoginPlatform();
         if (platform != null && mounted) {
           final loggedIn = await Navigator.of(context).push<bool>(
             MaterialPageRoute<bool>(
@@ -802,26 +805,12 @@ class ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
                 style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
               ),
             ),
-            ListTile(
-              leading: const Icon(Icons.login),
-              title: const Text('小红书'),
-              onTap: () => Navigator.of(context).pop('xhs'),
-            ),
-            ListTile(
-              leading: const Icon(Icons.login),
-              title: const Text('Instagram'),
-              onTap: () => Navigator.of(context).pop('instagram'),
-            ),
-            ListTile(
-              leading: const Icon(Icons.login),
-              title: const Text('TikTok'),
-              onTap: () => Navigator.of(context).pop('tiktok'),
-            ),
-            ListTile(
-              leading: const Icon(Icons.login),
-              title: const Text('X'),
-              onTap: () => Navigator.of(context).pop('x'),
-            ),
+            for (final siteId in loginSiteIds)
+              ListTile(
+                leading: PlatformIcon(platform: siteId),
+                title: Text(platformLabel(siteId)),
+                onTap: () => Navigator.of(context).pop(siteId),
+              ),
             const SizedBox(height: 8),
           ],
         ),
@@ -872,7 +861,7 @@ class ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
                       minLines: 1,
                       maxLines: 3,
                       decoration: InputDecoration(
-                        hintText: '粘贴小红书 / Instagram / X / TikTok 链接',
+                        hintText: '粘贴${SiteRegistry.current.sites.where((s) => s.enabled).map((s) => s.displayName).join(' / ')}链接',
                         filled: true,
                         fillColor: Theme.of(context).scaffoldBackgroundColor,
                         border: const OutlineInputBorder(
@@ -929,6 +918,9 @@ class ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
               padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
               child: ErrorCard(
                 code: _errorCode!,
+                canLogin: platformFromUrl(_linkController.text.trim()) == null
+                    ? loginSiteIds.isNotEmpty
+                    : loginSiteIds.contains(platformFromUrl(_linkController.text.trim())),
                 message: _errorMessage,
                 onAction: _onErrorAction,
                 diagnostics: () =>
@@ -987,7 +979,7 @@ class ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
                             child: CircularProgressIndicator(strokeWidth: 2),
                           )
                         : Row(mainAxisSize: MainAxisSize.min, children: [
-                            PlatformTag(platform: record.platform),
+                            PlatformTag(platform: record.platform, savedDisplayName: record.platformDisplayName),
                             AiLabelBadge(text: record.aiLabel, source: record.aiLabelSource),
                           ]),
                   ),
@@ -1037,7 +1029,7 @@ class ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
       ScaffoldMessenger.of(context).hideCurrentSnackBar();
 
       final isLoginRequired =
-          e is ParseFailure && e.code == ParseErrorCode.loginRequired;
+          e is ParseFailure && e.code == ParseErrorCode.loginRequired && loginSiteIds.contains(record.platform);
       final isUnavailable =
           e is ParseFailure && e.code == ParseErrorCode.privateOrUnavailable;
 

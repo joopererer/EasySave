@@ -12,6 +12,7 @@ import '../../core/error_copy.dart';
 import '../../core/models.dart';
 import '../../theme/app_theme.dart';
 import '../services/auth.dart';
+import '../services/site_registry.dart';
 
 /// Primary capsule button: red-orange gradient with white text.
 class GradientButton extends StatelessWidget {
@@ -222,38 +223,66 @@ class CdnImage extends ImageProvider<CdnImage> {
   int get hashCode => Object.hash(Object.hashAll(urls), referer, cacheWidth);
 }
 
-class PlatformTag extends StatelessWidget {
-  const PlatformTag({super.key, required this.platform});
-
+/// Local icon registry: manifest keys never become remote URLs or file paths.
+class PlatformIcon extends StatelessWidget {
+  const PlatformIcon({
+    super.key,
+    required this.platform,
+    this.size = 18,
+    this.color,
+  });
   final String platform;
+  final double size;
+  final Color? color;
+  static const _assets = <String, IconData>{
+    'xhs': Icons.menu_book,
+    'instagram': Icons.photo_camera,
+    'x': Icons.alternate_email,
+    'tiktok': Icons.music_note,
+  };
+  @override
+  Widget build(BuildContext context) => Icon(
+    _assets[SiteRegistry.current.byId(platform)?.assetKey] ?? Icons.public,
+    size: size,
+    color: color,
+  );
+}
+
+class PlatformTag extends StatelessWidget {
+  const PlatformTag({super.key, required this.platform, this.savedDisplayName});
+  final String platform;
+  final String? savedDisplayName;
 
   @override
   Widget build(BuildContext context) {
-    final isXhs = platform == 'xhs';
-    final isX = platform == 'x';
-    final isTiktok = platform == 'tiktok';
-    final color = isXhs
-        ? AppTokens.platformXhs
-        : (isX || isTiktok ? AppTokens.platformX : AppTokens.platformIg);
-    final label = platformLabel(platform);
+    final raw = SiteRegistry.current.byId(platform)?.data['tagColor'];
+    final color = raw is String && RegExp(r'^#[0-9a-fA-F]{6}$').hasMatch(raw)
+        ? Color(0xFF000000 | int.parse(raw.substring(1), radix: 16))
+        : const Color(0xFF607D8B);
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
       decoration: BoxDecoration(
         color: color,
         borderRadius: BorderRadius.circular(8),
       ),
-      child: Text(
-        label,
-        style: const TextStyle(
-          color: Colors.white,
-          fontSize: 11,
-          fontWeight: FontWeight.w600,
-        ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          PlatformIcon(platform: platform, size: 12, color: Colors.white),
+          const SizedBox(width: 3),
+          Text(
+            platformLabel(platform, savedDisplayName: savedDisplayName),
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 11,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ],
       ),
     );
   }
 }
-
 
 /// Error card driven by the centralized error copy: message, action button,
 /// and a diagnostics button on INVALID_PAGE failures.
@@ -264,12 +293,14 @@ class ErrorCard extends StatelessWidget {
     required this.onAction,
     this.message,
     this.diagnostics,
+    this.canLogin = true,
   });
 
   final String code;
   final String? message;
   final Future<void> Function(ErrorAction action) onAction;
   final String Function()? diagnostics;
+  final bool canLogin;
 
   @override
   Widget build(BuildContext context) {
@@ -288,10 +319,11 @@ class ErrorCard extends StatelessWidget {
             Wrap(
               spacing: 8,
               children: [
-                FilledButton(
-                  onPressed: () => onAction(copy.action),
-                  child: Text(_actionLabel(copy.action)),
-                ),
+                if (copy.action != ErrorAction.goLogin || canLogin)
+                  FilledButton(
+                    onPressed: () => onAction(copy.action),
+                    child: Text(_actionLabel(copy.action)),
+                  ),
                 if (code == ParseErrorCode.invalidPage && diagnostics != null)
                   OutlinedButton(
                     onPressed: () async {
@@ -378,4 +410,3 @@ class _ShimmerBoxState extends State<ShimmerBox>
     );
   }
 }
-

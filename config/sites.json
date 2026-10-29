@@ -133,7 +133,8 @@
     },
     "icon": {
       "assetKey": "xhs"
-    }
+    },
+    "tagColor": "#EA1C42"
   },
   {
     "id": "instagram",
@@ -211,7 +212,8 @@
     },
     "icon": {
       "assetKey": "instagram"
-    }
+    },
+    "tagColor": "#CE35A8"
   },
   {
     "id": "x",
@@ -305,7 +307,8 @@
     },
     "icon": {
       "assetKey": "x"
-    }
+    },
+    "tagColor": "#0F1419"
   },
   {
     "id": "tiktok",
@@ -426,7 +429,8 @@
     },
     "icon": {
       "assetKey": "tiktok"
-    }
+    },
+    "tagColor": "#0F1419"
   },
   {
     "id": "douyin",

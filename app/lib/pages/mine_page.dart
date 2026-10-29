@@ -8,6 +8,7 @@ import 'package:package_info_plus/package_info_plus.dart';
 import '../core/dev_log.dart';
 import '../services/album_name_registry.dart';
 import '../services/auth.dart';
+import '../widgets/shared.dart';
 import '../services/bubble_service.dart';
 import '../services/gallery_locator_service.dart';
 import '../services/history_backfill_service.dart';
@@ -655,6 +656,7 @@ class _MinePageState extends State<MinePage> with WidgetsBindingObserver {
                 for (final platform in loginSiteIds)
                   if (_checkingLogin)
                     ListTile(
+                      leading: PlatformIcon(platform: platform),
                       title: Text(platformLabel(platform)),
                       subtitle: const Text('检查中…'),
                       trailing: const SizedBox(
@@ -665,6 +667,7 @@ class _MinePageState extends State<MinePage> with WidgetsBindingObserver {
                     )
                   else
                     ListTile(
+                      leading: PlatformIcon(platform: platform),
                       title: Text(platformLabel(platform)),
                       subtitle: _loginSubtitle(platform),
                       trailing: (_loggedIn[platform] ?? false)

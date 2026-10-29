@@ -12,7 +12,7 @@ void main() {
       );
       expect(
         errorCopyFor(ParseErrorCode.loginRequired).message,
-        '需要先登录小红书/Instagram',
+        '需要先登录小红书/Instagram/X/TikTok',
       );
       expect(
         errorCopyFor(ParseErrorCode.privateOrUnavailable).action,

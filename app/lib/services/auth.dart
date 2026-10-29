@@ -27,40 +27,25 @@ Iterable<String> get loginSiteIds => SiteRegistry.current.sites
     )
     .map((site) => site.id);
 
-String platformLabel(String siteId) =>
-    SiteRegistry.current.byId(siteId)?.displayName ?? siteId;
+String platformLabel(String siteId, {String? savedDisplayName}) =>
+    SiteRegistry.current.byId(siteId)?.displayName ??
+    (savedDisplayName?.trim().isNotEmpty == true ? savedDisplayName! : siteId);
 
 String platformFromKey(String key) => key;
 
-/// Map a post URL to the platform that serves it, or null if unsupported.
+/// Login pages use host recognition, including roots without post paths.
 String? platformFromUrl(String url) {
-  final host = Uri.tryParse(url)?.host.toLowerCase() ?? '';
-  if (host.isEmpty) return null;
-  if (host == 'tiktok.com' || host.endsWith('.tiktok.com')) return 'tiktok';
-  if (host == 'xiaohongshu.com' ||
-      host.endsWith('.xiaohongshu.com') ||
-      host == 'rednote.com' ||
-      host.endsWith('.rednote.com') ||
-      host == 'xhslink.com' ||
-      host.endsWith('.xhslink.com') ||
-      host == 'xhslink.cn' ||
-      host.endsWith('.xhslink.cn') ||
-      host == 'xhs.cn' ||
-      host.endsWith('.xhs.cn')) {
-    return 'xhs';
+  final uri = Uri.tryParse(url);
+  if (uri == null ||
+      !{'https', 'http'}.contains(uri.scheme) ||
+      uri.userInfo.isNotEmpty ||
+      uri.host.isEmpty) {
+    return null;
   }
-  if (host == 'instagram.com' ||
-      host.endsWith('.instagram.com') ||
-      host.endsWith('.instagr.am')) {
-    return 'instagram';
-  }
-  if (host == 'x.com' ||
-      host.endsWith('.x.com') ||
-      host.endsWith('twitter.com') ||
-      host.endsWith('t.co')) {
-    return 'x';
-  }
-  return null;
+  return SiteRegistry.current.sites
+      .where((s) => s.enabled && s.hasHost(uri.host))
+      .firstOrNull
+      ?.id;
 }
 
 /// True for loopback URLs used by login hand-offs (e.g. XHS's desktop

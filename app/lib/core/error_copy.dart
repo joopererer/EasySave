@@ -3,6 +3,7 @@
 // with the browser extension.
 
 import 'models.dart';
+import '../services/site_registry.dart';
 
 /// UI action attached to an error code.
 enum ErrorAction { goLogin, backHome, retry, repaste }
@@ -25,8 +26,15 @@ String displayErrorMessage(String code, String? message) =>
 ErrorCopy errorCopyFor(String code) {
   switch (code) {
     case ParseErrorCode.loginRequired:
-      return const ErrorCopy(
-        message: '需要先登录小红书/Instagram',
+      final names = SiteRegistry.current.sites
+          .where(
+            (s) =>
+                s.enabled && {'optional', 'required'}.contains(s.auth['mode']),
+          )
+          .map((s) => s.displayName)
+          .join('/');
+      return ErrorCopy(
+        message: names.isEmpty ? '需要先登录' : '需要先登录$names',
         action: ErrorAction.goLogin,
       );
     case ParseErrorCode.privateOrUnavailable:
@@ -45,8 +53,12 @@ ErrorCopy errorCopyFor(String code) {
         action: ErrorAction.retry,
       );
     case ParseErrorCode.unsupportedUrl:
-      return const ErrorCopy(
-        message: '不支持的链接，请粘贴小红书/Instagram 帖子链接',
+      final names = SiteRegistry.current.sites
+          .where((s) => s.enabled)
+          .map((s) => s.displayName)
+          .join('/');
+      return ErrorCopy(
+        message: names.isEmpty ? '不支持的链接，请粘贴帖子链接' : '不支持的链接，请粘贴$names 帖子链接',
         action: ErrorAction.repaste,
       );
     case ParseErrorCode.timeout:

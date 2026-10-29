@@ -387,7 +387,7 @@ class _PreviewPageState extends State<PreviewPage> {
           children: [
             Flexible(child: Text(post.author.name ?? post.id)),
             const SizedBox(width: 8),
-            PlatformTag(platform: post.platform),
+            PlatformTag(platform: post.platform, savedDisplayName: post.platformDisplayName),
             AiLabelBadge(text: post.aiLabel?.text, source: post.aiLabel?.source),
           ],
         ),

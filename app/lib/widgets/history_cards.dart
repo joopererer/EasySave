@@ -495,7 +495,7 @@ class WaterfallPostCard extends StatelessWidget {
                           mainAxisSize: MainAxisSize.min,
                           children: [
                             Wrap(crossAxisAlignment: WrapCrossAlignment.center, children: [
-                              PlatformTag(platform: record.platform),
+                              PlatformTag(platform: record.platform, savedDisplayName: record.platformDisplayName),
                               AiLabelBadge(text: record.aiLabel, source: record.aiLabelSource),
                             ]),
                             const SizedBox(height: 4),
@@ -737,7 +737,7 @@ class ListPostRow extends StatelessWidget {
                     Row(
                       children: [
                         Wrap(crossAxisAlignment: WrapCrossAlignment.center, children: [
-                              PlatformTag(platform: record.platform),
+                              PlatformTag(platform: record.platform, savedDisplayName: record.platformDisplayName),
                               AiLabelBadge(text: record.aiLabel, source: record.aiLabelSource),
                             ]),
                         const SizedBox(width: 6),
@@ -922,6 +922,7 @@ class CreatorCard extends StatelessWidget {
     super.key,
     required this.authorName,
     required this.platform,
+    this.savedDisplayName,
     required this.postCount,
     required this.fileCount,
     required this.thumbs,
@@ -930,6 +931,7 @@ class CreatorCard extends StatelessWidget {
 
   final String authorName;
   final String platform;
+  final String? savedDisplayName;
   final int postCount;
   final int fileCount;
   final List<HistThumbRef> thumbs;
@@ -966,7 +968,7 @@ class CreatorCard extends StatelessWidget {
           const SizedBox(height: 4),
           Row(
             children: [
-              PlatformTag(platform: platform),
+              PlatformTag(platform: platform, savedDisplayName: savedDisplayName),
               const SizedBox(width: 6),
               Flexible(
                 child: Text(

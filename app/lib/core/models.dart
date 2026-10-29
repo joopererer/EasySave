@@ -117,6 +117,7 @@ class AiLabel {
 class ParsedPost {
   ParsedPost({
     required this.platform,
+    this.platformDisplayName,
     required this.id,
     required this.url,
     required this.author,
@@ -147,6 +148,8 @@ class ParsedPost {
   );
 
   final String platform;
+  /// Local display snapshot; excluded from parser/backup JSON.
+  final String? platformDisplayName;
   final String id;
   final String url;
   final PostAuthor author;

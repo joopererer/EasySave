@@ -174,6 +174,7 @@ class HistoryRecord {
   HistoryRecord({
     this.id,
     required this.platform,
+    String? platformDisplayName,
     required this.postId,
     this.authorName,
     this.title,
@@ -187,10 +188,12 @@ class HistoryRecord {
     this.itemsJson,
     List<HistoryFile>? files,
     this.isDeleted = false,
-  }) : files = files ?? const [];
+  }) : platformDisplayName = platformDisplayName ?? SiteRegistry.current.byId(platform)?.displayName,
+       files = files ?? const [];
 
   final int? id;
   final String platform;
+  final String? platformDisplayName;
   final String postId;
   final String? authorName;
   final String? title;
@@ -282,6 +285,7 @@ class HistoryRecord {
     }
     return ParsedPost(
       platform: platform,
+      platformDisplayName: platformDisplayName,
       id: postId,
       url: postUrl,
       author: PostAuthor(name: authorName),
@@ -294,6 +298,7 @@ class HistoryRecord {
 
   Map<String, Object?> toMap() => {
     'platform': platform,
+    'platform_display_name': SiteRegistry.current.byId(platform)?.displayName ?? platformDisplayName,
     'post_id': postId,
     'author_name': authorName,
     'title': title,
@@ -342,6 +347,7 @@ class HistoryRecord {
     return HistoryRecord(
       id: map['id'] as int?,
       platform: map['platform'] as String,
+      platformDisplayName: map['platform_display_name'] as String?,
       postId: postId,
       authorName: authorName,
       title: map['title'] as String?,
@@ -447,7 +453,7 @@ class HistoryDb {
     final path = dbPath ?? '${await getDatabasesPath()}/easysave_history.db';
     final db = await openDatabase(
       path,
-      version: 4,
+      version: 5,
       // Two engines (main UI isolate + background isolate) can hold a
       // connection to the same file. WAL lets readers work while a writer is
       // active, and busy_timeout makes a writer wait for the lock instead of
@@ -466,6 +472,7 @@ class HistoryDb {
         'CREATE TABLE history_records('
         'id INTEGER PRIMARY KEY AUTOINCREMENT,'
         'platform TEXT NOT NULL,'
+        'platform_display_name TEXT,'
         'post_id TEXT NOT NULL,'
         'author_name TEXT,'
         'title TEXT,'
@@ -511,12 +518,21 @@ class HistoryDb {
         if (oldVersion < 3) {
           await db.execute('ALTER TABLE history_records ADD COLUMN is_deleted INTEGER DEFAULT 0');
         }
+        if (oldVersion < 5) {
+          await db.execute('ALTER TABLE history_records ADD COLUMN platform_display_name TEXT');
+        }
         if (oldVersion < 4) {
           await db.execute('ALTER TABLE history_records ADD COLUMN ai_label TEXT');
           await db.execute('ALTER TABLE history_records ADD COLUMN ai_label_source TEXT');
         }
       },
     );
+    // Save names while a site is known, so later removal keeps records legible.
+    for (final site in SiteRegistry.current.sites) {
+      await db.update('history_records', {'platform_display_name': site.displayName},
+        where: '(platform = ? OR platform = ?) AND (platform_display_name IS NULL OR platform_display_name = ?)',
+        whereArgs: [site.id, site.platform, '']);
+    }
     final historyDb = HistoryDb._(db);
     if (dbPath == null) {
       DevLog.write('HIST', 'instance opened #${identityHashCode(historyDb)} path=$path'); // i18n:ignore 日志
@@ -616,6 +632,7 @@ class HistoryDb {
         final mergedRecord = HistoryRecord(
           id: existing.id,
           platform: record.platform,
+          platformDisplayName: record.platformDisplayName ?? existing.platformDisplayName,
           postId: record.postId,
           authorName: record.authorName?.trim().isNotEmpty == true ? record.authorName : existing.authorName,
           title: (record.title?.isNotEmpty == true) ? record.title : existing.title,

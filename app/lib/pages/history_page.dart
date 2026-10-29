@@ -502,7 +502,7 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
       ScaffoldMessenger.of(context).hideCurrentSnackBar();
 
       final isLoginRequired =
-          e is ParseFailure && e.code == ParseErrorCode.loginRequired;
+          e is ParseFailure && e.code == ParseErrorCode.loginRequired && loginSiteIds.contains(record.platform);
       final cachedPost = record.toPost();
       if (cachedPost.items.isNotEmpty) {
         Navigator.of(context).push(
@@ -1544,7 +1544,7 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
           ...SiteRegistry.current.sites.where((s) => s.enabled).map((s) => s.id),
           ..._records.map((r) => r.platform),
         })
-          PopupMenuItem(value: siteId, child: Text(platformLabel(siteId))),
+          PopupMenuItem(value: siteId, child: Text(_platformLabel(siteId))),
       ],
       child: _toolbarButtonInner(
         icon: Icons.filter_list,
@@ -1588,7 +1588,9 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
     );
   }
 
-  String _platformLabel(String key) => key == 'all' ? '全部' : platformLabel(key);
+  String _platformLabel(String key) => key == 'all' ? '全部' : platformLabel(key,
+    savedDisplayName: _records.where((r) => r.platform == key && r.platformDisplayName?.trim().isNotEmpty == true)
+      .map((r) => r.platformDisplayName).firstOrNull);
 
   Widget _body() {
     if (_loading) {
@@ -1869,6 +1871,7 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
           return CreatorCard(
             authorName: c.authorName,
             platform: c.platform,
+            savedDisplayName: _platformLabel(c.platform),
             postCount: c.postCount,
             fileCount: c.fileCount,
             thumbs: c.thumbs,
