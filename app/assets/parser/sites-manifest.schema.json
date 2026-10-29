@@ -281,6 +281,32 @@
             "prepareHook": {
               "type": "string",
               "pattern": "^[a-z][a-z0-9_]{0,63}$"
+            },
+            "headers": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "User-Agent": {
+                  "type": "string",
+                  "maxLength": 2048,
+                  "pattern": "^[^\\r\\n]*$"
+                },
+                "Accept": {
+                  "type": "string",
+                  "maxLength": 2048,
+                  "pattern": "^[^\\r\\n]*$"
+                },
+                "Accept-Language": {
+                  "type": "string",
+                  "maxLength": 2048,
+                  "pattern": "^[^\\r\\n]*$"
+                },
+                "Referer": {
+                  "type": "string",
+                  "maxLength": 2048,
+                  "pattern": "^[^\\r\\n]*$"
+                }
+              }
             }
           },
           "required": [

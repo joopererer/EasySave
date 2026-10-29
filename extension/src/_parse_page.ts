@@ -98,8 +98,16 @@ export function parseInstagramFromDom(doc: Document, pageUrl: string): { ok: tru
 
 export function parsePage(): string {
   const url = window.location.href;
+  const moduleId = isTiktokLink(url) ? 'tiktok' : isXhsHost(url) ? 'xhs' :
+    isInstagramHost(url) ? 'instagram' : isXHost(url) ? 'x' : '';
+  return parsePageForModule(moduleId);
+}
+
+// The App selects this entry point using the verified manifest, not host guessing.
+export function parsePageForModule(moduleId: string): string {
+  const url = window.location.href;
   const html = document.documentElement.outerHTML;
-  if (isTiktokLink(url)) {
+  if (moduleId === 'tiktok') {
     const result = parseTiktok(html, url);
     if (result.ok) return JSON.stringify(result);
     const state = (window as any).__UNIVERSAL_DATA_FOR_REHYDRATION__;
@@ -108,7 +116,7 @@ export function parsePage(): string {
     }
     return JSON.stringify(result);
   }
-  if (isXhsHost(url)) {
+  if (moduleId === 'xhs') {
     const state = (window as any).__INITIAL_STATE__;
     if (state !== undefined) {
       try {
@@ -129,7 +137,7 @@ export function parsePage(): string {
     }
     return JSON.stringify(parseXhs(html, url));
   }
-  if (isInstagramHost(url)) {
+  if (moduleId === 'instagram') {
     const shortcode = shortcodeFromUrl(url);
     if (shortcode && (window as any).__easysaveIgProducts?.[shortcode]) {
       return JSON.stringify(
@@ -142,7 +150,7 @@ export function parsePage(): string {
     if (domRes && domRes.ok) return JSON.stringify(domRes);
     return JSON.stringify(res);
   }
-  if (isXHost(url)) {
+  if (moduleId === 'x') {
     return JSON.stringify({
       ok: false,
       error: { code: 'UNSUPPORTED_URL', message: 'X posts require syndication JSON input to parse(input, pageUrl)' }
@@ -151,22 +159,24 @@ export function parsePage(): string {
   return JSON.stringify({ ok: false, error: { code: 'UNSUPPORTED_URL', message: `Unsupported host: ${url}` } });
 }
 
-export function parse(input: string, pageUrl: string): string {
-  if (isTiktokLink(pageUrl)) return JSON.stringify(parseTiktok(input, pageUrl));
+export function parse(input: string, pageUrl: string, moduleId?: string): string {
+  if (moduleId ? moduleId === 'tiktok' : isTiktokLink(pageUrl)) return JSON.stringify(parseTiktok(input, pageUrl));
   const host = hostnameOf(pageUrl);
   if (!host) {
     return JSON.stringify({ ok: false, error: { code: 'UNSUPPORTED_URL', message: `Cannot parse URL: ${pageUrl}` } });
   }
-  if (isXhsHost(host)) {
+  if (moduleId ? moduleId === 'xhs' : isXhsHost(host)) {
     return JSON.stringify(parseXhs(input, pageUrl));
   }
-  if (isInstagramHost(host)) {
+  if (moduleId ? moduleId === 'instagram' : isInstagramHost(host)) {
     return JSON.stringify(parseInstagram(input, pageUrl));
   }
-  if (isXHost(host)) {
+  if (moduleId ? moduleId === 'x' : isXHost(host)) {
     return JSON.stringify(parseX(input, pageUrl));
   }
   return JSON.stringify({ ok: false, error: { code: 'UNSUPPORTED_URL', message: `Unsupported host: ${host}` } });
 }
 
 export { parseXhs, parseInstagram, parseX, calculateToken, extractTweetId };
+
+export { moduleCall } from './parser-modules';

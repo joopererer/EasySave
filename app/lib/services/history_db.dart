@@ -8,6 +8,7 @@ import 'package:sqflite/sqflite.dart';
 import '../core/dev_log.dart';
 import '../core/models.dart';
 import 'clipboard_guard.dart';
+import 'site_registry.dart';
 
 enum FileStatus {
   unknown,
@@ -720,8 +721,9 @@ class HistoryDb {
 
   /// Find a history record matching a link (by postId, canonical URL, or resolved URL).
   Future<void> rememberParsedLink(String link, ParsedPost post) async {
-    final host = Uri.tryParse(link)?.host.toLowerCase();
-    if (post.platform != 'tiktok' || !{'vm.tiktok.com', 'vt.tiktok.com'}.contains(host)) return;
+    final uri = Uri.tryParse(link);
+    final site = SiteRegistry.current.byId(post.platform);
+    if (uri == null || site?.shortLink(uri) == null) return;
     await _db.insert('resolved_post_links', {'link_key': linkKey(link), 'platform': post.platform, 'post_id': post.id},
         conflictAlgorithm: ConflictAlgorithm.replace);
   }

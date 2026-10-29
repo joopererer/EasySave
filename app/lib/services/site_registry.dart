@@ -91,7 +91,14 @@ class SiteRegistry {
       sites.where((s) => s.id == id || s.platform == id).firstOrNull;
   SiteDefinition? forHost(String host) =>
       sites.where((s) => s.hasHost(host)).firstOrNull;
-  SiteDefinition? match(String text) {
+  String? canonicalUrl(String text) {
+    final site = match(text);
+    if (site == null) return null;
+    final id = site.sourceId(Uri.parse(text));
+    return id == null ? null : site.canonical(id);
+  }
+
+  SiteDefinition? match(String text, {bool includeDisabled = false}) {
     final uri = Uri.tryParse(text);
     if (uri == null ||
         !{'http', 'https'}.contains(uri.scheme) ||
@@ -99,6 +106,8 @@ class SiteRegistry {
         uri.host.isEmpty) {
       return null;
     }
-    return sites.where((s) => s.enabled && s.matches(uri)).firstOrNull;
+    return sites
+        .where((s) => (includeDisabled || s.enabled) && s.matches(uri))
+        .firstOrNull;
   }
 }

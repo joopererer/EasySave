@@ -4,14 +4,6 @@
 import 'models.dart';
 import '../services/site_registry.dart';
 
-// Transitional call-site aliases; the domains come exclusively from Registry.
-bool isXhsHost(String host) =>
-    SiteRegistry.current.byId('xhs')?.hasHost(host) ?? false;
-bool isInstagramHost(String host) =>
-    SiteRegistry.current.byId('instagram')?.hasHost(host) ?? false;
-bool isXHost(String host) =>
-    SiteRegistry.current.byId('x')?.hasHost(host) ?? false;
-
 /// Parse a supported post page. Dart platform parsers were replaced by
 /// the unified JS parser bundle in v1.3a.
 ParseResult parse(String html, String pageUrl) {

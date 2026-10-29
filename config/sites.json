@@ -87,7 +87,8 @@
     "load": {
       "mode": "webview",
       "timeoutMs": 30000,
-      "readyHook": "xhs_ready"
+      "readyHook": "xhs_ready",
+      "userAgent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36"
     },
     "auth": {
       "mode": "optional",
@@ -163,7 +164,8 @@
     "load": {
       "mode": "webview",
       "timeoutMs": 30000,
-      "readyHook": "instagram_ready"
+      "readyHook": "instagram_ready",
+      "userAgent": "Mozilla/5.0 (Linux; Android 12; Pixel 6) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Mobile Safari/537.36"
     },
     "auth": {
       "mode": "optional",
@@ -260,7 +262,10 @@
       "mode": "json",
       "timeoutMs": 30000,
       "endpointTemplate": "https://cdn.syndication.twimg.com/tweet-result?id={id}&lang=en&token={token}",
-      "prepareHook": "x_build_request"
+      "prepareHook": "x_build_request",
+      "headers": {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
+      }
     },
     "auth": {
       "mode": "none",
@@ -370,7 +375,8 @@
     "load": {
       "mode": "webview",
       "timeoutMs": 30000,
-      "readyHook": "tiktok_ready"
+      "readyHook": "tiktok_ready",
+      "userAgent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
     },
     "auth": {
       "mode": "optional",

@@ -23,10 +23,12 @@ var EasySaveParser = (() => {
   __export(parse_page_exports, {
     calculateToken: () => calculateToken,
     extractTweetId: () => extractTweetId,
+    moduleCall: () => moduleCall,
     parse: () => parse,
     parseInstagram: () => parseInstagram,
     parseInstagramFromDom: () => parseInstagramFromDom,
     parsePage: () => parsePage,
+    parsePageForModule: () => parsePageForModule,
     parseX: () => parseX,
     parseXhs: () => parseXhs
   });
@@ -1125,6 +1127,218 @@ var EasySaveParser = (() => {
     return /x\.com|twitter\.com/.test(host);
   }
 
+  // src/page-hooks.js
+  function installIgSniff() {
+    (() => {
+      if (window.__easysaveSniffInstalled) return;
+      window.__easysaveSniffInstalled = true;
+      window.__easysaveIgProducts = window.__easysaveIgProducts || {};
+      function isProductShaped2(obj) {
+        if (!obj || typeof obj !== "object") return false;
+        const sc = typeof obj.shortcode === "string" ? obj.shortcode : typeof obj.code === "string" ? obj.code : null;
+        if (!sc) return false;
+        return "video_versions" in obj || "carousel_media" in obj || "image_versions2" in obj || "display_url" in obj || "video_url" in obj || "edge_sidecar_to_children" in obj;
+      }
+      function extractProducts(payload) {
+        const seen = /* @__PURE__ */ new Set();
+        function visit(node) {
+          if (!node || typeof node !== "object") return;
+          if (seen.has(node)) return;
+          seen.add(node);
+          if (isProductShaped2(node)) {
+            const sc = typeof node.shortcode === "string" ? node.shortcode : node.code;
+            window.__easysaveIgProducts[sc] = node;
+          }
+          if (Array.isArray(node)) {
+            for (const item of node) visit(item);
+          } else {
+            for (const key of Object.keys(node)) visit(node[key]);
+          }
+        }
+        try {
+          visit(payload);
+        } catch (_) {
+        }
+      }
+      function sniffText(text2) {
+        if (!text2 || text2.length < 10) return;
+        if (!text2.includes("shortcode") && !text2.includes("xdt_shortcode_media") && !text2.includes("edge_sidecar_to_children") && !text2.includes("display_url")) return;
+        try {
+          const json = JSON.parse(text2);
+          extractProducts(json);
+        } catch (_) {
+        }
+      }
+      try {
+        const originalFetch = window.fetch;
+        if (originalFetch) {
+          window.fetch = async function(...args) {
+            const response = await originalFetch.apply(this, args);
+            try {
+              const clone = response.clone();
+              clone.text().then(sniffText).catch(() => {
+              });
+            } catch (_) {
+            }
+            return response;
+          };
+        }
+      } catch (_) {
+      }
+      try {
+        const originalOpen = XMLHttpRequest.prototype.open;
+        const originalSend = XMLHttpRequest.prototype.send;
+        XMLHttpRequest.prototype.open = function(method, url, ...rest) {
+          this.__url = url;
+          return originalOpen.apply(this, [method, url, ...rest]);
+        };
+        XMLHttpRequest.prototype.send = function(...args) {
+          this.addEventListener("load", function() {
+            try {
+              sniffText(this.responseText);
+            } catch (_) {
+            }
+          });
+          return originalSend.apply(this, args);
+        };
+      } catch (_) {
+      }
+    })();
+  }
+  function readXhsAccount() {
+    return JSON.parse(function() {
+      try {
+        var unwrap = function(v) {
+          return v && v.__v_isRef ? v.value : v;
+        };
+        var state = window.__INITIAL_STATE__;
+        var user = state && unwrap(state.user);
+        if (!user) return JSON.stringify({ state: "unknown" });
+        var loggedIn = unwrap(user.loggedIn);
+        if (typeof loggedIn !== "boolean") return JSON.stringify({ state: "unknown" });
+        if (!loggedIn) return JSON.stringify({ state: "guest" });
+        var info = unwrap(user.userInfo);
+        if (!info || info.guest === true || !info.userId) {
+          return JSON.stringify({ state: "guest" });
+        }
+        return JSON.stringify({
+          state: "user",
+          userId: String(info.userId),
+          nickname: info.nickname || ""
+        });
+      } catch (e) {
+        return JSON.stringify({ state: "unknown" });
+      }
+    }());
+  }
+  function tiktokReady() {
+    return (() => {
+      try {
+        const node = document.getElementById("__UNIVERSAL_DATA_FOR_REHYDRATION__");
+        const root = window.__UNIVERSAL_DATA_FOR_REHYDRATION__ || node && JSON.parse(node.textContent);
+        const scope = root && root.__DEFAULT_SCOPE__;
+        return !!(scope && ["webapp.video-detail", "webapp.reflow.video.detail"].some((key) => {
+          const detail = scope[key];
+          return detail && (detail.itemInfo && detail.itemInfo.itemStruct && detail.itemInfo.itemStruct.id || detail.statusCode != null && Number(detail.statusCode) !== 0);
+        }));
+      } catch (_) {
+        return false;
+      }
+    })();
+  }
+
+  // src/parser-modules.ts
+  var page = () => window;
+  var failure2 = (code, message) => ({ code, message });
+  var modules = {
+    x: {
+      request: (c) => {
+        const id = extractTweetId(c.url);
+        if (!id) throw new Error("UNSUPPORTED_URL");
+        const template = c.site.load.endpointTemplate;
+        return {
+          url: template.replaceAll("{id}", id).replaceAll("{token}", calculateToken(id)),
+          headers: c.site.load.headers || {}
+        };
+      },
+      parse: (c) => c.statusCode === 404 ? { ok: false, error: failure2("PRIVATE_OR_UNAVAILABLE", "Post is unavailable or private") } : parseX(c.input || "", c.url)
+    },
+    xhs: {
+      ready: (c) => {
+        const state = page().__INITIAL_STATE__;
+        if (!state) return false;
+        const wanted = /\/(?:explore|discovery\/item)\/([a-zA-Z0-9]+)/.exec(c.url)?.[1];
+        const map = state.note?.noteDetailMap;
+        if (map) return wanted ? Object.hasOwn(map, wanted) : Object.keys(map).length > 0;
+        const note = state.noteData?.data?.noteData || state.noteData?.data;
+        return !!note && (!wanted || !(note.noteId || note.id) || (note.noteId || note.id) === wanted);
+      },
+      account: () => readXhsAccount(),
+      classify: (c) => ["LOGIN_REQUIRED", "INVALID_PAGE"].includes(c.error?.code) ? c.loggedIn ? failure2("PRIVATE_OR_UNAVAILABLE", "\u672A\u80FD\u8BFB\u53D6\u7B14\u8BB0\u5185\u5BB9\uFF08\u5206\u4EAB\u94FE\u63A5\u53EF\u80FD\u5DF2\u8FC7\u671F\uFF0C\u8BF7\u91CD\u65B0\u7C98\u8D34\u539F\u5206\u4EAB\u94FE\u63A5\u518D\u8BD5\uFF09") : failure2("LOGIN_REQUIRED", "\u9700\u8981\u5148\u767B\u5F55\u5C0F\u7EA2\u4E66\u624D\u80FD\u89E3\u6790\u8BE5\u7B14\u8BB0") : c.error
+    },
+    instagram: {
+      install: () => installIgSniff(),
+      ready: (c) => {
+        const id = /\/(?:p|reels?|tv)\/([A-Za-z0-9_-]+)/.exec(c.url)?.[1];
+        return !!(id && page().__easysaveIgProducts?.[id]) || !!document.querySelector("article video, main video, article img, main img");
+      },
+      prepare: () => {
+        const words = ["see post", "view post", "\u67E5\u770B\u5E16\u5B50", "\u67E5\u770B\u8CBC\u6587", "\u4E86\u89E3\u8BE6\u60C5", "continue", "i understand", "\u786E\u8BA4"];
+        for (const node of Array.from(document.querySelectorAll('button, [role="button"], a[role="button"]'))) {
+          const text2 = (node.innerText || node.textContent || "").trim().toLowerCase();
+          if (words.some((word) => text2.includes(word))) {
+            node.click();
+            return true;
+          }
+        }
+        return false;
+      },
+      classify: (c) => c.error?.code === "LOGIN_REQUIRED" && c.loggedIn ? failure2("PRIVATE_OR_UNAVAILABLE", /敏感内容|年龄限制/.test(c.error.message || "") ? c.error.message : "\u672A\u80FD\u8BFB\u53D6\u5E16\u5B50\u5185\u5BB9\uFF08\u53EF\u80FD\u5305\u542B\u53D7\u9650\u5185\u5BB9\u6216\u5DF2\u88AB\u5220\u9664\uFF09") : c.error
+    },
+    tiktok: {
+      ready: () => tiktokReady(),
+      navigate: (c) => {
+        const id = extractTiktokPostId(c.url);
+        return id ? { url: c.site.normalize.canonicalTemplate.replaceAll("{id}", id) } : { wait: true };
+      },
+      parse: (c) => parseTiktok(c.input || "", c.url)
+    }
+  };
+  function moduleCall(moduleId, hook, context) {
+    if (!Object.hasOwn(modules, moduleId)) throw new Error("UNSUPPORTED_MODULE");
+    if (hook === "classify" && context.error?.code === "PRIVATE_OR_UNAVAILABLE" && context.site.auth.mode !== "none" && !context.loggedIn) {
+      context = { ...context, error: failure2("LOGIN_REQUIRED", "\u53EF\u80FD\u9700\u8981\u767B\u5F55" + context.site.displayName) };
+    }
+    const module = modules[moduleId];
+    if (Object.hasOwn(module, hook)) return JSON.stringify({ value: module[hook](context) ?? null });
+    switch (hook) {
+      case "install":
+      case "navigate":
+      case "account":
+        return JSON.stringify({ value: null });
+      case "prepare":
+        return JSON.stringify({ value: false });
+      case "ready":
+        return JSON.stringify({ value: true });
+      case "parsePage": {
+        try {
+          const result = JSON.parse(parsePageForModule(moduleId));
+          if (result.ok) return JSON.stringify({ value: result });
+        } catch (_) {
+        }
+        return JSON.stringify({ value: JSON.parse(parse(document.documentElement.outerHTML, context.url, moduleId)) });
+      }
+      case "parse":
+        return JSON.stringify({ value: JSON.parse(parse(context.input || "", context.url, moduleId)) });
+      case "classify": {
+        const error = context.error;
+        return JSON.stringify({ value: error?.code === "PRIVATE_OR_UNAVAILABLE" && context.site.auth.mode !== "none" && !context.loggedIn ? failure2("LOGIN_REQUIRED", "\u53EF\u80FD\u9700\u8981\u767B\u5F55" + context.site.displayName) : error });
+      }
+      default:
+        throw new Error("UNSUPPORTED_HOOK");
+    }
+  }
+
   // src/_parse_page.ts
   function noteIdFromUrl(url) {
     const m = /\/(?:explore|discovery\/item|user\/profile\/[^/]+)\/([a-f0-9]{24})/i.exec(url);
@@ -1207,8 +1421,13 @@ var EasySaveParser = (() => {
   }
   function parsePage() {
     const url = window.location.href;
+    const moduleId = isTiktokLink(url) ? "tiktok" : isXhsHost(url) ? "xhs" : isInstagramHost(url) ? "instagram" : isXHost(url) ? "x" : "";
+    return parsePageForModule(moduleId);
+  }
+  function parsePageForModule(moduleId) {
+    const url = window.location.href;
     const html = document.documentElement.outerHTML;
-    if (isTiktokLink(url)) {
+    if (moduleId === "tiktok") {
       const result = parseTiktok(html, url);
       if (result.ok) return JSON.stringify(result);
       const state = window.__UNIVERSAL_DATA_FOR_REHYDRATION__;
@@ -1217,7 +1436,7 @@ var EasySaveParser = (() => {
       }
       return JSON.stringify(result);
     }
-    if (isXhsHost(url)) {
+    if (moduleId === "xhs") {
       const state = window.__INITIAL_STATE__;
       if (state !== void 0) {
         try {
@@ -1234,7 +1453,7 @@ var EasySaveParser = (() => {
       }
       return JSON.stringify(parseXhs(html, url));
     }
-    if (isInstagramHost(url)) {
+    if (moduleId === "instagram") {
       const shortcode = shortcodeFromUrl(url);
       if (shortcode && window.__easysaveIgProducts?.[shortcode]) {
         return JSON.stringify(
@@ -1247,7 +1466,7 @@ var EasySaveParser = (() => {
       if (domRes && domRes.ok) return JSON.stringify(domRes);
       return JSON.stringify(res);
     }
-    if (isXHost(url)) {
+    if (moduleId === "x") {
       return JSON.stringify({
         ok: false,
         error: { code: "UNSUPPORTED_URL", message: "X posts require syndication JSON input to parse(input, pageUrl)" }
@@ -1255,19 +1474,19 @@ var EasySaveParser = (() => {
     }
     return JSON.stringify({ ok: false, error: { code: "UNSUPPORTED_URL", message: `Unsupported host: ${url}` } });
   }
-  function parse(input, pageUrl) {
-    if (isTiktokLink(pageUrl)) return JSON.stringify(parseTiktok(input, pageUrl));
+  function parse(input, pageUrl, moduleId) {
+    if (moduleId ? moduleId === "tiktok" : isTiktokLink(pageUrl)) return JSON.stringify(parseTiktok(input, pageUrl));
     const host = hostnameOf(pageUrl);
     if (!host) {
       return JSON.stringify({ ok: false, error: { code: "UNSUPPORTED_URL", message: `Cannot parse URL: ${pageUrl}` } });
     }
-    if (isXhsHost(host)) {
+    if (moduleId ? moduleId === "xhs" : isXhsHost(host)) {
       return JSON.stringify(parseXhs(input, pageUrl));
     }
-    if (isInstagramHost(host)) {
+    if (moduleId ? moduleId === "instagram" : isInstagramHost(host)) {
       return JSON.stringify(parseInstagram(input, pageUrl));
     }
-    if (isXHost(host)) {
+    if (moduleId ? moduleId === "x" : isXHost(host)) {
       return JSON.stringify(parseX(input, pageUrl));
     }
     return JSON.stringify({ ok: false, error: { code: "UNSUPPORTED_URL", message: `Unsupported host: ${host}` } });
