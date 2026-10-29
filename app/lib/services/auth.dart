@@ -16,10 +16,15 @@ import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'site_registry.dart';
+import 'parser_hooks.dart';
+import 'update_service.dart';
 
 /// Open site identifiers retain the persisted platform key verbatim.
 Iterable<String> get loginSiteIds => SiteRegistry.current.sites
-    .where((site) => site.enabled)
+    .where(
+      (site) =>
+          site.enabled && {'optional', 'required'}.contains(site.auth['mode']),
+    )
     .map((site) => site.id);
 
 String platformLabel(String siteId) =>
@@ -71,73 +76,27 @@ bool isLoopbackHost(String host) {
 }
 
 String loginEntryUrl(String platform) {
-  switch (platform) {
-    case 'xhs':
-      return 'https://www.xiaohongshu.com/explore';
-    case 'instagram':
-      return 'https://www.instagram.com/accounts/login/';
-    case 'x':
-      return 'https://x.com/i/flow/login';
-    case 'tiktok':
-      return 'https://www.tiktok.com/login';
-    default:
-      throw StateError('No login entry for $platform');
-  }
+  final url = SiteRegistry.current.byId(platform)?.auth['loginUrl'];
+  if (url is! String) throw StateError('No login entry for $platform');
+  return url;
 }
 
-/// 小红书移动端 UA 会命中 App 引流落地页（无登录入口），所以把 WebView 的
-/// UA 改成桌面形态：去掉 `Mobile` / `Version/4.0`，平台段换成 `X11; Linux
-/// x86_64`（与 XHS_Downloader_Android 的做法一致）。
-/// Instagram 使用标准移动 Chrome UA，去除内嵌 WebView 标识（Version/4.0 / ; wv）。
-String? loginUserAgent(String platform) {
-  switch (platform) {
-    case 'xhs':
-      return 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36';
-    case 'instagram':
-      return 'Mozilla/5.0 (Linux; Android 12; Pixel 6) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Mobile Safari/537.36';
-    case 'x':
-    case 'tiktok':
-    default:
-      return null;
-  }
+String? loginUserAgent(String platform) =>
+    SiteRegistry.current.byId(platform)?.auth['userAgent'] as String?;
+
+List<String> _cookieUrls(String platform) {
+  final auth = SiteRegistry.current.byId(platform)?.auth;
+  return (auth?['cookieUrls'] as List?)?.cast<String>() ??
+      [loginEntryUrl(platform)];
 }
 
-String _cookieUrl(String platform) {
-  switch (platform) {
-    case 'xhs':
-      return 'https://www.xiaohongshu.com';
-    case 'instagram':
-      return 'https://www.instagram.com';
-    case 'x':
-      return 'https://x.com';
-    case 'tiktok':
-      return 'https://www.tiktok.com';
-    default:
-      throw StateError('No cookie entry for $platform');
-  }
-}
+bool _isSessionCookie(String platform, String name) =>
+    (SiteRegistry.current.byId(platform)?.auth['sessionCookieNames'] as List? ??
+            [])
+        .contains(name);
 
-/// Session cookie names that only exist after a real login.
-bool _isSessionCookie(String platform, String name) {
-  if (platform == 'xhs') {
-    // XHS sets different session cookies depending on login method:
-    // - web_session: desktop web login
-    // - customer-sso-sid: SSO/mobile login
-    // - galaxy_creator_session_id: creator session
-    // - login_token: alternative login token
-    return const {
-      'web_session',
-      'customer-sso-sid',
-      'galaxy_creator_session_id',
-      'login_token',
-    }.contains(name);
-  }
-  if (platform == 'instagram') return name == 'sessionid';
-  if (platform == 'tiktok') {
-    return name == 'sessionid' || name == 'sessionid_ss';
-  }
-  return name == 'auth_token';
-}
+bool hasAccountHook(String platform) =>
+    SiteRegistry.current.byId(platform)?.auth['stateHook'] != null;
 
 /// Harvest cookies for [urls] into a single `Cookie:` header value.
 Future<String> cookieHeaderFor(List<String> urls) async {
@@ -158,24 +117,11 @@ Future<String> cookieHeaderFor(List<String> urls) async {
   return map.entries.map((e) => '${e.key}=${e.value}').join('; ');
 }
 
-/// Cookies to send when fetching an XHS page with plain HTTP.
-Future<String> xhsCookieHeader([String? pageUrl]) => cookieHeaderFor([
-  'https://www.xiaohongshu.com/',
-  'https://edith.xiaohongshu.com/',
-  if (pageUrl != null && pageUrl.isNotEmpty) pageUrl,
-]);
-
 /// True when the persistent cookie store holds a session cookie.
 Future<bool> isLoggedIn(String platform) async {
   try {
     final cookieManager = CookieManager.instance();
-    final urls = platform == 'xhs'
-        ? [
-            WebUri('https://www.xiaohongshu.com/'),
-            WebUri('https://www.xiaohongshu.com/explore'),
-            WebUri('https://edith.xiaohongshu.com/'),
-          ]
-        : [WebUri(_cookieUrl(platform))];
+    final urls = _cookieUrls(platform).map(WebUri.new);
 
     for (final u in urls) {
       final cookies = await cookieManager.getCookies(url: u);
@@ -193,162 +139,114 @@ Future<bool> checkLogin(
   String platform, {
   InAppWebViewController? webViewController,
 }) async {
-  if (platform != 'xhs') return isLoggedIn(platform);
+  if (!hasAccountHook(platform)) return isLoggedIn(platform);
 
   if (webViewController != null) {
-    final account = await readXhsAccount(webViewController);
+    final account = await readAccount(platform, webViewController);
     if (account != null) {
-      await XhsAccountCache.save(account);
+      await AccountCache.save(platform, account);
       return account.loggedIn;
     }
   }
 
-  final cached = await XhsAccountCache.load();
+  final cached = await AccountCache.load(platform);
   if (cached != null) return cached.loggedIn;
   // Nothing cached yet (e.g. right after an app update): fall back to the
   // cookie jar plus a cheap network probe, which is accurate but slower.
-  return verifyXhsSession();
+  return verifyAccountSession(platform);
 }
 
 /// Signed-in XHS user, as read from the page itself.
-class XhsAccount {
-  const XhsAccount({required this.loggedIn, this.userId, this.nickname});
+class SiteAccount {
+  const SiteAccount({required this.loggedIn, this.userId, this.nickname});
 
-  const XhsAccount.guest() : this(loggedIn: false);
+  const SiteAccount.guest() : this(loggedIn: false);
 
   final bool loggedIn;
   final String? userId;
   final String? nickname;
 }
 
-/// Reads `window.__INITIAL_STATE__.user` — the same source the official web
-/// app and XHS_Downloader_Android use. Returns null when the page can't tell
-/// us (still booting, or not an XHS page at all).
-const String xhsAccountScript = r'''
-(function () {
+/// Optional signed parser hook; unknown page state never proves a login.
+Future<SiteAccount?> readAccount(
+  String platform,
+  InAppWebViewController controller,
+) async {
   try {
-    var unwrap = function (v) { return v && v.__v_isRef ? v.value : v; };
-    var state = window.__INITIAL_STATE__;
-    var user = state && unwrap(state.user);
-    if (!user) return JSON.stringify({ state: 'unknown' });
-    var loggedIn = unwrap(user.loggedIn);
-    if (typeof loggedIn !== 'boolean') return JSON.stringify({ state: 'unknown' });
-    if (!loggedIn) return JSON.stringify({ state: 'guest' });
-    var info = unwrap(user.userInfo);
-    if (!info || info.guest === true || !info.userId) {
-      return JSON.stringify({ state: 'guest' });
-    }
-    return JSON.stringify({
-      state: 'user',
-      userId: String(info.userId),
-      nickname: info.nickname || ''
-    });
-  } catch (e) {
-    return JSON.stringify({ state: 'unknown' });
-  }
-})()
-''';
-
-/// Read the sign-in state out of a WebView that is on xiaohongshu.com.
-Future<XhsAccount?> readXhsAccount(InAppWebViewController controller) async {
-  try {
-    final raw = await controller.evaluateJavascript(source: xhsAccountScript);
-    if (raw is! String) return null;
-    final decoded = jsonDecode(raw);
-    if (decoded is! Map) return null;
-    switch (decoded['state']) {
-      case 'guest':
-        return const XhsAccount.guest();
-      case 'user':
-        return XhsAccount(
-          loggedIn: true,
-          userId: decoded['userId']?.toString(),
-          nickname: decoded['nickname']?.toString(),
-        );
-      default:
-        return null;
-    }
+    final script = await ParserManager.instance.getActiveScript();
+    final site = SiteRegistry.current.byId(platform);
+    final hook = site?.auth['stateHook'];
+    if (site == null || hook is! String) return null;
+    await controller.evaluateJavascript(source: script);
+    final value = await ParserHooks(
+      script,
+      site,
+    ).call(controller, hook, loginEntryUrl(platform));
+    if (value is! Map) return null;
+    if (value['state'] == 'guest') return const SiteAccount.guest();
+    if (value['state'] != 'user') return null;
+    return SiteAccount(
+      loggedIn: true,
+      userId: value['userId']?.toString(),
+      nickname: value['nickname']?.toString(),
+    );
   } catch (_) {
     return null;
   }
 }
 
-/// Last known XHS account, persisted so the Mine tab can answer instantly
-/// without touching the network on every launch.
-abstract final class XhsAccountCache {
-  static const _loggedInKey = 'xhsLoggedIn';
-  static const _userIdKey = 'xhsUserId';
-  static const _nicknameKey = 'xhsNickname';
+/// Per-site account cache. The existing xhs preference keys remain readable.
+abstract final class AccountCache {
+  static final _values = <String, SiteAccount>{};
+  static SiteAccount? value(String platform) => _values[platform];
+  static Future<SiteAccount?> load(String platform) async {
+    if (_values.containsKey(platform)) return _values[platform];
+    final prefs = await SharedPreferences.getInstance();
+    if (!prefs.containsKey('${platform}LoggedIn')) return null;
+    return _values[platform] = SiteAccount(
+      loggedIn: prefs.getBool('${platform}LoggedIn') ?? false,
+      userId: prefs.getString('${platform}UserId'),
+      nickname: prefs.getString('${platform}Nickname'),
+    );
+  }
 
-  static XhsAccount? _value;
-
-  /// In-memory value, for synchronous UI reads.
-  static XhsAccount? get value => _value;
-
-  static Future<XhsAccount?> load() async {
-    if (_value != null) return _value;
+  static Future<void> save(String platform, SiteAccount account) async {
+    _values[platform] = account;
     try {
       final prefs = await SharedPreferences.getInstance();
-      if (!prefs.containsKey(_loggedInKey)) return null;
-      _value = XhsAccount(
-        loggedIn: prefs.getBool(_loggedInKey) ?? false,
-        userId: prefs.getString(_userIdKey),
-        nickname: prefs.getString(_nicknameKey),
-      );
-    } catch (_) {
-      return null;
-    }
-    return _value;
+      await prefs.setBool('${platform}LoggedIn', account.loggedIn);
+      for (final entry in {
+        'UserId': account.userId,
+        'Nickname': account.nickname,
+      }.entries) {
+        if (entry.value == null) {
+          await prefs.remove('$platform${entry.key}');
+        } else {
+          await prefs.setString('$platform${entry.key}', entry.value!);
+        }
+      }
+    } catch (_) {}
   }
 
-  static Future<void> save(XhsAccount account) async {
-    _value = account;
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.setBool(_loggedInKey, account.loggedIn);
-      if (account.userId == null) {
-        await prefs.remove(_userIdKey);
-      } else {
-        await prefs.setString(_userIdKey, account.userId!);
-      }
-      if (account.nickname == null) {
-        await prefs.remove(_nicknameKey);
-      } else {
-        await prefs.setString(_nicknameKey, account.nickname!);
-      }
-    } catch (_) {
-      // Cache only; ignore storage errors.
-    }
-  }
-
-  static Future<void> clear() => save(const XhsAccount.guest());
+  static Future<void> clear(String platform) =>
+      save(platform, const SiteAccount.guest());
 }
 
-/// Network truth for XHS, used when no WebView is around: guests are
-/// redirected from `/explore` to `/login`, so a session that still loads the
-/// feed is a live one. Falls back to cookie presence when the network fails.
-Future<bool> verifyXhsSession({
-  Duration timeout = const Duration(seconds: 8),
-}) async {
-  if (!await isLoggedIn('xhs')) return false;
-  try {
-    return await _probeXhsFeed().timeout(timeout);
-  } catch (_) {
-    // Offline / timeout: can't prove it's invalid, so trust the cookie.
-    return true;
-  }
-}
-
-Future<bool> _probeXhsFeed() async {
-  final cookieHeader = await xhsCookieHeader();
+/// A cookie is a prerequisite; the optional signed probe interprets the feed.
+Future<bool> verifyAccountSession(String platform) async {
+  if (!await isLoggedIn(platform)) return false;
+  HeadlessInAppWebView? view;
   final client = HttpClient();
   client.connectionTimeout = const Duration(seconds: 6);
   try {
-    final request = await client.getUrl(
-      Uri.parse('https://www.xiaohongshu.com/explore'),
-    );
+    final script = await ParserManager.instance.getActiveScript();
+    final site = SiteRegistry.current.byId(platform)!;
+    final hook = site.auth['probeHook'];
+    if (hook is! String) return true;
+    final request = await client.getUrl(Uri.parse(loginEntryUrl(platform)));
     request.followRedirects = false;
-    request.headers.set(HttpHeaders.userAgentHeader, loginUserAgent('xhs')!);
+    final ua = loginUserAgent(platform);
+    if (ua != null) request.headers.set(HttpHeaders.userAgentHeader, ua);
     request.headers.set(
       HttpHeaders.acceptHeader,
       'text/html,application/xhtml+xml',
@@ -357,69 +255,71 @@ Future<bool> _probeXhsFeed() async {
       HttpHeaders.acceptLanguageHeader,
       'zh-CN,zh;q=0.9,en;q=0.8',
     );
-    if (cookieHeader.isNotEmpty) {
-      request.headers.set(HttpHeaders.cookieHeader, cookieHeader);
+    final cookies = await cookieHeaderFor(_cookieUrls(platform));
+    if (cookies.isNotEmpty) {
+      request.headers.set(HttpHeaders.cookieHeader, cookies);
     }
-    final response = await request.close();
-    final status = response.statusCode;
-    if (status >= 300 && status < 400) {
-      final location = response.headers.value(HttpHeaders.locationHeader) ?? '';
-      await response.drain<void>();
-      // Bounced to the login page => the session is dead.
-      return !location.contains('/login');
-    }
-    if (status != 200) {
-      await response.drain<void>();
-      return true;
-    }
-    final body = await response.transform(utf8.decoder).join();
-    if (body.contains('"loggedIn":false')) return false;
-    if (body.contains('"loggedIn":true')) return true;
-    // Feed served without a login wall: treat as logged in.
+    final response = await request.close().timeout(const Duration(seconds: 8));
+    final body = await response
+        .transform(utf8.decoder)
+        .join()
+        .timeout(const Duration(seconds: 8));
+    final answer = Completer<bool>();
+    view = HeadlessInAppWebView(
+      initialData: InAppWebViewInitialData(data: '<html></html>'),
+      onLoadStop: (controller, _) async {
+        try {
+          await controller.evaluateJavascript(source: script);
+          final value = await ParserHooks(script, site)
+              .call(controller, hook, loginEntryUrl(platform), {
+                'input': body,
+                'statusCode': response.statusCode,
+                'location': response.headers.value(HttpHeaders.locationHeader),
+              });
+          if (!answer.isCompleted) answer.complete(value != false);
+        } catch (_) {
+          if (!answer.isCompleted) answer.complete(true);
+        }
+      },
+    );
+    await view.run();
+    return await answer.future.timeout(const Duration(seconds: 8));
+  } catch (_) {
     return true;
   } finally {
     client.close(force: true);
+    await view?.dispose();
   }
 }
 
-/// Clear session cookies for [platform] (logout).
+/// Expire host and domain cookies within this site's declared login hosts.
 Future<void> logout(String platform) async {
   try {
-    final cookieManager = CookieManager.instance();
-    await cookieManager.deleteCookies(url: WebUri(_cookieUrl(platform)));
-    if (platform == 'xhs') {
-      for (final url in const [
-        'https://edith.xiaohongshu.com',
-        'https://www.xiaohongshu.com/explore',
-      ]) {
-        await cookieManager.deleteCookies(url: WebUri(url));
+    final manager = CookieManager.instance();
+    final site = SiteRegistry.current.byId(platform);
+    for (final url in _cookieUrls(platform)) {
+      await manager.deleteCookies(url: WebUri(url));
+      final host = Uri.parse(url).host;
+      final domains = <String?>{null, '.$host'};
+      for (final route in (site?.data['match']['routes'] as List? ?? [])) {
+        for (final rule in route['hosts'] as List) {
+          if (matchesHost(host, rule)) domains.add('.${rule['domain']}');
+        }
       }
-      // `web_session` is usually a domain cookie on `.xiaohongshu.com`;
-      // deleting by URL alone would leave it behind (it is written host- or
-      // domain-scoped depending on the login flow), so expire it both ways.
-      for (final name in const [
-        'web_session',
-        'customer-sso-sid',
-        'galaxy_creator_session_id',
-        'login_token',
-      ]) {
-        for (final domain in const [null, '.xiaohongshu.com']) {
+      for (final name in (site?.auth['sessionCookieNames'] as List? ?? [])) {
+        for (final domain in domains) {
           try {
-            await cookieManager.deleteCookie(
-              url: WebUri('https://www.xiaohongshu.com'),
+            await manager.deleteCookie(
+              url: WebUri(url),
               name: name,
               domain: domain,
             );
-          } catch (_) {
-            // Some platforms reject domain-scoped deletes; best effort.
-          }
+          } catch (_) {}
         }
       }
     }
-  } catch (_) {
-    // Best effort; the login page can also expire the session.
-  }
-  await XhsAccountCache.clear();
+  } catch (_) {}
+  await AccountCache.clear(platform);
   LoginExpiredBus.clear(platform);
 }
 
@@ -433,8 +333,8 @@ abstract final class LoginExpiredBus {
 
   static void markExpired(String platform) {
     // A rejected session invalidates the cached page-state answer too.
-    if (platform == 'xhs') {
-      unawaited(XhsAccountCache.clear());
+    if (hasAccountHook(platform)) {
+      unawaited(AccountCache.clear(platform));
     }
     if (expired.value.contains(platform)) return;
     expired.value = {...expired.value, platform};

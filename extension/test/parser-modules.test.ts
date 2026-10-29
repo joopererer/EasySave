@@ -40,6 +40,13 @@ describe('manifest-selected parser hooks', () => {
     expect(call('tiktok','navigate',{url:'https://www.tiktok.com/@user/photo/12345'}))
       .toEqual({url:'https://www.tiktok.com/@/video/12345'});
   });
+  it('keeps optional feed probe interpretation in the signed module', () => {
+    expect(call('xhs', 'probeSession', {statusCode:302, location:'/login'})).toBe(false);
+    expect(call('xhs', 'probeSession', {statusCode:302, location:'/explore'})).toBe(true);
+    expect(call('xhs', 'probeSession', {statusCode:200, input:'{"loggedIn":false}'})).toBe(false);
+    expect(call('xhs', 'probeSession', {statusCode:200, input:'{"loggedIn":true}'})).toBe(true);
+    expect(call('xhs', 'probeSession', {statusCode:503})).toBe(true);
+  });
   it('accepts TikTok hydrated data and terminal page errors', () => {
     vi.stubGlobal('document', {getElementById:()=>null});
     vi.stubGlobal('window', {});

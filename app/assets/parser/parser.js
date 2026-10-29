@@ -1252,6 +1252,7 @@ var EasySaveParser = (() => {
   var failure2 = (code, message) => ({ code, message });
   var modules = {
     x: {
+      classify: (c) => c.error,
       request: (c) => {
         const id = extractTweetId(c.url);
         if (!id) throw new Error("UNSUPPORTED_URL");
@@ -1274,6 +1275,12 @@ var EasySaveParser = (() => {
         return !!note && (!wanted || !(note.noteId || note.id) || (note.noteId || note.id) === wanted);
       },
       account: () => readXhsAccount(),
+      probeSession: (c) => {
+        if ((c.statusCode || 0) >= 300 && (c.statusCode || 0) < 400) return !(c.location || "").includes("/login");
+        if (c.statusCode !== 200) return true;
+        if ((c.input || "").includes('"loggedIn":false')) return false;
+        return true;
+      },
       classify: (c) => ["LOGIN_REQUIRED", "INVALID_PAGE"].includes(c.error?.code) ? c.loggedIn ? failure2("PRIVATE_OR_UNAVAILABLE", "\u672A\u80FD\u8BFB\u53D6\u7B14\u8BB0\u5185\u5BB9\uFF08\u5206\u4EAB\u94FE\u63A5\u53EF\u80FD\u5DF2\u8FC7\u671F\uFF0C\u8BF7\u91CD\u65B0\u7C98\u8D34\u539F\u5206\u4EAB\u94FE\u63A5\u518D\u8BD5\uFF09") : failure2("LOGIN_REQUIRED", "\u9700\u8981\u5148\u767B\u5F55\u5C0F\u7EA2\u4E66\u624D\u80FD\u89E3\u6790\u8BE5\u7B14\u8BB0") : c.error
     },
     instagram: {
@@ -1306,7 +1313,7 @@ var EasySaveParser = (() => {
   };
   function moduleCall(moduleId, hook, context) {
     if (!Object.hasOwn(modules, moduleId)) throw new Error("UNSUPPORTED_MODULE");
-    if (hook === "classify" && context.error?.code === "PRIVATE_OR_UNAVAILABLE" && context.site.auth.mode !== "none" && !context.loggedIn) {
+    if (hook === "classify" && context.error?.code === "PRIVATE_OR_UNAVAILABLE" && context.site.auth.mode !== "none" && !context.loggedIn && moduleId !== "x") {
       context = { ...context, error: failure2("LOGIN_REQUIRED", "\u53EF\u80FD\u9700\u8981\u767B\u5F55" + context.site.displayName) };
     }
     const module = modules[moduleId];

@@ -61,6 +61,13 @@ export function validatePayload(payload, schema) {
       }
     }
     if (Object.values(site.download.headers).some((v) => /[\r\n\x00]/.test(v))) throw new Error('Invalid request header value');
+    if (site.auth.mode !== 'none' && !site.auth.loginUrl) throw new Error('Missing login URL');
+    for (const raw of [site.auth.loginUrl, ...(site.auth.cookieUrls || [])].filter(Boolean)) {
+      const u = new URL(raw);
+      if (u.protocol !== 'https:' || u.username || u.password || !site.match.routes.some(r => r.hosts.some(h =>
+        u.hostname === h.domain || h.includeSubdomains && u.hostname.endsWith('.' + h.domain)))) throw new Error('Invalid login URL');
+    }
+    if (/[\r\n\x00]/.test(site.auth.userAgent || '')) throw new Error('Invalid login user agent');
   }
   for (const headers of Object.values(payload.headers ?? {})) {
     if (Object.values(headers).some((v) => /[\r\n\x00]/.test(v))) throw new Error('Invalid request header value');

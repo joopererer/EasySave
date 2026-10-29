@@ -3,13 +3,14 @@ import { parseTiktok, extractTiktokPostId } from './tiktok';
 import { parsePageForModule as legacyPage, parse as legacyParse } from './_parse_page';
 import { installIgSniff, readXhsAccount, tiktokReady } from './page-hooks';
 
-type Context = { url: string; input?: string; site: any; error?: any; loggedIn?: boolean; statusCode?: number };
-type Hooks = Partial<Record<'install' | 'request' | 'ready' | 'navigate' | 'prepare' | 'parsePage' | 'parse' | 'classify' | 'account', (c: Context) => any>>;
+type Context = { url: string; input?: string; site: any; error?: any; loggedIn?: boolean; statusCode?: number; location?: string };
+type Hooks = Partial<Record<'install' | 'request' | 'ready' | 'navigate' | 'prepare' | 'parsePage' | 'parse' | 'classify' | 'account' | 'probeSession', (c: Context) => any>>;
 const page = () => window as any;
 const failure = (code: string, message: string) => ({ code, message });
 
 const modules: Record<string, Hooks> = {
   x: {
+    classify: (c) => c.error,
     request: (c) => {
       const id = extractTweetId(c.url);
       if (!id) throw new Error('UNSUPPORTED_URL');
@@ -32,6 +33,12 @@ const modules: Record<string, Hooks> = {
       return !!note && (!wanted || !(note.noteId || note.id) || (note.noteId || note.id) === wanted);
     },
     account: () => readXhsAccount(),
+    probeSession: (c) => {
+      if ((c.statusCode || 0) >= 300 && (c.statusCode || 0) < 400) return !(c.location || '').includes('/login');
+      if (c.statusCode !== 200) return true;
+      if ((c.input || '').includes('"loggedIn":false')) return false;
+      return true;
+    },
     classify: (c) => ['LOGIN_REQUIRED', 'INVALID_PAGE'].includes(c.error?.code)
       ? (c.loggedIn
         ? failure('PRIVATE_OR_UNAVAILABLE', '未能读取笔记内容（分享链接可能已过期，请重新粘贴原分享链接再试）')
@@ -70,7 +77,7 @@ const modules: Record<string, Hooks> = {
 export function moduleCall(moduleId: string, hook: string, context: Context): string {
   if (!Object.hasOwn(modules, moduleId)) throw new Error('UNSUPPORTED_MODULE');
   if (hook === 'classify' && context.error?.code === 'PRIVATE_OR_UNAVAILABLE' &&
-      context.site.auth.mode !== 'none' && !context.loggedIn) {
+      context.site.auth.mode !== 'none' && !context.loggedIn && moduleId !== 'x') {
     context = { ...context, error: failure('LOGIN_REQUIRED', '可能需要登录' + context.site.displayName) };
   }
   const module = modules[moduleId];

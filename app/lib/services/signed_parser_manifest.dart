@@ -269,6 +269,30 @@ void _validateSemantics(Map<String, dynamic> payload) {
       }
     }
     _validateHeaderValues(download['headers'] as Map);
+    final auth = site['auth'] as Map;
+    if (auth['mode'] != 'none' && auth['loginUrl'] == null) {
+      throw const FormatException('manifest_login_url');
+    }
+    for (final raw in [
+      if (auth['loginUrl'] != null) auth['loginUrl'],
+      ...auth['cookieUrls'] as List? ?? [],
+    ]) {
+      final uri = Uri.parse(raw as String);
+      final allowed = routes.any(
+        (r) => (r['hosts'] as List).cast<Map>().any(
+          (h) =>
+              uri.host == h['domain'] ||
+              (h['includeSubdomains'] == true &&
+                  uri.host.endsWith('.${h['domain']}')),
+        ),
+      );
+      if (uri.scheme != 'https' || uri.userInfo.isNotEmpty || !allowed) {
+        throw const FormatException('manifest_login_url');
+      }
+    }
+    if (auth['userAgent'] != null) {
+      _validateHeaderValues({'User-Agent': auth['userAgent']});
+    }
   }
   for (final headers in (payload['headers'] as Map? ?? {}).values) {
     _validateHeaderValues(headers as Map);

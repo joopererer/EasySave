@@ -12,6 +12,8 @@ import 'ai_label_log.dart';
 import 'history_db.dart';
 import 'links.dart';
 import 'site_registry.dart';
+import 'parser_hooks.dart';
+export 'parser_hooks.dart';
 import 'update_service.dart';
 
 class ParseFailure implements Exception {
@@ -40,36 +42,6 @@ Future<void> waitForParserState(
       if (await ready()) return;
     } catch (_) {}
     await Future<void>.delayed(interval);
-  }
-}
-
-/// A parse holds one verified script and matching site definition throughout.
-class ParserHooks {
-  ParserHooks(this.script, this.site);
-  final String script;
-  final SiteDefinition site;
-
-  String expression(
-    String hook,
-    String url, [
-    Map<String, dynamic> extra = const {},
-  ]) =>
-      'EasySaveParser.moduleCall(${jsonEncode(site.parserModule)},${jsonEncode(hook)},${jsonEncode({'url': url, 'site': site.data, ...extra})})';
-
-  Future<dynamic> call(
-    InAppWebViewController controller,
-    String hook,
-    String url, [
-    Map<String, dynamic> extra = const {},
-  ]) async {
-    final value = await controller.evaluateJavascript(
-      source: expression(hook, url, extra),
-    );
-    final decoded = value is String ? jsonDecode(value) : value;
-    if (decoded is! Map || !decoded.containsKey('value')) {
-      throw ParseFailure(ParseErrorCode.invalidPage, '解析模块返回无效结果');
-    }
-    return decoded['value'];
   }
 }
 

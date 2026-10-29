@@ -342,6 +342,31 @@
             "stateHook": {
               "type": "string",
               "pattern": "^[a-z][a-z0-9_]{0,63}$"
+            },
+            "userAgent": {
+              "type": "string",
+              "maxLength": 2048
+            },
+            "cookieUrls": {
+              "type": "array",
+              "maxItems": 128,
+              "uniqueItems": true,
+              "items": {
+                "type": "string",
+                "format": "uri",
+                "pattern": "^https://"
+              }
+            },
+            "probeHook": {
+              "type": "string",
+              "pattern": "^[a-zA-Z][a-zA-Z0-9_]{0,63}$"
+            },
+            "loginHint": {
+              "type": "string",
+              "maxLength": 2048
+            },
+            "externalGoogleNotice": {
+              "type": "boolean"
             }
           },
           "required": [

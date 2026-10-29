@@ -93,9 +93,21 @@
     "auth": {
       "mode": "optional",
       "sessionCookieNames": [
-        "web_session"
+        "web_session",
+        "customer-sso-sid",
+        "galaxy_creator_session_id",
+        "login_token"
       ],
-      "loginUrl": "https://www.xiaohongshu.com/explore"
+      "loginUrl": "https://www.xiaohongshu.com/explore",
+      "userAgent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36",
+      "stateHook": "account",
+      "cookieUrls": [
+        "https://www.xiaohongshu.com/",
+        "https://www.xiaohongshu.com/explore",
+        "https://edith.xiaohongshu.com/"
+      ],
+      "probeHook": "probeSession",
+      "loginHint": "页面加载后输入手机号获取验证码登录（也可切换密码登录），登录成功会自动返回。登录状态保存在本机，重启 App 依然有效。"
     },
     "parserModule": "xhs",
     "download": {
@@ -172,7 +184,8 @@
       "sessionCookieNames": [
         "sessionid"
       ],
-      "loginUrl": "https://www.instagram.com/accounts/login/"
+      "loginUrl": "https://www.instagram.com/accounts/login/",
+      "userAgent": "Mozilla/5.0 (Linux; Android 12; Pixel 6) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Mobile Safari/537.36"
     },
     "parserModule": "instagram",
     "download": {
@@ -268,8 +281,11 @@
       }
     },
     "auth": {
-      "mode": "none",
-      "sessionCookieNames": []
+      "mode": "optional",
+      "sessionCookieNames": [
+        "auth_token"
+      ],
+      "loginUrl": "https://x.com/i/flow/login"
     },
     "parserModule": "x",
     "download": {
@@ -384,7 +400,9 @@
         "sessionid",
         "sessionid_ss"
       ],
-      "loginUrl": "https://www.tiktok.com/login"
+      "loginUrl": "https://www.tiktok.com/login",
+      "externalGoogleNotice": true,
+      "loginHint": "请选择 TikTok 的手机号 / 邮箱 / 用户名登录。Google 授权暂不支持在此页面完成。成功后点右上角“完成”。"
     },
     "parserModule": "tiktok",
     "download": {

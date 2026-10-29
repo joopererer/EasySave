@@ -16,12 +16,14 @@ import 'package:flutter/material.dart';
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 
 import '../services/auth.dart';
+import '../services/site_registry.dart';
 import '../services/login_navigation.dart';
 
 class LoginPage extends StatefulWidget {
   const LoginPage({super.key, required this.platform, this.windowId});
 
   final String platform;
+
   /// Attach OAuth windows to their original WebView transport so window.opener
   /// and window.close work. Loading their URL in the parent loses that context.
   final int? windowId;
@@ -49,18 +51,28 @@ class _LoginPageState extends State<LoginPage> {
 
   Timer? _pollTimer;
 
-  bool get _isXhs => widget.platform == 'xhs';
+  bool get _hasAccountHook => hasAccountHook(widget.platform);
+  Map get _auth => SiteRegistry.current.byId(widget.platform)?.auth ?? {};
+  bool get _externalGoogleNotice => _auth['externalGoogleNotice'] == true;
 
   String get _entryUrl => loginEntryUrl(widget.platform);
 
   Future<void> _showGoogleLoginNotice() async {
     if (!mounted || _googleNoticeOpen) return;
     _googleNoticeOpen = true;
-    await showDialog<void>(context: context, builder: (context) => AlertDialog(
-      title: const Text('请使用 TikTok 邮箱或手机号登录'),
-      content: const Text(googleWebViewLoginMessage),
-      actions: [TextButton(onPressed: () => Navigator.pop(context), child: const Text('返回登录'))],
-    ));
+    await showDialog<void>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('请使用邮箱或手机号登录'),
+        content: const Text(googleWebViewLoginMessage),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('返回登录'),
+          ),
+        ],
+      ),
+    );
     if (!mounted) return;
     _googleNoticeOpen = false;
     if (widget.windowId != null) {
@@ -71,20 +83,30 @@ class _LoginPageState extends State<LoginPage> {
   }
 
   Future<bool> _openWindow(CreateWindowAction action) async {
-    if (widget.platform == 'tiktok' && action.request.url != null &&
+    if (_externalGoogleNotice &&
+        action.request.url != null &&
         requiresExternalGoogleLogin(Uri.parse(action.request.url.toString()))) {
       unawaited(_showGoogleLoginNotice());
       return false;
     }
     if (!mounted) return false;
-    unawaited(Navigator.of(context).push<bool>(MaterialPageRoute(
-      builder: (_) => LoginPage(platform: widget.platform, windowId: action.windowId),
-    )).then((loggedIn) {
-      if (loggedIn == true && mounted) {
-        LoginExpiredBus.clear(widget.platform);
-        Navigator.of(context).pop(true);
-      }
-    }));
+    unawaited(
+      Navigator.of(context)
+          .push<bool>(
+            MaterialPageRoute(
+              builder: (_) => LoginPage(
+                platform: widget.platform,
+                windowId: action.windowId,
+              ),
+            ),
+          )
+          .then((loggedIn) {
+            if (loggedIn == true && mounted) {
+              LoginExpiredBus.clear(widget.platform);
+              Navigator.of(context).pop(true);
+            }
+          }),
+    );
     return true;
   }
 
@@ -92,14 +114,14 @@ class _LoginPageState extends State<LoginPage> {
   /// watch it while the user types/logs in: no reload needed, and the "完成"
   /// button becomes an instant confirmation when a session is already there.
   void _startPolling() {
-    if (!_isXhs) return;
+    if (!_hasAccountHook) return;
     _pollTimer?.cancel();
     _pollTimer = Timer.periodic(const Duration(milliseconds: 1500), (_) async {
       final controller = _controller;
       if (controller == null || _verifying) return;
-      final account = await readXhsAccount(controller);
+      final account = await readAccount(widget.platform, controller);
       if (account == null || !account.loggedIn) return;
-      await XhsAccountCache.save(account);
+      await AccountCache.save(widget.platform, account);
       if (!mounted) return;
       _pollTimer?.cancel();
       LoginExpiredBus.clear(widget.platform);
@@ -147,7 +169,7 @@ class _LoginPageState extends State<LoginPage> {
       builder: (ctx) => AlertDialog(
         title: const Text('未检测到登录状态'),
         content: Text(
-          _isXhs
+          _hasAccountHook
               ? '页面还没有显示登录成功。\n\n请输入手机号获取验证码完成登录（可切换密码登录），登录成功后会自动返回。'
               : '尚未检测到登录信息，确定要退出吗？',
         ),
@@ -194,7 +216,7 @@ class _LoginPageState extends State<LoginPage> {
       _callbackNoticeShown = true;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('页面跳转到本地回调（小红书电脑版专用），已自动忽略'),
+          content: Text('页面跳转到本地客户端回调，已自动忽略'),
           duration: Duration(seconds: 3),
         ),
       );
@@ -251,11 +273,8 @@ class _LoginPageState extends State<LoginPage> {
             padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
             color: bannerBg,
             child: Text(
-              _isXhs
-                  ? '页面加载后输入手机号获取验证码登录（也可切换密码登录），登录成功会自动返回。登录状态保存在本机，重启 App 依然有效。'
-                  : widget.platform == 'tiktok'
-                      ? '请选择 TikTok 的手机号 / 邮箱 / 用户名登录。Google 授权暂不支持在此页面完成。成功后点右上角“完成”。'
-                      : '请在此页面完成登录，成功后点右上角“完成”。登录状态保存在本机，重启 App 依然有效。',
+              _auth['loginHint'] as String? ??
+                  '请在此页面完成登录，成功后点右上角“完成”。登录状态保存在本机，重启 App 依然有效。',
               style: TextStyle(fontSize: 12, color: bannerText, height: 1.5),
             ),
           ),
@@ -266,7 +285,9 @@ class _LoginPageState extends State<LoginPage> {
               children: [
                 InAppWebView(
                   windowId: widget.windowId,
-                  initialUrlRequest: widget.windowId == null ? URLRequest(url: WebUri(_entryUrl)) : null,
+                  initialUrlRequest: widget.windowId == null
+                      ? URLRequest(url: WebUri(_entryUrl))
+                      : null,
                   initialSettings: InAppWebViewSettings(
                     javaScriptEnabled: true,
                     supportMultipleWindows: true,
@@ -303,12 +324,15 @@ class _LoginPageState extends State<LoginPage> {
                   shouldOverrideUrlLoading: (controller, navigationAction) async {
                     final uri = navigationAction.request.url;
                     if (uri == null) return NavigationActionPolicy.ALLOW;
-                    if (widget.platform == 'tiktok' &&
-                        requiresExternalGoogleLogin(Uri.parse(uri.toString()))) {
+                    if (_externalGoogleNotice &&
+                        requiresExternalGoogleLogin(
+                          Uri.parse(uri.toString()),
+                        )) {
                       unawaited(_showGoogleLoginNotice());
                       return NavigationActionPolicy.CANCEL;
                     }
-                    if (widget.windowId != null && uri.toString() == 'about:blank') {
+                    if (widget.windowId != null &&
+                        uri.toString() == 'about:blank') {
                       return NavigationActionPolicy.ALLOW;
                     }
                     // XHS hands the finished login off to a desktop-client
@@ -348,9 +372,9 @@ class _LoginPageState extends State<LoginPage> {
                       _onLocalCallback();
                       return;
                     }
-                    final isDnsError = error.description
-                        .toUpperCase()
-                        .contains('NAME_NOT_RESOLVED');
+                    final isDnsError = error.description.toUpperCase().contains(
+                      'NAME_NOT_RESOLVED',
+                    );
                     if (isDnsError && !_dnsRetried) {
                       // A single silent retry: transient DNS hiccups are
                       // common right after switching networks.
@@ -374,7 +398,8 @@ class _LoginPageState extends State<LoginPage> {
                     // A real page finished loading: allow one more loopback
                     // notice if the hand-off happens again later.
                     _callbackNoticeShown = false;
-                    if (mounted && !_httpFailure &&
+                    if (mounted &&
+                        !_httpFailure &&
                         (_loadError != null || !_pageReady)) {
                       setState(() {
                         _loadError = null;
