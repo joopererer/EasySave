@@ -46,7 +46,7 @@ import kotlin.math.hypot
  * Native "选择下载" panel shown as a TYPE_APPLICATION_OVERLAY window. Plain
  * Android views (no FlutterView): attaching a FlutterView to an overlay window
  * proved unreliable on some devices (transparent SurfaceView, dead touch).
- * Thumbnails load off the main thread with the webview cookie jar; the chosen
+ * Thumbnails load off the main thread using cookie-free policy declarations; the chosen
  * indices are handed back through [onResult].
  *
  * Supports long-press fullscreen preview for images and videos (default muted).
@@ -56,6 +56,7 @@ import kotlin.math.hypot
 class SelectPanelView(
     context: Context,
     private val stickyPreview: Boolean = false,
+    private val onPolicyRejected: (String, String) -> Unit = { _, _ -> },
     private val onResult: (List<Int>?) -> Unit,
 ) : FrameLayout(context) {
 
@@ -158,9 +159,9 @@ class SelectPanelView(
     }
 
     private class Cell(
-        val thumb: String,
-        val url: String,
-        val videoUrl: String?,
+        val thumbRequest: NativeMediaRequest,
+        val imageRequest: NativeMediaRequest,
+        val videoRequest: NativeMediaRequest,
         val video: Boolean,
         val saved: Boolean,
     )
@@ -194,6 +195,7 @@ class SelectPanelView(
     private var previewTitle: TextView? = null
     private var previewCloseBtn: TextView? = null
     private var mediaPlayer: MediaPlayer? = null
+    private var previewVideoFile: java.io.File? = null
     private var previewIndex = -1
     private var previewOpenedAt = 0L
 
@@ -266,12 +268,14 @@ class SelectPanelView(
         cells.clear()
         for (raw in items) {
             val m = raw as? Map<*, *> ?: continue
-            val thumb = m["thumb"] as? String ?: ""
+            fun request(key: String) = NativeMediaRequest(
+                m[key] as? Map<*, *>, onPolicyRejected,
+            )
             cells.add(
                 Cell(
-                    thumb = thumb,
-                    url = m["url"] as? String ?: thumb,
-                    videoUrl = m["videoUrl"] as? String,
+                    thumbRequest = request("thumbRequest"),
+                    imageRequest = request("imageRequest"),
+                    videoRequest = request("videoRequest"),
                     video = m["video"] as? Boolean ?: false,
                     saved = m["saved"] as? Boolean ?: false,
                 )
@@ -715,11 +719,19 @@ class SelectPanelView(
                 alpha = 0.6f
             }
             box.addView(shimmer, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT))
-            if (showThumbs) {
+            if (showThumbs && !cells[i].thumbRequest.requiresAppPreview) {
                 shimmers.add(shimmer)
                 startShimmer()
             } else {
                 shimmer.visibility = View.GONE
+            }
+            if (cells[i].thumbRequest.requiresAppPreview) {
+                box.addView(TextView(context).apply {
+                    text = "请在 App 内预览"
+                    setTextColor(Color.WHITE)
+                    textSize = 12f
+                    gravity = Gravity.CENTER
+                }, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT))
             }
 
             // Item number (1-based), matching what the post shows. Large when
@@ -852,7 +864,9 @@ class SelectPanelView(
             }
 
             grid.addView(box)
-            if (showThumbs) loadThumb(cells[i].thumb, iv, shimmer)
+            if (showThumbs && !cells[i].thumbRequest.requiresAppPreview) {
+                loadThumb(cells[i].thumbRequest, iv, shimmer)
+            }
         }
         updateFooter()
     }
@@ -901,6 +915,7 @@ class SelectPanelView(
         previewIndex = index
         previewOpenedAt = SystemClock.uptimeMillis()
         val cell = cells[index]
+        val request = if (cell.video) cell.videoRequest else cell.imageRequest
         previewTitle?.text = if (cell.video) {
             "视频预览 (${index + 1}/${cells.size})"
         } else {
@@ -914,6 +929,21 @@ class SelectPanelView(
 
         releasePlayer()
 
+        if (request.requiresAppPreview) {
+            previewTexture?.visibility = View.GONE
+            previewImage?.visibility = View.GONE
+            previewProgress?.visibility = View.GONE
+            videoControlBar?.visibility = View.GONE
+            previewTitle?.text = "请在 App 内预览（点击打开 App）"
+            previewTitle?.setOnClickListener {
+                context.packageManager.getLaunchIntentForPackage(context.packageName)?.let {
+                    context.startActivity(it)
+                }
+            }
+            return
+        }
+        previewTitle?.setOnClickListener(null)
+
         if (cell.video) {
             videoControlBar?.visibility = if (isStickyPreview) View.VISIBLE else View.GONE
             playPauseBtn?.isPlaying = true
@@ -921,8 +951,7 @@ class SelectPanelView(
             videoTimeText?.text = "00:00 / 00:00"
             previewImage?.visibility = View.GONE
             previewTexture?.visibility = View.VISIBLE
-            val videoTarget = cell.videoUrl?.takeIf { it.isNotEmpty() } ?: cell.url
-            playVideo(videoTarget)
+            playVideo(cell.videoRequest)
             main.removeCallbacks(updateProgressRunnable)
             main.post(updateProgressRunnable)
         } else {
@@ -930,98 +959,95 @@ class SelectPanelView(
             main.removeCallbacks(updateProgressRunnable)
             previewTexture?.visibility = View.GONE
             previewImage?.visibility = View.VISIBLE
-            loadImage(cell.url, cell.thumb)
+            loadImage(cell.imageRequest)
         }
     }
 
-    private fun playVideo(videoUrl: String) {
-        val texture = previewTexture ?: return
-        fun startMp(surfaceTexture: SurfaceTexture) {
+    private fun playVideo(request: NativeMediaRequest) {
+        val index = previewIndex
+        pool.execute {
+            val file = java.io.File(context.cacheDir, "policy_preview_${System.nanoTime()}.mp4")
             try {
-                val mp = MediaPlayer().apply {
-                    setSurface(android.view.Surface(surfaceTexture))
-                    setVolume(0f, 0f) // Muted by default for overlay preview
-                    isLooping = true
-                    val headers = HashMap<String, String>()
-                    android.webkit.CookieManager.getInstance().getCookie(videoUrl)
-                        ?.takeIf { it.isNotEmpty() }
-                        ?.let { headers["Cookie"] = it }
-                    headers["User-Agent"] =
-                        "Mozilla/5.0 (Linux; Android 12) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Mobile Safari/537.36"
-                    setDataSource(context, Uri.parse(videoUrl), headers)
-                    setOnPreparedListener {
-                        if (previewIndex != -1 && previewOverlay?.visibility == View.VISIBLE) {
-                            previewProgress?.visibility = View.GONE
-                            start()
-                        }
-                    }
-                    setOnErrorListener { _, what, extra ->
-                        Log.w(TAG, "MediaPlayer preview error: what=$what extra=$extra")
+                request.writeVideo(file)
+            } catch (e: NativeMediaRequest.Rejected) {
+                file.delete()
+                main.post {
+                    if (previewIndex == index) {
                         previewProgress?.visibility = View.GONE
-                        true
+                        previewTitle?.text = "该资源地址不在允许范围内"
                     }
-                    prepareAsync()
                 }
-                mediaPlayer = mp
-            } catch (e: Exception) {
-                Log.e(TAG, "playVideo failed: $e")
-                previewProgress?.visibility = View.GONE
+                return@execute
+            } catch (_: Exception) {
+                file.delete()
+                main.post { if (previewIndex == index) previewProgress?.visibility = View.GONE }
+                return@execute
             }
-        }
-
-        if (texture.isAvailable) {
-            startMp(texture.surfaceTexture!!)
-        } else {
-            texture.surfaceTextureListener = object : TextureView.SurfaceTextureListener {
-                override fun onSurfaceTextureAvailable(st: SurfaceTexture, width: Int, height: Int) {
-                    startMp(st)
+            main.post {
+                if (previewIndex != index || previewOverlay?.visibility != View.VISIBLE) {
+                    file.delete()
+                    return@post
                 }
-                override fun onSurfaceTextureSizeChanged(st: SurfaceTexture, width: Int, height: Int) {}
-                override fun onSurfaceTextureDestroyed(st: SurfaceTexture): Boolean {
-                    releasePlayer()
-                    return true
+                previewVideoFile = file
+                val texture = previewTexture ?: return@post
+                fun startMp(surfaceTexture: SurfaceTexture) {
+                    try {
+                        mediaPlayer = MediaPlayer().apply {
+                            setSurface(android.view.Surface(surfaceTexture))
+                            setVolume(0f, 0f)
+                            isLooping = true
+                            setDataSource(file.absolutePath)
+                            setOnPreparedListener {
+                                if (previewIndex == index && previewOverlay?.visibility == View.VISIBLE) {
+                                    previewProgress?.visibility = View.GONE
+                                    start()
+                                }
+                            }
+                            setOnErrorListener { _, _, _ ->
+                                previewProgress?.visibility = View.GONE
+                                true
+                            }
+                            prepareAsync()
+                        }
+                    } catch (_: Exception) {
+                        previewProgress?.visibility = View.GONE
+                    }
                 }
-                override fun onSurfaceTextureUpdated(st: SurfaceTexture) {}
+                if (texture.isAvailable) startMp(texture.surfaceTexture!!)
+                else texture.surfaceTextureListener = object : TextureView.SurfaceTextureListener {
+                    override fun onSurfaceTextureAvailable(st: SurfaceTexture, width: Int, height: Int) {
+                        startMp(st)
+                    }
+                    override fun onSurfaceTextureSizeChanged(st: SurfaceTexture, width: Int, height: Int) {}
+                    override fun onSurfaceTextureDestroyed(st: SurfaceTexture): Boolean {
+                        releasePlayer()
+                        return true
+                    }
+                    override fun onSurfaceTextureUpdated(st: SurfaceTexture) {}
+                }
             }
         }
     }
 
-    private fun loadImage(url: String, thumbUrl: String) {
+    private fun loadImage(request: NativeMediaRequest) {
         val target = previewImage ?: return
+        val index = previewIndex
         target.setImageBitmap(null)
         val maxDim = resources.displayMetrics.widthPixels.coerceAtLeast(resources.displayMetrics.heightPixels)
-
         pool.execute {
             var bmp: Bitmap? = null
+            var denied = false
             try {
-                val targetUrl = url.ifEmpty { thumbUrl }
-                val conn = URL(targetUrl).openConnection() as HttpURLConnection
-                conn.connectTimeout = 8000
-                conn.readTimeout = 12000
-                conn.instanceFollowRedirects = true
-                runCatching { android.webkit.CookieManager.getInstance().getCookie(targetUrl) }
-                    .getOrNull()?.takeIf { it.isNotEmpty() }
-                    ?.let { conn.setRequestProperty("Cookie", it) }
-                conn.setRequestProperty(
-                    "Accept",
-                    "image/webp,image/apng,image/*,*/*;q=0.8"
-                )
-                conn.connect()
-                if (conn.responseCode in 200..299) {
-                    val bytes = conn.inputStream.use { it.readBytes() }
-                    bmp = decodeSampled(bytes, maxDim)
-                }
-                conn.disconnect()
-            } catch (e: Exception) {
-                Log.w(TAG, "loadImage failed: ${e.javaClass.simpleName}")
-            }
-            val resBmp = bmp
+                bmp = decodeSampled(request.readImage(), maxDim)
+            } catch (_: NativeMediaRequest.Rejected) {
+                denied = true
+            } catch (_: Exception) {}
+            val result = bmp
             main.post {
-                if (previewIndex != -1 && previewOverlay?.visibility == View.VISIBLE) {
+                if (previewIndex == index && previewOverlay?.visibility == View.VISIBLE) {
                     previewProgress?.visibility = View.GONE
-                    if (resBmp != null) {
-                        target.setImageBitmap(resBmp)
-                    }
+                    if (denied) previewTitle?.text = "该资源地址不在允许范围内"
+                    if (result != null) target.setImageBitmap(result)
                 }
             }
         }
@@ -1042,6 +1068,8 @@ class SelectPanelView(
             mediaPlayer?.release()
         } catch (_: Exception) {}
         mediaPlayer = null
+        previewVideoFile?.delete()
+        previewVideoFile = null
     }
 
     /// Pulsing placeholder animation shared by every pending thumbnail.
@@ -1104,42 +1132,24 @@ class SelectPanelView(
         updateFooter()
     }
 
-    private fun loadThumb(url: String, target: ImageView, shimmer: View) {
-        if (url.isEmpty()) {
-            shimmer.visibility = View.GONE
-            return
-        }
+    private fun loadThumb(request: NativeMediaRequest, target: ImageView, shimmer: View) {
         pool.execute {
             var bitmap: Bitmap? = null
+            var denied = false
             try {
-                val conn = URL(url).openConnection() as HttpURLConnection
-                conn.connectTimeout = 8000
-                conn.readTimeout = 10000
-                conn.instanceFollowRedirects = true
-                runCatching { android.webkit.CookieManager.getInstance().getCookie(url) }
-                    .getOrNull()?.takeIf { it.isNotEmpty() }
-                    ?.let { conn.setRequestProperty("Cookie", it) }
-                conn.setRequestProperty(
-                    "Accept",
-                    "image/webp,image/apng,image/*,*/*;q=0.8"
-                )
-                conn.connect()
-                if (conn.responseCode in 200..299) {
-                    val bytes = conn.inputStream.use { it.readBytes() }
-                    bitmap = decodeSampled(bytes, dp(TARGET_PX))
-                }
-                conn.disconnect()
-            } catch (e: Exception) {
-                Log.w(
-                    TAG,
-                    "thumb failed: ${e.javaClass.simpleName} host=" +
-                        LogSanitizer.hostPath(url),
-                )
-            }
+                bitmap = decodeSampled(request.readImage(), dp(TARGET_PX))
+            } catch (_: NativeMediaRequest.Rejected) {
+                denied = true
+            } catch (_: Exception) {}
             val bmp = bitmap
             main.post {
-                if (bmp != null && target.isAttachedToWindow) {
-                    target.setImageBitmap(bmp)
+                if (target.isAttachedToWindow) {
+                    if (bmp != null) target.setImageBitmap(bmp)
+                    if (denied) {
+                        target.setImageResource(android.R.drawable.ic_delete)
+                        android.widget.Toast.makeText(context,
+                            "该资源地址不在允许范围内", android.widget.Toast.LENGTH_SHORT).show()
+                    }
                     shimmer.visibility = View.GONE
                     shimmers.remove(shimmer)
                 }
@@ -1147,8 +1157,6 @@ class SelectPanelView(
         }
     }
 
-    /// Decode JPEG/PNG/WebP bytes downsampled to roughly [target] px — decoding
-    /// a multi-MB original at full size was the main cause of slow thumbnails.
     private fun decodeSampled(bytes: ByteArray, target: Int): Bitmap? {
         val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
         BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)

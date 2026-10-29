@@ -13,6 +13,9 @@ import '../../core/models.dart';
 import '../../theme/app_theme.dart';
 import '../services/auth.dart';
 import '../services/site_registry.dart';
+import '../services/media_request_policy.dart';
+import '../services/authorized_media_http.dart';
+import '../../core/media_request.dart';
 
 /// Primary capsule button: red-orange gradient with white text.
 class GradientButton extends StatelessWidget {
@@ -71,7 +74,7 @@ class CoverImage extends StatefulWidget {
   const CoverImage({
     super.key,
     required this.item,
-    required this.referer,
+    required this.platform,
     this.fit = BoxFit.cover,
     this.cacheWidth,
     this.width,
@@ -80,7 +83,7 @@ class CoverImage extends StatefulWidget {
   });
 
   final MediaItem item;
-  final String referer;
+  final String platform;
   final BoxFit fit;
   final int? cacheWidth;
   final double? width;
@@ -96,22 +99,25 @@ class _CoverImageState extends State<CoverImage> {
   Widget build(BuildContext context) {
     return Image(
       image: CdnImage(
-        urlsFor(widget.item),
-        referer: widget.referer,
+        widget.item,
+        platform: widget.platform,
         cacheWidth: widget.cacheWidth,
       ),
       fit: widget.fit,
       width: widget.width,
       height: widget.height,
       gaplessPlayback: true,
-      errorBuilder: (context, _, _) => const ColoredBox(
+      errorBuilder: (context, error, _) => ColoredBox(
         color: Colors.black12,
-        child: Icon(Icons.broken_image),
+        child: Center(
+          child: Text(
+            error is MediaPolicyException ? '该资源地址不在允许范围内' : '图片加载失败',
+          ),
+        ),
       ),
-      loadingBuilder: (context, child, progress) =>
-          progress == null
-              ? child
-              : (widget.placeholder ?? const ColoredBox(color: Colors.black12)),
+      loadingBuilder: (context, child, progress) => progress == null
+          ? child
+          : (widget.placeholder ?? const ColoredBox(color: Colors.black12)),
     );
   }
 }
@@ -129,10 +135,10 @@ List<String> urlsFor(MediaItem item) {
 /// fetch; the codec decodes at [cacheWidth]).
 @immutable
 class CdnImage extends ImageProvider<CdnImage> {
-  const CdnImage(this.urls, {required this.referer, this.cacheWidth});
+  const CdnImage(this.item, {required this.platform, this.cacheWidth});
 
-  final List<String> urls;
-  final String referer;
+  final MediaItem item;
+  final String platform;
   final int? cacheWidth;
 
   static final _client = http.Client();
@@ -166,35 +172,71 @@ class CdnImage extends ImageProvider<CdnImage> {
   }
 
   Future<Uint8List> _fetchBytes() async {
-    final cached = getCachedBytes(urls);
-    if (cached != null) return cached;
-
-    for (final url in urls) {
-      try {
-        final response = await _client
-            .get(Uri.parse(url), headers: {'Referer': referer})
-            .timeout(_timeout);
-        if (response.statusCode == 200 && response.bodyBytes.isNotEmpty) {
-          cacheBytes(url, response.bodyBytes);
-          return response.bodyBytes;
-        }
-      } catch (_) {
-        // Timeout, DNS, TLS, 403 — try the next URL.
+    final site = SiteRegistry.current.byId(platform);
+    if (site == null) {
+      throw const MediaPolicyException('REQUEST_SITE_REJECTED', '');
+    }
+    final policy = MediaRequestPolicy(site);
+    final resources = policy
+        .resourcesFor(item)
+        .where(
+          (r) =>
+              r.role == MediaResourceRole.image ||
+              r.role == MediaResourceRole.poster ||
+              (r.role == MediaResourceRole.fallback &&
+                  r.fallbackFor != MediaResourceRole.video),
+        )
+        .toList();
+    final ordered = <MediaRequestResource>[];
+    for (final url in urlsFor(item)) {
+      final resource = resources.where((r) => r.url == url).firstOrNull;
+      if (resource != null && !ordered.contains(resource)) {
+        ordered.add(resource);
       }
     }
-    throw StateError('all image urls failed: ${urls.firstOrNull}');
+    final cached = getCachedBytes(ordered.map((r) => r.url).toList());
+    if (cached != null) return cached;
+
+    for (final resource in ordered) {
+      try {
+        final response = await sendAuthorizedMediaGet(
+          _client,
+          policy,
+          resource,
+          timeout: _timeout,
+        );
+        final bytes = await response.stream.toBytes().timeout(_timeout);
+        if (response.statusCode == 200 && bytes.isNotEmpty) {
+          cacheBytes(resource.url, bytes);
+          return bytes;
+        }
+      } on MediaPolicyException {
+        rethrow;
+      } catch (_) {
+        // Timeout, DNS, TLS, 403: try the next authorized URL.
+      }
+    }
+    throw StateError('all image urls failed');
   }
 
   @override
-  Future<CdnImage> obtainKey(ImageConfiguration configuration) =>
-      SynchronousFuture<CdnImage>(this);
+  Future<CdnImage> obtainKey(ImageConfiguration configuration) async {
+    // ImageCache may reuse a decoded frame without invoking _fetchBytes.
+    // Recheck the current signed manifest and expiry even on a cache hit.
+    final site = SiteRegistry.current.byId(platform);
+    if (site == null) {
+      throw const MediaPolicyException('REQUEST_SITE_REJECTED', '');
+    }
+    MediaRequestPolicy(site).resourcesFor(item);
+    return this;
+  }
 
   @override
   ImageStreamCompleter loadImage(CdnImage key, ImageDecoderCallback decode) {
     return MultiFrameImageStreamCompleter(
       codec: _loadAsync(key, decode),
       scale: 1.0,
-      debugLabel: urls.firstOrNull,
+      debugLabel: platform,
     );
   }
 
@@ -215,12 +257,12 @@ class CdnImage extends ImageProvider<CdnImage> {
   @override
   bool operator ==(Object other) =>
       other is CdnImage &&
-      listEquals(other.urls, urls) &&
-      other.referer == referer &&
+      identical(other.item, item) &&
+      other.platform == platform &&
       other.cacheWidth == cacheWidth;
 
   @override
-  int get hashCode => Object.hash(Object.hashAll(urls), referer, cacheWidth);
+  int get hashCode => Object.hash(identityHashCode(item), platform, cacheWidth);
 }
 
 /// Local icon registry: manifest keys never become remote URLs or file paths.

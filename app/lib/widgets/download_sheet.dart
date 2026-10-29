@@ -12,6 +12,7 @@ import '../services/download_manager.dart';
 import '../services/saver.dart';
 import '../services/settings.dart';
 import '../services/share_service.dart';
+import '../services/media_request_policy.dart';
 import '../theme/app_theme.dart';
 import 'shared.dart';
 
@@ -292,6 +293,12 @@ class _DownloadSheetState extends State<DownloadSheet> {
     setState(() => _sharing = true);
     try {
       await shareBatch(batch);
+    } on MediaPolicyException {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('该资源地址不在允许范围内')),
+        );
+      }
     } catch (_) {
       if (mounted) {
         ScaffoldMessenger.of(

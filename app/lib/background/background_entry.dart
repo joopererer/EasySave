@@ -10,6 +10,9 @@ import 'package:flutter/widgets.dart';
 
 import '../core/dev_log.dart';
 import '../core/models.dart';
+import '../core/media_request.dart';
+import '../services/media_request_policy.dart';
+import '../services/site_registry.dart';
 import '../services/download_manager.dart';
 import '../services/download_claims.dart';
 import '../services/history_db.dart';
@@ -47,13 +50,26 @@ void backgroundEntry() {
         _selectCompleter = null;
         if (c != null && !c.isCompleted) c.complete(picked);
         break;
+      case 'mediaPolicyRejected':
+        final values = call.arguments as Map? ?? const {};
+        final code = values['code'] as String? ?? 'REQUEST_URL_REJECTED';
+        final host = values['host'] as String? ?? '';
+        if (RegExp(r'^REQUEST_[A-Z_]+$').hasMatch(code) &&
+            RegExp(r'^[a-z0-9.:-]{0,253}$').hasMatch(host)) {
+          await DevLog.write('RequestPolicy', '$code host=$host');
+        }
+        break;
     }
     return null;
   });
   channel.invokeMethod('ready');
 }
 
-Future<void> _invoke(MethodChannel channel, String method, [dynamic args]) async {
+Future<void> _invoke(
+  MethodChannel channel,
+  String method, [
+  dynamic args,
+]) async {
   try {
     await channel.invokeMethod<void>(method, args);
   } catch (_) {
@@ -77,8 +93,12 @@ Future<void> _toast(MethodChannel channel, String msg) =>
 
 /// Error notification that carries the link + code + message so tapping it can
 /// open the app on the same error page as a manual parse.
-Future<void> _error(MethodChannel channel, String url, String code, String message) =>
-    _invoke(channel, 'error', {'url': url, 'code': code, 'message': message});
+Future<void> _error(
+  MethodChannel channel,
+  String url,
+  String code,
+  String message,
+) => _invoke(channel, 'error', {'url': url, 'code': code, 'message': message});
 
 /// Drive the Quick Settings tile state (active + subtitle).
 Future<void> _tile(MethodChannel channel, bool active, String? subtitle) =>
@@ -96,17 +116,16 @@ Future<void> _bubble(
   String? url,
   String? code,
   String? message,
-]) =>
-    _invoke(channel, 'bubble', {
-      'active': active,
-      'done': done,
-      'total': total,
-      'label': label,
-      'error': error,
-      'url': url,
-      'code': code,
-      'message': message,
-    });
+]) => _invoke(channel, 'bubble', {
+  'active': active,
+  'done': done,
+  'total': total,
+  'label': label,
+  'error': error,
+  'url': url,
+  'code': code,
+  'message': message,
+});
 
 /// Build the caption text (title + body) for the bubble's "复制文案".
 String _captionText(ParsedPost post) {
@@ -118,7 +137,11 @@ String _captionText(ParsedPost post) {
   return parts.join('\n\n');
 }
 
-Future<void> _handleSubmit(MethodChannel channel, Map<dynamic, dynamic> args) async {  final mode = args['mode']?.toString() ?? 'all';
+Future<void> _handleSubmit(
+  MethodChannel channel,
+  Map<dynamic, dynamic> args,
+) async {
+  final mode = args['mode']?.toString() ?? 'all';
   final source = args['source']?.toString() ?? 'background';
   final text = args['text']?.toString();
   var urls = (args['urls'] as List?)?.map((e) => '$e').toList() ?? <String>[];
@@ -188,7 +211,8 @@ Future<void> _handleSubmit(MethodChannel channel, Map<dynamic, dynamic> args) as
           final db = await HistoryDb.instance();
           final existing = await db.getByPostId(post.id);
           if (existing != null) {
-            final is1Based = existing.files.isNotEmpty &&
+            final is1Based =
+                existing.files.isNotEmpty &&
                 existing.files.every((f) => f.itemIndex > 0);
             for (final f in existing.files) {
               savedIdx.add(is1Based ? f.itemIndex - 1 : f.itemIndex);
@@ -197,18 +221,53 @@ Future<void> _handleSubmit(MethodChannel channel, Map<dynamic, dynamic> args) as
         } catch (e) {
           await _log(channel, 'SELECT history lookup failed: $e');
         }
+        final site = SiteRegistry.current.byId(post.platform);
+        if (site == null) {
+          throw const MediaPolicyException('REQUEST_SITE_REJECTED', '');
+        }
+        final mediaPolicy = MediaRequestPolicy(site);
+        Future<Map<String, Object?>> nativeRequirement(
+          MediaRequestResource resource,
+        ) async {
+          final uri = mediaPolicy.validate(resource);
+          final requiresCookie = resource.request.cookieDomains.any(
+            (domain) => uri.host == domain || uri.host.endsWith('.$domain'),
+          );
+          if (requiresCookie) return {'requiresAppPreview': true};
+          final authorized = await mediaPolicy.authorize(resource);
+          return {
+            'url': authorized.uri.toString(),
+            'headers': authorized.headers,
+            'mediaHosts': (site.data['download'] as Map)['mediaHosts'],
+            if (resource.request.expiresAt != null)
+              'expiresAtMs': resource.request.expiresAt!.millisecondsSinceEpoch,
+          };
+        }
+
+        final panelItems = <Map<String, Object?>>[];
+        for (var i = 0; i < post.items.length; i++) {
+          final item = post.items[i];
+          final resources = mediaPolicy.resourcesFor(item);
+          Future<Map<String, Object?>> forUrl(String? url) async {
+            if (url == null || url.isEmpty) return {'requiresAppPreview': true};
+            final resource = resources.where((r) => r.url == url).firstOrNull;
+            if (resource == null) {
+              mediaPolicy.rejectResource(url);
+            }
+            return nativeRequirement(resource);
+          }
+
+          panelItems.add({
+            'thumbRequest': await forUrl(item.posterUrl ?? item.url),
+            'imageRequest': await forUrl(item.url),
+            'videoRequest': await forUrl(item.videoUrl ?? item.url),
+            'video': item.type == 'video',
+            'saved': savedIdx.contains(i),
+          });
+        }
         await _invoke(channel, 'showSelectPanel', {
           'stickyPreview': settings.bubblePreviewSticky,
-          'items': [
-            for (var i = 0; i < post.items.length; i++)
-              {
-                'thumb': post.items[i].posterUrl ?? post.items[i].url,
-                'url': post.items[i].url,
-                'videoUrl': post.items[i].videoUrl,
-                'video': post.items[i].type == 'video',
-                'saved': savedIdx.contains(i),
-              },
-          ],
+          'items': panelItems,
         });
         // Keep the engine alive while the user picks.
         final picker = Timer.periodic(
@@ -236,13 +295,19 @@ Future<void> _handleSubmit(MethodChannel channel, Map<dynamic, dynamic> args) as
           requestGalleryAccess: false,
         );
         anyStarted = true;
-        await _log(channel, 'DOWNLOAD started ${batch.jobs.length} files (selected) :: $url');
+        await _log(
+          channel,
+          'DOWNLOAD started ${batch.jobs.length} files (selected) :: $url',
+        );
         if (toasts) await _toast(channel, '开始下载 ${batch.jobs.length} 个文件');
         unawaited(_awaitBatchAndNotify(channel, batch, started, url, toasts));
         break;
       }
       if (post.items.isEmpty) {
-        await _log(channel, 'PARSE OK but no items (${sw.elapsedMilliseconds}ms) :: $url');
+        await _log(
+          channel,
+          'PARSE OK but no items (${sw.elapsedMilliseconds}ms) :: $url',
+        );
         await _notify(channel, '该帖子没有可保存的内容');
         continue;
       }
@@ -256,7 +321,10 @@ Future<void> _handleSubmit(MethodChannel channel, Map<dynamic, dynamic> args) as
         requestGalleryAccess: false,
       );
       anyStarted = true;
-      await _log(channel, 'DOWNLOAD started ${batch.jobs.length} files :: $url');
+      await _log(
+        channel,
+        'DOWNLOAD started ${batch.jobs.length} files :: $url',
+      );
       if (toasts) await _toast(channel, '开始下载 ${batch.jobs.length} 个文件');
       unawaited(_awaitBatchAndNotify(channel, batch, started, url, toasts));
     } on AlreadyDownloading {
@@ -267,7 +335,10 @@ Future<void> _handleSubmit(MethodChannel channel, Map<dynamic, dynamic> args) as
       // This request is handled by an existing batch, not a parse failure.
       anyStarted = true;
     } on ParseFailure catch (e) {
-      await _log(channel, 'PARSE FAIL[${e.code}] (${sw.elapsedMilliseconds}ms) ${e.message} :: $url');
+      await _log(
+        channel,
+        'PARSE FAIL[${e.code}] (${sw.elapsedMilliseconds}ms) ${e.message} :: $url',
+      );
       if (e.code == ParseErrorCode.loginRequired) {
         if (toasts) await _toast(channel, '需要登录：${e.message}');
       } else if (toasts) {
@@ -276,11 +347,37 @@ Future<void> _handleSubmit(MethodChannel channel, Map<dynamic, dynamic> args) as
       await _tile(channel, false, null);
       await _bubble(channel, false, 0, 0, null, true, url, e.code, e.message);
       await _error(channel, url, e.code, e.message);
+    } on MediaPolicyException catch (e) {
+      await _log(channel, 'REQUEST POLICY ${e.code} host=${e.host}');
+      if (toasts) await _toast(channel, '该资源地址不在允许范围内');
+      await _tile(channel, false, null);
+      await _bubble(
+        channel,
+        false,
+        0,
+        0,
+        null,
+        true,
+        null,
+        e.code,
+        '该资源地址不在允许范围内',
+      );
+      await _error(channel, '', e.code, '该资源地址不在允许范围内');
     } catch (e) {
       await _log(channel, 'ERROR (${sw.elapsedMilliseconds}ms) $e :: $url');
       if (toasts) await _toast(channel, '处理失败');
       await _tile(channel, false, null);
-      await _bubble(channel, false, 0, 0, null, true, url, ParseErrorCode.invalidPage, '$e');
+      await _bubble(
+        channel,
+        false,
+        0,
+        0,
+        null,
+        true,
+        url,
+        ParseErrorCode.invalidPage,
+        '$e',
+      );
       await _error(channel, url, ParseErrorCode.invalidPage, '$e');
     }
   }
@@ -325,8 +422,12 @@ Future<void> _awaitBatchAndNotify(
     final secs = DateTime.now().difference(started).inSeconds;
     if (failed > 0) {
       final firstError =
-          batch.jobs.firstWhere((j) => j.state == JobState.failed).error ?? '下载失败';
-      await _log(channel, 'DOWNLOAD failed: $ok/$total ok, $failed failed, ${secs}s :: $url');
+          batch.jobs.firstWhere((j) => j.state == JobState.failed).error ??
+          '下载失败';
+      await _log(
+        channel,
+        'DOWNLOAD failed: $ok/$total ok, $failed failed, ${secs}s :: $url',
+      );
       if (toasts) await _toast(channel, '下载失败：成功 $ok/$total');
       await _notify(channel, '下载失败：成功 $ok/$total —— $firstError');
     } else {

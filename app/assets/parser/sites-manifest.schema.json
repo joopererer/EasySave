@@ -440,6 +440,9 @@
             "resumable": {
               "type": "boolean"
             },
+            "urlOrder": {
+              "enum": ["primaryFirst", "fallbackFirst"]
+            },
             "resourceDefaults": {
               "type": "object",
               "additionalProperties": false,

@@ -13,7 +13,6 @@ import '../services/history_db.dart';
 import '../theme/app_theme.dart';
 import 'shared.dart';
 import 'verified_asset_image.dart';
-import '../services/saver.dart';
 import 'ai_label_badge.dart';
 
 /// Short saved-time label, e.g. "今天 18:24", "昨天 09:10", "10-12 09:10".
@@ -58,7 +57,8 @@ String mediaKindLabel(MediaItem? item) {
 }
 
 /// A post's type bucket (by its cover), used to group the 帖子 view by type.
-String postKindLabel(HistoryRecord record) => mediaKindLabel(coverItemFor(record));
+String postKindLabel(HistoryRecord record) =>
+    mediaKindLabel(coverItemFor(record));
 
 double aspectRatioFor(MediaItem? item) {
   final w = item?.width?.toDouble();
@@ -94,8 +94,14 @@ class HistoryThumb extends StatelessWidget {
   Widget build(BuildContext context) {
     final locator = GalleryLocatorService.instance;
     final items = record.toPost().items;
-    final index = itemIndex == null ? 0 : (record.files.every((f) => f.itemIndex > 0) ? itemIndex! - 1 : itemIndex!);
-    final remote = index >= 0 && index < items.length ? items[index] : coverItemFor(record);
+    final index = itemIndex == null
+        ? 0
+        : (record.files.every((f) => f.itemIndex > 0)
+              ? itemIndex! - 1
+              : itemIndex!);
+    final remote = index >= 0 && index < items.length
+        ? items[index]
+        : coverItemFor(record);
 
     AssetEntity? asset;
     for (final f in record.files) {
@@ -109,7 +115,13 @@ class HistoryThumb extends StatelessWidget {
     if (asset != null) {
       return VerifiedAssetImage(
         asset,
-        fallback: CoverImage(item: remote ?? MediaItem(type: 'image', url: ''), referer: refererFor(record.platform), fit: fit, width: width, height: height),
+        fallback: CoverImage(
+          item: remote ?? MediaItem(type: 'image', url: ''),
+          platform: (record.platform),
+          fit: fit,
+          width: width,
+          height: height,
+        ),
         isOriginal: false,
         thumbnailSize: const ThumbnailSize.square(400),
         fit: fit,
@@ -118,7 +130,15 @@ class HistoryThumb extends StatelessWidget {
       );
     }
 
-    if (remote != null && remote.url.startsWith('http')) return CoverImage(item: remote, referer: refererFor(record.platform), fit: fit, width: width, height: height);
+    if (remote != null && remote.url.startsWith('http')) {
+      return CoverImage(
+        item: remote,
+        platform: (record.platform),
+        fit: fit,
+        width: width,
+        height: height,
+      );
+    }
 
     final isUnlocated = record.files.any(
       (f) =>
@@ -494,10 +514,19 @@ class WaterfallPostCard extends StatelessWidget {
                           crossAxisAlignment: CrossAxisAlignment.start,
                           mainAxisSize: MainAxisSize.min,
                           children: [
-                            Wrap(crossAxisAlignment: WrapCrossAlignment.center, children: [
-                              PlatformTag(platform: record.platform, savedDisplayName: record.platformDisplayName),
-                              AiLabelBadge(text: record.aiLabel, source: record.aiLabelSource),
-                            ]),
+                            Wrap(
+                              crossAxisAlignment: WrapCrossAlignment.center,
+                              children: [
+                                PlatformTag(
+                                  platform: record.platform,
+                                  savedDisplayName: record.platformDisplayName,
+                                ),
+                                AiLabelBadge(
+                                  text: record.aiLabel,
+                                  source: record.aiLabelSource,
+                                ),
+                              ],
+                            ),
                             const SizedBox(height: 4),
                             Text(
                               title,
@@ -513,11 +542,7 @@ class WaterfallPostCard extends StatelessWidget {
                         ),
                       ),
                     ),
-                    ...coverBadges(
-                      context,
-                      cover: cover,
-                      fileCount: fileCount,
-                    ),
+                    ...coverBadges(context, cover: cover, fileCount: fileCount),
                     if (downloadProgress != null)
                       Positioned.fill(
                         child: DownloadingOverlay(
@@ -573,7 +598,9 @@ class _SelectionDot extends StatelessWidget {
       height: 22,
       decoration: BoxDecoration(
         shape: BoxShape.circle,
-        color: selected ? AppTokens.primary : Colors.black.withValues(alpha: 0.35),
+        color: selected
+            ? AppTokens.primary
+            : Colors.black.withValues(alpha: 0.35),
         border: Border.all(color: Colors.white, width: 1.5),
       ),
       child: selected
@@ -736,10 +763,19 @@ class ListPostRow extends StatelessWidget {
                   children: [
                     Row(
                       children: [
-                        Wrap(crossAxisAlignment: WrapCrossAlignment.center, children: [
-                              PlatformTag(platform: record.platform, savedDisplayName: record.platformDisplayName),
-                              AiLabelBadge(text: record.aiLabel, source: record.aiLabelSource),
-                            ]),
+                        Wrap(
+                          crossAxisAlignment: WrapCrossAlignment.center,
+                          children: [
+                            PlatformTag(
+                              platform: record.platform,
+                              savedDisplayName: record.platformDisplayName,
+                            ),
+                            AiLabelBadge(
+                              text: record.aiLabel,
+                              source: record.aiLabelSource,
+                            ),
+                          ],
+                        ),
                         const SizedBox(width: 6),
                         Flexible(
                           child: Text(
@@ -857,13 +893,14 @@ class AllMediaCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final post = record.toPost();
-    final is1Based = record.files.isNotEmpty && record.files.every((f) => f.itemIndex > 0);
+    final is1Based =
+        record.files.isNotEmpty && record.files.every((f) => f.itemIndex > 0);
     final zeroBased = is1Based ? itemIndex - 1 : itemIndex;
     final item = (zeroBased >= 0 && zeroBased < post.items.length)
         ? post.items[zeroBased]
         : ((itemIndex >= 0 && itemIndex < post.items.length)
-            ? post.items[itemIndex]
-            : null);
+              ? post.items[itemIndex]
+              : null);
     final radius = BorderRadius.circular(16);
     final badge = listTypeBadge(item);
 
@@ -889,8 +926,14 @@ class AllMediaCard extends StatelessWidget {
                   child: _TranslucentBadge(label: badge),
                 ),
               if (record.aiLabel != null)
-                Positioned(bottom: 6, left: 6,
-                  child: AiLabelBadge(text: record.aiLabel, source: record.aiLabelSource)),
+                Positioned(
+                  bottom: 6,
+                  left: 6,
+                  child: AiLabelBadge(
+                    text: record.aiLabel,
+                    source: record.aiLabelSource,
+                  ),
+                ),
               if (selectionMode)
                 Positioned(
                   top: 6,
@@ -903,7 +946,10 @@ class AllMediaCard extends StatelessWidget {
                     child: DecoratedBox(
                       decoration: BoxDecoration(
                         borderRadius: radius,
-                        border: Border.all(color: AppTokens.primary, width: 2.5),
+                        border: Border.all(
+                          color: AppTokens.primary,
+                          width: 2.5,
+                        ),
                       ),
                     ),
                   ),
@@ -968,7 +1014,10 @@ class CreatorCard extends StatelessWidget {
           const SizedBox(height: 4),
           Row(
             children: [
-              PlatformTag(platform: platform, savedDisplayName: savedDisplayName),
+              PlatformTag(
+                platform: platform,
+                savedDisplayName: savedDisplayName,
+              ),
               const SizedBox(width: 6),
               Flexible(
                 child: Text(
@@ -1006,4 +1055,3 @@ class _CreatorCell extends StatelessWidget {
     );
   }
 }
-

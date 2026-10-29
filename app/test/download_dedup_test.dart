@@ -35,7 +35,7 @@ void main() {
     id: '123',
     url: 'https://example.invalid',
     author: PostAuthor(),
-    items: [MediaItem(type: 'image', url: 'https://example.invalid/a.jpg')],
+    items: [MediaItem(type: 'image', url: 'https://p16-common-sign.tiktokcdn-eu.com/a.jpg')],
   );
 
   test('ten simultaneous saves create and enqueue exactly one batch', () async {

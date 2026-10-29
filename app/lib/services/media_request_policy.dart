@@ -98,6 +98,12 @@ class MediaRequestPolicy {
     throw MediaPolicyException(code, host);
   }
 
+  Never rejectRedirect(Uri uri) =>
+      _reject('REQUEST_REDIRECT_REJECTED', uri.toString());
+
+  Never rejectResource(String url) =>
+      _reject('REQUEST_RESOURCE_MISMATCH', url);
+
   Map<String, String> _headers(Map source, String url) {
     final result = <String, String>{};
     for (final entry in source.entries) {

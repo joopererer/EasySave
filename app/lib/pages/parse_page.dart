@@ -109,8 +109,11 @@ class ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
     } catch (e) {
       // Never silent: "no listeners attached" in a device log is otherwise
       // indistinguishable from a subscription that failed here.
-      DevLog.write('HIST', 'attach failed: $e', // i18n:ignore 日志
-          level: DevLogLevel.warn);
+      DevLog.write(
+        'HIST',
+        'attach failed: $e', // i18n:ignore 日志
+        level: DevLogLevel.warn,
+      );
     }
   }
 
@@ -164,7 +167,10 @@ class ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
       _recentAll = all;
       _recentLoaded = true;
     });
-    DevLog.write('HIST', 'recent refreshed shown=${records.length} known=${all.length}'); // i18n:ignore 日志
+    DevLog.write(
+      'HIST',
+      'recent refreshed shown=${records.length} known=${all.length}',
+    ); // i18n:ignore 日志
   }
 
   /// Reload recent from DB; called by the shell every time the tab becomes visible.
@@ -716,7 +722,7 @@ class ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
       if (!mounted || _cancelRequested) return;
       closeParsingSnackBar();
       setState(() => _busy = false);
-      
+
       // Preview pages are always pushed through PreviewPage.route so the route
       // carries the post id that PreviewRouteObserver reads back.
       await Navigator.of(context).push(
@@ -763,7 +769,9 @@ class ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
         // more platforms are added).
         final recognized = platformFromUrl(link);
         if (recognized != null && !loginSiteIds.contains(recognized)) return;
-        final platform = loginSiteIds.contains(recognized) ? recognized : await _chooseLoginPlatform();
+        final platform = loginSiteIds.contains(recognized)
+            ? recognized
+            : await _chooseLoginPlatform();
         if (platform != null && mounted) {
           final loggedIn = await Navigator.of(context).push<bool>(
             MaterialPageRoute<bool>(
@@ -861,7 +869,8 @@ class ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
                       minLines: 1,
                       maxLines: 3,
                       decoration: InputDecoration(
-                        hintText: '粘贴${SiteRegistry.current.sites.where((s) => s.enabled).map((s) => s.displayName).join(' / ')}链接',
+                        hintText:
+                            '粘贴${SiteRegistry.current.sites.where((s) => s.enabled).map((s) => s.displayName).join(' / ')}链接',
                         filled: true,
                         fillColor: Theme.of(context).scaffoldBackgroundColor,
                         border: const OutlineInputBorder(
@@ -905,8 +914,10 @@ class ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
                     else
                       GradientButton(
                         label: '解析',
-                        onPressed: () =>
-                            _handleLinks(_linkController.text.trim(), entry: 'input'),
+                        onPressed: () => _handleLinks(
+                          _linkController.text.trim(),
+                          entry: 'input',
+                        ),
                       ),
                   ],
                 ),
@@ -920,7 +931,9 @@ class ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
                 code: _errorCode!,
                 canLogin: platformFromUrl(_linkController.text.trim()) == null
                     ? loginSiteIds.isNotEmpty
-                    : loginSiteIds.contains(platformFromUrl(_linkController.text.trim())),
+                    : loginSiteIds.contains(
+                        platformFromUrl(_linkController.text.trim()),
+                      ),
                 message: _errorMessage,
                 onAction: _onErrorAction,
                 diagnostics: () =>
@@ -960,7 +973,9 @@ class ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
                 padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
                 child: Card(
                   child: ListTile(
-                    onTap: _openingRecordId != null ? null : () => _openRecord(record),
+                    onTap: _openingRecordId != null
+                        ? null
+                        : () => _openRecord(record),
                     leading: _thumbOf(context, record),
                     title: Text(
                       (record.title?.isNotEmpty == true)
@@ -978,10 +993,19 @@ class ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
                             height: 20,
                             child: CircularProgressIndicator(strokeWidth: 2),
                           )
-                        : Row(mainAxisSize: MainAxisSize.min, children: [
-                            PlatformTag(platform: record.platform, savedDisplayName: record.platformDisplayName),
-                            AiLabelBadge(text: record.aiLabel, source: record.aiLabelSource),
-                          ]),
+                        : Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              PlatformTag(
+                                platform: record.platform,
+                                savedDisplayName: record.platformDisplayName,
+                              ),
+                              AiLabelBadge(
+                                text: record.aiLabel,
+                                source: record.aiLabelSource,
+                              ),
+                            ],
+                          ),
                   ),
                 ),
               ),
@@ -1018,10 +1042,7 @@ class ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
       if (!mounted) return;
       ScaffoldMessenger.of(context).hideCurrentSnackBar();
       Navigator.of(context).push(
-        PreviewPage.route(
-          post: outcome.data,
-          rawImages: outcome.rawImages,
-        ),
+        PreviewPage.route(post: outcome.data, rawImages: outcome.rawImages),
       );
       _reloadRecent();
     } catch (e) {
@@ -1029,7 +1050,9 @@ class ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
       ScaffoldMessenger.of(context).hideCurrentSnackBar();
 
       final isLoginRequired =
-          e is ParseFailure && e.code == ParseErrorCode.loginRequired && loginSiteIds.contains(record.platform);
+          e is ParseFailure &&
+          e.code == ParseErrorCode.loginRequired &&
+          loginSiteIds.contains(record.platform);
       final isUnavailable =
           e is ParseFailure && e.code == ParseErrorCode.privateOrUnavailable;
 
@@ -1037,9 +1060,7 @@ class ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
       final cachedPost = PreviewPage.postFromRecord(record);
       final platform = platformFromKey(record.platform);
       if (cachedPost.items.isNotEmpty) {
-        Navigator.of(context).push(
-          PreviewPage.route(post: cachedPost),
-        );
+        Navigator.of(context).push(PreviewPage.route(post: cachedPost));
         if (isLoginRequired) {
           LoginExpiredBus.markExpired(platform);
           ScaffoldMessenger.of(context).showSnackBar(
@@ -1110,7 +1131,8 @@ class ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
       final post = PreviewPage.postFromRecord(record);
       final locator = GalleryLocatorService.instance;
 
-      final files = [...record.files]..sort((a, b) => a.itemIndex.compareTo(b.itemIndex));
+      final files = [...record.files]
+        ..sort((a, b) => a.itemIndex.compareTo(b.itemIndex));
       final items = <GalleryBrowserItem>[];
 
       if (files.isNotEmpty) {
@@ -1124,7 +1146,8 @@ class ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
             postItem = post.items[f.itemIndex];
           }
 
-          AssetEntity? asset = locator.getAssetById(f.mediaId) ??
+          AssetEntity? asset =
+              locator.getAssetById(f.mediaId) ??
               locator.locateAsset(f, record.postId);
           if (asset == null && locator.hasAccess) {
             asset = await locator.locateAssetAsync(
@@ -1146,6 +1169,7 @@ class ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
               videoUrl: postItem?.videoUrl,
               posterUrl: postItem?.posterUrl,
               fallbacks: postItem?.fallbacks ?? const [],
+              requestResources: postItem?.requestResources,
               isGif: postItem?.isGif ?? false,
               asset: asset,
               status: status,
@@ -1166,6 +1190,7 @@ class ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
               videoUrl: postItem.videoUrl,
               posterUrl: postItem.posterUrl,
               fallbacks: postItem.fallbacks,
+              requestResources: postItem.requestResources,
               isGif: postItem.isGif ?? false,
               status: FileStatus.unknown,
             ),
@@ -1175,9 +1200,9 @@ class ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
 
       if (items.isEmpty) {
         if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('未找到可查看的媒体文件')),
-          );
+          ScaffoldMessenger.of(
+            context,
+          ).showSnackBar(const SnackBar(content: Text('未找到可查看的媒体文件')));
         }
         return;
       }

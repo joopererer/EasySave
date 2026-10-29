@@ -14,8 +14,8 @@ import '../services/download_claims.dart';
 import '../services/gallery_locator_service.dart';
 import '../services/history_db.dart';
 import '../services/host_bridge.dart';
+import '../services/media_request_policy.dart';
 import '../services/preview_route_observer.dart';
-import '../services/saver.dart';
 import '../theme/app_theme.dart';
 import '../widgets/download_sheet.dart';
 import '../widgets/gallery_browser.dart';
@@ -151,8 +151,9 @@ class _PreviewPageState extends State<PreviewPage> {
                 onPressed: _batchBusy
                     ? null
                     : () => _batchAction((b) async {
-                        final owned =
-                            await DownloadManager.instance.forceAdopt(b);
+                        final owned = await DownloadManager.instance.forceAdopt(
+                          b,
+                        );
                         await DownloadManager.instance.retryBatch(owned);
                       }),
                 child: const Text('重试'),
@@ -197,8 +198,8 @@ class _PreviewPageState extends State<PreviewPage> {
       setState(() => _post = merged);
     } catch (_) {}
 
-    final downloaded =
-        await GalleryLocatorService.instance.findDownloadedIndices(_post);
+    final downloaded = await GalleryLocatorService.instance
+        .findDownloadedIndices(_post);
     if (!mounted) return;
     setState(() {
       _downloaded = downloaded;
@@ -246,6 +247,7 @@ class _PreviewPageState extends State<PreviewPage> {
                 videoUrl: _post.items[i].videoUrl,
                 posterUrl: _post.items[i].posterUrl,
                 fallbacks: _post.items[i].fallbacks,
+                requestResources: _post.items[i].requestResources,
                 isGif: _post.items[i].isGif ?? false,
                 status: FileStatus.found,
               ),
@@ -280,14 +282,34 @@ class _PreviewPageState extends State<PreviewPage> {
   Future<void> _save() async {
     if (_order.isEmpty || _saving) return;
     setState(() => _saving = true);
-    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('正在处理保存请求')));
-    try { await _saveSelection(); }
-    on AlreadyDownloading {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('已在下载中')));
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(const SnackBar(content: Text('正在处理保存请求')));
+    try {
+      await _saveSelection();
+    } on AlreadyDownloading {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('已在下载中')));
+      }
+    } on MediaPolicyException {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('该资源地址不在允许范围内')),
+        );
+      }
     } catch (e) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('保存失败：$e')));
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('保存失败：$e')));
+      }
     } finally {
-      if (mounted) { setState(() => _saving = false); await _refreshBatch(); }
+      if (mounted) {
+        setState(() => _saving = false);
+        await _refreshBatch();
+      }
     }
   }
 
@@ -306,7 +328,7 @@ class _PreviewPageState extends State<PreviewPage> {
     DevLog.write(
       'V16DL', // i18n:ignore 日志
       'save plan post=${_post.id} selected=${_order.length} '
-      'associate=${toAssociate.length} download=${toDownload.length}',
+          'associate=${toAssociate.length} download=${toDownload.length}',
     );
 
     var associated = 0;
@@ -325,9 +347,9 @@ class _PreviewPageState extends State<PreviewPage> {
     // Everything was already local: just link the records and go back.
     if (toDownload.isEmpty) {
       widget.onSaved?.call();
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('已将 $associated 个本地文件关联到历史记录')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('已将 $associated 个本地文件关联到历史记录')));
       // Notify history page to refresh
       HostBridge.historyRevision.value = HostBridge.historyRevision.value + 1;
       Navigator.of(context).pop(true);
@@ -387,8 +409,14 @@ class _PreviewPageState extends State<PreviewPage> {
           children: [
             Flexible(child: Text(post.author.name ?? post.id)),
             const SizedBox(width: 8),
-            PlatformTag(platform: post.platform, savedDisplayName: post.platformDisplayName),
-            AiLabelBadge(text: post.aiLabel?.text, source: post.aiLabel?.source),
+            PlatformTag(
+              platform: post.platform,
+              savedDisplayName: post.platformDisplayName,
+            ),
+            AiLabelBadge(
+              text: post.aiLabel?.text,
+              source: post.aiLabel?.source,
+            ),
           ],
         ),
         actions: [
@@ -405,9 +433,7 @@ class _PreviewPageState extends State<PreviewPage> {
                   }
                 });
               },
-              child: Text(
-                _order.length == post.items.length ? '全不选' : '全选',
-              ),
+              child: Text(_order.length == post.items.length ? '全不选' : '全选'),
             ),
         ],
       ),
@@ -487,7 +513,7 @@ class _PreviewPageState extends State<PreviewPage> {
                                 ? CoverImage(
                                     key: ValueKey(item.url),
                                     item: item,
-                                    referer: refererFor(post.platform),
+                                    platform: (post.platform),
                                     cacheWidth: 400,
                                   )
                                 : const ColoredBox(color: Colors.black12),
@@ -548,7 +574,9 @@ class _PreviewPageState extends State<PreviewPage> {
                                 color: Colors.black.withValues(alpha: 0.65),
                                 borderRadius: BorderRadius.circular(6),
                                 border: Border.all(
-                                  color: Colors.greenAccent.withValues(alpha: 0.7),
+                                  color: Colors.greenAccent.withValues(
+                                    alpha: 0.7,
+                                  ),
                                   width: 1,
                                 ),
                               ),

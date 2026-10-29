@@ -1,22 +1,10 @@
 import 'dart:async';
 import 'dart:io';
+import '../core/media_request.dart';
+import 'media_request_policy.dart';
 
 const expiredMediaMessage = '链接已过期，请重新解析';
 const interruptedMediaMessage = '需要重新解析';
-
-bool mediaUrlExpired(String url, {DateTime? now}) {
-  final uri = Uri.tryParse(url);
-  if (uri == null) return false;
-  final seconds = (now ?? DateTime.now()).millisecondsSinceEpoch ~/ 1000;
-  for (final entry in uri.queryParametersAll.entries) {
-    if (!{'expire', 'x-expires'}.contains(entry.key.toLowerCase())) continue;
-    for (final value in entry.value) {
-      final expiry = int.tryParse(value);
-      if (expiry != null && expiry <= seconds) return true;
-    }
-  }
-  return false;
-}
 
 /// Only fixed messages leave the transport. Never expose request objects,
 /// response headers or exceptions (which may contain credentials).
@@ -50,34 +38,61 @@ class SessionMediaDownload {
   Future<void> download({
     required String url,
     required File destination,
-    required Future<String> Function() readCookie,
+    Future<String> Function()? readCookie,
+    MediaRequestPolicy? policy,
+    MediaRequestResource? resource,
     required void Function(double progress) onProgress,
   }) async {
     RandomAccessFile? output;
     var complete = false;
     try {
       if (_canceled) throw const SessionDownloadCanceled();
-      if (mediaUrlExpired(url)) {
-        throw const SessionDownloadException(expiredMediaMessage);
-      }
+      var authorized = policy == null
+          ? null
+          : await policy.authorize(resource!);
       final client = _client = HttpClient()
         ..connectionTimeout = const Duration(seconds: 30)
         ..autoUncompress = false;
-      final request = await client.getUrl(Uri.parse(url));
-      // Do not forward TikTok credentials to a redirect target. A newly parsed
-      // direct CDN address is required instead.
-      request.followRedirects = false;
-      request.headers.set(HttpHeaders.refererHeader, 'https://www.tiktok.com/');
-      request.headers.set(HttpHeaders.userAgentHeader, 'Mozilla/5.0 (Linux; Android 10)');
-      final cookie = await readCookie();
-      if (_canceled) throw const SessionDownloadCanceled();
-      if (cookie.isNotEmpty) request.headers.set(HttpHeaders.cookieHeader, cookie);
-      final response = await request.close().timeout(const Duration(seconds: 30));
+      HttpClientResponse response;
+      var current = authorized?.uri ?? Uri.parse(url);
+      for (var hop = 0; ; hop++) {
+        final request = await client.getUrl(current);
+        request.followRedirects = false;
+        if (authorized != null) {
+          for (final header in authorized.wireHeaders.entries) {
+            request.headers.set(header.key, header.value);
+          }
+        } else {
+          final cookie = await readCookie?.call() ?? '';
+          if (cookie.isNotEmpty) {
+            request.headers.set(HttpHeaders.cookieHeader, cookie);
+          }
+        }
+        if (_canceled) throw const SessionDownloadCanceled();
+        response = await request.close().timeout(const Duration(seconds: 30));
+        if (response.statusCode < 300 || response.statusCode >= 400) break;
+        final location = response.headers.value(HttpHeaders.locationHeader);
+        await response.drain<void>();
+        if (authorized == null || policy == null) {
+          throw const SessionDownloadException('下载失败，请重新解析');
+        }
+        if (location == null || hop >= 5) {
+          policy.rejectRedirect(current);
+        }
+        authorized = await policy.redirect(authorized, location);
+        current = authorized.uri;
+      }
       if (response.statusCode == 403) {
-        throw const SessionDownloadException(expiredMediaMessage, statusCode: 403);
+        throw const SessionDownloadException(
+          expiredMediaMessage,
+          statusCode: 403,
+        );
       }
       if (response.statusCode != 200) {
-        throw SessionDownloadException('下载失败，请重新解析', statusCode: response.statusCode);
+        throw SessionDownloadException(
+          '下载失败，请重新解析',
+          statusCode: response.statusCode,
+        );
       }
       await destination.parent.create(recursive: true);
       output = await destination.open(mode: FileMode.write);
@@ -86,11 +101,15 @@ class SessionMediaDownload {
         if (_canceled) throw const SessionDownloadCanceled();
         await output.writeFrom(chunk);
         received += chunk.length;
-        onProgress(response.contentLength > 0
-            ? (received / response.contentLength).clamp(0.0, 1.0) : 0);
+        onProgress(
+          response.contentLength > 0
+              ? (received / response.contentLength).clamp(0.0, 1.0)
+              : 0,
+        );
       }
       if (_canceled) throw const SessionDownloadCanceled();
-      if (received == 0 || (response.contentLength >= 0 && received != response.contentLength)) {
+      if (received == 0 ||
+          (response.contentLength >= 0 && received != response.contentLength)) {
         throw const SessionDownloadException('下载不完整，请重新解析');
       }
       await output.flush();
@@ -98,6 +117,8 @@ class SessionMediaDownload {
     } on SessionDownloadException {
       rethrow;
     } on SessionDownloadCanceled {
+      rethrow;
+    } on MediaPolicyException {
       rethrow;
     } catch (_) {
       if (_canceled) throw const SessionDownloadCanceled();
@@ -109,7 +130,9 @@ class SessionMediaDownload {
         await output?.close();
       } finally {
         try {
-          if (!complete && await destination.exists()) await destination.delete();
+          if (!complete && await destination.exists()) {
+            await destination.delete();
+          }
         } finally {
           _finished.complete();
         }

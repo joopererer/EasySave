@@ -243,6 +243,10 @@ void _validateSemantics(Map<String, dynamic> payload) {
     }
     final routes = ((site['match'] as Map)['routes'] as List).cast<Map>();
     final download = site['download'] as Map;
+    if (download['urlOrder'] != null &&
+        !const {'primaryFirst', 'fallbackFirst'}.contains(download['urlOrder'])) {
+      throw const FormatException('manifest_url_order');
+    }
     final hosts = [
       for (final route in routes) ...(route['hosts'] as List).cast<Map>(),
       for (final short in (site['shortLinks'] as List).cast<Map>())
