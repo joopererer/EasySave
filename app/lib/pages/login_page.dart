@@ -64,7 +64,7 @@ class _LoginPageState extends State<LoginPage> {
       context: context,
       builder: (context) => AlertDialog(
         title: const Text('请使用邮箱或手机号登录'),
-        content: const Text(googleWebViewLoginMessage),
+        content: Text(googleLoginMessage(widget.platform)),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context),

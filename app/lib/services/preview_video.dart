@@ -1,6 +1,7 @@
 import 'package:video_player/video_player.dart';
 import 'auth.dart';
 import 'saver.dart';
+import 'site_registry.dart';
 
 /// These headers belong only to the current player, never to post/job JSON.
 Future<Map<String, String>> previewVideoHeaders(String platform, {
@@ -17,6 +18,7 @@ Future<Map<String, String>> previewVideoHeaders(String platform, {
 Future<VideoPlayerController> networkPreviewController(String url, String platform) async =>
     VideoPlayerController.networkUrl(Uri.parse(url), httpHeaders: await previewVideoHeaders(platform));
 
-String previewPlaybackError(String platform) => platform == 'tiktok'
-    ? 'TikTok 在线预览可能受平台限制，请下载后观看'
-    : '暂时无法播放，请重试或下载后观看';
+String previewPlaybackError(String platform) =>
+    SiteRegistry.current.byId(platform)?.data['previewErrorMessage']
+        as String? ??
+    '暂时无法播放，请重试或下载后观看';

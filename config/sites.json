@@ -405,7 +405,8 @@
       ],
       "loginUrl": "https://www.tiktok.com/login",
       "externalGoogleNotice": true,
-      "loginHint": "请选择 TikTok 的手机号 / 邮箱 / 用户名登录。Google 授权暂不支持在此页面完成。成功后点右上角“完成”。"
+      "loginHint": "请选择 TikTok 的手机号 / 邮箱 / 用户名登录。Google 授权暂不支持在此页面完成。成功后点右上角“完成”。",
+      "externalGoogleMessage": "Google 授权不能在此内嵌登录页完成。请返回 TikTok，选择“手机号 / 邮箱 / 用户名”登录。如果使用 Gmail 地址，请输入 TikTok 账号密码，不是 Google 密码。在外部浏览器登录也不会自动同步到 EasySave。"
     },
     "parserModule": "tiktok",
     "download": {
@@ -430,7 +431,8 @@
     "icon": {
       "assetKey": "tiktok"
     },
-    "tagColor": "#0F1419"
+    "tagColor": "#0F1419",
+    "previewErrorMessage": "TikTok 在线预览可能受平台限制，请下载后观看"
   },
   {
     "id": "douyin",

@@ -367,6 +367,11 @@
             },
             "externalGoogleNotice": {
               "type": "boolean"
+            },
+            "externalGoogleMessage": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 2048
             }
           },
           "required": [
@@ -463,6 +468,11 @@
         "tagColor": {
           "type": "string",
           "pattern": "^#[0-9A-Fa-f]{6}$"
+        },
+        "previewErrorMessage": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048
         }
       },
       "required": [
