@@ -48,9 +48,60 @@ Future<void> waitForParserState(
 Future<ParsedPost> parsePostUrl(String url) async =>
     (await parsePostOutcome(url)).data;
 
+/// Resolve a declared short link, validate the final route, then enter parsing.
+/// The load URL keeps tokens; canonicalization is for identity, not navigation.
+Future<T> resolveAndEnterParse<T>(
+  String url,
+  SiteDefinition site,
+  Future<T> Function(String loadUrl, String canonicalUrl) enter, {
+  Future<String?> Function(Uri)? readRedirect,
+  Duration? timeout,
+}) async {
+  final short = site.shortLink(Uri.parse(url)) != null;
+  String resolved;
+  try {
+    resolved = short
+        ? await resolveShortLink(
+            url,
+            readRedirect: readRedirect,
+            timeout: timeout,
+          )
+        : url;
+  } on FormatException {
+    throw ParseFailure(ParseErrorCode.invalidPage, '短链跳转目标不受支持');
+  }
+  if (short && resolved == url) {
+    throw ParseFailure(ParseErrorCode.invalidPage, '短链未能展开，请重试');
+  }
+  final target = SiteRegistry.current.match(resolved);
+  if (target?.id != site.id) {
+    throw ParseFailure(ParseErrorCode.invalidPage, '短链跳转目标不受支持');
+  }
+  final canonical = SiteRegistry.current.canonicalUrl(resolved);
+  if (canonical == null) {
+    throw ParseFailure(ParseErrorCode.invalidPage, '短链跳转目标不是作品页面');
+  }
+  return enter(resolved, canonical);
+}
+
 Future<ParseOutcome> parsePostOutcome(String url) async {
+  final preSite = SiteRegistry.current.match(url, includeDisabled: true);
+  if (preSite == null) {
+    throw ParseFailure(ParseErrorCode.unsupportedUrl, '无法识别链接');
+  }
+  final budget = Duration(milliseconds: preSite.load['timeoutMs'] as int);
+  final watch = Stopwatch()..start();
+  Duration remaining() => Duration(
+    milliseconds: (budget.inMilliseconds - watch.elapsedMilliseconds).clamp(
+      1,
+      budget.inMilliseconds,
+    ),
+  );
   // Loading also validates the cached script and activates the matching registry.
-  final script = await ParserManager.instance.getActiveScript();
+  final script = await ParserManager.instance.getActiveScript().timeout(
+    budget,
+    onTimeout: () => throw ParseFailure(ParseErrorCode.timeout, '加载页面超时，请重试'),
+  );
   final site = SiteRegistry.current.match(url, includeDisabled: true);
   if (site == null) {
     throw ParseFailure(ParseErrorCode.unsupportedUrl, '无法识别链接');
@@ -64,10 +115,12 @@ Future<ParseOutcome> parsePostOutcome(String url) async {
   final hooks = ParserHooks(script, site);
   try {
     return await (() async {
-      final resolved = await resolveShortLink(
+      final result = await resolveAndEnterParse(
         url,
-      ).timeout(const Duration(seconds: 10), onTimeout: () => url);
-      final result = await _run(hooks, resolved);
+        site,
+        (loadUrl, _) => _run(hooks, loadUrl),
+        timeout: remaining(),
+      );
       if (site.shortLink(Uri.parse(url)) != null) {
         try {
           await (await HistoryDb.instance())
@@ -77,7 +130,7 @@ Future<ParseOutcome> parsePostOutcome(String url) async {
       }
       return result;
     })().timeout(
-      Duration(milliseconds: site.load['timeoutMs'] as int),
+      remaining(),
       onTimeout: () => throw ParseFailure(ParseErrorCode.timeout, '加载页面超时，请重试'),
     );
   } on TimeoutException {

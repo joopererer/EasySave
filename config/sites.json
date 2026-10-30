@@ -52,7 +52,7 @@
           "domain": "xhslink.com",
           "includeSubdomains": false
         },
-        "strategy": "webview",
+        "strategy": "http",
         "maxRedirects": 5
       },
       {
@@ -60,7 +60,7 @@
           "domain": "xhslink.cn",
           "includeSubdomains": false
         },
-        "strategy": "webview",
+        "strategy": "http",
         "maxRedirects": 5
       },
       {
@@ -68,7 +68,7 @@
           "domain": "xhs.cn",
           "includeSubdomains": false
         },
-        "strategy": "webview",
+        "strategy": "http",
         "maxRedirects": 5
       }
     ],
@@ -360,7 +360,7 @@
           "domain": "vm.tiktok.com",
           "includeSubdomains": false
         },
-        "strategy": "webview",
+        "strategy": "http",
         "maxRedirects": 5,
         "historyStrategy": "http"
       },
@@ -369,7 +369,7 @@
           "domain": "vt.tiktok.com",
           "includeSubdomains": false
         },
-        "strategy": "webview",
+        "strategy": "http",
         "maxRedirects": 5,
         "historyStrategy": "http"
       },
@@ -378,7 +378,7 @@
           "domain": "tiktok.com",
           "includeSubdomains": true
         },
-        "strategy": "webview",
+        "strategy": "http",
         "historyStrategy": "http",
         "pathPatterns": [
           "^/t/[^/]+/?$"

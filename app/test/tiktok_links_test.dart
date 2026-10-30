@@ -22,12 +22,18 @@ void main() {
       }
     }
   });
-  test('short links remain unchanged until expanded by WebView', () async {
+  test('short links expand before entering the parser', () async {
     for (final host in ['vm.tiktok.com', 'vt.tiktok.com']) {
       final url = 'https://$host/abc/';
       expect(isSupportedLink(url), isTrue);
       expect(SiteRegistry.current.canonicalUrl(url), isNull);
-      expect(await resolveShortLink(url), url);
+      expect(
+        await resolveShortLink(
+          url,
+          readRedirect: (_) async => 'https://www.tiktok.com/@person/video/$id',
+        ),
+        'https://www.tiktok.com/@person/video/$id',
+      );
     }
   });
   test('rejects lookalikes, unrelated paths and non-http schemes', () {

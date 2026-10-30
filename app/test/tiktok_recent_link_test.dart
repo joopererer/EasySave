@@ -70,34 +70,34 @@ void main() {
       }
     },
   );
-  test(
-    'history lookup expands vm and vt while parsing still leaves them for WebView',
-    () async {
-      for (final host in ['vm.tiktok.com', 'vt.tiktok.com']) {
-        final link = 'https://$host/FAKE/';
-        var calls = 0;
-        Future<String?> redirect(Uri uri) async {
-          calls++;
-          return uri.host == host
-              ? 'https://www.tiktok.com/@someone/photo/$id?tracking=FAKE'
-              : null;
-        }
-
-        expect(await resolveShortLink(link, readRedirect: redirect), link);
-        expect(calls, 0);
-        final resolved = await resolveShortLink(
-          link,
-          forHistoryLookup: true,
-          readRedirect: redirect,
-        );
-        expect(
-          isLinkKnown(link, [
-            (postUrl: canonical, postId: id),
-          ], resolvedUrl: resolved),
-          isTrue,
-        );
-        expect(calls, 2);
+  test('history lookup and parsing both expand vm and vt', () async {
+    for (final host in ['vm.tiktok.com', 'vt.tiktok.com']) {
+      final link = 'https://$host/FAKE/';
+      var calls = 0;
+      Future<String?> redirect(Uri uri) async {
+        calls++;
+        return uri.host == host
+            ? 'https://www.tiktok.com/@someone/photo/$id?tracking=FAKE'
+            : null;
       }
-    },
-  );
+
+      expect(
+        await resolveShortLink(link, readRedirect: redirect),
+        'https://www.tiktok.com/@someone/photo/$id?tracking=FAKE',
+      );
+      expect(calls, 2);
+      final resolved = await resolveShortLink(
+        link,
+        forHistoryLookup: true,
+        readRedirect: redirect,
+      );
+      expect(
+        isLinkKnown(link, [
+          (postUrl: canonical, postId: id),
+        ], resolvedUrl: resolved),
+        isTrue,
+      );
+      expect(calls, 4);
+    }
+  });
 }

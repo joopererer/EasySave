@@ -105,13 +105,14 @@ Future<bool> routeExternalText(
   return true;
 }
 
-/// Resolve xhslink short links to the final page URL with plain HTTP
+/// Resolve declared short links to the final page URL with plain HTTP
 /// redirect following (no WebView involved, so in-page app-open schemes
 /// can't hijack the navigation). Other URLs pass through untouched.
 Future<String> resolveShortLink(
   String url, {
   bool forHistoryLookup = false,
   Future<String?> Function(Uri)? readRedirect,
+  Duration? timeout,
 }) async {
   final uri = Uri.tryParse(url);
   final site = SiteRegistry.current.match(url);
@@ -123,17 +124,25 @@ Future<String> resolveShortLink(
   if (strategy != 'http') return url;
   final client = HttpClient();
   final watch = Stopwatch()..start();
-  Future<T> bounded<T>(Future<T> work) => forHistoryLookup
-      ? work.timeout(
-          Duration(
-            milliseconds: (3000 - watch.elapsedMilliseconds).clamp(1, 3000),
-          ),
-        )
-      : work;
-  if (forHistoryLookup) client.connectionTimeout = const Duration(seconds: 3);
+  final budget = forHistoryLookup ? const Duration(seconds: 3) : timeout;
+  Future<T> bounded<T>(Future<T> work) {
+    if (budget == null) return work;
+    final remaining = budget.inMilliseconds - watch.elapsedMilliseconds;
+    return work.timeout(
+      Duration(milliseconds: remaining.clamp(1, budget.inMilliseconds)),
+    );
+  }
+
+  if (budget != null) client.connectionTimeout = budget;
   try {
     var current = uri;
     for (var i = 0; i < (rule['maxRedirects'] as int); i++) {
+      if (SiteRegistry.current
+              .match(current.toString(), includeDisabled: true)
+              ?.id !=
+          site?.id) {
+        throw const FormatException('短链跳转目标不受支持');
+      }
       String? location;
       if (readRedirect != null) {
         location = await bounded(readRedirect(current));
@@ -151,7 +160,7 @@ Future<String> resolveShortLink(
       if (location == null) return current.toString();
       current = current.resolve(location);
       if (current.scheme != 'http' && current.scheme != 'https') {
-        return current.toString();
+        throw const FormatException('短链跳转目标不受支持');
       }
     }
     return current.toString();
