@@ -9,6 +9,7 @@ import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 
 import '../../core/error_copy.dart';
+import '../core/dev_log.dart';
 import '../../core/models.dart';
 import '../../theme/app_theme.dart';
 import '../services/auth.dart';
@@ -171,22 +172,62 @@ class CdnImage extends ImageProvider<CdnImage> {
     return null;
   }
 
-  Future<Uint8List> _fetchBytes() async {
+  /// One [PreviewPoster] line per (reason, host) keeps a grid of identical
+  /// failing tiles from filling the log.
+  static final Set<String> _posterLogged = {};
+
+  static void _logPoster(
+    String reason,
+    String url, {
+    String extra = '',
+    String? host,
+  }) {
+    final uri = Uri.tryParse(url);
+    final name = host ??
+        (uri == null || uri.host.isEmpty ? '-' : uri.host.toLowerCase());
+    if (!_posterLogged.add('$reason|$name')) return;
+    unawaited(
+      DevLog.write(
+        'PreviewPoster',
+        'reason=$reason host=$name${extra.isEmpty ? '' : ' $extra'}',
+      ),
+    );
+  }
+
+  /// Image/poster resources of [item] after the policy has validated every
+  /// declared URL. A rejection is logged before it propagates so a cover that
+  /// never loads names its host and reason.
+  List<MediaRequestResource> _imageResources(MediaRequestPolicy policy) {
+    try {
+      return policy
+          .resourcesFor(item)
+          .where(
+            (r) =>
+                r.role == MediaResourceRole.image ||
+                r.role == MediaResourceRole.poster ||
+                (r.role == MediaResourceRole.fallback &&
+                    r.fallbackFor != MediaResourceRole.video),
+          )
+          .toList();
+    } on MediaPolicyException catch (error) {
+      _logPoster(
+        'POLICY',
+        '',
+        host: error.host.isEmpty ? null : error.host,
+        extra: 'code=${error.code}',
+      );
+      rethrow;
+    }
+  }
+
+  Future<({Uint8List bytes, String url})> _fetchBytes() async {
     final site = SiteRegistry.current.byId(platform);
     if (site == null) {
+      _logPoster('SITE_REJECTED', item.url);
       throw const MediaPolicyException('REQUEST_SITE_REJECTED', '');
     }
     final policy = MediaRequestPolicy(site);
-    final resources = policy
-        .resourcesFor(item)
-        .where(
-          (r) =>
-              r.role == MediaResourceRole.image ||
-              r.role == MediaResourceRole.poster ||
-              (r.role == MediaResourceRole.fallback &&
-                  r.fallbackFor != MediaResourceRole.video),
-        )
-        .toList();
+    final resources = _imageResources(policy);
     final ordered = <MediaRequestResource>[];
     for (final url in urlsFor(item)) {
       final resource = resources.where((r) => r.url == url).firstOrNull;
@@ -194,8 +235,17 @@ class CdnImage extends ImageProvider<CdnImage> {
         ordered.add(resource);
       }
     }
+    // A video whose parser result carries no cover has no image resource at
+    // all: only its own media URL would be left, which can never decode.
+    if (ordered.isEmpty) {
+      _logPoster(
+        'NO_COVER_DECLARED',
+        item.url,
+        extra: 'type=${item.type} poster=${item.posterUrl == null ? 'none' : 'set'}',
+      );
+    }
     final cached = getCachedBytes(ordered.map((r) => r.url).toList());
-    if (cached != null) return cached;
+    if (cached != null) return (bytes: cached, url: ordered.first.url);
 
     for (final resource in ordered) {
       try {
@@ -207,15 +257,38 @@ class CdnImage extends ImageProvider<CdnImage> {
         );
         final bytes = await response.stream.toBytes().timeout(_timeout);
         if (response.statusCode == 200 && bytes.isNotEmpty) {
+          _logPoster(
+            'FETCH_OK',
+            resource.url,
+            extra:
+                'headers=${resource.request.headers.keys.map((k) => k.toLowerCase()).join(',')}',
+          );
           cacheBytes(resource.url, bytes);
-          return bytes;
+          return (bytes: bytes, url: resource.url);
         }
-      } on MediaPolicyException {
+        _logPoster(
+          'HTTP_STATUS',
+          resource.url,
+          extra: 'status=${response.statusCode} bytes=${bytes.length}',
+        );
+      } on MediaPolicyException catch (error) {
+        _logPoster(
+          'POLICY',
+          resource.url,
+          host: error.host.isEmpty ? null : error.host,
+          extra: 'code=${error.code}',
+        );
         rethrow;
-      } catch (_) {
+      } catch (error) {
         // Timeout, DNS, TLS, 403: try the next authorized URL.
+        _logPoster(
+          'REQUEST_FAILED',
+          resource.url,
+          extra: 'error=${error.runtimeType}',
+        );
       }
     }
+    _logPoster('ALL_FAILED', item.url, extra: 'candidates=${ordered.length}');
     throw StateError('all image urls failed');
   }
 
@@ -225,9 +298,10 @@ class CdnImage extends ImageProvider<CdnImage> {
     // Recheck the current signed manifest and expiry even on a cache hit.
     final site = SiteRegistry.current.byId(platform);
     if (site == null) {
+      _logPoster('SITE_REJECTED', item.url);
       throw const MediaPolicyException('REQUEST_SITE_REJECTED', '');
     }
-    MediaRequestPolicy(site).resourcesFor(item);
+    _imageResources(MediaRequestPolicy(site));
     return this;
   }
 
@@ -242,16 +316,26 @@ class CdnImage extends ImageProvider<CdnImage> {
 
   Future<ui.Codec> _loadAsync(CdnImage key, ImageDecoderCallback decode) async {
     assert(key == this);
-    final bytes = await _fetchBytes();
-    final buffer = await ui.ImmutableBuffer.fromUint8List(bytes);
-    // Bypass the injected decoder on purpose: the stock callback in this
-    // Flutter revision has no resize hook, and decoding multi-MB originals
-    // at full size is what froze large posts.
-    // ignore: deprecated_member_use
-    return PaintingBinding.instance.instantiateImageCodecFromBuffer(
-      buffer,
-      cacheWidth: cacheWidth,
-    );
+    final fetched = await _fetchBytes();
+    final buffer = await ui.ImmutableBuffer.fromUint8List(fetched.bytes);
+    try {
+      // Bypass the injected decoder on purpose: the stock callback in this
+      // Flutter revision has no resize hook, and decoding multi-MB originals
+      // at full size is what froze large posts.
+      // ignore: deprecated_member_use
+      return await PaintingBinding.instance.instantiateImageCodecFromBuffer(
+        buffer,
+        cacheWidth: cacheWidth,
+      );
+    } catch (error) {
+      // Non-image bytes (an mp4 poster fallback) fail here, not at the request.
+      _logPoster(
+        'DECODE_FAILED',
+        fetched.url,
+        extra: 'error=${error.runtimeType} bytes=${fetched.bytes.length}',
+      );
+      rethrow;
+    }
   }
 
   @override
