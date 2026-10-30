@@ -79,7 +79,8 @@ void main() {
     for (final change in [
       (Map data) => data['platform'] = 'x',
       (Map data) => data['id'] = '',
-      (Map data) => data['items'] = [],
+      (Map data) => data['id'] = null,
+      (Map data) => data['items'] = 'not-a-list',
       (Map data) => data['items'][0]['url'] = 'javascript:alert(1)',
       (Map data) => data['items'][0]['url'] =
           'https://user:secret@cdn.example.test/image',
@@ -92,6 +93,37 @@ void main() {
         throwsA(isA<ParseFailure>()),
       );
     }
+  });
+  test('a media-less post is accepted like v1.9.0 instead of a mismatch', () {
+    final site = SiteRegistry.current.byId('x')!;
+    final value = post(site);
+    value['data']['items'] = <Map>[];
+    final outcome = validateParserResult(value, site);
+    expect(outcome.data.items, isEmpty);
+    expect(outcome.data.platform, 'x');
+  });
+  test('platform names are compared after mapping xhs <-> xiaohongshu', () {
+    final site = SiteRegistry.current.byId('xhs')!;
+    expect(site.platform, 'xiaohongshu');
+    final value = post(site);
+    value['data']['platform'] = 'xhs';
+    final outcome = validateParserResult(value, site);
+    // Persisted identity stays the app key the rest of the app uses.
+    expect(outcome.data.platform, 'xhs');
+    final upper = post(site);
+    upper['data']['platform'] = 'XHS';
+    expect(validateParserResult(upper, site).data.platform, 'xhs');
+    final specName = post(site);
+    specName['data']['platform'] = 'xiaohongshu';
+    expect(validateParserResult(specName, site).data.platform, 'xhs');
+  });
+  test('numeric ids are normalized to strings before comparison', () {
+    final site = SiteRegistry.current.byId('x')!;
+    final value = post(site);
+    value['data']['id'] = 2115654865154191715;
+    final outcome = validateParserResult(value, site);
+    expect(outcome.data.id, '2115654865154191715');
+    expect(outcome.data.url, 'https://x.com/i/status/2115654865154191715');
   });
   test('preserves parser error code and readable message', () {
     final site = SiteRegistry.current.byId('instagram')!;

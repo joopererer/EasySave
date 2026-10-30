@@ -175,6 +175,18 @@ Future<ParseOutcome> parsePostOutcome(String url) async {
         (loadUrl, _) => _run(hooks, loadUrl),
         timeout: remaining(),
       );
+      // Diagnostics only: retweets and quote tweets may answer with a payload
+      // id that differs from the one in the link (v1.9.0 kept parsing).
+      final linkId = site.sourceId(Uri.parse(url));
+      if (linkId != null && linkId != result.data.id) {
+        _logParseCheck(
+          'ID_DIFFERS_LINK',
+          site,
+          postId: result.data.id,
+          expected: linkId,
+          actual: result.data.id,
+        );
+      }
       if (site.shortLink(Uri.parse(url)) != null) {
         try {
           await (await HistoryDb.instance())
@@ -212,28 +224,114 @@ Future<bool> _loggedIn(
   );
 }
 
+/// Identity comparison happens on normalized values: a module reports the
+/// app platform key (`xhs`) while a manifest may carry the spec/export name
+/// (`xiaohongshu`), and an id may arrive as a number. v1.9.0 never compared a
+/// result id with the link's id, so retweets/quotes whose payload id differs
+/// from the URL keep parsing; the difference is only logged.
+String? _normalizedPostId(dynamic value) {
+  if (value is String) {
+    final trimmed = value.trim();
+    return trimmed.isEmpty ? null : trimmed;
+  }
+  if (value is num && value.isFinite) return value.toInt().toString();
+  return null;
+}
+
+/// Why an item cannot be requested; no URL or query ever leaves this function.
+String _mediaProblem(dynamic item) {
+  if (item is! Map) return 'not_object';
+  if (!{'image', 'video'}.contains(item['type'])) return 'type';
+  final uri = Uri.tryParse(item['url']?.toString() ?? '');
+  if (uri == null) return 'url_unparsable';
+  if (!{'http', 'https'}.contains(uri.scheme)) return 'scheme';
+  if (uri.host.isEmpty) return 'host';
+  if (uri.userInfo.isNotEmpty) return 'userinfo';
+  return '';
+}
+
 /// Validate module results before creating application records.
 ParseOutcome validateParserResult(dynamic value, SiteDefinition site) {
-  if (value is! Map) throw ParseFailure(ParseErrorCode.invalidPage, '解析结果不是对象');
+  if (value is! Map) {
+    _logParseCheck(
+      'RESULT_NOT_OBJECT',
+      site,
+      expected: 'object',
+      actual: value.runtimeType.toString(),
+    );
+    throw ParseFailure(ParseErrorCode.invalidPage, '解析结果不是对象');
+  }
   if (value['ok'] != true) {
     final error = value['error'];
+    final code = error is Map
+        ? error['code']?.toString() ?? 'INVALID_PAGE'
+        : 'INVALID_PAGE';
+    _logParseCheck('MODULE_ERROR', site, expected: 'ok', actual: code);
     throw ParseFailure(
-      error is Map
-          ? error['code']?.toString() ?? 'INVALID_PAGE'
-          : 'INVALID_PAGE',
+      code,
       error is Map ? error['message']?.toString() ?? '解析失败' : '解析失败',
     );
   }
   final data = value['data'];
-  if (data is! Map ||
-      data['platform'] != site.platform ||
-      data['id'] is! String ||
-      (data['id'] as String).isEmpty ||
-      data['items'] is! List ||
-      (data['items'] as List).isEmpty) {
+  if (data is! Map) {
+    _logParseCheck(
+      'DATA_NOT_OBJECT',
+      site,
+      expected: 'object',
+      actual: value['data'].runtimeType.toString(),
+    );
     throw ParseFailure(ParseErrorCode.invalidPage, '解析模块返回不匹配的内容');
   }
-  final canonical = site.canonical(data['id'] as String);
+  final platform = (data['platform']?.toString() ?? '').trim().toLowerCase();
+  final accepted = {site.id.toLowerCase(), site.platform.toLowerCase()};
+  if (!accepted.contains(platform)) {
+    _logParseCheck(
+      'PLATFORM',
+      site,
+      expected: accepted.join('|'),
+      actual: platform.isEmpty ? '-' : platform,
+    );
+    throw ParseFailure(ParseErrorCode.invalidPage, '解析模块返回不匹配的内容');
+  }
+  final id = _normalizedPostId(data['id']);
+  if (id == null) {
+    final raw = data['id'];
+    _logParseCheck(
+      'POST_ID',
+      site,
+      expected: 'non-empty string',
+      actual: raw == null
+          ? 'null'
+          : (raw is String ? 'empty_string' : raw.runtimeType.toString()),
+    );
+    throw ParseFailure(ParseErrorCode.invalidPage, '解析模块返回不匹配的内容');
+  }
+  final items = data['items'];
+  if (items is! List) {
+    _logParseCheck(
+      'ITEMS_TYPE',
+      site,
+      postId: id,
+      expected: 'list',
+      actual: items.runtimeType.toString(),
+    );
+    throw ParseFailure(ParseErrorCode.invalidPage, '解析模块返回不匹配的内容');
+  }
+  // An empty list is a real result (a text-only X post); v1.9.0 accepted it
+  // and the save entries already explain "该帖子没有可保存的内容".
+  for (var index = 0; index < items.length; index++) {
+    final problem = _mediaProblem(items[index]);
+    if (problem.isEmpty) continue;
+    _logParseCheck(
+      'ITEM_MEDIA',
+      site,
+      postId: id,
+      expected: 'http(s) media url',
+      actual: 'index=$index reason=$problem',
+    );
+    throw ParseFailure(ParseErrorCode.invalidPage, '解析模块返回无效媒体');
+  }
+  final canonical = site.canonical(id);
   // Tokens in the actual load URL must survive; only metadata uses canonical paths.
   final source = Uri.tryParse(data['url']?.toString() ?? '');
   final preserved = <String, String>{};
@@ -250,23 +348,11 @@ ParseOutcome validateParserResult(dynamic value, SiteDefinition site) {
               queryParameters: {...normalized.queryParameters, ...preserved},
             )
             .toString();
-  bool validMedia(dynamic item) {
-    if (item is! Map || !{'image', 'video'}.contains(item['type'])) {
-      return false;
-    }
-    final uri = Uri.tryParse(item['url']?.toString() ?? '');
-    return uri != null &&
-        {'http', 'https'}.contains(uri.scheme) &&
-        uri.host.isNotEmpty &&
-        uri.userInfo.isEmpty;
-  }
-
-  if (!(data['items'] as List).every(validMedia)) {
-    throw ParseFailure(ParseErrorCode.invalidPage, '解析模块返回无效媒体');
-  }
   return ParseOutcome(
     data: ParsedPost.fromJson({
       ...data.cast<String, dynamic>(),
+      'platform': site.id,
+      'id': id,
       'url': postUrl,
     }),
     rawImages: const [],
@@ -338,6 +424,12 @@ Future<ParseOutcome> _run(ParserHooks hooks, String targetUrl) async {
                 final nextUri = Uri.parse(next);
                 if (nextUri.scheme != 'https' ||
                     !hooks.site.hasHost(nextUri.host)) {
+                  _logParseCheck(
+                    'NAVIGATE',
+                    hooks.site,
+                    expected: 'https within site',
+                    actual: _hostPathOf(next),
+                  );
                   throw ParseFailure(ParseErrorCode.invalidPage, '解析模块返回无效导航');
                 }
                 navigated = true;
@@ -368,6 +460,12 @@ Future<ParseOutcome> _run(ParserHooks hooks, String targetUrl) async {
     if (jsonMode) {
       final request = await hooks.call(controller, 'request', targetUrl);
       if (request is! Map || request['url'] is! String) {
+        _logParseCheck(
+          'REQUEST_SHAPE',
+          hooks.site,
+          expected: '{url, headers}',
+          actual: request is Map ? 'url_missing' : 'not_object',
+        );
         throw ParseFailure(ParseErrorCode.invalidPage, '解析模块返回无效请求');
       }
       final endpoint = Uri.parse(hooks.site.load['endpointTemplate'] as String);
@@ -375,6 +473,12 @@ Future<ParseOutcome> _run(ParserHooks hooks, String targetUrl) async {
       if (uri.scheme != 'https' ||
           uri.host != endpoint.host ||
           uri.userInfo.isNotEmpty) {
+        _logParseCheck(
+          'REQUEST_HOST',
+          hooks.site,
+          expected: endpoint.host,
+          actual: _hostPathOf(request['url'] as String),
+        );
         throw ParseFailure(ParseErrorCode.invalidPage, '解析模块请求超出声明范围');
       }
       final headers = (request['headers'] as Map? ?? {}).cast<String, String>();
@@ -386,6 +490,22 @@ Future<ParseOutcome> _run(ParserHooks hooks, String targetUrl) async {
           'referer',
         }.contains(key.toLowerCase()),
       )) {
+        _logParseCheck(
+          'REQUEST_HEADER',
+          hooks.site,
+          expected: 'user-agent|accept|accept-language|referer',
+          actual: headers.keys
+              .where(
+                (key) => !{
+                  'user-agent',
+                  'accept',
+                  'accept-language',
+                  'referer',
+                }.contains(key.toLowerCase()),
+              )
+              .map((key) => key.toLowerCase())
+              .join(','),
+        );
         throw ParseFailure(ParseErrorCode.invalidPage, '解析模块请求头超出许可范围');
       }
       final response = await http
