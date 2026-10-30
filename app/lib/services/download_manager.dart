@@ -31,6 +31,7 @@ import 'download_provenance.dart';
 import 'export_names.dart';
 import 'download_claims.dart';
 import 'provenance_pair.dart';
+import 'save_collision.dart';
 import 'session_media_download.dart';
 import 'media_request_policy.dart';
 import 'site_registry.dart';
@@ -41,10 +42,11 @@ import 'settings.dart';
 const int kMaxAttempts = 3;
 
 int maxAttemptsFor(DownloadBatch batch, DownloadJob job) =>
-    (SiteRegistry.current.byId(batch.platform)?.data['download'] as Map?)?['transport'] ==
-            'session'
-        ? job.urls.length
-        : kMaxAttempts;
+    (SiteRegistry.current.byId(batch.platform)?.data['download']
+            as Map?)?['transport'] ==
+        'session'
+    ? job.urls.length
+    : kMaxAttempts;
 
 bool needsSessionDownload(DownloadBatch batch, DownloadJob job) {
   if (job.resources.isNotEmpty) {
@@ -69,10 +71,11 @@ bool recoverSessionJob(DownloadBatch batch, DownloadJob job) {
 }
 
 List<String> orderedMediaUrls(ParsedPost post, MediaItem item) =>
-    (SiteRegistry.current.byId(post.platform)?.data['download'] as Map?)?['urlOrder'] ==
-            'primaryFirst'
-        ? [item.url, ...item.fallbacks]
-        : [...item.fallbacks, item.url];
+    (SiteRegistry.current.byId(post.platform)?.data['download']
+            as Map?)?['urlOrder'] ==
+        'primaryFirst'
+    ? [item.url, ...item.fallbacks]
+    : [...item.fallbacks, item.url];
 
 /// How long a batch snapshot may stay untouched before the other engine may
 /// consider its owner dead and adopt the batch. The owner refreshes the
@@ -1521,18 +1524,35 @@ class DownloadManager extends ChangeNotifier {
   }
 
   /// Gallery import for a finished file, then temp cleanup.
-  final _finishing = <String>{};
+  final _finishing = <String, Future<void>>{};
+  Future<void> _trackFinish(String key, Future<void> Function() action) async {
+    final running = _finishing[key];
+    if (running != null) {
+      await running;
+      return;
+    }
+    final work = action();
+    _finishing[key] = work;
+    try {
+      await work;
+    } finally {
+      _finishing.remove(key);
+    }
+  }
+
+  @visibleForTesting
+  Future<void> trackFinishForTesting(
+    String key,
+    Future<void> Function() action,
+  ) => _trackFinish(key, action);
+
   Future<void> _finishFile(
     DownloadBatch batch,
     DownloadJob job,
     Task task,
   ) async {
-    if (job.isTerminal || !_finishing.add(job.key)) return;
-    try {
-      await _finishFileOnce(batch, job, task);
-    } finally {
-      _finishing.remove(job.key);
-    }
+    if (job.isTerminal) return;
+    await _trackFinish(job.key, () => _finishFileOnce(batch, job, task));
   }
 
   Future<void> _finishFileOnce(
@@ -1599,8 +1619,7 @@ class DownloadManager extends ChangeNotifier {
           // the copy and the snapshot write) — reuse it instead of saving a
           // second copy.
           var existing = await _findExistingAlbumAsset(batch, job);
-          if (existing != null &&
-              (await AppSettings.load()).saveProvenanceInImages) {
+          if (existing != null) {
             // A same-name file may be the result of an older skipped write.
             // Reuse only after checking its credentials against this save.
             final local = await existing.originFile;
@@ -1616,8 +1635,7 @@ class DownloadManager extends ChangeNotifier {
             if (read == null ||
                 read.platform != expected.platform ||
                 read.sourceId != expected.sourceId ||
-                read.aiLabel != expected.aiLabel ||
-                read.aiLabelSource != expected.aiLabelSource) {
+                read.itemIndex != expected.itemIndex) {
               existing = null;
             }
           }
@@ -1653,18 +1671,24 @@ class DownloadManager extends ChangeNotifier {
               itemIndex ?? job.itemIndex,
             );
 
-            final saved = job.metadataNotice != null
-                ? await saveProvenancePair(
-                    path,
-                    expectedAssetId: writtenAssetId,
-                    finalName: finalName,
-                  )
-                : await saveToGallery(
-                    path,
-                    isImage,
-                    batch.album,
-                    finalName: finalName,
-                  );
+            final outcome = await saveWithConflictHandling(
+              filename: finalName,
+              tempPath: path,
+              album: batch.album,
+              pair: job.metadataNotice != null,
+              expected: provenanceForBatchItem(
+                batch,
+                itemIndex: itemIndex ?? job.itemIndex,
+              ),
+              save: (name) => job.metadataNotice != null
+                  ? saveProvenancePair(
+                      path,
+                      expectedAssetId: writtenAssetId,
+                      finalName: name,
+                    )
+                  : saveToGallery(path, isImage, batch.album, finalName: name),
+            );
+            final saved = outcome.saved;
             _log('gallery import done: ${job.filename} -> ${saved.mediaId}');
             job.mediaId = saved.mediaId;
             job.savedTitle = saved.title;
@@ -1674,7 +1698,7 @@ class DownloadManager extends ChangeNotifier {
             job.saved = true;
 
             // Store assetId for reuse
-            job.assetId = writtenAssetId;
+            job.assetId = outcome.reusedAssetId ?? writtenAssetId;
           }
         }
       })().timeout(kFinishFileTimeout);
@@ -1709,9 +1733,7 @@ class DownloadManager extends ChangeNotifier {
     }
 
     // Live Photos write identical pairId (<sourceId>#<itemIndex>) for image and video
-    final pairId = (job.isLivePhoto && batch.postId != null)
-        ? '${batch.postId}#$itemIndex'
-        : null;
+    final pairId = job.isLivePhoto ? '${batch.postId}#$itemIndex' : null;
 
     // Build provenance metadata
     final provenance = provenanceForBatchItem(
@@ -1818,6 +1840,7 @@ class DownloadManager extends ChangeNotifier {
   /// Manual per-row retry: re-parse the post first so 403/expired CDN links
   /// are refreshed; fall back to the stored URLs when parsing fails.
   Future<void> retryJob(DownloadBatch batch, DownloadJob job) async {
+    await _finishing[job.key];
     if (job.state != JobState.failed && job.state != JobState.canceled) return;
     // Claim the retry synchronously, before parsing or any plugin await.
     job.state = JobState.queued;
@@ -2003,7 +2026,9 @@ class DownloadManager extends ChangeNotifier {
   Future<void> restartBatch(DownloadBatch batch) async {
     if (batch.source != owner &&
         !batch.isStalledAt(DateTime.now().millisecondsSinceEpoch) &&
-        batch.jobs.any((j) => needsSessionDownload(batch, j) && !j.isTerminal)) {
+        batch.jobs.any(
+          (j) => needsSessionDownload(batch, j) && !j.isTerminal,
+        )) {
       return;
     }
     batch = await _ownedOrAdopt(batch);
@@ -2050,6 +2075,7 @@ class DownloadManager extends ChangeNotifier {
 
   /// Cancel one file of a batch (queue page / preview page).
   Future<void> cancelJob(DownloadBatch batch, DownloadJob job) async {
+    await _finishing[job.key];
     if (batch.source != owner &&
         needsSessionDownload(batch, job) &&
         !batch.isStalledAt(DateTime.now().millisecondsSinceEpoch)) {
@@ -2059,6 +2085,7 @@ class DownloadManager extends ChangeNotifier {
     }
     batch = await _ownedOrAdopt(batch);
     job = batch.jobs.firstWhere((j) => j.key == job.key, orElse: () => job);
+    if (job.saved) return; // The album write won the race; keep it completed.
     if (job.isTerminal) return;
     if (needsSessionDownload(batch, job)) {
       job.state = JobState.canceled;
@@ -2236,7 +2263,9 @@ class DownloadManager extends ChangeNotifier {
   }
 
   Future<bool> _allTasksTerminal(DownloadBatch batch) async {
-    if (batch.jobs.every((j) => j.isTerminal || needsSessionDownload(batch, j))) {
+    if (batch.jobs.every(
+      (j) => j.isTerminal || needsSessionDownload(batch, j),
+    )) {
       return true;
     }
     try {

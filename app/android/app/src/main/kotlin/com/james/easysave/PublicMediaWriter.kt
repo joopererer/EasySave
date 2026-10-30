@@ -10,6 +10,44 @@ import java.io.File
 
 object PublicMediaWriter {
     val lock = Any()
+    fun inspect(context: Context, relative: String, name: String, pair: Boolean): Map<String, String>? {
+        ExportNames.requireClean(name)
+        val resolver = context.contentResolver
+        @Suppress("DEPRECATION")
+        val legacyPath = File(Environment.getExternalStorageDirectory(), relative + name).path
+        val selection = if (Build.VERSION.SDK_INT >= 29)
+            "relative_path = ? AND _display_name = ?" else "_data = ?"
+        val args = if (Build.VERSION.SDK_INT >= 29)
+            arrayOf(relative, name) else arrayOf(legacyPath)
+        val row = resolver.query(
+            MediaStore.Files.getContentUri("external"),
+            arrayOf("_id", "_display_name"),
+            selection, args, null
+        )?.use { cursor ->
+            if (cursor.moveToFirst()) cursor.getString(0) to cursor.getString(1) else null
+        } ?: return null
+        val result = mutableMapOf(
+            "mediaId" to row.first, "title" to row.second, "relativePath" to relative
+        )
+        if (pair) {
+            runCatching { ProvenancePairWriter.read(context, row.first) }
+                .getOrNull()?.let { result["sidecarXml"] = it }
+        } else {
+            val uri = Uri.withAppendedPath(MediaStore.Files.getContentUri("external"), row.first)
+            val extension = name.substringAfterLast('.', "bin")
+            val copy = File.createTempFile("collision-", ".$extension", context.cacheDir)
+            try {
+                checkNotNull(resolver.openInputStream(uri)).use { input ->
+                    copy.outputStream().use { output -> input.copyTo(output) }
+                }
+                result["probePath"] = copy.path
+            } catch (e: Exception) {
+                copy.delete()
+                throw e
+            }
+        }
+        return result
+    }
     fun available(context: Context, relative: String, name: String) {
         if (Build.VERSION.SDK_INT >= 29) {
             context.contentResolver.query(MediaStore.Files.getContentUri("external"), arrayOf("_id"),

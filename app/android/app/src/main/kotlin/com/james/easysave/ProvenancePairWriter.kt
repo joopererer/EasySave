@@ -35,7 +35,7 @@ object ProvenancePairWriter {
 
     fun register(context: Context, messenger: BinaryMessenger) {
         MethodChannel(messenger, "easysave/provenance_pair").setMethodCallHandler { call, result ->
-            if (call.method !in setOf("savePair", "saveMedia", "repairLegacyNames", "readSidecar", "readSidecarDetailed", "queryFixedMedia", "deletePair", "setFixedTree", "readFixedHeader")) {
+            if (call.method !in setOf("savePair", "saveMedia", "inspectTarget", "repairLegacyNames", "readSidecar", "readSidecarDetailed", "queryFixedMedia", "deletePair", "setFixedTree", "readFixedHeader")) {
                 result.notImplemented()
                 return@setMethodCallHandler
             }
@@ -64,6 +64,12 @@ object ProvenancePairWriter {
                         if (Build.VERSION.SDK_INT >= 29) FixedRebuildAccess.query(context) else queryFixedMedia(context)
                     } else if (call.method == "readSidecar") {
                         read(context, call.argument<String>("mediaId")!!)
+                    } else if (call.method == "inspectTarget") {
+                        val name = call.argument<String>("filename")!!
+                        val pair = call.argument<Boolean>("pair") == true
+                        val relative = if (pair) C2paStoragePolicy.RELATIVE_PATH else
+                            ExportNames.albumPath(call.argument<String>("album")!!)
+                        PublicMediaWriter.inspect(context, relative, name, pair)
                     } else {
                         val path = call.argument<String>("path")!!
                         val source = File(path).canonicalFile
@@ -280,7 +286,7 @@ object ProvenancePairWriter {
         }
     }
 
-    private fun read(context: Context, id: String): String? {
+    internal fun read(context: Context, id: String): String? {
         val resolver = context.contentResolver
         val files = MediaStore.Files.getContentUri("external")
         if (Build.VERSION.SDK_INT < 29) {
