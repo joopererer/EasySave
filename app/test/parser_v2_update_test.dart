@@ -107,6 +107,13 @@ void main() {
   });
   tearDown(() => directory.deleteSync(recursive: true));
 
+  test('builtin mode removes stale empty recognition projection', () async {
+    final view = File('${directory.path}/link-recognition.json');
+    view.writeAsStringSync('{"sites":[]}');
+    await manager.getActiveScript();
+    expect(view.existsSync(), isFalse);
+  });
+
   test(
     'valid original payload bytes and parser are cached unchanged and reverified',
     () async {

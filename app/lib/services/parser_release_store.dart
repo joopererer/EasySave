@@ -210,10 +210,17 @@ class ParserReleaseStore {
 
   void writeRecognitionView(SignedParserManifest? manifest) {
     // This projection is an entrance hint, never a security authority.
+    final target = File('${directory.path}/link-recognition.json');
+    if (manifest == null) {
+      // The builtin APK asset is authoritative when no signed release is active.
+      // A stale empty projection would mask every route in Kotlin.
+      if (target.existsSync()) target.deleteSync();
+      return;
+    }
     _atomicWrite(
-      File('${directory.path}/link-recognition.json'),
+      target,
       utf8.encode(
-        jsonEncode(manifest?.recognitionView(appVersion) ?? {'sites': []}),
+        jsonEncode({...manifest.recognitionView(appVersion), 'activated': true}),
       ),
     );
   }
