@@ -22,17 +22,23 @@ void main() {
       }
     }
   });
-  test('short links expand before entering the parser', () async {
+  test('short links are followed by the WebView, history lookup uses HTTP',
+      () async {
     for (final host in ['vm.tiktok.com', 'vt.tiktok.com']) {
       final url = 'https://$host/abc/';
       expect(isSupportedLink(url), isTrue);
       expect(SiteRegistry.current.canonicalUrl(url), isNull);
+      final target = 'https://www.tiktok.com/@person/video/$id';
+      // v1.9.0 parity: the parse path must not expand a webview short link.
       expect(
-        await resolveShortLink(
-          url,
-          readRedirect: (_) async => 'https://www.tiktok.com/@person/video/$id',
-        ),
-        'https://www.tiktok.com/@person/video/$id',
+        await resolveShortLink(url, readRedirect: (_) async => target),
+        url,
+      );
+      Future<String?> redirect(Uri uri) async =>
+          uri.host == host ? target : null;
+      expect(
+        await resolveShortLink(url, forHistoryLookup: true, readRedirect: redirect),
+        target,
       );
     }
   });

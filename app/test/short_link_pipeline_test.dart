@@ -1,11 +1,14 @@
 import 'dart:async';
 
+import 'package:easysave/services/links.dart';
 import 'package:easysave/services/parse_service.dart';
 import 'package:easysave/services/site_registry.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
-  final cases = <(String, String, List<String>, String, String)>[
+  // v1.9.0 parity per site: xhslink/t.co expand over HTTP, TikTok short links
+  // are followed by the WebView, and a full post URL is entered unchanged.
+  final httpCases = <(String, String, List<String>, String, String?)>[
     (
       'xhs',
       'https://xhslink.cn/o/71TKM3kfsK1',
@@ -24,23 +27,6 @@ void main() {
       'https://www.xiaohongshu.com/explore/AbC123',
     ),
     (
-      'tiktok',
-      'https://vm.tiktok.com/ZN8UuWyMb/',
-      [
-        'https://www.tiktok.com/t/ZN8UuWyMb/',
-        'https://www.tiktok.com/@creator/video/1234567890123456789?is_from_webapp=1',
-      ],
-      'https://www.tiktok.com/@creator/video/1234567890123456789?is_from_webapp=1',
-      'https://www.tiktok.com/@/video/1234567890123456789',
-    ),
-    (
-      'tiktok',
-      'https://vt.tiktok.com/AbC123/',
-      ['https://www.tiktok.com/@creator/photo/1234567890123456789'],
-      'https://www.tiktok.com/@creator/photo/1234567890123456789',
-      'https://www.tiktok.com/@/video/1234567890123456789',
-    ),
-    (
       'x',
       'https://t.co/AbC123',
       ['https://x.com/creator/status/2115654865154191715?a=token'],
@@ -56,8 +42,8 @@ void main() {
     ),
   ];
 
-  for (final (id, input, hops, loadUrl, canonical) in cases) {
-    test('$id short-link pipeline enters parser with correct URL', () async {
+  for (final (id, input, hops, loadUrl, canonical) in httpCases) {
+    test('$id http short-link pipeline enters parser with correct URL', () async {
       SiteRegistry.useBuiltin();
       final site = SiteRegistry.current.match(input)!;
       expect(site.id, id);
@@ -81,9 +67,61 @@ void main() {
     });
   }
 
-  test('short link that never redirects fails clearly', () async {
+  // TikTok declares `strategy: webview`, so no HTTP expansion may run: the
+  // token/cookie-bearing landing hop belongs to the WebView (v1.9.0).
+  final tiktokShortLinks = [
+    'https://vm.tiktok.com/ZN8UuWyMb/',
+    'https://vt.tiktok.com/AbC123/',
+    'https://www.tiktok.com/t/ZN8UuWyMb/',
+  ];
+  for (final input in tiktokShortLinks) {
+    test('tiktok short link $input is handed to the WebView untouched', () async {
+      SiteRegistry.useBuiltin();
+      final site = SiteRegistry.current.match(input)!;
+      expect(site.id, 'tiktok');
+      final rule = site.shortLink(Uri.parse(input))!;
+      expect(rule['strategy'], 'webview');
+      expect(rule['historyStrategy'], 'http');
+      var reads = 0;
+      final result = await resolveAndEnterParse(
+        input,
+        site,
+        (actualLoad, actualCanonical) async {
+          expect(actualLoad, input);
+          expect(actualCanonical, isNull);
+          return 'entered';
+        },
+        readRedirect: (_) async {
+          reads++;
+          return 'https://www.tiktok.com/@creator/video/1234567890123456789';
+        },
+      );
+      expect(result, 'entered');
+      expect(reads, 0, reason: 'webview short links must not be HTTP expanded');
+    });
+  }
+
+  test('tiktok history lookup still expands over HTTP', () async {
     SiteRegistry.useBuiltin();
     const input = 'https://vm.tiktok.com/ZN8UuWyMb/';
+    var reads = 0;
+    final resolved = await resolveShortLink(
+      input,
+      forHistoryLookup: true,
+      readRedirect: (_) async {
+        reads++;
+        return reads == 1
+            ? 'https://www.tiktok.com/@creator/video/1234567890123456789'
+            : null;
+      },
+    );
+    expect(reads, 2);
+    expect(resolved, 'https://www.tiktok.com/@creator/video/1234567890123456789');
+  });
+
+  test('http short link that never redirects fails clearly', () async {
+    SiteRegistry.useBuiltin();
+    const input = 'https://xhslink.cn/o/71TKM3kfsK1';
     final site = SiteRegistry.current.match(input)!;
     await expectLater(
       resolveAndEnterParse(

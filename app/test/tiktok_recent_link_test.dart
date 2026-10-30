@@ -70,7 +70,8 @@ void main() {
       }
     },
   );
-  test('history lookup and parsing both expand vm and vt', () async {
+  test('history lookup expands vm and vt; the parse path leaves them alone',
+      () async {
     for (final host in ['vm.tiktok.com', 'vt.tiktok.com']) {
       final link = 'https://$host/FAKE/';
       var calls = 0;
@@ -81,15 +82,18 @@ void main() {
             : null;
       }
 
-      expect(
-        await resolveShortLink(link, readRedirect: redirect),
-        'https://www.tiktok.com/@someone/photo/$id?tracking=FAKE',
-      );
-      expect(calls, 2);
+      // v1.9.0 parity: only the history lookup may HTTP-expand a TikTok
+      // short link; parsing hands the short link to the WebView.
+      expect(await resolveShortLink(link, readRedirect: redirect), link);
+      expect(calls, 0);
       final resolved = await resolveShortLink(
         link,
         forHistoryLookup: true,
         readRedirect: redirect,
+      );
+      expect(
+        resolved,
+        'https://www.tiktok.com/@someone/photo/$id?tracking=FAKE',
       );
       expect(
         isLinkKnown(link, [
@@ -97,7 +101,7 @@ void main() {
         ], resolvedUrl: resolved),
         isTrue,
       );
-      expect(calls, 4);
+      expect(calls, 2);
     }
   });
 }

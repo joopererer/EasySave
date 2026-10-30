@@ -6,6 +6,7 @@ import 'dart:convert';
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 import 'package:http/http.dart' as http;
 
+import '../core/dev_log.dart';
 import '../core/models.dart';
 import 'auth.dart' show isLoopbackHost;
 import 'ai_label_log.dart';
@@ -48,37 +49,90 @@ Future<void> waitForParserState(
 Future<ParsedPost> parsePostUrl(String url) async =>
     (await parsePostOutcome(url)).data;
 
+/// Host + path only: DevLog already strips queries, this keeps them out of the
+/// message before it is even formatted.
+String _hostPathOf(String url) {
+  final uri = Uri.tryParse(url);
+  if (uri == null || uri.host.isEmpty) return '-';
+  return '${uri.host.toLowerCase()}${uri.path}';
+}
+
+/// Log one result check so a device failure names the check and both sides.
+/// Only platforms, ids, types, indices and host+path are ever written.
+void _logParseCheck(
+  String check,
+  SiteDefinition site, {
+  String? postId,
+  String expected = '',
+  String actual = '',
+}) {
+  final parts = [
+    'check=$check',
+    'site=${site.id}',
+    'post=${postId ?? '-'}',
+    if (expected.isNotEmpty) 'expected=$expected',
+    if (actual.isNotEmpty) 'actual=$actual',
+  ];
+  unawaited(DevLog.write('ParseMismatch', parts.join(' ')));
+}
+
+/// `strategy` decides who follows a declared short link. v1.9.0 expands
+/// xhslink/t.co over plain HTTP but hands TikTok short links to the WebView
+/// (its landing hop sets the cookies the reflow route needs); the manifest
+/// must keep that split, so only `http` is expanded here.
+String _shortLinkStrategy(Map rule) => rule['strategy'] as String? ?? 'http';
+
 /// Resolve a declared short link, validate the final route, then enter parsing.
 /// The load URL keeps tokens; canonicalization is for identity, not navigation.
+/// [enter] receives a null canonical URL when the WebView resolves the link.
 Future<T> resolveAndEnterParse<T>(
   String url,
   SiteDefinition site,
-  Future<T> Function(String loadUrl, String canonicalUrl) enter, {
+  Future<T> Function(String loadUrl, String? canonicalUrl) enter, {
   Future<String?> Function(Uri)? readRedirect,
   Duration? timeout,
 }) async {
-  final short = site.shortLink(Uri.parse(url)) != null;
-  String resolved;
-  try {
-    resolved = short
-        ? await resolveShortLink(
-            url,
-            readRedirect: readRedirect,
-            timeout: timeout,
-          )
-        : url;
-  } on FormatException {
-    throw ParseFailure(ParseErrorCode.invalidPage, '短链跳转目标不受支持');
+  final uri = Uri.parse(url);
+  final rule = site.shortLink(uri);
+  if (rule != null && _shortLinkStrategy(rule) != 'http') {
+    // WebView strategy: the browser engine follows the short link and the
+    // parser hook canonicalizes what it lands on, exactly as in v1.9.0.
+    return enter(url, SiteRegistry.current.canonicalUrl(url));
   }
-  if (short && resolved == url) {
-    throw ParseFailure(ParseErrorCode.invalidPage, '短链未能展开，请重试');
+  var resolved = url;
+  if (rule != null) {
+    try {
+      resolved = await resolveShortLink(
+        url,
+        readRedirect: readRedirect,
+        timeout: timeout,
+      );
+    } on FormatException {
+      _logParseCheck(
+        'SHORT_TARGET_REJECTED',
+        site,
+        actual: _hostPathOf(url),
+      );
+      throw ParseFailure(ParseErrorCode.invalidPage, '短链跳转目标不受支持');
+    }
+    if (resolved == url) {
+      _logParseCheck('SHORT_NOT_EXPANDED', site, actual: _hostPathOf(url));
+      throw ParseFailure(ParseErrorCode.invalidPage, '短链未能展开，请重试');
+    }
   }
   final target = SiteRegistry.current.match(resolved);
   if (target?.id != site.id) {
+    _logParseCheck(
+      'SHORT_TARGET_SITE',
+      site,
+      expected: site.id,
+      actual: target?.id ?? _hostPathOf(resolved),
+    );
     throw ParseFailure(ParseErrorCode.invalidPage, '短链跳转目标不受支持');
   }
   final canonical = SiteRegistry.current.canonicalUrl(resolved);
   if (canonical == null) {
+    _logParseCheck('SHORT_TARGET_NOT_POST', site, actual: _hostPathOf(resolved));
     throw ParseFailure(ParseErrorCode.invalidPage, '短链跳转目标不是作品页面');
   }
   return enter(resolved, canonical);

@@ -362,7 +362,7 @@
           "domain": "vm.tiktok.com",
           "includeSubdomains": false
         },
-        "strategy": "http",
+        "strategy": "webview",
         "maxRedirects": 5,
         "historyStrategy": "http"
       },
@@ -371,7 +371,7 @@
           "domain": "vt.tiktok.com",
           "includeSubdomains": false
         },
-        "strategy": "http",
+        "strategy": "webview",
         "maxRedirects": 5,
         "historyStrategy": "http"
       },
@@ -380,7 +380,7 @@
           "domain": "tiktok.com",
           "includeSubdomains": true
         },
-        "strategy": "http",
+        "strategy": "webview",
         "historyStrategy": "http",
         "pathPatterns": [
           "^/t/[^/]+/?$"
