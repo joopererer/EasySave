@@ -6,6 +6,7 @@ import 'package:easysave/core/models.dart';
 import 'package:easysave/services/media_request_policy.dart';
 import 'package:easysave/services/site_registry.dart';
 import 'package:easysave/services/signed_parser_manifest.dart';
+import 'package:easysave/widgets/shared.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
@@ -43,6 +44,24 @@ void main() {
     readCookie: reader,
     logRejection: log ?? (_, _) {},
   );
+
+  test('X video fixture keeps its poster and sends the declared Referer', () async {
+    final fixture = jsonDecode(
+      File('../spec/fixtures/x/video.expected.json').readAsStringSync(),
+    ) as Map<String, dynamic>;
+    final item = MediaItem.fromJson(
+      (fixture['items'] as List).single as Map<String, dynamic>,
+    );
+    expect(item.posterUrl, isNotNull);
+    expect(urlsFor(item).first, item.posterUrl);
+    final poster = policy(id: 'x').resourcesFor(item).singleWhere(
+      (r) => r.role == MediaResourceRole.poster,
+    );
+    expect(poster.url, item.posterUrl);
+    expect(poster.request.headers['Referer'], 'https://x.com/');
+    final authorized = await policy(id: 'x').authorize(poster);
+    expect(authorized.wireHeaders['Referer'], 'https://x.com/');
+  });
 
   test(
     'rejects non-HTTPS, userinfo, malformed URLs, spoofed domains and public suffix targets',

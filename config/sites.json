@@ -301,7 +301,9 @@
           "includeSubdomains": true
         }
       ],
-      "headers": {},
+      "headers": {
+        "Referer": "https://x.com/"
+      },
       "cookieDomains": [],
       "transport": "background",
       "resumable": true
