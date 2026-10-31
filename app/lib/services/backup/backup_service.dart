@@ -80,14 +80,19 @@ abstract final class BackupService {
             'schema': '0.1',
             'assetId': f.assetId,
             'capturedAt': savedAtStr,
-            'capturedBy': 'EasySave/${BackupData.currentAppVersion}',
+            // Values recorded when the provenance was written into the file.
+            // They are never re-derived here: a hard-coded app version lied
+            // about the writer and a file count is not the item count.
+            if (f.capturedBy != null && f.capturedBy!.isNotEmpty)
+              'capturedBy': f.capturedBy,
             'metadataDate': savedAtStr,
             'source': {
               'url': normalizeUrl(record.postUrl),
               'platform': specPlatform,
               'id': record.postId,
               if (record.fileCount > 1) 'itemIndex': f.itemIndex,
-              if (record.fileCount > 1) 'itemCount': record.fileCount,
+              if (record.fileCount > 1 && f.itemCount != null)
+                'itemCount': f.itemCount,
             },
             if (record.title != null && record.title!.isNotEmpty)
               'title': record.title,
@@ -210,6 +215,7 @@ abstract final class BackupService {
         final isImage = f.mediaType != 'video';
         final savedAtMs =
             DateTime.tryParse(f.savedAt)?.millisecondsSinceEpoch ?? 0;
+        final provSource = f.provenance?['source'];
         files.add(
           HistoryFile(
             filename: f.filename,
@@ -220,10 +226,15 @@ abstract final class BackupService {
             isImage: isImage,
             assetId: f.assetId,
             relativePath: f.relativePath,
+            // Keep what the backup says the file carries; a v1 backup without
+            // provenance leaves both null and the next export omits them.
+            itemCount: (provSource is Map ? provSource['itemCount'] as num? : null)?.toInt(),
+            capturedBy: f.provenance?['capturedBy'] as String?,
           ),
         );
       }
-      restoredFilesCount += files.length;
+      final restoredFiles = repairHistoryFiles(files) ?? files;
+      restoredFilesCount += restoredFiles.length;
 
       String? itemsJson;
       if (post.items != null && post.items!.isNotEmpty) {
@@ -250,10 +261,10 @@ abstract final class BackupService {
         aiLabelSource: post.aiLabelSource,
         thumbnailUrl: null,
         postUrl: post.originalUrl,
-        fileCount: files.length,
+        fileCount: restoredFiles.length,
         createdAt: resolvedCreatedAt,
         itemsJson: itemsJson,
-        files: files,
+        files: restoredFiles,
         isDeleted: false,
       );
 

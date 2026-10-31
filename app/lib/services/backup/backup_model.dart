@@ -1,6 +1,7 @@
 // Copyright 2026 EasySave. All rights reserved.
 // Data models for backup and restore (matching spec/backup.md §2).
 
+import '../../core/app_version.dart';
 import '../../metadata/provenance_version.dart' as pv;
 
 class IncompatibleBackupVersionException implements Exception {
@@ -216,7 +217,10 @@ class BackupSettings {
 class BackupData {
   static const currentFormat = 'easysave-backup';
   static const currentFormatVersion = 1;
-  static const currentAppVersion = '1.8.0';
+
+  /// Version string written into the backup header. It tracks the app that
+  /// wrote the file; the old hard-coded value made every export claim 1.8.0.
+  static const currentAppVersion = AppVersion.defaultVersion;
 
   final String format;
   final int formatVersion;

@@ -183,7 +183,6 @@ class DownloadJob {
     this.isLivePhoto = false,
     this.resources = const [],
   });
-
   final String key;
   final String label;
   final String filename;
@@ -211,6 +210,12 @@ class DownloadJob {
   String? savedTitle;
   String? metadataNotice;
   String? relativePath;
+
+  /// prov:itemCount and prov:capturedBy of the provenance actually written into
+  /// the file (or read back from the reused file). History stores these so the
+  /// backup export can report what the file says instead of guessing.
+  int? provenanceItemCount;
+  String? provenanceCapturedBy;
 
   /// Last time this job showed life (enqueued, progress or status update), in
   /// epoch ms. The watchdog and the stale-batch check use it; 0 = unknown
@@ -244,6 +249,8 @@ class DownloadJob {
     'savedTitle': savedTitle,
     'metadataNotice': metadataNotice,
     'relativePath': relativePath,
+    if (provenanceItemCount != null) 'provenanceItemCount': provenanceItemCount,
+    if (provenanceCapturedBy != null) 'provenanceCapturedBy': provenanceCapturedBy,
   };
 
   static DownloadJob fromJson(Map<String, Object?> map) {
@@ -271,6 +278,8 @@ class DownloadJob {
     job.savedTitle = map['savedTitle'] as String?;
     job.metadataNotice = map['metadataNotice'] as String?;
     job.relativePath = map['relativePath'] as String?;
+    job.provenanceItemCount = (map['provenanceItemCount'] as num?)?.toInt();
+    job.provenanceCapturedBy = map['provenanceCapturedBy'] as String?;
     job.lastProgressAt = (map['lastProgressAt'] as num?)?.toInt() ?? 0;
     return job;
   }
@@ -649,6 +658,8 @@ Future<void> writeBatchHistory(
           isImage: job.isImage,
           assetId: job.assetId,
           relativePath: job.relativePath,
+          itemCount: job.provenanceItemCount,
+          capturedBy: job.provenanceCapturedBy,
           status: job.mediaId != null ? FileStatus.found : FileStatus.unknown,
         ),
   ];
@@ -1619,6 +1630,7 @@ class DownloadManager extends ChangeNotifier {
           // the copy and the snapshot write) — reuse it instead of saving a
           // second copy.
           var existing = await _findExistingAlbumAsset(batch, job);
+          XmpProvenance? reusedProvenance;
           if (existing != null) {
             // A same-name file may be the result of an older skipped write.
             // Reuse only after checking its credentials against this save.
@@ -1637,6 +1649,8 @@ class DownloadManager extends ChangeNotifier {
                 read.sourceId != expected.sourceId ||
                 read.itemIndex != expected.itemIndex) {
               existing = null;
+            } else {
+              reusedProvenance = read;
             }
           }
           if (existing != null) {
@@ -1648,6 +1662,10 @@ class DownloadManager extends ChangeNotifier {
             } catch (_) {
               job.relativePath = null;
             }
+            // The reused file already carries its own provenance: keep those
+            // values instead of writing a new guess into the record.
+            job.provenanceItemCount = reusedProvenance?.itemCount;
+            job.provenanceCapturedBy = reusedProvenance?.capturedBy;
             job.state = JobState.done;
             job.progress = 1;
             job.saved = true;
@@ -1745,6 +1763,8 @@ class DownloadManager extends ChangeNotifier {
 
     // Embed into file (videos use Mp4WriteMode.rewrite in private cache)
     final sidecar = await prepareDownloadProvenance(filePath, provenance);
+    job.provenanceItemCount = provenance.itemCount;
+    job.provenanceCapturedBy = provenance.capturedBy;
     if (sidecar) {
       job.metadataNotice = c2paSavedNotice;
       _log('provenance sidecar prepared: ${job.filename}');

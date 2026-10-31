@@ -1,5 +1,6 @@
 // Download history stored in a local sqflite table.
 
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
@@ -22,19 +23,25 @@ class HistoryFile {
     required this.savedAt,
     this.mediaId,
     this.status = FileStatus.unknown,
-    this.itemIndex = 0,
+    this.itemIndex = 1,
     this.isImage = true,
     this.assetId,
     this.relativePath,
+    this.itemCount,
+    this.capturedBy,
   });
 
   final String filename;
   final int savedAt;
   final String? mediaId;
   final FileStatus status;
+
+  /// 1-based position in the original post. Never 0: an index taken straight
+  /// from a list position made the first item indistinguishable from "unset"
+  /// and produced a second row for the same album file.
   final int itemIndex;
   final bool isImage;
-  
+
   /// Provenance asset ID (prov:assetId). Stored in files_json for reuse
   /// when re-downloading the same file across devices.
   final String? assetId;
@@ -42,6 +49,15 @@ class HistoryFile {
   /// MediaStore RELATIVE_PATH (e.g. Pictures/EasySave/).
   /// May be null for older records before first gallery location.
   final String? relativePath;
+
+  /// prov:itemCount exactly as written into the file. Null when the file was
+  /// stored without provenance, so consumers must omit it instead of deriving
+  /// a value from the number of rows in this record.
+  final int? itemCount;
+
+  /// prov:capturedBy exactly as written into the file. Null when unknown;
+  /// never re-derived from the app version at export time.
+  final String? capturedBy;
 
   Map<String, Object?> toMap() => {
     'filename': filename,
@@ -52,6 +68,8 @@ class HistoryFile {
     'is_image': isImage ? 1 : 0,
     'asset_id': assetId,
     'relative_path': relativePath,
+    if (itemCount != null) 'item_count': itemCount,
+    if (capturedBy != null) 'captured_by': capturedBy,
   };
 
   factory HistoryFile.fromMap(Map<String, Object?> map) => HistoryFile(
@@ -66,6 +84,8 @@ class HistoryFile {
     isImage: (map['is_image'] as num?)?.toInt() != 0,
     assetId: map['asset_id'] as String?,
     relativePath: map['relative_path'] as String?,
+    itemCount: (map['item_count'] as num?)?.toInt(),
+    capturedBy: map['captured_by'] as String?,
   );
 
   HistoryFile copyWith({
@@ -77,6 +97,8 @@ class HistoryFile {
     bool? isImage,
     String? assetId,
     String? relativePath,
+    int? itemCount,
+    String? capturedBy,
   }) => HistoryFile(
     filename: filename ?? this.filename,
     savedAt: savedAt ?? this.savedAt,
@@ -86,7 +108,103 @@ class HistoryFile {
     isImage: isImage ?? this.isImage,
     assetId: assetId ?? this.assetId,
     relativePath: relativePath ?? this.relativePath,
+    itemCount: itemCount ?? this.itemCount,
+    capturedBy: capturedBy ?? this.capturedBy,
   );
+}
+
+/// Whether a stored file row is a *winner* when two rows describe the same
+/// album file: a real 1-based index with written provenance is preferred.
+int _keeperRank(HistoryFile file) =>
+    (file.itemIndex >= 1 ? 2 : 0) + (file.assetId != null ? 1 : 0);
+
+/// Repair the file list of one history record.
+///
+/// Two defects are healed, and nothing outside the database is touched:
+/// * a legacy set inferred from `items_json` is entirely 0-based, so every
+///   index is shifted to the 1-based form the rest of the app uses;
+/// * two rows that point at the same MediaStore item (`mediaId`) are collapsed
+///   to one, keeping the 1-based row that carries `prov:assetId` (the one
+///   written with the real provenance) and dropping the inferred stray.
+///
+/// Returns null when the input already satisfies those rules, so callers can
+/// skip a database write.
+List<HistoryFile>? repairHistoryFiles(List<HistoryFile> files) {
+  if (files.isEmpty) return null;
+  var changed = false;
+  var working = files;
+
+  final keep = List<bool>.filled(working.length, true);
+  final byMediaId = <String, List<int>>{};
+  for (var i = 0; i < working.length; i++) {
+    final id = working[i].mediaId;
+    if (id == null || id.isEmpty) continue;
+    byMediaId.putIfAbsent(id, () => []).add(i);
+  }
+  for (final group in byMediaId.values) {
+    if (group.length < 2) continue;
+    var keeper = group.first;
+    for (final i in group.skip(1)) {
+      if (_keeperRank(working[i]) > _keeperRank(working[keeper])) keeper = i;
+    }
+    for (final i in group) {
+      if (i != keeper) keep[i] = false;
+    }
+    changed = true;
+  }
+  if (changed) {
+    working = [
+      for (var i = 0; i < working.length; i++)
+        if (keep[i]) working[i],
+    ];
+  }
+  if (working.isEmpty) return changed ? const [] : null;
+
+  // A set numbered from 0 predates the 1-based rule. Shift the whole set so
+  // relative order survives; a single leftover 0-based row is shifted too.
+  final lowest = working.map((f) => f.itemIndex).reduce((a, b) => a < b ? a : b);
+  if (lowest < 1) {
+    final delta = 1 - lowest;
+    working = [
+      for (final f in working) f.copyWith(itemIndex: f.itemIndex + delta),
+    ];
+    changed = true;
+  }
+
+  if (!changed) return null;
+  return working;
+}
+
+/// Reject a file list that breaks the 1-based index invariant before it is
+/// written. Every producer numbers items from 1; a 0 here means a list
+/// position was used by mistake, and it must not reach the database.
+void validateHistoryFiles(Iterable<HistoryFile> files) {
+  for (final file in files) {
+    if (file.itemIndex < 1) {
+      throw ArgumentError.value(
+        file.itemIndex,
+        'itemIndex',
+        'history file index must be 1-based (file "${file.filename}")',
+      );
+    }
+  }
+}
+
+/// Whether a stored `files_json` value still holds a 0-based or duplicated
+/// row, i.e. whether reading it needs a database correction.
+bool historyFilesNeedRepair(String? filesJson) {
+  if (filesJson == null || filesJson.isEmpty) return false;
+  try {
+    final decoded = jsonDecode(filesJson);
+    if (decoded is! List) return false;
+    final files = [
+      for (final raw in decoded)
+        if (raw is Map) HistoryFile.fromMap(raw.cast<String, Object?>()),
+    ];
+    return repairHistoryFiles(files) != null;
+  } catch (_) {
+    return false;
+  }
 }
 
 List<HistoryFile> inferHistoryFiles({
@@ -129,7 +247,7 @@ List<HistoryFile> inferHistoryFiles({
             filename: '$base.jpg',
             savedAt: createdAt.millisecondsSinceEpoch,
             status: FileStatus.unknown,
-            itemIndex: i,
+            itemIndex: i + 1,
             isImage: true,
           ),
         );
@@ -138,7 +256,7 @@ List<HistoryFile> inferHistoryFiles({
             filename: '$base.mp4',
             savedAt: createdAt.millisecondsSinceEpoch,
             status: FileStatus.unknown,
-            itemIndex: i,
+            itemIndex: i + 1,
             isImage: false,
           ),
         );
@@ -148,7 +266,7 @@ List<HistoryFile> inferHistoryFiles({
             filename: '$base.mp4',
             savedAt: createdAt.millisecondsSinceEpoch,
             status: FileStatus.unknown,
-            itemIndex: i,
+            itemIndex: i + 1,
             isImage: false,
           ),
         );
@@ -158,7 +276,7 @@ List<HistoryFile> inferHistoryFiles({
             filename: '$base.jpg',
             savedAt: createdAt.millisecondsSinceEpoch,
             status: FileStatus.unknown,
-            itemIndex: i,
+            itemIndex: i + 1,
             isImage: true,
           ),
         );
@@ -342,6 +460,8 @@ class HistoryRecord {
         createdAt: createdAt,
         itemsJson: itemsJson,
       );
+    } else {
+      resolvedFiles = repairHistoryFiles(resolvedFiles) ?? resolvedFiles;
     }
 
     return HistoryRecord(
@@ -587,6 +707,7 @@ class HistoryDb {
     bool userSave = false,
     int? downloadStartedAt,
   }) async {
+    validateHistoryFiles(record.files);
     DevLog.write(
       'HIST', // i18n:ignore 日志
       'history write post=${record.postId} files=${record.files.length} '
@@ -616,12 +737,16 @@ class HistoryDb {
         for (final f in record.files) {
           fileMap['${f.itemIndex}_${f.isImage}'] = f;
         }
-        final mergedFiles = fileMap.values.toList()
+        final sortedFiles = fileMap.values.toList()
           ..sort((a, b) {
             final cmp = a.itemIndex.compareTo(b.itemIndex);
             if (cmp != 0) return cmp;
             return (a.isImage ? 0 : 1).compareTo(b.isImage ? 0 : 1);
           });
+        // An inferred 0-based row can already be stored next to the 1-based row
+        // written with the real provenance; collapse them before persisting.
+        final mergedFiles = repairHistoryFiles(sortedFiles) ?? sortedFiles;
+        validateHistoryFiles(mergedFiles);
 
         final resolvedCreatedAt = restoreDeleted && userSave && existing.isDeleted
             ? record.createdAt
@@ -691,6 +816,7 @@ class HistoryDb {
   }
 
   Future<void> updateFiles(int id, List<HistoryFile> files) async {
+    validateHistoryFiles(files);
     final rows = await _db.update(
       'history_records',
       {
@@ -702,11 +828,41 @@ class HistoryDb {
     notifyChanged('updateFiles id=$id rows=$rows');
   }
 
-  Future<HistoryRecord?> getByPostUrl(String postUrl) async =>
-      _getByPostUrl(_db, postUrl);
+  /// Rewrite one stored record whose `files_json` still carries the 0-based or
+  /// duplicated rows left by the old inference path. Only the database row
+  /// changes: no album file is deleted, renamed or rewritten.
+  Future<void> _persistFileRepair(HistoryRecord record) async {
+    final id = record.id;
+    if (id == null || record.files.isEmpty) return;
+    final rows = await _db.query(
+      'history_records',
+      columns: ['files_json'],
+      where: 'id = ?',
+      whereArgs: [id],
+      limit: 1,
+    );
+    if (rows.isEmpty) return;
+    if (!historyFilesNeedRepair(rows.first['files_json'] as String?)) return;
+    DevLog.write(
+      'HIST', // i18n:ignore 日志
+      'file rows repaired post=${record.postId} kept=${record.files.length}',
+    );
+    await updateFiles(id, record.files);
+  }
 
-  Future<HistoryRecord?> getByPostId(String postId) async =>
-      _getByPostId(_db, postId);
+  Future<HistoryRecord?> getByPostUrl(String postUrl) async {
+    final record = await _getByPostUrl(_db, postUrl);
+    if (record == null) return null;
+    await _persistFileRepair(record);
+    return record;
+  }
+
+  Future<HistoryRecord?> getByPostId(String postId) async {
+    final record = await _getByPostId(_db, postId);
+    if (record == null) return null;
+    await _persistFileRepair(record);
+    return record;
+  }
 
   static Future<HistoryRecord?> _getByPostUrl(
     DatabaseExecutor db,
@@ -787,7 +943,11 @@ class HistoryDb {
       orderBy: 'created_at DESC, id DESC',
       limit: limit,
     );
-    return rows.map(HistoryRecord.fromMap).toList();
+    final records = rows.map(HistoryRecord.fromMap).toList();
+    for (final record in records) {
+      unawaited(_persistFileRepair(record));
+    }
+    return records;
   }
 
   Future<void> delete(int id) async {

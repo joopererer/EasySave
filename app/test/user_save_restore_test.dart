@@ -76,8 +76,8 @@ void main() {
         fileCount: 2,
         createdAt: DateTime.now(),
         files: [
-          HistoryFile(filename: '$postId-1.jpg', savedAt: 0, itemIndex: 0),
-          HistoryFile(filename: '$postId-2.jpg', savedAt: 0, itemIndex: 1),
+          HistoryFile(filename: '$postId-1.jpg', savedAt: 0, itemIndex: 1),
+          HistoryFile(filename: '$postId-2.jpg', savedAt: 0, itemIndex: 2),
         ],
       ),
     );

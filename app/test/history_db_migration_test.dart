@@ -167,7 +167,7 @@ void main() {
             filename: 'post123_3.jpg',
             savedAt: DateTime.now().millisecondsSinceEpoch,
             status: FileStatus.unknown,
-            itemIndex: 2,
+            itemIndex: 3,
             isImage: true,
           ),
         ],
@@ -176,11 +176,12 @@ void main() {
       await historyDb.upsert(newDownloadRecord);
       final mergedPost1 = await historyDb.getByPostId('post123');
       expect(mergedPost1, isNotNull);
-      // Retains previously downloaded files (0, 1) + newly downloaded file (2)
+      // Retains previously inferred files (1, 2) + newly downloaded file (3).
+      // Indices are 1-based since v1.10; the old inference used list positions.
       expect(mergedPost1!.files.length, equals(3));
       expect(mergedPost1.fileCount, equals(3));
-      expect(mergedPost1.files.map((f) => f.itemIndex).toList(), equals([0, 1, 2]));
-      // The found status and mediaId on item 0 are preserved!
+      expect(mergedPost1.files.map((f) => f.itemIndex).toList(), equals([1, 2, 3]));
+      // The found status and mediaId on item 1 are preserved!
       expect(mergedPost1.files[0].status, equals(FileStatus.found));
       expect(mergedPost1.files[0].mediaId, equals('asset_1001'));
     });

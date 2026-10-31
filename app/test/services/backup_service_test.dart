@@ -129,7 +129,10 @@ void main() {
       final decoded = jsonDecode(exportedJson) as Map<String, dynamic>;
       expect(decoded['format'], 'easysave-backup');
       expect(decoded['formatVersion'], 1);
-      expect(decoded['appVersion'], '1.8.0');
+      // The header tracks the real app version; it used to be a hard-coded
+      // '1.8.0' string long after the app had moved on.
+      expect(decoded['appVersion'], BackupData.currentAppVersion);
+      expect(decoded['appVersion'], isNot('1.8.0'));
       expect(decoded['provenanceSpecVersion'], provenanceSpecVersion);
       expect((decoded['posts'] as List).length, 2);
 
