@@ -359,6 +359,66 @@ ParseOutcome validateParserResult(dynamic value, SiteDefinition site) {
   );
 }
 
+/// What one page load should do after the `navigate` hook answered.
+enum NavigateKind {
+  /// The page is a landing/redirect page: keep waiting for the next load.
+  wait,
+
+  /// The hook named a different URL inside the site: load it once.
+  load,
+
+  /// The page is where it should be: start parsing.
+  parse,
+
+  /// The hook named something outside the site: a real mismatch.
+  invalid,
+}
+
+/// Result of [navigateStep]: the kind plus the URL to load for [NavigateKind.load]
+/// (or the offending target for [NavigateKind.invalid]).
+class NavigateStep {
+  const NavigateStep(this.kind, [this.url]);
+  final NavigateKind kind;
+  final String? url;
+}
+
+/// Apply the `navigate` hook answer for one page load.
+///
+/// Mirrors v1.9.0's `onLoadStop`: when the current address already is a post
+/// page the canonical URL compares equal and parsing starts; when it is a
+/// landing page (`{wait: true}`, or no answer at all) the load is ignored and
+/// the redirect is awaited. An empty answer is therefore "nothing to do", not a
+/// format error — which is what used to abort every TikTok retry.
+Future<NavigateStep> navigateStep({
+  required SiteDefinition site,
+  required String currentUrl,
+  required bool alreadyNavigated,
+  required Future<dynamic> Function() navigate,
+}) async {
+  final action = await navigate();
+  if (action is Map) {
+    if (action['wait'] == true) return const NavigateStep(NavigateKind.wait);
+    final next = action['url'];
+    if (next is String && next != currentUrl && !alreadyNavigated) {
+      final nextUri = Uri.parse(next);
+      if (nextUri.scheme != 'https' || !site.hasHost(nextUri.host)) {
+        return NavigateStep(NavigateKind.invalid, next);
+      }
+      return NavigateStep(NavigateKind.load, next);
+    }
+    return const NavigateStep(NavigateKind.parse);
+  }
+  if (action == null) {
+    final uri = Uri.tryParse(currentUrl);
+    final isPostPage =
+        uri != null && site.sourceId(uri) != null && site.hasHost(uri.host);
+    return NavigateStep(
+      isPostPage ? NavigateKind.parse : NavigateKind.wait,
+    );
+  }
+  return const NavigateStep(NavigateKind.parse);
+}
+
 Future<ParseOutcome> _run(ParserHooks hooks, String targetUrl) async {
   final jsonMode = hooks.site.load['mode'] == 'json';
   final loaded = Completer<InAppWebViewController>();
@@ -412,32 +472,32 @@ Future<ParseOutcome> _run(ParserHooks hooks, String targetUrl) async {
         if (loaded.isCompleted) return;
         try {
           if (!jsonMode) {
-            final action = await hooks.call(
-              controller,
-              'navigate',
-              uri?.toString() ?? targetUrl,
+            final current = uri?.toString() ?? targetUrl;
+            final step = await navigateStep(
+              site: hooks.site,
+              currentUrl: current,
+              alreadyNavigated: navigated,
+              navigate: () => hooks.call(controller, 'navigate', current),
             );
-            if (action is Map) {
-              if (action['wait'] == true) return;
-              final next = action['url'];
-              if (next is String && next != uri?.toString() && !navigated) {
-                final nextUri = Uri.parse(next);
-                if (nextUri.scheme != 'https' ||
-                    !hooks.site.hasHost(nextUri.host)) {
-                  _logParseCheck(
-                    'NAVIGATE',
-                    hooks.site,
-                    expected: 'https within site',
-                    actual: _hostPathOf(next),
-                  );
-                  throw ParseFailure(ParseErrorCode.invalidPage, '解析模块返回无效导航');
-                }
+            switch (step.kind) {
+              case NavigateKind.wait:
+                return;
+              case NavigateKind.load:
                 navigated = true;
                 await controller.loadUrl(
-                  urlRequest: URLRequest(url: WebUri(next)),
+                  urlRequest: URLRequest(url: WebUri(step.url!)),
                 );
                 return;
-              }
+              case NavigateKind.invalid:
+                _logParseCheck(
+                  'NAVIGATE',
+                  hooks.site,
+                  expected: 'https within site',
+                  actual: _hostPathOf(step.url ?? ''),
+                );
+                throw ParseFailure(ParseErrorCode.invalidPage, '解析模块返回无效导航');
+              case NavigateKind.parse:
+                break;
             }
           }
           loaded.complete(controller);

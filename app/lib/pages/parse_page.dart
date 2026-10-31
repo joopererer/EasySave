@@ -747,8 +747,16 @@ class ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
         if (platform != null) LoginExpiredBus.markExpired(platform);
       }
       if (offscreen) _showOffscreenError(e.code, e.message);
-    } catch (_) {
+    } catch (e) {
       if (!mounted || _cancelRequested) return;
+      // An unexpected engine failure (a hook that could not run, a disposed
+      // WebView ...) is not "the page changed": name it in the log so the next
+      // device round can tell the two apart instead of seeing INVALID_PAGE.
+      DevLog.write(
+        'ParseMismatch', // i18n:ignore 日志
+        'check=UNCAUGHT site=${platformFromUrl(link) ?? "-"} post=- '
+        'expected=ParseFailure actual=type=${e.runtimeType}',
+      );
       setState(() {
         _busy = false;
         _errorCode = ParseErrorCode.invalidPage;
