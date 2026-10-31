@@ -5,6 +5,7 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Color
+import android.graphics.Matrix
 import android.graphics.SurfaceTexture
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
@@ -495,6 +496,10 @@ class SelectPanelView(
 
         previewTexture = TextureView(context).apply {
             visibility = View.GONE
+            addOnLayoutChangeListener { view, _, _, _, _, _, _, _, _ ->
+                val mp = mediaPlayer ?: return@addOnLayoutChangeListener
+                fitVideoToView(mp.videoWidth, mp.videoHeight, view.width, view.height)
+            }
         }
         contentContainer.addView(
             previewTexture,
@@ -997,7 +1002,11 @@ class SelectPanelView(
                             setVolume(0f, 0f)
                             isLooping = true
                             setDataSource(file.absolutePath)
-                            setOnPreparedListener {
+                            setOnVideoSizeChangedListener { _, width, height ->
+                                fitVideoToView(width, height)
+                            }
+                            setOnPreparedListener { player ->
+                                fitVideoToView(player.videoWidth, player.videoHeight)
                                 if (previewIndex == index && previewOverlay?.visibility == View.VISIBLE) {
                                     previewProgress?.visibility = View.GONE
                                     start()
@@ -1059,6 +1068,33 @@ class SelectPanelView(
         previewOverlay?.visibility = View.GONE
         previewImage?.setImageBitmap(null)
         videoControlBar?.visibility = View.GONE
+        previewTexture?.setTransform(null)
+    }
+
+    /**
+     * Letterbox the preview video.
+     *
+     * A TextureView always stretches its surface to its own bounds, so a 9:16
+     * clip in a portrait overlay looked pulled out of shape. Scale it uniformly
+     * to fit inside the visible area and let the overlay background fill the
+     * rest. No-op until both the media and the view have a size.
+     */
+    private fun fitVideoToView(
+        videoWidth: Int,
+        videoHeight: Int,
+        viewWidth: Int = previewTexture?.width ?: 0,
+        viewHeight: Int = previewTexture?.height ?: 0,
+    ) {
+        val texture = previewTexture ?: return
+        val fit = videoFitScale(videoWidth, videoHeight, viewWidth, viewHeight) ?: return
+        val matrix = Matrix()
+        matrix.setScale(
+            fit.scaleX,
+            fit.scaleY,
+            viewWidth / 2f,
+            viewHeight / 2f,
+        )
+        texture.setTransform(matrix)
     }
 
     private fun releasePlayer() {
@@ -1186,4 +1222,30 @@ class SelectPanelView(
         shimmerAnim = null
         pool.shutdownNow()
     }
+}
+
+/**
+ * Uniform scale needed to fit a video inside a view without distortion.
+ *
+ * Pure math, kept next to its only caller and unit-tested on the JVM: applying
+ * these factors about the view centre letterboxes the clip instead of pulling
+ * it out of shape.
+ */
+internal data class VideoFit(val scaleX: Float, val scaleY: Float)
+
+internal fun videoFitScale(
+    videoWidth: Int,
+    videoHeight: Int,
+    viewWidth: Int,
+    viewHeight: Int,
+): VideoFit? {
+    if (videoWidth <= 0 || videoHeight <= 0 || viewWidth <= 0 || viewHeight <= 0) return null
+    val scale = minOf(
+        viewWidth.toFloat() / videoWidth,
+        viewHeight.toFloat() / videoHeight,
+    )
+    return VideoFit(
+        scaleX = scale * videoWidth / viewWidth,
+        scaleY = scale * videoHeight / viewHeight,
+    )
 }
