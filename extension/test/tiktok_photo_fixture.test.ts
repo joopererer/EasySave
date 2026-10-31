@@ -33,7 +33,9 @@ describe('real canonical TikTok photo page', () => {
 
   it('contains only minimal post JSON and unusable sanitized media addresses', () => {
     expect(Object.keys(root.__DEFAULT_SCOPE__)).toEqual(['webapp.video-detail']);
-    expect(fixture).not.toMatch(/cookie|csrfToken|encryptedWebid|downloadAddr|music|cover/i);
+    // The preview still is the only cover-shaped field kept in the fixture.
+    expect(fixture).not.toMatch(/cookie|csrfToken|encryptedWebid|downloadAddr|music/i);
+    expect(fixture.match(/cover/gi)).toEqual(['cover']);
     source.imagePost.images.forEach((image: { imageURL: { urlList: string[] } }) => {
       image.imageURL.urlList.forEach(raw => {
         const url = new URL(raw);

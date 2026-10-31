@@ -1017,6 +1017,24 @@ var EasySaveParser = (() => {
       }
     }))];
   }
+  function selectTiktokPoster(value) {
+    const candidates = [];
+    const push = (raw) => {
+      candidates.push(...urls(raw));
+      if (raw !== null && typeof raw === "object") {
+        const holder = record(raw);
+        candidates.push(...urls(record(holder.imageURL).urlList), ...urls(holder.urlList));
+      }
+    };
+    const source = record(value);
+    push(source.originCover);
+    push(source.cover);
+    push(source.dynamicCover);
+    push(record(source.video).originCover);
+    push(record(source.video).cover);
+    push(record(source.video).dynamicCover);
+    return candidates[0];
+  }
   function selectTiktokVideo(value) {
     const video = record(value);
     const variants = (Array.isArray(video.bitrateInfo) ? video.bitrateInfo : []).map((v) => {
@@ -1087,9 +1105,12 @@ var EasySaveParser = (() => {
         };
       });
       if (items.some((i) => !i.url)) return failure({});
+      const cover = selectTiktokPoster({ cover: imagePost.cover });
+      if (cover && items.length) items[0] = { ...items[0], posterUrl: cover };
     } else {
       const video = selectTiktokVideo(item.video);
-      items = video ? [video] : [];
+      const poster = selectTiktokPoster({ video: item.video });
+      items = video ? [{ ...video, posterUrl: poster }] : [];
     }
     if (!items.length) return failure({});
     const author = record(item.author), authorId = text(author.id);
