@@ -127,8 +127,18 @@ class _CoverImageState extends State<CoverImage> {
 /// cover (the item url itself may be an mp4), CDN originals first with
 /// the rewritten primary kept last as a fallback.
 List<String> urlsFor(MediaItem item) {
-  final cover = item.type == 'video' ? item.posterUrl : null;
-  return [...item.fallbacks, if (cover != null) cover, item.url];
+  if (item.type == 'video') {
+    if (item.posterUrl != null &&
+        item.posterUrl != item.videoUrl &&
+        item.posterUrl != item.url) {
+      return [item.posterUrl!];
+    }
+    if (item.videoUrl != null && item.videoUrl != item.url) {
+      return [...item.fallbacks, item.url];
+    }
+    return const [];
+  }
+  return [...item.fallbacks, item.url];
 }
 
 /// Network image provider with per-URL timeout and declared headers. Mirrors the

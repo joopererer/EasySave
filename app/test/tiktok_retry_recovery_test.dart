@@ -123,13 +123,10 @@ void main() {
       );
     });
 
-    test('an empty navigate answer is null and is logged as tolerated', () {
+    test('an empty navigate answer is null and is silent', () {
       expect(unwrapHookResult(null, hook: 'navigate', site: site), isNull);
       expect(unwrapHookResult('', hook: 'navigate', site: site), isNull);
-      final line = logged.firstWhere((l) => l.contains('check=HOOK_RESULT'));
-      expect(line, contains('hook=navigate'));
-      expect(line, contains('site=tiktok'));
-      expect(line, contains('tolerated=1'));
+      expect(logged, isEmpty);
     });
 
     test('a broken hook answer logs HOOK_RESULT and still fails', () {

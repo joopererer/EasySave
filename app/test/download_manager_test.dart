@@ -388,7 +388,7 @@ void main() {
             postUrl: 'https://www.xiaohongshu.com/explore/adopted',
             fileCount: 1,
             createdAt: DateTime.now(),
-            files: [HistoryFile(filename: 'old.jpg', savedAt: 0)],
+            files: [HistoryFile(itemIndex: 1, filename: 'old.jpg', savedAt: 0)],
           ),
         );
         final existing = await db.getByPostId('adopted');

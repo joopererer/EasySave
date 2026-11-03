@@ -142,7 +142,7 @@ void main() {
           postUrl: 'https://www.xiaohongshu.com/explore/noMedia',
           fileCount: 1,
           createdAt: DateTime.now(),
-          files: [HistoryFile(filename: 'noMedia_1.jpg', savedAt: 0)],
+          files: [HistoryFile(itemIndex: 1, filename: 'noMedia_1.jpg', savedAt: 0)],
         ),
       );
 

@@ -138,7 +138,7 @@ Future<T> resolveAndEnterParse<T>(
   return enter(resolved, canonical);
 }
 
-Future<ParseOutcome> parsePostOutcome(String url) async {
+Future<ParseOutcome> parsePostOutcome(String url, {String source = 'app'}) async {
   final preSite = SiteRegistry.current.match(url, includeDisabled: true);
   if (preSite == null) {
     throw ParseFailure(ParseErrorCode.unsupportedUrl, '无法识别链接');
@@ -172,7 +172,7 @@ Future<ParseOutcome> parsePostOutcome(String url) async {
       final result = await resolveAndEnterParse(
         url,
         site,
-        (loadUrl, _) => _run(hooks, loadUrl),
+        (loadUrl, _) => _run(hooks, loadUrl, source: source),
         timeout: remaining(),
       );
       // Diagnostics only: retweets and quote tweets may answer with a payload
@@ -241,7 +241,7 @@ String? _normalizedPostId(dynamic value) {
 /// Why an item cannot be requested; no URL or query ever leaves this function.
 String _mediaProblem(dynamic item) {
   if (item is! Map) return 'not_object';
-  if (!{'image', 'video'}.contains(item['type'])) return 'type';
+  if (!{'image', 'video', 'live'}.contains(item['type'])) return 'type';
   final uri = Uri.tryParse(item['url']?.toString() ?? '');
   if (uri == null) return 'url_unparsable';
   if (!{'http', 'https'}.contains(uri.scheme)) return 'scheme';
@@ -322,12 +322,20 @@ ParseOutcome validateParserResult(dynamic value, SiteDefinition site) {
   for (var index = 0; index < items.length; index++) {
     final problem = _mediaProblem(items[index]);
     if (problem.isEmpty) continue;
+    final item = items[index];
+    final keys = item is Map
+        ? item.keys.whereType<String>().where((key) => RegExp(r'^[A-Za-z][A-Za-z0-9_]{0,40}$').hasMatch(key)).take(12).join(',')
+        : '-';
+    final mediaType = item is Map && item['type'] is String &&
+            RegExp(r'^[A-Za-z]{1,20}$').hasMatch(item['type'] as String)
+        ? item['type'] as String
+        : item.runtimeType.toString();
     _logParseCheck(
       'ITEM_MEDIA',
       site,
       postId: id,
       expected: 'http(s) media url',
-      actual: 'index=$index reason=$problem',
+      actual: 'index=$index reason=$problem type=$mediaType keys=$keys',
     );
     throw ParseFailure(ParseErrorCode.invalidPage, '解析模块返回无效媒体');
   }
@@ -419,8 +427,10 @@ Future<NavigateStep> navigateStep({
   return const NavigateStep(NavigateKind.parse);
 }
 
-Future<ParseOutcome> _run(ParserHooks hooks, String targetUrl) async {
+Future<ParseOutcome> _run(ParserHooks hooks, String targetUrl, {required String source}) async {
   final jsonMode = hooks.site.load['mode'] == 'json';
+  final target = Uri.tryParse(targetUrl);
+  DevLog.write('ParseWebView', 'event=start source=$source site=${hooks.site.id} hasQuery=${target?.hasQuery == true ? 1 : 0}');
   final loaded = Completer<InAppWebViewController>();
   var navigated = false;
   HeadlessInAppWebView? view;
@@ -470,6 +480,7 @@ Future<ParseOutcome> _run(ParserHooks hooks, String targetUrl) async {
       },
       onLoadStop: (controller, uri) async {
         if (loaded.isCompleted) return;
+        DevLog.write('ParseWebView', 'event=loadStop source=$source site=${hooks.site.id} hasQuery=${uri?.hasQuery == true ? 1 : 0}');
         try {
           if (!jsonMode) {
             final current = uri?.toString() ?? targetUrl;
@@ -507,7 +518,13 @@ Future<ParseOutcome> _run(ParserHooks hooks, String targetUrl) async {
       },
       onReceivedError: (controller, request, error) {
         if (request.isForMainFrame == true && !loaded.isCompleted) {
+          DevLog.write('ParseWebView', 'event=mainFrameError source=$source site=${hooks.site.id} type=${error.type}');
           loaded.complete(controller);
+        }
+      },
+      onReceivedHttpError: (controller, request, response) {
+        if (request.isForMainFrame == true) {
+          DevLog.write('ParseWebView', 'event=httpError source=$source site=${hooks.site.id} status=${response.statusCode ?? 0}');
         }
       },
     );

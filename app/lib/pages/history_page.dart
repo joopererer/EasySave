@@ -36,6 +36,24 @@ import 'download_queue_page.dart';
 import 'login_page.dart';
 import 'preview_page.dart';
 
+@visibleForTesting
+Widget historyGroupSliver({
+  required String title,
+  required Color background,
+  required Widget content,
+}) {
+  return SliverMainAxisGroup(
+    slivers: [
+      if (title.isNotEmpty)
+        SliverPersistentHeader(
+          pinned: true,
+          delegate: _StickyHeaderDelegate(title: title, background: background),
+        ),
+      content,
+    ],
+  );
+}
+
 class HistoryPage extends StatefulWidget {
   const HistoryPage({
     super.key,
@@ -1674,18 +1692,6 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
     );
   }
 
-  Widget _stickyHeader(String title) {
-    final title0 = title;
-    if (title0.isEmpty) return const SliverToBoxAdapter(child: SizedBox.shrink());
-    return SliverPersistentHeader(
-      pinned: true,
-      delegate: _StickyHeaderDelegate(
-        title: title0,
-        background: Theme.of(context).scaffoldBackgroundColor,
-      ),
-    );
-  }
-
   /// A masonry block for one group: a shrink-wrapped grid inside a
   /// SliverToBoxAdapter so the sliver reports an exact height (avoids the
   /// sliver-masonry extent estimate that caused the scroll to jump back and
@@ -1717,9 +1723,11 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
       CustomScrollView(
         slivers: [
           const SliverToBoxAdapter(child: SizedBox(height: 8)),
-          for (final group in groups) ...[
-            _stickyHeader(group.title),
-            _groupGrid(
+          for (final group in groups)
+            historyGroupSliver(
+              title: group.title,
+              background: Theme.of(context).scaffoldBackgroundColor,
+              content: _groupGrid(
               count: group.posts.length,
               itemBuilder: (context, index) {
                 final record = group.posts[index];
@@ -1739,8 +1747,8 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
                   onToggleSelect: () => _toggleSelection(key),
                 );
               },
+              ),
             ),
-          ],
           const SliverToBoxAdapter(child: SizedBox(height: 96)),
         ],
       ),
@@ -1753,9 +1761,11 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
       CustomScrollView(
         slivers: [
           const SliverToBoxAdapter(child: SizedBox(height: 8)),
-          for (final group in groups) ...[
-            _stickyHeader(group.title),
-            SliverPadding(
+          for (final group in groups)
+            historyGroupSliver(
+              title: group.title,
+              background: Theme.of(context).scaffoldBackgroundColor,
+              content: SliverPadding(
               padding: const EdgeInsets.symmetric(horizontal: 16),
               sliver: SliverList(
                 delegate: SliverChildBuilderDelegate((context, index) {
@@ -1813,8 +1823,8 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
                   );
                 }, childCount: group.posts.length),
               ),
+              ),
             ),
-          ],
           const SliverToBoxAdapter(child: SizedBox(height: 24)),
         ],
       ),
@@ -1827,9 +1837,11 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
       CustomScrollView(
         slivers: [
           const SliverToBoxAdapter(child: SizedBox(height: 8)),
-          for (final group in groups) ...[
-            _stickyHeader(group.title),
-            _groupGrid(
+          for (final group in groups)
+            historyGroupSliver(
+              title: group.title,
+              background: Theme.of(context).scaffoldBackgroundColor,
+              content: _groupGrid(
               count: group.media.length,
               itemBuilder: (context, index) {
                 final ref = group.media[index];
@@ -1846,8 +1858,8 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
                   onToggleSelect: () => _toggleSelection(key),
                 );
               },
+              ),
             ),
-          ],
           const SliverToBoxAdapter(child: SizedBox(height: 96)),
         ],
       ),
@@ -2066,4 +2078,3 @@ class VideoBackfillHintBanner extends StatelessWidget {
     );
   }
 }
-

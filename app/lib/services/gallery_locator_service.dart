@@ -746,7 +746,7 @@ class GalleryLocatorService extends ChangeNotifier {
       record.files.clear();
       record.files.addAll(updatedFiles);
       final db = await HistoryDb.instance();
-      await db.updateFiles(record.id!, updatedFiles);
+      await db.updateFiles(record.id!, updatedFiles, source: 'gallery-scan');
     }
   }
 
@@ -895,6 +895,7 @@ class GalleryLocatorService extends ChangeNotifier {
       ),
       restoreDeleted: restoreDeleted,
       userSave: restoreDeleted,
+      source: 'associate-existing',
     );
     return files.length;
   }
@@ -1023,4 +1024,3 @@ class GalleryLocatorService extends ChangeNotifier {
     return fixed;
   }
 }
-

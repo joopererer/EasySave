@@ -7,6 +7,7 @@ import 'package:easysave/services/media_request_policy.dart';
 import 'package:easysave/services/site_registry.dart';
 import 'package:easysave/services/signed_parser_manifest.dart';
 import 'package:easysave/widgets/shared.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
@@ -61,6 +62,46 @@ void main() {
     expect(poster.request.headers['Referer'], 'https://x.com/');
     final authorized = await policy(id: 'x').authorize(poster);
     expect(authorized.wireHeaders['Referer'], 'https://x.com/');
+  });
+
+  test('video poster candidates never include video URLs or video fallbacks', () {
+    final item = MediaItem(
+      type: 'video',
+      url: 'https://sns-video-zl.xhscdn.com/a.mp4',
+      fallbacks: ['https://sns-video-bd.xhscdn.com/a.mp4'],
+      posterUrl: 'https://sns-webpic-qc.xhscdn.com/cover.jpg',
+    );
+    expect(urlsFor(item), [item.posterUrl]);
+    expect(urlsFor(MediaItem(type: 'video', url: item.url, fallbacks: item.fallbacks)), isEmpty);
+    expect(urlsFor(MediaItem(type: 'video', url: item.url, posterUrl: item.url)), isEmpty);
+    expect(urlsFor(MediaItem(type: 'video', url: 'https://example.test/cover.jpg', videoUrl: item.url)), ['https://example.test/cover.jpg']);
+  });
+
+  test('URL rejection identifies field and shape without leaking values', () {
+    final lines = <String>[];
+    final original = debugPrint;
+    debugPrint = (String? message, {int? wrapWidth}) {
+      if (message != null) lines.add(message);
+    };
+    try {
+      for (final (url, shape) in [
+        ('', 'empty'),
+        ('relative/path?secret=hidden', 'relative'),
+        ('//example.test/path?secret=hidden', 'protocol-relative'),
+        ('file:///secret', 'scheme=file'),
+      ]) {
+        expect(
+          () => MediaRequestPolicy(site()).resourcesFor(
+            MediaItem(type: 'image', url: url),
+          ),
+          rejected('REQUEST_URL_REJECTED'),
+        );
+        expect(lines.last, contains('field=url shape=$shape'));
+        expect(lines.last, isNot(contains('secret')));
+      }
+    } finally {
+      debugPrint = original;
+    }
   });
 
   test(

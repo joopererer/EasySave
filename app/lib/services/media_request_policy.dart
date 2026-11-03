@@ -49,12 +49,12 @@ class MediaRequestPolicy {
     MediaPolicyRejectionLogger? logRejection,
   }) : _readCookie = readCookie ?? _systemCookie,
        _now = now ?? DateTime.now,
-       _logRejection = logRejection ?? _log;
+       _logRejection = logRejection;
 
   final SiteDefinition site;
   final MediaCookieReader _readCookie;
   final DateTime Function() _now;
-  final MediaPolicyRejectionLogger _logRejection;
+  final MediaPolicyRejectionLogger? _logRejection;
   static final _controls = RegExp(r'[\r\n\x00]');
   // Uri canonicalizes an empty userinfo marker away, so inspect raw authority.
   static final _userinfo = RegExp(r'^(?:[A-Za-z][A-Za-z0-9+.-]*:)?//[^/?#]*@');
@@ -67,10 +67,6 @@ class MediaRequestPolicy {
     'user-agent': 'User-Agent',
     'range': 'Range',
   };
-
-  static void _log(String code, String host) {
-    unawaited(DevLog.write('RequestPolicy', '$code host=$host'));
-  }
 
   static Future<String> _systemCookie(Uri actualMediaUrl) async {
     final cookies = await CookieManager.instance().getCookies(
@@ -92,9 +88,24 @@ class MediaRequestPolicy {
     return RegExp(r'^[a-z0-9.:\[\]-]{1,253}$').hasMatch(host) ? host : '';
   }
 
-  Never _reject(String code, String raw) {
+  static String _shape(String raw) {
+    if (raw.isEmpty) return 'empty';
+    if (raw.startsWith('//')) return 'protocol-relative';
+    final match = RegExp(r'^([A-Za-z][A-Za-z0-9+.-]*):').firstMatch(raw);
+    return match == null ? 'relative' : 'scheme=${match.group(1)!.toLowerCase()}';
+  }
+
+  Never _reject(String code, String raw, {String field = 'unknown'}) {
     final host = _host(raw);
-    _logRejection(code, host);
+    final logger = _logRejection;
+    if (logger != null) {
+      logger(code, host);
+    } else {
+      unawaited(DevLog.write(
+        'RequestPolicy',
+        '$code host=$host${code == 'REQUEST_URL_REJECTED' ? ' field=$field shape=${_shape(raw)}' : ''}',
+      ));
+    }
     throw MediaPolicyException(code, host);
   }
 
@@ -123,7 +134,7 @@ class MediaRequestPolicy {
 
   /// Validate every candidate, including ones that have not yet been attempted.
   /// No cookies are read here, so callers can validate a complete resource set.
-  Uri validate(MediaRequestResource resource) {
+  Uri validate(MediaRequestResource resource, {String? field}) {
     final raw = resource.url;
     final uri = Uri.tryParse(raw);
     if (uri == null ||
@@ -133,7 +144,7 @@ class MediaRequestPolicy {
         uri.userInfo.isNotEmpty ||
         _userinfo.hasMatch(raw) ||
         _controls.hasMatch(raw)) {
-      _reject('REQUEST_URL_REJECTED', raw);
+      _reject('REQUEST_URL_REJECTED', raw, field: field ?? resource.role.name);
     }
     final config = site.data['download'] as Map;
     final hosts = (config['mediaHosts'] as List).cast<Map>();
@@ -200,7 +211,7 @@ class MediaRequestPolicy {
       _reject('REQUEST_REDIRECT_REJECTED', previous.resource.url);
     }
     if (_userinfo.hasMatch(location)) {
-      _reject('REQUEST_URL_REJECTED', location);
+      _reject('REQUEST_URL_REJECTED', location, field: 'redirect');
     }
     Uri next;
     try {
@@ -215,26 +226,27 @@ class MediaRequestPolicy {
   /// Use with legacy or v2 parser results; every fallback must also be checked.
   List<MediaRequestResource> resourcesFor(MediaItem item) {
     final config = site.data['download'] as Map;
-    final slots = <(MediaResourceRole, String, MediaResourceRole?)>[];
+    final slots = <(MediaResourceRole, String, MediaResourceRole?, String)>[];
     final video = item.type == 'video';
     final primary = video
         ? (item.videoUrl != null && item.videoUrl != item.url
               ? MediaResourceRole.poster
               : MediaResourceRole.video)
         : MediaResourceRole.image;
-    slots.add((primary, item.url, null));
+    slots.add((primary, item.url, null, 'url'));
     if (item.videoUrl != null && (!video || item.videoUrl != item.url)) {
       slots.add((
         video ? MediaResourceRole.video : MediaResourceRole.motion,
         item.videoUrl!,
         null,
+        'videoUrl',
       ));
     }
     if (item.posterUrl != null) {
-      slots.add((MediaResourceRole.poster, item.posterUrl!, null));
+      slots.add((MediaResourceRole.poster, item.posterUrl!, null, 'posterUrl'));
     }
-    for (final url in item.fallbacks) {
-      slots.add((MediaResourceRole.fallback, url, primary));
+    for (var i = 0; i < item.fallbacks.length; i++) {
+      slots.add((MediaResourceRole.fallback, item.fallbacks[i], primary, 'fallbacks[$i]'));
     }
     final explicit = item.requestResources;
     if (explicit != null &&
@@ -258,8 +270,8 @@ class MediaRequestPolicy {
               request: _legacyRequirements(config, slot.$3 ?? slot.$1),
             ),
         ];
-    for (final resource in result) {
-      validate(resource);
+    for (var i = 0; i < result.length; i++) {
+      validate(result[i], field: slots[i].$4);
     }
     return List.unmodifiable(result);
   }

@@ -165,6 +165,7 @@ void main() {
         createdAt: DateTime.now(),
         files: [
           HistoryFile(
+            itemIndex: 1,
             filename: 'album_video.mp4',
             savedAt: DateTime.now().millisecondsSinceEpoch,
             mediaId: 'asset_vid_1',
@@ -215,6 +216,7 @@ void main() {
         createdAt: DateTime.now(),
         files: [
           HistoryFile(
+            itemIndex: 1,
             filename: 'perm_video.mp4',
             savedAt: DateTime.now().millisecondsSinceEpoch,
             mediaId: 'asset_perm_1',
@@ -295,6 +297,7 @@ void main() {
         createdAt: DateTime.now(),
         files: [
           HistoryFile(
+            itemIndex: 1,
             filename: 'disk_full_video.mp4',
             savedAt: DateTime.now().millisecondsSinceEpoch,
             mediaId: 'asset_disk_1',

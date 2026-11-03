@@ -47,6 +47,7 @@ void main() {
         createdAt: DateTime.now(),
         files: [
           HistoryFile(
+            itemIndex: 1,
             filename: 'test.jpg',
             savedAt: DateTime.now().millisecondsSinceEpoch,
           ),
@@ -306,6 +307,7 @@ void main() {
         createdAt: DateTime.now(),
         files: [
           HistoryFile(
+            itemIndex: 1,
             filename: 'test.jpg',
             savedAt: DateTime.now().millisecondsSinceEpoch,
           ),
@@ -381,7 +383,7 @@ void main() {
           postUrl: 'https://example.com/$postId',
           fileCount: 1,
           createdAt: DateTime.now(),
-          files: [HistoryFile(filename: '$postId.jpg', savedAt: 0)],
+          files: [HistoryFile(itemIndex: 1, filename: '$postId.jpg', savedAt: 0)],
         ),
       );
       return (await db.getByPostId(postId))!;
@@ -461,7 +463,7 @@ void main() {
       db.addListener(() => notified++);
 
       await db.updateFiles(record.id!, [
-        HistoryFile(filename: 'status_1.jpg', savedAt: 0, status: FileStatus.found),
+        HistoryFile(itemIndex: 1, filename: 'status_1.jpg', savedAt: 0, status: FileStatus.found),
       ]);
 
       expect(notified, 1);

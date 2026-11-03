@@ -11,7 +11,8 @@ import java.util.Locale
 /** Native consumer of the Dart policy's cookie-free request declaration. */
 internal class NativeMediaRequest(
     private val raw: Map<*, *>?,
-    private val rejected: (String, String) -> Unit,
+    private val field: String,
+    private val rejected: (String, String, String, String) -> Unit,
 ) {
     val requiresAppPreview: Boolean = raw == null || raw["requiresAppPreview"] == true
     val url: String = raw?.get("url") as? String ?: ""
@@ -21,21 +22,28 @@ internal class NativeMediaRequest(
 
     internal class Rejected(val code: String, val host: String) : IOException("$code host=$host")
 
-    private fun deny(code: String, host: String): Nothing {
+    private fun deny(code: String, host: String, address: String = url): Nothing {
         val safeHost = host.lowercase(Locale.ROOT).takeIf {
             it.matches(Regex("[a-z0-9.:-]{1,253}"))
         } ?: ""
-        rejected(code, safeHost)
+        val shape = when {
+            address.isEmpty() -> "empty"
+            address.startsWith("//") -> "protocol-relative"
+            else -> Regex("^([A-Za-z][A-Za-z0-9+.-]*):").find(address)?.let {
+                "scheme=${it.groupValues[1].lowercase(Locale.ROOT)}"
+            } ?: "relative"
+        }
+        rejected(code, safeHost, field, shape)
         throw Rejected(code, safeHost)
     }
 
     private fun checkedUri(address: String): URI {
         val uri = runCatching { URI(address) }.getOrNull()
-            ?: deny("REQUEST_URL_REJECTED", "")
+            ?: deny("REQUEST_URL_REJECTED", "", address)
         val host = uri.host?.lowercase(Locale.ROOT) ?: ""
         if (uri.scheme?.lowercase(Locale.ROOT) != "https" || host.isEmpty() ||
             uri.rawUserInfo != null || uri.rawAuthority?.contains('@') == true
-        ) deny("REQUEST_URL_REJECTED", host)
+        ) deny("REQUEST_URL_REJECTED", host, address)
         val accepted = hosts.any { rule ->
             val map = rule as? Map<*, *> ?: return@any false
             val domain = (map["domain"] as? String)?.lowercase(Locale.ROOT) ?: return@any false

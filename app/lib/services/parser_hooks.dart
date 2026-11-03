@@ -50,12 +50,6 @@ dynamic unwrapHookResult(
   if (raw == null || (raw is String && raw.trim().isEmpty)) {
     final allowed = _emptyAnswer(hook);
     if (allowed.ok) {
-      _logHookResult(
-        hook,
-        site: site,
-        actual: raw == null ? 'type=null' : 'type=empty_string',
-        empty: true,
-      );
       return allowed.value;
     }
   }
@@ -97,7 +91,6 @@ void _logHookResult(
   required SiteDefinition site,
   required String actual,
   String? fields,
-  bool empty = false,
 }) {
   // Only the hook name, the value type and its field names are logged; the
   // page address (and any query parameter it carries) never is.
@@ -105,7 +98,6 @@ void _logHookResult(
     'ParseMismatch', // i18n:ignore 日志
     'check=HOOK_RESULT site=${site.id} post=- hook=$hook '
     'expected={value:<json>} actual=$actual'
-    '${fields == null ? '' : ' fields=$fields'}'
-    '${empty ? ' tolerated=1' : ''}',
+    '${fields == null ? '' : ' fields=$fields'}',
   );
 }

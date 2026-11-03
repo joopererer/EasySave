@@ -23,7 +23,7 @@ class HistoryFile {
     required this.savedAt,
     this.mediaId,
     this.status = FileStatus.unknown,
-    this.itemIndex = 1,
+    required this.itemIndex,
     this.isImage = true,
     this.assetId,
     this.relativePath,
@@ -489,6 +489,7 @@ class HistoryDb {
   HistoryDb._(this._db);
 
   final Database _db;
+  Future<void>? _activeFileRepair;
 
   /// Listeners are notified by the write methods themselves (never by their
   /// callers), so a new caller — a new delete gesture, a rebuild, the
@@ -633,6 +634,7 @@ class HistoryDb {
               where: 'id = ?',
               whereArgs: [id],
             );
+            DevLog.write('HIST', 'file rows written source=migration post=$postId count=${inferred.length}');
           }
         }
         if (oldVersion < 3) {
@@ -706,6 +708,7 @@ class HistoryDb {
     bool restoreDeleted = false,
     bool userSave = false,
     int? downloadStartedAt,
+    String source = 'unspecified',
   }) async {
     validateHistoryFiles(record.files);
     DevLog.write(
@@ -713,11 +716,11 @@ class HistoryDb {
       'history write post=${record.postId} files=${record.files.length} '
       'restoreDeleted=$restoreDeleted',
     );
-    await _db.transaction((txn) async {
+    final writtenCount = await _db.transaction<int?>((txn) async {
       if (downloadStartedAt != null) {
         final barriers = await txn.query('download_delete_barriers',
           where: 'platform = ? AND post_id = ?', whereArgs: [record.platform, record.postId]);
-        if (barriers.isNotEmpty && (barriers.first['deleted_at'] as int) >= downloadStartedAt) return;
+        if (barriers.isNotEmpty && (barriers.first['deleted_at'] as int) >= downloadStartedAt) return null;
       }
       final existing = await _getByPostUrl(txn, record.postUrl) ??
           await _getByPostId(txn, record.postId);
@@ -779,7 +782,7 @@ class HistoryDb {
           where: 'id = ?',
           whereArgs: [existing.id],
         );
-        return;
+        return mergedFiles.length;
       }
 
       await txn.insert(
@@ -787,7 +790,11 @@ class HistoryDb {
         record.toMap(),
         conflictAlgorithm: ConflictAlgorithm.replace,
       );
+      return record.files.length;
     });
+    if (writtenCount != null) {
+      DevLog.write('HIST', 'file rows written source=$source post=${record.postId} count=$writtenCount');
+    }
     notifyChanged('upsert post=${record.postId}');
   }
 
@@ -815,53 +822,97 @@ class HistoryDb {
     return merged;
   }
 
-  Future<void> updateFiles(int id, List<HistoryFile> files) async {
+  Future<void> updateFiles(int id, List<HistoryFile> files, {String source = 'unspecified'}) async {
     validateHistoryFiles(files);
+    final normalized = repairHistoryFiles(files) ?? files;
+    final records = await _db.query(
+      'history_records', columns: ['post_id'], where: 'id = ?', whereArgs: [id], limit: 1,
+    );
     final rows = await _db.update(
       'history_records',
       {
-        'files_json': jsonEncode([for (final f in files) f.toMap()]),
+        'files_json': jsonEncode([for (final f in normalized) f.toMap()]),
       },
       where: 'id = ?',
       whereArgs: [id],
     );
+    if (rows > 0 && records.isNotEmpty) {
+      DevLog.write('HIST', 'file rows written source=$source post=${records.first['post_id']} count=${normalized.length}');
+    }
     notifyChanged('updateFiles id=$id rows=$rows');
   }
 
   /// Rewrite one stored record whose `files_json` still carries the 0-based or
   /// duplicated rows left by the old inference path. Only the database row
   /// changes: no album file is deleted, renamed or rewritten.
-  Future<void> _persistFileRepair(HistoryRecord record) async {
+  Future<HistoryRecord> _persistFileRepair(HistoryRecord record) async {
     final id = record.id;
-    if (id == null || record.files.isEmpty) return;
-    final rows = await _db.query(
-      'history_records',
-      columns: ['files_json'],
-      where: 'id = ?',
-      whereArgs: [id],
-      limit: 1,
-    );
-    if (rows.isEmpty) return;
-    if (!historyFilesNeedRepair(rows.first['files_json'] as String?)) return;
-    DevLog.write(
-      'HIST', // i18n:ignore 日志
-      'file rows repaired post=${record.postId} kept=${record.files.length}',
-    );
-    await updateFiles(id, record.files);
+    if (id == null) return record;
+    while (_activeFileRepair != null) {
+      await _activeFileRepair;
+    }
+    final finished = Completer<void>();
+    _activeFileRepair = finished.future;
+    try {
+      final result = await _db.transaction((txn) async {
+        final rows = await txn.query('history_records', where: 'id = ?', whereArgs: [id], limit: 1);
+        if (rows.isEmpty) return (record: record, deleted: 0, updated: 0, verified: false);
+        final row = rows.first;
+        final raw = row['files_json'] as String?;
+        if (!historyFilesNeedRepair(raw)) {
+          return (record: HistoryRecord.fromMap(row), deleted: 0, updated: 0, verified: false);
+        }
+        final decoded = jsonDecode(raw!) as List;
+        final files = [
+          for (final item in decoded)
+            if (item is Map) HistoryFile.fromMap(item.cast<String, Object?>()),
+        ];
+        final repaired = repairHistoryFiles(files)!;
+        final details = files.map((f) {
+          final mediaId = f.mediaId;
+          final safeId = mediaId != null && RegExp(r'^[A-Za-z0-9_-]+$').hasMatch(mediaId) ? mediaId : '-';
+          return 'index=${f.itemIndex},mediaId=$safeId,assetId=${f.assetId != null && f.assetId!.isNotEmpty ? 1 : 0}';
+        }).join(';');
+        DevLog.write('HIST', 'file rows before repair post=${record.postId} count=${files.length} rows=[$details]');
+        final updated = await txn.update(
+          'history_records',
+          {'files_json': jsonEncode([for (final f in repaired) f.toMap()])},
+          where: 'id = ?',
+          whereArgs: [id],
+        );
+        final verifiedRows = await txn.query('history_records', where: 'id = ?', whereArgs: [id], limit: 1);
+        final verifiedJson = verifiedRows.first['files_json'] as String;
+        final verifiedCount = (jsonDecode(verifiedJson) as List).length;
+        if (updated != 1 || verifiedCount != repaired.length || historyFilesNeedRepair(verifiedJson)) {
+          throw StateError('History file repair verification failed');
+        }
+        return (record: HistoryRecord.fromMap(verifiedRows.first), deleted: files.length - repaired.length, updated: updated, verified: true);
+      });
+      if (result.verified) {
+        DevLog.write('HIST', 'file rows repaired post=${record.postId} kept=${result.record.files.length} deleted=${result.deleted} updated=${result.updated} committed=1 verified=1');
+        DevLog.write('HIST', 'file rows written source=repair post=${record.postId} count=${result.record.files.length}');
+        notifyChanged('file repair post=${record.postId}');
+      }
+      return result.record;
+    } catch (error) {
+      DevLog.write('HIST', 'file repair failed post=${record.postId} committed=0 exception=${error.runtimeType}', level: DevLogLevel.error);
+      rethrow;
+    } finally {
+      _activeFileRepair = null;
+      finished.complete();
+    }
   }
 
   Future<HistoryRecord?> getByPostUrl(String postUrl) async {
     final record = await _getByPostUrl(_db, postUrl);
     if (record == null) return null;
-    await _persistFileRepair(record);
-    return record;
+    return _persistFileRepair(record);
   }
 
   Future<HistoryRecord?> getByPostId(String postId) async {
     final record = await _getByPostId(_db, postId);
     if (record == null) return null;
-    await _persistFileRepair(record);
-    return record;
+    return _persistFileRepair(record);
   }
 
   static Future<HistoryRecord?> _getByPostUrl(
@@ -943,9 +994,12 @@ class HistoryDb {
       orderBy: 'created_at DESC, id DESC',
       limit: limit,
     );
-    final records = rows.map(HistoryRecord.fromMap).toList();
-    for (final record in records) {
-      unawaited(_persistFileRepair(record));
+    final records = <HistoryRecord>[];
+    for (final row in rows) {
+      final record = HistoryRecord.fromMap(row);
+      records.add(historyFilesNeedRepair(row['files_json'] as String?)
+          ? await _persistFileRepair(record)
+          : record);
     }
     return records;
   }

@@ -1,10 +1,34 @@
 import 'dart:convert';
 import 'package:easysave/services/parse_service.dart';
 import 'package:easysave/services/site_registry.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
   tearDown(SiteRegistry.useBuiltin);
+  test('valid empty hook results are silent; invalid results are logged', () {
+    final site = SiteRegistry.current.byId('xhs')!;
+    final lines = <String>[];
+    final original = debugPrint;
+    debugPrint = (String? message, {int? wrapWidth}) {
+      if (message != null) lines.add(message);
+    };
+    try {
+      for (final hook in ['navigate', 'prepare', 'ready']) {
+        unwrapHookResult(null, hook: hook, site: site);
+        unwrapHookResult('', hook: hook, site: site);
+      }
+      expect(lines, isEmpty);
+      expect(
+        () => unwrapHookResult(42, hook: 'ready', site: site),
+        throwsFormatException,
+      );
+      expect(lines.single, contains('check=HOOK_RESULT'));
+      expect(lines.single, contains('type=int'));
+    } finally {
+      debugPrint = original;
+    }
+  });
   Map<String, dynamic> post(SiteDefinition site) => {
     'ok': true,
     'data': {
@@ -101,6 +125,14 @@ void main() {
     final outcome = validateParserResult(value, site);
     expect(outcome.data.items, isEmpty);
     expect(outcome.data.platform, 'x');
+  });
+  test('XHS live photos are accepted as media items', () {
+    final site = SiteRegistry.current.byId('xhs')!;
+    final value = post(site);
+    value['data']['items'] = [
+      {'type': 'live', 'url': 'https://ci.xiaohongshu.com/image', 'videoUrl': 'https://sns-video-bd.xhscdn.com/video'},
+    ];
+    expect(validateParserResult(value, site).data.items.single.type, 'live');
   });
   test('platform names are compared after mapping xhs <-> xiaohongshu', () {
     final site = SiteRegistry.current.byId('xhs')!;

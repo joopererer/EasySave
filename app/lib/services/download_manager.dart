@@ -689,6 +689,7 @@ Future<void> writeBatchHistory(
     restoreDeleted: !recovered,
     userSave: !recovered,
     downloadStartedAt: batch.startedAt,
+    source: recovered ? 'download-recovery' : 'download',
   );
 }
 
@@ -722,6 +723,7 @@ Future<void> writePlaceholderHistory(HistoryDb db, DownloadBatch batch) async {
     restoreDeleted: true,
     userSave: true,
     downloadStartedAt: batch.startedAt,
+    source: 'download-placeholder',
   );
 }
 

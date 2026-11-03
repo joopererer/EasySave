@@ -289,9 +289,9 @@ class HostService : Service() {
                     WindowManager.LayoutParams.TYPE_PHONE
                 }
                 val panel = SelectPanelView(this, stickyPreview = stickyPreview,
-                    onPolicyRejected = { code, host ->
+                    onPolicyRejected = { code, host, field, shape ->
                         handler.post {
-                            channel?.invokeMethod("mediaPolicyRejected", mapOf("code" to code, "host" to host))
+                            channel?.invokeMethod("mediaPolicyRejected", mapOf("code" to code, "host" to host, "field" to field, "shape" to shape))
                         }
                     }) { picked ->
                     unmountSelectPanel()

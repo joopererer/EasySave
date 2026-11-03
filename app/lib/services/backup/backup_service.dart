@@ -268,7 +268,7 @@ abstract final class BackupService {
         isDeleted: false,
       );
 
-      await database.upsert(record, restoreDeleted: true);
+      await database.upsert(record, restoreDeleted: true, source: 'backup-restore');
     }
 
     var overlayNotice = false;

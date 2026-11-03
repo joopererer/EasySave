@@ -57,7 +57,7 @@ import kotlin.math.hypot
 class SelectPanelView(
     context: Context,
     private val stickyPreview: Boolean = false,
-    private val onPolicyRejected: (String, String) -> Unit = { _, _ -> },
+    private val onPolicyRejected: (String, String, String, String) -> Unit = { _, _, _, _ -> },
     private val onResult: (List<Int>?) -> Unit,
 ) : FrameLayout(context) {
 
@@ -270,7 +270,7 @@ class SelectPanelView(
         for (raw in items) {
             val m = raw as? Map<*, *> ?: continue
             fun request(key: String) = NativeMediaRequest(
-                m[key] as? Map<*, *>, onPolicyRejected,
+                m[key] as? Map<*, *>, key, onPolicyRejected,
             )
             cells.add(
                 Cell(
@@ -774,6 +774,7 @@ class SelectPanelView(
                         textSize = 14f
                     },
                     LayoutParams(dp(26), dp(26), Gravity.BOTTOM or Gravity.START)
+                        .apply { setMargins(dp(6), 0, 0, dp(6)) }
                 )
             }
             if (cells[i].saved) {

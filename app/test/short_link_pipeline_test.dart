@@ -6,6 +6,20 @@ import 'package:easysave/services/site_registry.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  test('reported XHS /o/ short link is recognized and expanded offline', () async {
+    SiteRegistry.useBuiltin();
+    const input = 'https://xhslink.cn/o/3REdoqhbg6s';
+    const target = 'https://www.xiaohongshu.com/explore/6adb3258000000002c00da14?xsec_token=example';
+    expect(extractLink('share $input'), input);
+    final site = SiteRegistry.current.match(input)!;
+    expect(site.id, 'xhs');
+    var reads = 0;
+    await resolveAndEnterParse(input, site, (load, canonical) async {
+      expect(load, target);
+      expect(canonical, 'https://www.xiaohongshu.com/explore/6adb3258000000002c00da14');
+    }, readRedirect: (_) async => reads++ == 0 ? target : null);
+    expect(reads, 2);
+  });
   // v1.9.0 parity per site: xhslink/t.co expand over HTTP, TikTok short links
   // are followed by the WebView, and a full post URL is entered unchanged.
   final httpCases = <(String, String, List<String>, String, String?)>[

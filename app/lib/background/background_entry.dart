@@ -54,9 +54,13 @@ void backgroundEntry() {
         final values = call.arguments as Map? ?? const {};
         final code = values['code'] as String? ?? 'REQUEST_URL_REJECTED';
         final host = values['host'] as String? ?? '';
+        final field = values['field'] as String? ?? '';
+        final shape = values['shape'] as String? ?? '';
         if (RegExp(r'^REQUEST_[A-Z_]+$').hasMatch(code) &&
-            RegExp(r'^[a-z0-9.:-]{0,253}$').hasMatch(host)) {
-          await DevLog.write('RequestPolicy', '$code host=$host');
+            RegExp(r'^[a-z0-9.:-]{0,253}$').hasMatch(host) &&
+            RegExp(r'^(thumbRequest|imageRequest|videoRequest)$').hasMatch(field) &&
+            RegExp(r'^(empty|relative|protocol-relative|scheme=[a-z][a-z0-9+.-]*)$').hasMatch(shape)) {
+          await DevLog.write('RequestPolicy', '$code host=$host${code == 'REQUEST_URL_REJECTED' ? ' field=$field shape=$shape' : ''}');
         }
         break;
     }
@@ -181,7 +185,7 @@ Future<void> _handleSubmit(
     final started = DateTime.now();
     final sw = Stopwatch()..start();
     try {
-      final outcome = await parsePostOutcome(url);
+      final outcome = await parsePostOutcome(url, source: 'background');
       final post = outcome.data;
       if (mode == 'caption') {
         final cap = _captionText(post);
@@ -248,6 +252,15 @@ Future<void> _handleSubmit(
         for (var i = 0; i < post.items.length; i++) {
           final item = post.items[i];
           final resources = mediaPolicy.resourcesFor(item);
+          final thumbUrl = item.type != 'video'
+              ? item.url
+              : item.posterUrl != null &&
+                    item.posterUrl != item.url &&
+                    item.posterUrl != item.videoUrl
+              ? item.posterUrl
+              : item.videoUrl != null && item.videoUrl != item.url
+              ? item.url
+              : null;
           Future<Map<String, Object?>> forUrl(String? url) async {
             if (url == null || url.isEmpty) return {'requiresAppPreview': true};
             final resource = resources.where((r) => r.url == url).firstOrNull;
@@ -258,7 +271,7 @@ Future<void> _handleSubmit(
           }
 
           panelItems.add({
-            'thumbRequest': await forUrl(item.posterUrl ?? item.url),
+            'thumbRequest': await forUrl(thumbUrl),
             'imageRequest': await forUrl(item.url),
             'videoRequest': await forUrl(item.videoUrl ?? item.url),
             'video': item.type == 'video',

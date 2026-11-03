@@ -547,7 +547,7 @@ class HistoryRebuildService {
           files: mergedList,
         );
 
-        await db.upsert(mergedRecord, restoreDeleted: true);
+        await db.upsert(mergedRecord, restoreDeleted: true, source: 'rebuild');
         merged++;
         DevLog.write(_logTag, 'Merged record: $platform:$sourceId'); // i18n:ignore 日志
       } else {
@@ -569,7 +569,7 @@ class HistoryRebuildService {
           files: files,
         );
 
-        await db.upsert(record, restoreDeleted: true);
+        await db.upsert(record, restoreDeleted: true, source: 'rebuild');
         created++;
         DevLog.write(_logTag, 'Created record: $platform:$sourceId'); // i18n:ignore 日志
       }
@@ -649,4 +649,3 @@ class _FileDiag {
     );
   }
 }
-

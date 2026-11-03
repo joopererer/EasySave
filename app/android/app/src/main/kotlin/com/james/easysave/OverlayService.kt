@@ -7,6 +7,7 @@ import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.content.res.Configuration
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
@@ -18,11 +19,13 @@ import android.graphics.drawable.GradientDrawable
 import android.os.Build
 import android.os.IBinder
 import android.util.Log
+import android.util.DisplayMetrics
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
 import android.view.WindowManager
+import android.view.WindowInsets
 import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.LinearLayout
@@ -108,6 +111,7 @@ class OverlayService : Service() {
     private var isHalfHidden = false
     private var isSnappedToLeft = false
     private var autoHideEnabled = true
+    private var lastBubbleBounds: BubbleBounds? = null
 
     // Drag-to-close target.
     private var closeView: View? = null
@@ -204,6 +208,49 @@ class OverlayService : Service() {
         WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
             WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS
 
+    @Suppress("DEPRECATION")
+    private fun bubbleBounds(): BubbleBounds {
+        val manager = wm ?: return BubbleBounds(0, 0, 0, 0)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            val metrics = manager.currentWindowMetrics
+            val insets = metrics.windowInsets.getInsets(
+                WindowInsets.Type.systemBars() or WindowInsets.Type.displayCutout()
+            )
+            return BubbleBounds(insets.left, insets.top, metrics.bounds.width() - insets.right, metrics.bounds.height() - insets.bottom)
+        }
+        val metrics = DisplayMetrics()
+        manager.defaultDisplay.getRealMetrics(metrics)
+        val insets = bubbleContainer?.rootWindowInsets
+        val cutout = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) insets?.displayCutout else null
+        return BubbleBounds(
+            maxOf(insets?.systemWindowInsetLeft ?: 0, cutout?.safeInsetLeft ?: 0),
+            maxOf(insets?.systemWindowInsetTop ?: 0, cutout?.safeInsetTop ?: 0),
+            metrics.widthPixels - maxOf(insets?.systemWindowInsetRight ?: 0, cutout?.safeInsetRight ?: 0),
+            metrics.heightPixels - maxOf(insets?.systemWindowInsetBottom ?: 0, cutout?.safeInsetBottom ?: 0),
+        )
+    }
+
+    override fun onConfigurationChanged(newConfig: Configuration) {
+        super.onConfigurationChanged(newConfig)
+        val view = bubbleContainer ?: return
+        val params = bubbleParams ?: return
+        val previous = lastBubbleBounds ?: return
+        val fraction = previous.fraction(params.y, dp(SIZE_DP))
+        removeMenu()
+        removeClose()
+        view.post {
+            val bounds = bubbleBounds()
+            params.x = bounds.snapX(isSnappedToLeft, dp(SIZE_DP))
+            params.y = bounds.yAt(fraction, dp(SIZE_DP))
+            lastBubbleBounds = bounds
+            try {
+                wm?.updateViewLayout(view, params)
+            } catch (e: Exception) {
+                Log.e(TAG, "rotation reposition failed", e)
+            }
+        }
+    }
+
     private fun startForegroundCompat() {
         val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -268,17 +315,20 @@ class OverlayService : Service() {
     }
 
     private fun addBubble() {
-        val screenW = resources.displayMetrics.widthPixels
-        val screenH = resources.displayMetrics.heightPixels
-        val minY = dp(64)
-        val maxY = screenH - dp(SIZE_DP + 84)
+        val bounds = bubbleBounds()
+        lastBubbleBounds = bounds
 
         val params = WindowManager.LayoutParams(
             dp(SIZE_DP), dp(SIZE_DP), overlayType(), baseFlags(), PixelFormat.TRANSLUCENT
         ).apply {
             gravity = Gravity.TOP or Gravity.START
-            x = screenW - dp(SIZE_DP - 6)
-            y = (screenH * 0.33f).roundToInt().coerceIn(minY, maxY)
+            flags = flags or WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) fitInsetsTypes = 0
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+            }
+            x = bounds.snapX(false, dp(SIZE_DP))
+            y = bounds.yAt(0.33f, dp(SIZE_DP))
         }
         val container = FrameLayout(this).apply {
             clipChildren = false
@@ -359,20 +409,18 @@ class OverlayService : Service() {
     }
 
     private fun clampDrag(params: WindowManager.LayoutParams) {
-        val screenW = resources.displayMetrics.widthPixels
-        val screenH = resources.displayMetrics.heightPixels
-        params.x = params.x.coerceIn(-dp(8), screenW - dp(SIZE_DP) + dp(8))
-        params.y = params.y.coerceIn(dp(24), screenH - dp(SIZE_DP + 24))
+        val bounds = bubbleBounds()
+        lastBubbleBounds = bounds
+        params.x = params.x.coerceIn(bounds.left, bounds.maxX(dp(SIZE_DP)))
+        params.y = params.y.coerceIn(bounds.top, bounds.maxY(dp(SIZE_DP)))
     }
 
     private fun snap(params: WindowManager.LayoutParams, view: View) {
-        val screenW = resources.displayMetrics.widthPixels
-        val screenH = resources.displayMetrics.heightPixels
-        isSnappedToLeft = (params.x + dp(SIZE_DP) / 2 < screenW / 2)
-        params.x = if (isSnappedToLeft) -dp(6) else screenW - dp(SIZE_DP - 6)
-        val minY = dp(64)
-        val maxY = screenH - dp(SIZE_DP + 84)
-        params.y = params.y.coerceIn(minY, maxY)
+        val bounds = bubbleBounds()
+        lastBubbleBounds = bounds
+        isSnappedToLeft = (params.x + dp(SIZE_DP) / 2 < (bounds.left + bounds.right) / 2)
+        params.x = bounds.snapX(isSnappedToLeft, dp(SIZE_DP))
+        params.y = params.y.coerceIn(bounds.top, bounds.maxY(dp(SIZE_DP)))
         try {
             wm?.updateViewLayout(view, params)
         } catch (_: Exception) {
@@ -436,11 +484,10 @@ class OverlayService : Service() {
         root.setOnClickListener { removeMenu() }
 
         val bp = bubbleParams
-        val screenW = resources.displayMetrics.widthPixels
-        val screenH = resources.displayMetrics.heightPixels
+        val bounds = bubbleBounds()
         val bcx = (bp?.x ?: 0).toFloat() + dp(SIZE_DP) / 2f
         val bcy = (bp?.y ?: 0).toFloat() + dp(SIZE_DP) / 2f
-        val onRight = bcx > screenW / 2f
+        val onRight = bcx > (bounds.left + bounds.right) / 2f
         val baseDeg = if (onRight) 180.0 else 0.0
         val spread = 52.0
         val radius = dp(120).toFloat()
@@ -458,8 +505,8 @@ class OverlayService : Service() {
             val cy = bcy + radius * sin(deg).toFloat()
             val item = makeItem(items[i].second, items[i].third) { onMenuAction(items[i].first) }
             val lp = FrameLayout.LayoutParams(dp(72), dp(78)).apply {
-                leftMargin = (cx - dp(36)).roundToInt().coerceIn(0, screenW - dp(72))
-                topMargin = (cy - dp(39)).roundToInt().coerceIn(dp(24), screenH - dp(78))
+                leftMargin = (cx - dp(36)).roundToInt().coerceIn(bounds.left, (bounds.right - dp(72)).coerceAtLeast(bounds.left))
+                topMargin = (cy - dp(39)).roundToInt().coerceIn(bounds.top, (bounds.bottom - dp(78)).coerceAtLeast(bounds.top))
             }
             root.addView(item, lp)
         }
@@ -468,8 +515,13 @@ class OverlayService : Service() {
         val params = WindowManager.LayoutParams(
             WindowManager.LayoutParams.MATCH_PARENT,
             WindowManager.LayoutParams.MATCH_PARENT,
-            overlayType(), baseFlags(), PixelFormat.TRANSLUCENT
-        )
+            overlayType(), baseFlags() or WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN, PixelFormat.TRANSLUCENT
+        ).apply {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) fitInsetsTypes = 0
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+            }
+        }
         try {
             wm?.addView(root, params)
         } catch (e: Exception) {
@@ -564,8 +616,8 @@ class OverlayService : Service() {
 
     // ---------------------------------------------------------------- close
 
-    private fun closeCenterX(): Int = resources.displayMetrics.widthPixels / 2
-    private fun closeCenterY(): Int = resources.displayMetrics.heightPixels - dp(120)
+    private fun closeCenterX(): Int = bubbleBounds().let { (it.left + it.right) / 2 }
+    private fun closeCenterY(): Int = bubbleBounds().bottom - dp(120)
 
     private fun inCloseZone(x: Int, y: Int): Boolean {
         val dx = (x - closeCenterX()).toFloat()
@@ -580,6 +632,11 @@ class OverlayService : Service() {
             dp(60), dp(60), overlayType(), baseFlags(), PixelFormat.TRANSLUCENT
         ).apply {
             gravity = Gravity.TOP or Gravity.START
+            flags = flags or WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) fitInsetsTypes = 0
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+            }
             x = closeCenterX() - dp(30)
             y = closeCenterY() - dp(30)
         }

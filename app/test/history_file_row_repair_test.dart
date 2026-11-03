@@ -17,6 +17,7 @@ import 'package:easysave/services/backup/backup_model.dart';
 import 'package:easysave/services/backup/backup_service.dart';
 import 'package:easysave/services/history_db.dart';
 import 'package:easysave/services/settings.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
@@ -191,10 +192,6 @@ void main() {
       expect(inferred.map((f) => f.itemIndex), [1, 2, 3, 4]);
     });
 
-    test('HistoryFile defaults to index 1, never 0', () {
-      expect(HistoryFile(filename: 'a.jpg', savedAt: 0).itemIndex, 1);
-    });
-
     test('upsert refuses an index below 1 before touching the database',
         () async {
       await expectLater(
@@ -240,6 +237,37 @@ void main() {
   });
 
   group('a stored record is corrected on the next load', () {
+    test('concurrent and repeated loads persist exactly one repair', () async {
+      await writeDamagedRow();
+      final lines = <String>[];
+      final original = debugPrint;
+      debugPrint = (String? message, {int? wrapWidth}) {
+        if (message != null) lines.add(message);
+      };
+      try {
+        await Future.wait([db.recent(), db.recent(), db.recent()]);
+        await db.recent();
+        final repairs = lines.where((line) => line.contains('file rows repaired')).toList();
+        expect(repairs, hasLength(1));
+        expect(repairs.single, contains('deleted=1'));
+        expect(repairs.single, contains('updated=1 committed=1 verified=1'));
+        expect(await storedFilesJson(), hasLength(4));
+      } finally {
+        debugPrint = original;
+      }
+    });
+
+    test('gallery scan cannot persist duplicate media IDs', () async {
+      await db.upsert(recordWith(savedRows()));
+      final stored = (await db.getByPostId(_postId))!;
+      final duplicate = savedRows().first.copyWith(itemIndex: 5);
+      await db.updateFiles(stored.id!, [...savedRows(), duplicate], source: 'gallery-scan');
+      expect(await storedFilesJson(), hasLength(4));
+      expect(historyFilesNeedRepair(jsonEncode(await storedFilesJson())), isFalse);
+      await db.recent();
+      expect(await storedFilesJson(), hasLength(4));
+    });
+
     test('getByPostId repairs the row in the database', () async {
       await writeDamagedRow();
       expect((await storedFilesJson()), hasLength(5));
@@ -264,12 +292,6 @@ void main() {
       final records = await db.recent();
       final record = records.firstWhere((r) => r.postId == _postId);
       expect(record.files, hasLength(4));
-      // recent() persists the correction in the background; poll briefly
-      // instead of assuming the write finished before the list returned.
-      for (var i = 0; i < 100; i++) {
-        if ((await storedFilesJson()).length == 4) break;
-        await Future<void>.delayed(const Duration(milliseconds: 20));
-      }
       expect(await storedFilesJson(), hasLength(4));
     });
   });

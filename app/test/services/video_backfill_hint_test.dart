@@ -63,6 +63,7 @@ void main() {
           createdAt: DateTime.now(),
           files: [
             HistoryFile(
+              itemIndex: 1,
               filename: 'video.mp4',
               savedAt: 1000,
               isImage: false,
@@ -109,6 +110,7 @@ void main() {
           createdAt: DateTime.now(),
           files: [
             HistoryFile(
+              itemIndex: 1,
               filename: 'video.mp4',
               savedAt: 1000,
               isImage: false,
@@ -145,6 +147,7 @@ void main() {
           createdAt: DateTime.now(),
           files: [
             HistoryFile(
+              itemIndex: 1,
               filename: 'video.mp4',
               savedAt: 1000,
               isImage: false,
@@ -181,6 +184,7 @@ void main() {
           createdAt: DateTime.now(),
           files: [
             HistoryFile(
+              itemIndex: 1,
               filename: 'img.jpg',
               savedAt: 1000,
               isImage: true,
@@ -217,6 +221,7 @@ void main() {
           createdAt: DateTime.now(),
           files: [
             HistoryFile(
+              itemIndex: 1,
               filename: 'video.mp4',
               savedAt: 1000,
               isImage: false,

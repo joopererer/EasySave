@@ -453,7 +453,7 @@ class HistoryBackfillService {
 
     if (record.id != null) {
       final db = await HistoryDb.instance();
-      await db.updateFiles(record.id!, updatedFiles);
+      await db.updateFiles(record.id!, updatedFiles, source: 'backfill');
     }
   }
 }

@@ -11,7 +11,7 @@ class NativeMediaRequestTest {
         val events = mutableListOf<Pair<String, String>>()
         val request = NativeMediaRequest(mapOf(
             "url" to url, "headers" to headers, "mediaHosts" to hosts,
-        )) { code, host -> events.add(code to host) }
+        ), "imageRequest") { code, host, _, _ -> events.add(code to host) }
         assertThrows(NativeMediaRequest.Rejected::class.java) { request.readImage() }
         return events.single()
     }
@@ -33,5 +33,15 @@ class NativeMediaRequestTest {
             rejected("https://tiktok.com/video", mapOf("Cookie" to "secret")))
         assertEquals("REQUEST_HEADER_REJECTED" to "tiktok.com",
             rejected("https://tiktok.com/video", mapOf("Referer" to "ok\r\nCookie: secret")))
+    }
+
+    @Test fun rejectionIncludesFieldAndShapeWithoutTheAddress() {
+        val events = mutableListOf<List<String>>()
+        val request = NativeMediaRequest(
+            mapOf("url" to "//example.test/path?secret=hidden", "mediaHosts" to hosts),
+            "thumbRequest",
+        ) { code, host, field, shape -> events.add(listOf(code, host, field, shape)) }
+        assertThrows(NativeMediaRequest.Rejected::class.java) { request.readImage() }
+        assertEquals(listOf("REQUEST_URL_REJECTED", "example.test", "thumbRequest", "protocol-relative"), events.single())
     }
 }
