@@ -120,6 +120,9 @@ class _LoginPageState extends State<LoginPage> {
       final controller = _controller;
       if (controller == null || _verifying) return;
       final account = await readAccount(widget.platform, controller);
+      if (widget.platform == 'xhs') {
+        unawaited(logXhsPageCheck(controller, 'login_poll', account?.loggedIn));
+      }
       if (account == null || !account.loggedIn) return;
       await AccountCache.save(widget.platform, account);
       if (!mounted) return;
@@ -154,6 +157,7 @@ class _LoginPageState extends State<LoginPage> {
     final ok = await checkLogin(
       widget.platform,
       webViewController: _controller,
+      entry: 'login_complete',
     );
     if (!mounted) return ok;
     setState(() => _verifying = false);

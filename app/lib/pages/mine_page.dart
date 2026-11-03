@@ -180,7 +180,7 @@ class _MinePageState extends State<MinePage> with WidgetsBindingObserver {
   }
 
   Future<void> _refreshPlatform(String platform) async {
-    final ok = await checkLogin(platform);
+    final ok = await checkLogin(platform, entry: 'mine_refresh');
     if (!mounted) return;
     if (ok) LoginExpiredBus.clear(platform);
     final account = hasAccountHook(platform)
@@ -196,7 +196,7 @@ class _MinePageState extends State<MinePage> with WidgetsBindingObserver {
     final settings = await AppSettings.load();
     final states = <String, bool>{};
     for (final platform in loginSiteIds) {
-      states[platform] = await checkLogin(platform);
+      states[platform] = await checkLogin(platform, entry: 'mine_load');
       _nicknames[platform] = AccountCache.value(platform)?.nickname ?? '';
     }
     final info = await PackageInfo.fromPlatform();
@@ -253,7 +253,7 @@ class _MinePageState extends State<MinePage> with WidgetsBindingObserver {
     if (!mounted) return;
     if (loggedIn) {
       LoginExpiredBus.clear(platform);
-    } else {
+    } else if (platform != 'xhs') {
       LoginExpiredBus.markExpired(platform);
     }
     final account = hasAccountHook(platform)

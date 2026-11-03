@@ -20,6 +20,15 @@ internal class NativeMediaRequest(
     private val hosts = raw?.get("mediaHosts") as? List<*> ?: emptyList<Any>()
     private val expiresAtMs = (raw?.get("expiresAtMs") as? Number)?.toLong()
 
+    val diagnosticHost: String
+        get() = runCatching { URI(url).host?.lowercase(Locale.ROOT) }
+            .getOrNull()?.takeIf { it.matches(Regex("[a-z0-9.-]{1,253}")) } ?: "unknown"
+
+    val diagnosticHeaderNames: String
+        get() = headers.keys.mapNotNull { (it as? String)?.lowercase(Locale.ROOT) }
+            .filter { it in setOf("referer", "origin", "user-agent", "range") }
+            .sorted().joinToString(",").ifEmpty { "none" }
+
     internal class Rejected(val code: String, val host: String) : IOException("$code host=$host")
 
     private fun deny(code: String, host: String, address: String = url): Nothing {

@@ -1007,6 +1007,10 @@ class SelectPanelView(
 
     private fun playVideo(cell: Cell, generation: Int) {
         var stopped = false
+        fun logPlayer(event: String, errorCode: String = "none") {
+            Log.i("PreviewPlayer", "event=$event host=${cell.videoRequest.diagnosticHost} " +
+                "errorCode=$errorCode headers=${cell.videoRequest.diagnosticHeaderNames}")
+        }
         fun failed(rejected: Boolean = false) {
             if (stopped || !previewCurrent(generation)) return
             stopped = true
@@ -1024,10 +1028,15 @@ class SelectPanelView(
             try {
                 cell.videoRequest.writeVideo(file)
             } catch (e: NativeMediaRequest.Rejected) {
+                logPlayer("error", e.code)
                 file.delete()
                 main.post { failed(true) }
                 return@execute
-            } catch (_: Exception) {
+            } catch (e: Exception) {
+                val code = e.message?.takeIf { it.matches(Regex("HTTP_[0-9]{3}")) }
+                    ?: e.javaClass.simpleName.takeIf { it.matches(Regex("[A-Za-z0-9_]{1,80}")) }
+                    ?: "download"
+                logPlayer("error", code)
                 file.delete()
                 main.post { failed() }
                 return@execute
@@ -1039,7 +1048,7 @@ class SelectPanelView(
                 }
                 previewVideoFile = file
                 val texture = previewTexture ?: run { failed(); return@post }
-                val timeout = Runnable { failed() }
+                val timeout = Runnable { logPlayer("timeout"); failed() }
                 previewFrameTimeout = timeout
                 main.postDelayed(timeout, 15000L)
                 fun startMp(surfaceTexture: SurfaceTexture) {
@@ -1059,12 +1068,18 @@ class SelectPanelView(
                             setOnPreparedListener { player ->
                                 fitVideoToView(player.videoWidth, player.videoHeight)
                                 if (!stopped && previewCurrent(generation) && mediaPlayer === player) {
-                                    try { player.start() } catch (_: Exception) { failed() }
+                                    try { player.start() } catch (e: Exception) {
+                                        logPlayer("error", e.javaClass.simpleName.takeIf {
+                                            it.matches(Regex("[A-Za-z0-9_]{1,80}"))
+                                        } ?: "start")
+                                        failed()
+                                    }
                                 }
                             }
                             setOnInfoListener { player, what, _ ->
                                 if (!stopped && previewCurrent(generation) && mediaPlayer === player &&
                                     previewFirstFrame(what)) {
+                                    logPlayer("firstFrame")
                                     previewFrameTimeout?.let { main.removeCallbacks(it) }
                                     previewFrameTimeout = null
                                     previewProgress?.visibility = View.GONE
@@ -1073,13 +1088,18 @@ class SelectPanelView(
                                 }
                                 false
                             }
-                            setOnErrorListener { _, _, _ ->
+                            setOnErrorListener { _, what, extra ->
+                                logPlayer("error", "media_${what}_$extra")
                                 failed()
                                 true
                             }
+                            logPlayer("prepare")
                             prepareAsync()
                         }
-                    } catch (_: Exception) {
+                    } catch (e: Exception) {
+                        logPlayer("error", e.javaClass.simpleName.takeIf {
+                            it.matches(Regex("[A-Za-z0-9_]{1,80}"))
+                        } ?: "player")
                         failed()
                     }
                 }

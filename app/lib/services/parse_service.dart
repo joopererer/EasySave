@@ -9,7 +9,7 @@ import 'package:http/http.dart' as http;
 
 import '../core/dev_log.dart';
 import '../core/models.dart';
-import 'auth.dart' show isLoopbackHost;
+import 'auth.dart' show isLoopbackHost, logXhsWebViewCookies;
 import 'ai_label_log.dart';
 import 'history_db.dart';
 import 'links.dart';
@@ -508,6 +508,11 @@ Future<ParseOutcome> _run(ParserHooks hooks, String targetUrl, {required String 
         mixedContentMode: MixedContentMode.MIXED_CONTENT_ALWAYS_ALLOW,
         useShouldOverrideUrlLoading: true,
       ),
+      onLoadStart: (_, uri) {
+        if (hooks.site.id == 'xhs') {
+          unawaited(logXhsWebViewCookies(uri));
+        }
+      },
       shouldOverrideUrlLoading: (controller, action) async {
         final uri = action.request.url;
         if (action.isForMainFrame == true) mainNavigations++;

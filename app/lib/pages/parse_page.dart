@@ -583,7 +583,7 @@ class ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
     });
     if (code == ParseErrorCode.loginRequired && url.isNotEmpty) {
       final platform = platformFromUrl(url);
-      if (platform != null) LoginExpiredBus.markExpired(platform);
+      if (platform != null) LoginExpiredBus.markParseLoginRequired(platform);
     }
   }
 
@@ -744,7 +744,7 @@ class ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
       });
       if (e.code == ParseErrorCode.loginRequired) {
         final platform = platformFromUrl(link);
-        if (platform != null) LoginExpiredBus.markExpired(platform);
+        if (platform != null) LoginExpiredBus.markParseLoginRequired(platform);
       }
       if (offscreen) _showOffscreenError(e.code, e.message);
     } catch (e) {
@@ -1070,7 +1070,7 @@ class ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
       if (cachedPost.items.isNotEmpty) {
         Navigator.of(context).push(PreviewPage.route(post: cachedPost));
         if (isLoginRequired) {
-          LoginExpiredBus.markExpired(platform);
+          LoginExpiredBus.markParseLoginRequired(platform);
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
               content: const Text('已使用本地记录打开预览（重新解析需登录）'),
@@ -1100,7 +1100,7 @@ class ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
       }
 
       if (isLoginRequired) {
-        LoginExpiredBus.markExpired(platform);
+        LoginExpiredBus.markParseLoginRequired(platform);
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: const Text('该内容需要登录后查看，请先登录'),

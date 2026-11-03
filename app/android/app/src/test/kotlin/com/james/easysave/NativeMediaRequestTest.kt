@@ -44,4 +44,16 @@ class NativeMediaRequestTest {
         assertThrows(NativeMediaRequest.Rejected::class.java) { request.readImage() }
         assertEquals(listOf("REQUEST_URL_REJECTED", "example.test", "thumbRequest", "protocol-relative"), events.single())
     }
+
+    @Test fun playerDiagnosticsContainOnlyHostAndAllowedHeaderNames() {
+        val request = NativeMediaRequest(
+            mapOf(
+                "url" to "https://cdn.tiktok.com/path?token=private",
+                "headers" to mapOf("Referer" to "private", "Range" to "private", "Cookie" to "private"),
+            ),
+            "videoRequest",
+        ) { _, _, _, _ -> }
+        assertEquals("cdn.tiktok.com", request.diagnosticHost)
+        assertEquals("range,referer", request.diagnosticHeaderNames)
+    }
 }

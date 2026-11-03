@@ -15,6 +15,8 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../core/dev_log.dart';
+import 'links.dart' show parsePathCategory;
 import 'site_registry.dart';
 import 'parser_hooks.dart';
 import 'update_service.dart';
@@ -83,6 +85,84 @@ bool _isSessionCookie(String platform, String name) =>
 bool hasAccountHook(String platform) =>
     SiteRegistry.current.byId(platform)?.auth['stateHook'] != null;
 
+String? xhsDomain(String? host) {
+  final value = host?.toLowerCase() ?? '';
+  for (final domain in const ['xiaohongshu.com', 'rednote.com']) {
+    if (value == domain || value.endsWith('.$domain')) return domain;
+  }
+  return null;
+}
+
+Future<String> _xhsCookiePresence(String url) async {
+  const names = [
+    'web_session',
+    'customer-sso-sid',
+    'galaxy_creator_session_id',
+    'login_token',
+  ];
+  try {
+    final cookies = await CookieManager.instance().getCookies(url: WebUri(url));
+    final present = cookies.map((cookie) => cookie.name).toSet();
+    return names.map((name) => '$name-${present.contains(name) ? "present" : "absent"}').join(',');
+  } catch (_) {
+    return names.map((name) => '$name-unknown').join(',');
+  }
+}
+
+/// Record only configured cookie names and presence, never cookie values.
+Future<void> logXhsWebViewCookies(Uri? uri) async {
+  final domain = xhsDomain(uri?.host);
+  if (domain == null || uri == null) return;
+  final presence = await _xhsCookiePresence(
+    uri.replace(query: null, fragment: null).toString(),
+  );
+  await DevLog.write('XhsLogin', 'event=webview domain=$domain presence=$presence');
+}
+
+Future<void> _logXhsCheck({
+  required String entry,
+  required String condition,
+  required String result,
+  Uri? target,
+  Uri? landed,
+  bool? loggedIn,
+  int? redirects,
+  Uri? redirectTarget,
+}) async {
+  final xhs = await _xhsCookiePresence('https://www.xiaohongshu.com/');
+  final rednote = await _xhsCookiePresence('https://www.rednote.com/');
+  await DevLog.write(
+    'XhsLogin',
+    'event=check entry=$entry target=${xhsDomain(target?.host) ?? "none"} '
+    'landed=${xhsDomain(landed?.host) ?? "none"} '
+    'path=${landed == null ? "unknown" : parsePathCategory(landed)} '
+    'redirects=${redirects ?? "unknown"} loggedIn=${loggedIn ?? "missing"} '
+    'redirectDomain=${xhsDomain(redirectTarget?.host) ?? "none"} '
+    'redirectPath=${redirectTarget == null ? "none" : parsePathCategory(redirectTarget)} '
+    'xiaohongshu=[$xhs] rednote=[$rednote] result=$result condition=$condition',
+  );
+}
+
+Future<void> logXhsPageCheck(
+  InAppWebViewController controller,
+  String entry,
+  bool? loggedIn,
+) async {
+  Uri? uri;
+  try {
+    uri = await controller.getUrl();
+  } catch (_) {
+    // The WebView may be disposed after the account hook returns.
+  }
+  await _logXhsCheck(
+    entry: entry,
+    condition: 'page_state',
+    result: loggedIn == null ? 'unknown' : loggedIn ? 'valid' : 'invalid',
+    landed: uri,
+    loggedIn: loggedIn,
+  );
+}
+
 /// Harvest cookies for [urls] into a single `Cookie:` header value.
 Future<String> cookieHeaderFor(List<String> urls) async {
   final cookieManager = CookieManager.instance();
@@ -123,6 +203,7 @@ Future<bool> isLoggedIn(String platform) async {
 Future<bool> checkLogin(
   String platform, {
   InAppWebViewController? webViewController,
+  String entry = 'unspecified',
 }) async {
   if (!hasAccountHook(platform)) return isLoggedIn(platform);
 
@@ -130,15 +211,26 @@ Future<bool> checkLogin(
     final account = await readAccount(platform, webViewController);
     if (account != null) {
       await AccountCache.save(platform, account);
+      if (platform == 'xhs') {
+        unawaited(logXhsPageCheck(webViewController, entry, account.loggedIn));
+      }
       return account.loggedIn;
     }
   }
 
   final cached = await AccountCache.load(platform);
-  if (cached != null) return cached.loggedIn;
+  if (cached != null) {
+    if (platform == 'xhs') {
+      unawaited(_logXhsCheck(
+        entry: entry, condition: 'cached_page_state',
+        result: cached.loggedIn ? 'valid' : 'invalid',
+      ));
+    }
+    return cached.loggedIn;
+  }
   // Nothing cached yet (e.g. right after an app update): fall back to the
   // cookie jar plus a cheap network probe, which is accurate but slower.
-  return verifyAccountSession(platform);
+  return verifyAccountSession(platform, entry: entry);
 }
 
 /// Signed-in XHS user, as read from the page itself.
@@ -218,8 +310,16 @@ abstract final class AccountCache {
 }
 
 /// A cookie is a prerequisite; the optional signed probe interprets the feed.
-Future<bool> verifyAccountSession(String platform) async {
-  if (!await isLoggedIn(platform)) return false;
+Future<bool> verifyAccountSession(String platform, {String entry = 'unspecified'}) async {
+  if (!await isLoggedIn(platform)) {
+    if (platform == 'xhs') {
+      unawaited(_logXhsCheck(
+        entry: entry, condition: 'no_configured_cookie',
+        result: 'invalid',
+      ));
+    }
+    return false;
+  }
   HeadlessInAppWebView? view;
   final client = HttpClient();
   client.connectionTimeout = const Duration(seconds: 6);
@@ -240,7 +340,7 @@ Future<bool> verifyAccountSession(String platform) async {
       HttpHeaders.acceptLanguageHeader,
       'zh-CN,zh;q=0.9,en;q=0.8',
     );
-    final cookies = await cookieHeaderFor(_cookieUrls(platform));
+    final cookies = await cookieHeaderFor([loginEntryUrl(platform)]);
     if (cookies.isNotEmpty) {
       request.headers.set(HttpHeaders.cookieHeader, cookies);
     }
@@ -261,6 +361,17 @@ Future<bool> verifyAccountSession(String platform) async {
                 'statusCode': response.statusCode,
                 'location': response.headers.value(HttpHeaders.locationHeader),
               });
+          if (platform == 'xhs') {
+            final target = Uri.parse(loginEntryUrl(platform));
+            final location = response.headers.value(HttpHeaders.locationHeader);
+            final redirectTarget = location == null ? null : target.resolve(location);
+            unawaited(_logXhsCheck(
+              entry: entry, condition: 'http_probe',
+              result: value == false ? 'invalid' : 'valid',
+              target: target, landed: target,
+              redirects: 0, redirectTarget: redirectTarget,
+            ));
+          }
           if (!answer.isCompleted) answer.complete(value != false);
         } catch (_) {
           if (!answer.isCompleted) answer.complete(true);
@@ -323,6 +434,12 @@ abstract final class LoginExpiredBus {
     }
     if (expired.value.contains(platform)) return;
     expired.value = {...expired.value, platform};
+  }
+
+  /// A post may require login on one domain even if another remains signed in.
+  static void markParseLoginRequired(String platform) {
+    if (platform == 'xhs') return;
+    markExpired(platform);
   }
 
   static void clear(String platform) {

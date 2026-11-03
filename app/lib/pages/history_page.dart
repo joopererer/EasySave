@@ -528,7 +528,7 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
         );
         if (isLoginRequired) {
           final platform = platformFromKey(record.platform);
-          LoginExpiredBus.markExpired(platform);
+          LoginExpiredBus.markParseLoginRequired(platform);
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
               content: const Text('已使用本地记录打开预览（重新解析需登录）'),
@@ -551,7 +551,7 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
 
       if (isLoginRequired) {
         final platform = platformFromKey(record.platform);
-        LoginExpiredBus.markExpired(platform);
+        LoginExpiredBus.markParseLoginRequired(platform);
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: const Text('该内容需要登录后查看，请先登录'),
