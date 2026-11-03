@@ -137,8 +137,12 @@
         "https://www.xiaohongshu.com/explore",
         "https://www.rednote.com/explore"
       ],
+      "openDomains": {
+        "xiaohongshu.com": "https://www.xiaohongshu.com/explore/{id}",
+        "rednote.com": "https://www.rednote.com/explore/{id}"
+      },
       "probeHook": "probeSession",
-      "loginHint": "页面加载后输入手机号获取验证码登录（也可切换密码登录），登录成功会自动返回。登录状态保存在本机，重启 App 依然有效。"
+      "loginHint": "只需登录其中一个站点：小红书（中国大陆账号）或 rednote（海外账号）。登录成功会自动返回，状态保存在本机。"
     },
     "parserModule": "xhs",
     "download": {

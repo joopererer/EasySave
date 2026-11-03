@@ -219,7 +219,6 @@ class SelectPanelView(
     private var previewTitle: TextView? = null
     private var previewCloseBtn: TextView? = null
     private var mediaPlayer: MediaPlayer? = null
-    private var previewVideoFile: java.io.File? = null
     private var previewIndex = -1
     private var previewGeneration = 0
     private var previewFrameTimeout: Runnable? = null
@@ -1088,7 +1087,7 @@ class SelectPanelView(
         var stopped = false
         val frameGate = PreviewFrameGate()
         fun logPlayer(event: String, errorCode: String = "none") {
-            Log.i("PreviewPlayer", "event=$event host=${cell.videoRequest.diagnosticHost} " +
+            NativeLog.i("PreviewPlayer", "event=$event host=${cell.videoRequest.diagnosticHost} " +
                 "errorCode=$errorCode headers=${cell.videoRequest.diagnosticHeaderNames}")
         }
         fun firstFrame() {
@@ -1112,34 +1111,9 @@ class SelectPanelView(
                 previewTitle?.text = if (rejected) "该资源地址不在允许范围内" else "视频加载失败，请重试"
             }
         }
-        pool.execute {
-            val file = java.io.File(context.cacheDir, "policy_preview_${System.nanoTime()}.mp4")
-            try {
-                cell.videoRequest.writeVideo(file)
-            } catch (e: NativeMediaRequest.Rejected) {
-                logPlayer("error", e.code)
-                file.delete()
-                main.post { failed(true) }
-                return@execute
-            } catch (e: Exception) {
-                val code = e.message?.takeIf { it.matches(Regex("HTTP_[0-9]{3}")) }
-                    ?: e.javaClass.simpleName.takeIf { it.matches(Regex("[A-Za-z0-9_]{1,80}")) }
-                    ?: "download"
-                logPlayer("error", code)
-                file.delete()
-                main.post { failed() }
-                return@execute
-            }
-            main.post {
-                if (!previewCurrent(generation)) {
-                    file.delete()
-                    return@post
-                }
-                previewVideoFile = file
+        main.post {
+                if (!previewCurrent(generation)) return@post
                 val texture = previewTexture ?: run { failed(); return@post }
-                val timeout = Runnable { logPlayer("timeout"); failed() }
-                previewFrameTimeout = timeout
-                main.postDelayed(timeout, 15000L)
                 fun startMp(surfaceTexture: SurfaceTexture) {
                     if (stopped || !previewCurrent(generation)) return
                     try {
@@ -1150,7 +1124,7 @@ class SelectPanelView(
                             try { setSurface(surface) } finally { surface.release() }
                             setVolume(0f, 0f)
                             isLooping = true
-                            setDataSource(file.absolutePath)
+                            setDataSource(NativePreviewDataSource(cell.videoRequest))
                             setOnVideoSizeChangedListener { _, width, height ->
                                 fitVideoToView(width, height)
                             }
@@ -1181,6 +1155,12 @@ class SelectPanelView(
                                 true
                             }
                             logPlayer("prepare")
+                            // 15 seconds covers DNS/connect plus codec startup
+                            // on mobile networks while still failing promptly
+                            // for a dead CDN. The clock starts at prepareAsync.
+                            val timeout = Runnable { logPlayer("timeout"); failed() }
+                            previewFrameTimeout = timeout
+                            main.postDelayed(timeout, 15000L)
                             prepareAsync()
                         }
                     } catch (e: Exception) {
@@ -1204,7 +1184,6 @@ class SelectPanelView(
                     }
                 }
                 if (texture.isAvailable) startMp(texture.surfaceTexture!!)
-            }
         }
     }
 
@@ -1281,8 +1260,6 @@ class SelectPanelView(
         } catch (_: Exception) {}
         mediaPlayer?.release()
         mediaPlayer = null
-        previewVideoFile?.delete()
-        previewVideoFile = null
     }
 
     /// Pulsing placeholder animation shared by every pending thumbnail.
@@ -1371,15 +1348,15 @@ class SelectPanelView(
             try {
                 val bitmap = decodeSampled(request.readImage(), target)
                 if (bitmap != null) return bitmap to false
-                Log.i("PreviewImage", "event=error host=${request.diagnosticHost} errorCode=decode")
+                NativeLog.i("PreviewImage", "event=error host=${request.diagnosticHost} errorCode=decode")
             } catch (error: NativeMediaRequest.Rejected) {
                 denied = true
-                Log.i("PreviewImage", "event=error host=${request.diagnosticHost} errorCode=${error.code}")
+                NativeLog.i("PreviewImage", "event=error host=${request.diagnosticHost} errorCode=${error.code}")
             } catch (error: Exception) {
                 val code = error.javaClass.simpleName.takeIf {
                     it.matches(Regex("[A-Za-z0-9_]{1,80}"))
                 } ?: "request"
-                Log.i("PreviewImage", "event=error host=${request.diagnosticHost} errorCode=$code")
+                NativeLog.i("PreviewImage", "event=error host=${request.diagnosticHost} errorCode=$code")
             }
         }
         return null to denied

@@ -93,7 +93,7 @@ class HostService : Service() {
     private val pending = ArrayDeque<Map<String, Any?>>()
     private val handler = Handler(Looper.getMainLooper())
     private val idleRunnable = Runnable {
-        Log.i(TAG, "Idle ${IDLE_TIMEOUT_MS}ms reached → destroy engine + stopSelf")
+        NativeLog.i(TAG, "Idle ${IDLE_TIMEOUT_MS}ms reached → destroy engine + stopSelf")
         releaseEngine()
     }
 
@@ -136,7 +136,7 @@ class HostService : Service() {
                 loader.startInitialization(applicationContext)
                 loader.ensureInitializationComplete(applicationContext, null)
             } catch (e: Exception) {
-                Log.i(TAG, "FlutterLoader init skipped: ${e.message}")
+                NativeLog.i(TAG, "FlutterLoader init skipped: ${e.message}")
             }
 
             val e = FlutterEngine(applicationContext, null, true)
@@ -149,7 +149,7 @@ class HostService : Service() {
                 when (call.method) {
                     "ready" -> {
                         ready = true
-                        Log.i(TAG, "BG engine ready")
+                        NativeLog.i(TAG, "BG engine ready")
                         while (pending.isNotEmpty()) {
                             ch.invokeMethod("submit", pending.removeFirst())
                         }
@@ -160,7 +160,7 @@ class HostService : Service() {
                         // The message comes from Dart; scrub it again here so a
                         // URL with query parameters can never reach logcat.
                         val msg = call.arguments as? String ?: ""
-                        Log.i(TAG, LogSanitizer.scrub(msg))
+                        NativeLog.i(TAG, LogSanitizer.scrub(msg))
                         result.success(null)
                     }
                     "notify" -> {
@@ -229,7 +229,7 @@ class HostService : Service() {
                                     android.content.ClipData.newPlainText("EasySave", text)
                                 )
                             } catch (e: Exception) {
-                                Log.e(TAG, "setClipboard failed: $e")
+                                NativeLog.e(TAG, "setClipboard failed: $e")
                             }
                         }
                         result.success(null)
@@ -263,9 +263,9 @@ class HostService : Service() {
             e.dartExecutor.executeDartEntrypoint(
                 DartExecutor.DartEntrypoint(loader.findAppBundlePath(), "backgroundMain")
             )
-            Log.i(TAG, "FlutterEngine.executeDartEntrypoint(backgroundMain) called")
+            NativeLog.i(TAG, "FlutterEngine.executeDartEntrypoint(backgroundMain) called")
         } catch (e: Exception) {
-            Log.e(TAG, "ensureEngine FAILED: $e", e)
+            NativeLog.e(TAG, "ensureEngine FAILED: $e", e)
             updateNotification("后台引擎启动失败: ${e.message}")
             stopSelf()
         }
@@ -305,10 +305,10 @@ class HostService : Service() {
                                 unmountSelectPanel()
                                 channel?.invokeMethod("selectResult", null)
                             } catch (error: android.content.ActivityNotFoundException) {
-                                Log.e(TAG, "open preview failed: activity unavailable")
+                                NativeLog.e(TAG, "open preview failed: activity unavailable")
                                 android.widget.Toast.makeText(this, "无法打开 App，请重试", android.widget.Toast.LENGTH_SHORT).show()
                             } catch (error: SecurityException) {
-                                Log.e(TAG, "open preview failed: permission denied")
+                                NativeLog.e(TAG, "open preview failed: permission denied")
                                 android.widget.Toast.makeText(this, "无法打开 App，请重试", android.widget.Toast.LENGTH_SHORT).show()
                             }
                         }
@@ -332,7 +332,7 @@ class HostService : Service() {
                 panelView = panel
                 panel.setItems(items)
             } catch (e: Exception) {
-                Log.e(TAG, "showSelectPanel failed: $e")
+                NativeLog.e(TAG, "showSelectPanel failed: $e")
                 channel?.invokeMethod("selectResult", null)
             }
         }
@@ -388,7 +388,7 @@ class HostService : Service() {
             intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
             startActivity(intent)
         } catch (e: Exception) {
-            Log.e(TAG, "openApp failed: $e")
+            NativeLog.e(TAG, "openApp failed: $e")
         }
     }
 

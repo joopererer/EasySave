@@ -23,7 +23,7 @@ object ProvenancePairWriter {
         try { return action() } catch (e: Exception) {
             if (e is StepFailure) throw e
             val message = PairSavePolicy.errorMessage(name, e)
-            Log.w("EasySavePair", message)
+            NativeLog.w("EasySavePair", message)
             throw StepFailure(message)
         }
     }
@@ -83,7 +83,7 @@ object ProvenancePairWriter {
                     Handler(Looper.getMainLooper()).post { result.success(value) }
                 } catch (e: Exception) {
                     val message = if (e is StepFailure) e.message!! else PairSavePolicy.errorMessage(call.method, e)
-                    if (e !is StepFailure) Log.w("EasySavePair", message)
+                    if (e !is StepFailure) NativeLog.w("EasySavePair", message)
                     Handler(Looper.getMainLooper()).post {
                         result.error("provenance_pair", message, null)
                     }
@@ -255,7 +255,7 @@ object ProvenancePairWriter {
                     "relativePath" to C2paStoragePolicy.RELATIVE_PATH))
             }
         }
-        Log.i("EasySavePair", "queryFixedMedia directory=${C2paStoragePolicy.RELATIVE_PATH} media=${result.size}")
+        NativeLog.i("EasySavePair", "queryFixedMedia directory=${C2paStoragePolicy.RELATIVE_PATH} media=${result.size}")
         return result
     }
 

@@ -86,6 +86,7 @@ class MainActivity : FlutterActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        NativeLog.init(this)
         handleErrorIntent(intent)
         handleOpenIntent(intent)
     }
@@ -389,7 +390,7 @@ class MainActivity : FlutterActivity() {
                         contentResolver.takePersistableUriPermission(treeUri, takeFlags)
                         pendingPickDirectoryResult?.success(treeUri.toString())
                     } catch (e: Exception) {
-                        Log.e("EasySaveSAF", "Failed to take persistable URI permission: ${e.message}", e)
+                        NativeLog.e("EasySaveSAF", "Failed to take persistable URI permission: ${e.message}", e)
                         pendingPickDirectoryResult?.error("PERMISSION_LOST", e.message, null)
                     }
                 } else {
@@ -642,7 +643,7 @@ class MainActivity : FlutterActivity() {
             }
             startActivityForResult(intent, SAF_PICK_DIRECTORY_REQUEST_CODE)
         } catch (e: Exception) {
-            Log.e("EasySaveSAF", "Failed to start ACTION_OPEN_DOCUMENT_TREE: ${e.message}", e)
+            NativeLog.e("EasySaveSAF", "Failed to start ACTION_OPEN_DOCUMENT_TREE: ${e.message}", e)
             pendingPickDirectoryResult = null
             result.error("SAF_ERROR", e.message, null)
         }
@@ -658,7 +659,7 @@ class MainActivity : FlutterActivity() {
             }
             startActivityForResult(intent, SAF_PICK_FILE_REQUEST_CODE)
         } catch (e: Exception) {
-            Log.e("EasySaveSAF", "Failed to start ACTION_OPEN_DOCUMENT: ${e.message}", e)
+            NativeLog.e("EasySaveSAF", "Failed to start ACTION_OPEN_DOCUMENT: ${e.message}", e)
             pendingPickFileResult = null
             result.error("SAF_ERROR", e.message, null)
         }
@@ -683,7 +684,7 @@ class MainActivity : FlutterActivity() {
                     treeDoc.canWrite()
             result.success(isValid)
         } catch (e: Exception) {
-            Log.w("EasySaveSAF", "checkDirectoryAccess error for $treeUriString: ${e.message}")
+            NativeLog.w("EasySaveSAF", "checkDirectoryAccess error for $treeUriString: ${e.message}")
             result.success(false)
         }
     }
@@ -698,13 +699,13 @@ class MainActivity : FlutterActivity() {
             val uri = Uri.parse(treeUriString)
             val treeDoc = DocumentFile.fromTreeUri(this, uri)
             if (treeDoc == null || !treeDoc.exists() || !treeDoc.isDirectory) {
-                Log.e("EasySaveSAF", "Directory not found: $treeUriString")
+                NativeLog.e("EasySaveSAF", "Directory not found: $treeUriString")
                 result.error("DIRECTORY_NOT_FOUND", "Directory does not exist", null)
                 return
             }
 
             if (!treeDoc.canWrite()) {
-                Log.e("EasySaveSAF", "Permission lost for directory: $treeUriString")
+                NativeLog.e("EasySaveSAF", "Permission lost for directory: $treeUriString")
                 result.error("PERMISSION_LOST", "Permission lost for directory", null)
                 return
             }
@@ -717,7 +718,7 @@ class MainActivity : FlutterActivity() {
                 treeDoc.createFile("application/json", fileName)
             }
             if (targetFile == null) {
-                Log.e("EasySaveSAF", "Failed to obtain or create document file: $fileName")
+                NativeLog.e("EasySaveSAF", "Failed to obtain or create document file: $fileName")
                 result.error("IO_ERROR", "Failed to create backup document file", null)
                 return
             }
@@ -733,10 +734,10 @@ class MainActivity : FlutterActivity() {
 
             result.success(targetFile.uri.toString())
         } catch (e: SecurityException) {
-            Log.e("EasySaveSAF", "SecurityException writing backup: ${e.message}", e)
+            NativeLog.e("EasySaveSAF", "SecurityException writing backup: ${e.message}", e)
             result.error("PERMISSION_LOST", e.message, null)
         } catch (e: IOException) {
-            Log.e("EasySaveSAF", "IOException writing backup: ${e.message}", e)
+            NativeLog.e("EasySaveSAF", "IOException writing backup: ${e.message}", e)
             val msg = e.message ?: ""
             if (msg.contains("ENOSPC", ignoreCase = true) || msg.contains("No space left", ignoreCase = true)) {
                 result.error("STORAGE_FULL", "Storage device is full", null)
@@ -744,7 +745,7 @@ class MainActivity : FlutterActivity() {
                 result.error("IO_ERROR", e.message, null)
             }
         } catch (e: Exception) {
-            Log.e("EasySaveSAF", "Unexpected error writing backup: ${e.message}", e)
+            NativeLog.e("EasySaveSAF", "Unexpected error writing backup: ${e.message}", e)
             result.error("IO_ERROR", e.message, null)
         }
     }
@@ -768,7 +769,7 @@ class MainActivity : FlutterActivity() {
             }
             result.success(list)
         } catch (e: Exception) {
-            Log.w("EasySaveSAF", "listBackupDirectory error: ${e.message}", e)
+            NativeLog.w("EasySaveSAF", "listBackupDirectory error: ${e.message}", e)
             result.success(emptyList<Map<String, String>>())
         }
     }
@@ -785,7 +786,7 @@ class MainActivity : FlutterActivity() {
                     val doc = DocumentFile.fromSingleUri(this, Uri.parse(uriStr))
                     deleted = doc?.delete() ?: false
                 } catch (e2: Exception) {
-                    Log.w("EasySaveSAF", "Failed to delete document $uriStr: ${e2.message}")
+                    NativeLog.w("EasySaveSAF", "Failed to delete document $uriStr: ${e2.message}")
                 }
             }
             results[uriStr] = deleted
@@ -801,13 +802,13 @@ class MainActivity : FlutterActivity() {
             val content = inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() }
             result.success(content)
         } catch (e: SecurityException) {
-            Log.e("EasySaveSAF", "SecurityException reading $uriString: ${e.message}", e)
+            NativeLog.e("EasySaveSAF", "SecurityException reading $uriString: ${e.message}", e)
             result.error("PERMISSION_LOST", e.message, null)
         } catch (e: IOException) {
-            Log.e("EasySaveSAF", "IOException reading $uriString: ${e.message}", e)
+            NativeLog.e("EasySaveSAF", "IOException reading $uriString: ${e.message}", e)
             result.error("IO_ERROR", e.message, null)
         } catch (e: Exception) {
-            Log.e("EasySaveSAF", "Unexpected error reading $uriString: ${e.message}", e)
+            NativeLog.e("EasySaveSAF", "Unexpected error reading $uriString: ${e.message}", e)
             result.error("IO_ERROR", e.message, null)
         }
     }
@@ -818,7 +819,7 @@ class MainActivity : FlutterActivity() {
             val treeDoc = DocumentFile.fromTreeUri(this, uri)
             result.success(treeDoc?.name)
         } catch (e: Exception) {
-            Log.w("EasySaveSAF", "getDirectoryDisplayName error: ${e.message}", e)
+            NativeLog.w("EasySaveSAF", "getDirectoryDisplayName error: ${e.message}", e)
             result.success(null)
         }
     }

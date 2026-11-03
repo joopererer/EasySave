@@ -10,7 +10,7 @@ import org.json.JSONObject
 object SupportedLinks {
     internal var recognitionOverride: String? = null
     private data class ViewResult(val view: JSONObject, val source: String)
-    private fun warn(message: String) { runCatching { Log.w("EasySaveLinks", message) } }
+    private fun warn(message: String) { runCatching { NativeLog.w("EasySaveLinks", message) } }
     private val urls = Regex("""https?://[^\s<>"'，。！？；：）】”　]+|(?<![a-zA-Z0-9_@./:-])(?:[a-zA-Z0-9-]+\.)+[a-zA-Z]{2,}(?:[/\?#][^\s<>"'，。！？；：）】”　]*)?""", RegexOption.IGNORE_CASE)
 
     private fun readView(context: Context?): ViewResult? {

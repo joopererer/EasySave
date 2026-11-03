@@ -1,5 +1,6 @@
 package com.james.easysave
 
+import android.media.MediaDataSource
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.IOException
@@ -19,6 +20,7 @@ internal class NativeMediaRequest(
     private val headers = raw?.get("headers") as? Map<*, *> ?: emptyMap<Any, Any>()
     private val hosts = raw?.get("mediaHosts") as? List<*> ?: emptyList<Any>()
     private val expiresAtMs = (raw?.get("expiresAtMs") as? Number)?.toLong()
+    @Volatile private var pendingRange: String? = null
 
     val diagnosticHost: String
         get() = runCatching { URI(url).host?.lowercase(Locale.ROOT) }
@@ -95,6 +97,7 @@ internal class NativeMediaRequest(
                 connection.connectTimeout = 8000
                 connection.readTimeout = 12000
                 for ((name, value) in headers) connection.setRequestProperty(name, value)
+                pendingRange?.let { connection.setRequestProperty("Range", it) }
                 val status = connection.responseCode
                 if (status in 300..399) {
                     val location = connection.getHeaderField("Location")
@@ -122,7 +125,38 @@ internal class NativeMediaRequest(
                 if (output.size() + count > maxBytes) throw IOException("IMAGE_TOO_LARGE")
                 output.write(buffer, 0, count)
             }
+
             output.toByteArray()
+        }
+    }
+
+    fun readRange(offset: Long, length: Int): ByteArray {
+        pendingRange = "bytes=$offset-${offset + length - 1}"
+        return try {
+            execute { connection ->
+                connection.inputStream.use { input ->
+                    val output = ByteArrayOutputStream()
+                    val buffer = ByteArray(64 * 1024)
+                    var remainingOffset = if (connection.responseCode == 200) offset else 0L
+                    while (remainingOffset > 0) {
+                        val skipped = input.skip(remainingOffset)
+                        if (skipped <= 0) break
+                        remainingOffset -= skipped
+                    }
+                    while (output.size() < length) {
+                        val count = input.read(
+                            buffer,
+                            0,
+                            minOf(buffer.size, length - output.size()),
+                        )
+                        if (count < 0) break
+                        output.write(buffer, 0, count)
+                    }
+                    output.toByteArray()
+                }
+            }
+        } finally {
+            pendingRange = null
         }
     }
 
@@ -141,4 +175,18 @@ internal class NativeMediaRequest(
             }
         }
     }
+}
+
+internal class NativePreviewDataSource(private val request: NativeMediaRequest) : MediaDataSource() {
+    override fun getSize(): Long = -1L
+
+    override fun readAt(position: Long, buffer: ByteArray, offset: Int, size: Int): Int {
+        if (size <= 0) return 0
+        val bytes = request.readRange(position, size)
+        if (bytes.isEmpty()) return -1
+        bytes.copyInto(buffer, offset)
+        return bytes.size
+    }
+
+    override fun close() = Unit
 }

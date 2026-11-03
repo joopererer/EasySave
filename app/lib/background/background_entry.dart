@@ -15,7 +15,7 @@ import '../services/media_request_policy.dart';
 import '../services/site_registry.dart';
 import '../services/download_manager.dart';
 import '../services/download_claims.dart';
-import '../services/history_db.dart';
+import '../services/gallery_locator_service.dart';
 import '../services/links.dart';
 import '../services/parse_service.dart';
 import '../services/preview_resources.dart';
@@ -220,16 +220,9 @@ Future<void> _handleSubmit(
         // mark them and the user can just fetch what is missing).
         final savedIdx = <int>{};
         try {
-          final db = await HistoryDb.instance();
-          final existing = await db.getByPostId(post.id);
-          if (existing != null) {
-            final is1Based =
-                existing.files.isNotEmpty &&
-                existing.files.every((f) => f.itemIndex > 0);
-            for (final f in existing.files) {
-              savedIdx.add(is1Based ? f.itemIndex - 1 : f.itemIndex);
-            }
-          }
+          savedIdx.addAll(
+            await GalleryLocatorService.instance.findDownloadedIndices(post),
+          );
         } catch (e) {
           await _log(
             channel,

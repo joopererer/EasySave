@@ -9,8 +9,8 @@ void main() {
     await tester.pumpWidget(
       const MaterialApp(home: LoginPage(platform: 'xhs')),
     );
-    expect(find.text('小红书登录'), findsOneWidget);
-    expect(find.text('Rednote 登录'), findsOneWidget);
+    expect(find.text('小红书（中国大陆账号）'), findsOneWidget);
+    expect(find.text('rednote（海外账号）'), findsOneWidget);
     await tester.pumpWidget(const SizedBox());
   });
 }

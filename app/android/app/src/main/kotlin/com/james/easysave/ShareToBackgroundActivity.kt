@@ -38,7 +38,7 @@ class ShareToBackgroundActivity : Activity() {
             ?: intent?.getCharSequenceExtra(Intent.EXTRA_TEXT)?.toString()
         // Never log the shared text itself (it can contain a link with
         // tokens) — only its length and the host of the first URL.
-        Log.i(TAG, "share text=${LogSanitizer.summarize(text)}")
+        NativeLog.i(TAG, "share text=${LogSanitizer.summarize(text)}")
 
         // Reject unsupported hosts before starting the background engine.
         // Dart handles canonicalization and resolves platform short links.

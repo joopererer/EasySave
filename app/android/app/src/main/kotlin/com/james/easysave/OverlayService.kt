@@ -123,6 +123,7 @@ class OverlayService : Service() {
 
     override fun onCreate() {
         super.onCreate()
+        NativeLog.init(this)
         isRunning = true
         instance = this
         wm = getSystemService(WINDOW_SERVICE) as WindowManager
@@ -158,7 +159,7 @@ class OverlayService : Service() {
                 startForegroundCompat()
                 addBubble()
             } catch (e: Exception) {
-                Log.e(TAG, "restart addBubble failed: $e")
+                NativeLog.e(TAG, "restart addBubble failed: $e")
             }
         }
         return START_STICKY
@@ -178,7 +179,7 @@ class OverlayService : Service() {
             val am = getSystemService(ALARM_SERVICE) as AlarmManager
             am.set(AlarmManager.RTC, System.currentTimeMillis() + 1000, pi)
         } catch (e: Exception) {
-            Log.e(TAG, "onTaskRemoved restart failed: $e")
+            NativeLog.e(TAG, "onTaskRemoved restart failed: $e")
         }
         super.onTaskRemoved(rootIntent)
     }
@@ -256,7 +257,7 @@ class OverlayService : Service() {
         try {
             wm?.updateViewLayout(view, params)
         } catch (e: Exception) {
-            Log.e(TAG, "insets reposition failed", e)
+            NativeLog.e(TAG, "insets reposition failed", e)
         }
     }
 
@@ -360,7 +361,7 @@ class OverlayService : Service() {
         try {
             wm?.addView(container, params)
         } catch (e: Exception) {
-            Log.e(TAG, "addView failed: $e")
+            NativeLog.e(TAG, "addView failed: $e")
         }
         scheduleIdleHide(2500L)
     }
@@ -487,7 +488,7 @@ class OverlayService : Service() {
         try {
             startActivity(intent)
         } catch (e: Exception) {
-            Log.e(TAG, "startActivity clipboard failed: $e")
+            NativeLog.e(TAG, "startActivity clipboard failed: $e")
             scheduleIdleHide(2500L)
         }
     }
@@ -544,7 +545,7 @@ class OverlayService : Service() {
         try {
             wm?.addView(root, params)
         } catch (e: Exception) {
-            Log.e(TAG, "menu addView failed: $e")
+            NativeLog.e(TAG, "menu addView failed: $e")
         }
     }
 
@@ -611,7 +612,7 @@ class OverlayService : Service() {
             }
             startActivity(i)
         } catch (e: Exception) {
-            Log.e(TAG, "openApp failed: $e")
+            NativeLog.e(TAG, "openApp failed: $e")
         }
     }
 
@@ -629,7 +630,7 @@ class OverlayService : Service() {
             }
             startActivity(i)
         } catch (e: Exception) {
-            Log.e(TAG, "openErrorPage failed: $e")
+            NativeLog.e(TAG, "openErrorPage failed: $e")
         }
     }
 
@@ -665,7 +666,7 @@ class OverlayService : Service() {
         try {
             wm?.addView(cv, params)
         } catch (e: Exception) {
-            Log.e(TAG, "close addView failed: $e")
+            NativeLog.e(TAG, "close addView failed: $e")
         }
     }
 
@@ -688,7 +689,7 @@ class OverlayService : Service() {
                 .putBoolean("flutter.bubbleEnabled", false)
                 .apply()
         } catch (e: Exception) {
-            Log.e(TAG, "persist bubbleEnabled failed: $e")
+            NativeLog.e(TAG, "persist bubbleEnabled failed: $e")
         }
         try {
             bubbleContainer?.let { wm?.removeView(it) }
@@ -699,7 +700,7 @@ class OverlayService : Service() {
         try {
             sendBroadcast(Intent(ACTION_BUBBLE_STATE))
         } catch (e: Exception) {
-            Log.e(TAG, "broadcast bubble state failed: $e")
+            NativeLog.e(TAG, "broadcast bubble state failed: $e")
         }
         stopSelf()
     }

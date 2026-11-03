@@ -266,9 +266,11 @@ class _MinePageState extends State<MinePage> with WidgetsBindingObserver {
             for (final url in xhsProbeUrls())
               SimpleDialogOption(
                 onPressed: () => Navigator.pop(context, url),
-                child: Text(xhsDomain(Uri.parse(url).host) == 'rednote.com'
-                    ? 'Rednote 登录'
-                    : '小红书登录'),
+                child: Text(
+                  xhsDomain(Uri.parse(url).host) == 'rednote.com'
+                      ? 'Rednote 登录'
+                      : '小红书登录',
+                ),
               ),
           ],
         ),
@@ -276,7 +278,9 @@ class _MinePageState extends State<MinePage> with WidgetsBindingObserver {
       if (entryUrl == null || !mounted) return;
     }
     final ok = await Navigator.of(context).push<bool>(
-      MaterialPageRoute<bool>(builder: (_) => LoginPage(platform: platform, entryUrl: entryUrl)),
+      MaterialPageRoute<bool>(
+        builder: (_) => LoginPage(platform: platform, entryUrl: entryUrl),
+      ),
     );
     if (!mounted) return;
     setState(() => _checkingLogin = true);
@@ -671,9 +675,27 @@ class _MinePageState extends State<MinePage> with WidgetsBindingObserver {
       return const Text('无法确认登录状态，请检查网络后重试');
     }
     final loggedIn = _loggedIn[platform] ?? false;
-    final expired = LoginExpiredBus.expired.value.contains(platform);
+    final expired =
+        platform != 'xhs' && LoginExpiredBus.expired.value.contains(platform);
     if (expired) {
       return const Text('登录已失效，请重新登录', style: TextStyle(color: Colors.orange));
+    }
+    if (platform == 'xhs' && loggedIn) {
+      return FutureBuilder<Map<String, SessionStatus>>(
+        future: loadXhsDomainStatuses(),
+        builder: (context, snapshot) {
+          final domains =
+              snapshot.data?.entries
+                  .where((entry) => entry.value == SessionStatus.valid)
+                  .map((entry) => entry.key)
+                  .join('、') ??
+              '';
+          return Text(
+            domains.isEmpty ? '已登录' : '已登录（$domains）',
+            style: const TextStyle(color: Colors.green),
+          );
+        },
+      );
     }
     if (loggedIn && (_nicknames[platform] ?? '').trim().isNotEmpty) {
       return Text(
@@ -715,11 +737,18 @@ class _MinePageState extends State<MinePage> with WidgetsBindingObserver {
                       leading: PlatformIcon(platform: platform),
                       title: Text(platformLabel(platform)),
                       subtitle: _loginSubtitle(platform),
-                      trailing: platform == 'xhs' && (_loggedIn[platform] ?? false)
+                      trailing:
+                          platform == 'xhs' && (_loggedIn[platform] ?? false)
                           ? Wrap(
                               children: [
-                                TextButton(onPressed: () => _openLogin(platform), child: const Text('登录站点')),
-                                TextButton(onPressed: () => _logout(platform), child: const Text('退出登录')),
+                                TextButton(
+                                  onPressed: () => _openLogin(platform),
+                                  child: const Text('登录站点'),
+                                ),
+                                TextButton(
+                                  onPressed: () => _logout(platform),
+                                  child: const Text('退出登录'),
+                                ),
                               ],
                             )
                           : (_loggedIn[platform] ?? false)

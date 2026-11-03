@@ -52,7 +52,7 @@ object BubbleReconciler {
                 try {
                     context.sendBroadcast(Intent(OverlayService.ACTION_BUBBLE_STATE))
                 } catch (e: Exception) {
-                    Log.e(TAG, "send ACTION_BUBBLE_STATE broadcast failed: $e")
+                    NativeLog.e(TAG, "send ACTION_BUBBLE_STATE broadcast failed: $e")
                 }
                 action = ReconcileAction.SYNC_DISABLED
             }
@@ -61,7 +61,7 @@ object BubbleReconciler {
         }
 
         val started = (action == ReconcileAction.START)
-        Log.i(
+        NativeLog.i(
             TAG,
             "reconcile trigger=$trigger enabled=$enabled canDraw=$canDrawOverlays isRunning=${isServiceRunning()} action=$action started=$started"
         )

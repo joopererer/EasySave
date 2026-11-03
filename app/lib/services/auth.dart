@@ -94,6 +94,74 @@ bool hasAccountHook(String platform) =>
 
 enum SessionStatus { valid, invalid, unknown }
 
+const _xhsDomains = ['xiaohongshu.com', 'rednote.com'];
+
+String xhsSessionKey(String domain) => 'xhs.session.$domain';
+
+Future<Map<String, SessionStatus>> loadXhsDomainStatuses() async {
+  final prefs = await SharedPreferences.getInstance();
+  return {
+    for (final domain in _xhsDomains)
+      domain: SessionStatus.values.firstWhere(
+        (status) => status.name == prefs.getString(xhsSessionKey(domain)),
+        orElse: () => SessionStatus.unknown,
+      ),
+  };
+}
+
+Future<void> saveXhsDomainStatus(String domain, SessionStatus status) async {
+  if (!_xhsDomains.contains(domain)) return;
+  final prefs = await SharedPreferences.getInstance();
+  final previous = SessionStatus.values.firstWhere(
+    (value) => value.name == prefs.getString(xhsSessionKey(domain)),
+    orElse: () => SessionStatus.unknown,
+  );
+  if (status == SessionStatus.unknown && previous == SessionStatus.valid) {
+    return;
+  }
+  await prefs.setString(xhsSessionKey(domain), status.name);
+}
+
+String? xhsValidAlternate(String origin, Map<String, SessionStatus> statuses) {
+  final source = xhsDomain(origin);
+  if (source == null || statuses[source] == SessionStatus.valid) return null;
+  for (final domain in _xhsDomains) {
+    if (domain != source && statuses[domain] == SessionStatus.valid) {
+      return domain;
+    }
+  }
+  return null;
+}
+
+Future<String> selectXhsPostUrl(String url, String postId) async {
+  final uri = Uri.tryParse(url);
+  if (uri == null) return url;
+  final origin = xhsDomain(uri.host);
+  if (origin == null) return url;
+  final statuses = await loadXhsDomainStatuses();
+  final targetDomain = statuses[origin] == SessionStatus.valid
+      ? origin
+      : xhsValidAlternate(origin, statuses);
+  if (targetDomain == null || targetDomain == origin) return url;
+  final site = SiteRegistry.current.byId('xhs');
+  final mappings = site?.auth['openDomains'];
+  final template = mappings is Map ? mappings[targetDomain] : null;
+  if (template is! String) return url;
+  final target = Uri.parse(
+    template.replaceFirst('{id}', Uri.encodeComponent(postId)),
+  );
+  return target
+      .replace(
+        queryParameters: {
+          ...target.queryParameters,
+          for (final key in const ['xsec_token', 'xsec_source'])
+            if (uri.queryParameters[key] != null)
+              key: uri.queryParameters[key]!,
+        },
+      )
+      .toString();
+}
+
 bool shouldCachePageAccount(String platform, bool loggedIn) =>
     platform != 'xhs' || loggedIn;
 
@@ -287,9 +355,30 @@ Future<SessionStatus> probeXhsSessions({String entry = 'unspecified'}) async {
     );
     return SessionStatus.unknown;
   }
-  final observations = await Future.wait(
-    urls.map((url) => _probeXhsDomain(Uri.parse(url), entry)),
-  );
+  Future<SiteAccount?> retry(String url) async {
+    for (var attempt = 1; attempt <= 3; attempt++) {
+      final result = await _probeXhsDomain(Uri.parse(url), entry);
+      if (result != null || attempt == 3) return result;
+      await Future<void>.delayed(Duration(milliseconds: attempt * 500));
+    }
+    return null;
+  }
+
+  final observations = await Future.wait(urls.map(retry));
+  for (var i = 0; i < urls.length; i++) {
+    final domain = xhsDomain(Uri.parse(urls[i]).host);
+    final account = observations[i];
+    if (domain != null) {
+      await saveXhsDomainStatus(
+        domain,
+        account == null
+            ? SessionStatus.unknown
+            : account.loggedIn
+            ? SessionStatus.valid
+            : SessionStatus.invalid,
+      );
+    }
+  }
   final status = combineXhsSessionStates(
     observations.map((value) => value?.loggedIn),
   );
@@ -298,7 +387,10 @@ Future<SessionStatus> probeXhsSessions({String entry = 'unspecified'}) async {
       'xhs',
       observations.firstWhere((value) => value?.loggedIn == true)!,
     );
-  } else if (status == SessionStatus.invalid) {
+  } else if (status == SessionStatus.invalid &&
+      (await loadXhsDomainStatuses()).values.every(
+        (value) => value == SessionStatus.invalid,
+      )) {
     await AccountCache.clear('xhs');
   }
   return status;
@@ -317,7 +409,8 @@ Future<SiteAccount?> _probeXhsDomain(Uri target, String entry) async {
     final generation = navigation;
     try {
       final current = await controller.getUrl();
-      if (current == null || xhsDomain(current.host) != xhsDomain(target.host)) {
+      if (current == null ||
+          xhsDomain(current.host) != xhsDomain(target.host)) {
         return;
       }
       final account = await readAccount('xhs', controller);

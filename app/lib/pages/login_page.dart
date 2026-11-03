@@ -57,6 +57,7 @@ class _LoginPageState extends State<LoginPage> {
   bool _pageReady = false;
 
   Timer? _pollTimer;
+  bool? _lastPollState;
 
   bool get _hasAccountHook => hasAccountHook(widget.platform);
   Map get _auth => SiteRegistry.current.byId(widget.platform)?.auth ?? {};
@@ -138,7 +139,12 @@ class _LoginPageState extends State<LoginPage> {
       if (!await _onRequestedXhsDomain(controller)) return;
       final account = await readAccount(widget.platform, controller);
       if (widget.platform == 'xhs') {
-        unawaited(logXhsPageCheck(controller, 'login_poll', account?.loggedIn));
+        if (account?.loggedIn != _lastPollState) {
+          _lastPollState = account?.loggedIn;
+          unawaited(
+            logXhsPageCheck(controller, 'login_poll', account?.loggedIn),
+          );
+        }
       }
       if (account == null || !account.loggedIn) return;
       await AccountCache.save(widget.platform, account);
@@ -272,8 +278,8 @@ class _LoginPageState extends State<LoginPage> {
               ListTile(
                 title: Text(
                   xhsDomain(Uri.parse(url).host) == 'rednote.com'
-                      ? 'Rednote 登录'
-                      : '小红书登录',
+                      ? 'rednote（海外账号）'
+                      : '小红书（中国大陆账号）',
                 ),
                 onTap: () => setState(() => _selectedEntryUrl = url),
               ),

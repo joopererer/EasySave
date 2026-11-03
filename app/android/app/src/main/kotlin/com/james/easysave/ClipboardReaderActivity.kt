@@ -46,7 +46,7 @@ class ClipboardReaderActivity : Activity() {
     private val timeout = Runnable {
         if (!done) {
             done = true
-            Log.i(TAG, "CLIPBOARD=<timeout: no focus>")
+            NativeLog.i(TAG, "CLIPBOARD=<timeout: no focus>")
             finish()
         }
     }
@@ -75,7 +75,7 @@ class ClipboardReaderActivity : Activity() {
             if (clip != null && clip.itemCount > 0) clip.getItemAt(0).coerceToText(this)?.toString() else null
         // Never log the clipboard content itself (it can contain a share link
         // with tokens) — only its length and the host of the first URL.
-        Log.i(TAG, "CLIPBOARD=${LogSanitizer.summarize(text)}")
+        NativeLog.i(TAG, "CLIPBOARD=${LogSanitizer.summarize(text)}")
         if (ExternalHandlers.handle(this, text)) {
             deliver(null)
             finish()

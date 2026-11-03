@@ -9,7 +9,7 @@ import 'package:http/http.dart' as http;
 
 import '../core/dev_log.dart';
 import '../core/models.dart';
-import 'auth.dart' show isLoopbackHost, logXhsWebViewCookies;
+import 'auth.dart' show isLoopbackHost, logXhsWebViewCookies, selectXhsPostUrl;
 import 'ai_label_log.dart';
 import 'history_db.dart';
 import 'links.dart';
@@ -119,16 +119,15 @@ Future<T> resolveAndEnterParse<T>(
       resolved = await resolveShortLink(
         url,
         readRedirect: readRedirect,
-        timeout: fallback && (timeout == null || timeout > const Duration(seconds: 5))
-            ? const Duration(seconds: 5) : timeout,
+        timeout:
+            fallback &&
+                (timeout == null || timeout > const Duration(seconds: 5))
+            ? const Duration(seconds: 5)
+            : timeout,
       );
     } on FormatException {
       if (fallback) return enter(url, null);
-      _logParseCheck(
-        'SHORT_TARGET_REJECTED',
-        site,
-        actual: _hostPathOf(url),
-      );
+      _logParseCheck('SHORT_TARGET_REJECTED', site, actual: _hostPathOf(url));
       throw ParseFailure(ParseErrorCode.invalidPage, '短链跳转目标不受支持');
     } on TimeoutException {
       if (fallback) return enter(url, null);
@@ -168,13 +167,20 @@ Future<T> resolveAndEnterParse<T>(
     if (rule != null && site.shortLinkFallback(uri, rule) == 'webview') {
       return enter(url, null);
     }
-    _logParseCheck('SHORT_TARGET_NOT_POST', site, actual: _hostPathOf(resolved));
+    _logParseCheck(
+      'SHORT_TARGET_NOT_POST',
+      site,
+      actual: _hostPathOf(resolved),
+    );
     throw ParseFailure(ParseErrorCode.invalidPage, '短链跳转目标不是作品页面');
   }
   return enter(resolved, canonical);
 }
 
-Future<ParseOutcome> parsePostOutcome(String url, {String source = 'app'}) async {
+Future<ParseOutcome> parsePostOutcome(
+  String url, {
+  String source = 'app',
+}) async {
   final preSite = SiteRegistry.current.match(url, includeDisabled: true);
   if (preSite == null) {
     throw ParseFailure(ParseErrorCode.unsupportedUrl, '无法识别链接');
@@ -191,7 +197,10 @@ Future<ParseOutcome> parsePostOutcome(String url, {String source = 'app'}) async
   final script = await ParserManager.instance.getActiveScript().timeout(
     budget,
     onTimeout: () {
-      DevLog.write('ParseWebView', 'event=failure source=$source site=${preSite.id} condition=script_timeout code=TIMEOUT');
+      DevLog.write(
+        'ParseWebView',
+        'event=failure source=$source site=${preSite.id} condition=script_timeout code=TIMEOUT',
+      );
       throw ParseFailure(ParseErrorCode.timeout, '加载页面超时，请重试');
     },
   );
@@ -207,9 +216,14 @@ Future<ParseOutcome> parsePostOutcome(String url, {String source = 'app'}) async
   }
   final hooks = ParserHooks(script, site);
   try {
+    final loadOrigin = site.id == 'xhs'
+        ? site.sourceId(Uri.parse(url)) == null
+              ? url
+              : await selectXhsPostUrl(url, site.sourceId(Uri.parse(url))!)
+        : url;
     return await (() async {
       final result = await resolveAndEnterParse(
-        url,
+        loadOrigin,
         site,
         (loadUrl, _) => _run(hooks, loadUrl, source: source),
         timeout: remaining(),
@@ -237,7 +251,10 @@ Future<ParseOutcome> parsePostOutcome(String url, {String source = 'app'}) async
     })().timeout(
       remaining(),
       onTimeout: () {
-        DevLog.write('ParseWebView', 'event=failure source=$source site=${site.id} condition=budget code=TIMEOUT');
+        DevLog.write(
+          'ParseWebView',
+          'event=failure source=$source site=${site.id} condition=budget code=TIMEOUT',
+        );
         throw ParseFailure(ParseErrorCode.timeout, '加载页面超时，请重试');
       },
     );
@@ -367,9 +384,17 @@ ParseOutcome validateParserResult(dynamic value, SiteDefinition site) {
     if (problem.isEmpty) continue;
     final item = items[index];
     final keys = item is Map
-        ? item.keys.whereType<String>().where((key) => RegExp(r'^[A-Za-z][A-Za-z0-9_]{0,40}$').hasMatch(key)).take(12).join(',')
+        ? item.keys
+              .whereType<String>()
+              .where(
+                (key) => RegExp(r'^[A-Za-z][A-Za-z0-9_]{0,40}$').hasMatch(key),
+              )
+              .take(12)
+              .join(',')
         : '-';
-    final mediaType = item is Map && item['type'] is String &&
+    final mediaType =
+        item is Map &&
+            item['type'] is String &&
             RegExp(r'^[A-Za-z]{1,20}$').hasMatch(item['type'] as String)
         ? item['type'] as String
         : item.runtimeType.toString();
@@ -465,17 +490,22 @@ Future<NavigateStep> navigateStep({
   if (action == null) {
     final isPostPage =
         uri != null && site.sourceId(uri) != null && site.hasHost(uri.host);
-    return NavigateStep(
-      isPostPage ? NavigateKind.parse : NavigateKind.wait,
-    );
+    return NavigateStep(isPostPage ? NavigateKind.parse : NavigateKind.wait);
   }
   return const NavigateStep(NavigateKind.parse);
 }
 
-Future<ParseOutcome> _run(ParserHooks hooks, String targetUrl, {required String source}) async {
+Future<ParseOutcome> _run(
+  ParserHooks hooks,
+  String targetUrl, {
+  required String source,
+}) async {
   final jsonMode = hooks.site.load['mode'] == 'json';
   final target = Uri.tryParse(targetUrl);
-  DevLog.write('ParseWebView', 'event=start source=$source site=${hooks.site.id} hasQuery=${target?.hasQuery == true ? 1 : 0}');
+  DevLog.write(
+    'ParseWebView',
+    'event=start source=$source site=${hooks.site.id} hasQuery=${target?.hasQuery == true ? 1 : 0}',
+  );
   final loaded = Completer<InAppWebViewController>();
   var navigated = false;
   var loads = 0;
@@ -537,7 +567,10 @@ Future<ParseOutcome> _run(ParserHooks hooks, String targetUrl, {required String 
         if (loaded.isCompleted) return;
         loads++;
         path = parsePathCategory(uri);
-        DevLog.write('ParseWebView', 'event=loadStop source=$source site=${hooks.site.id} hasQuery=${uri?.hasQuery == true ? 1 : 0} path=$path loads=$loads navigations=$mainNavigations');
+        DevLog.write(
+          'ParseWebView',
+          'event=loadStop source=$source site=${hooks.site.id} hasQuery=${uri?.hasQuery == true ? 1 : 0} path=$path loads=$loads navigations=$mainNavigations',
+        );
         try {
           if (!jsonMode) {
             stage = 'navigate';
@@ -548,7 +581,10 @@ Future<ParseOutcome> _run(ParserHooks hooks, String targetUrl, {required String 
               alreadyNavigated: navigated,
               navigate: () => hooks.call(controller, 'navigate', current),
             );
-            DevLog.write('ParseWebView', 'event=navigate source=$source site=${hooks.site.id} path=$path loads=$loads navigations=$mainNavigations condition=${step.kind.name}');
+            DevLog.write(
+              'ParseWebView',
+              'event=navigate source=$source site=${hooks.site.id} path=$path loads=$loads navigations=$mainNavigations condition=${step.kind.name}',
+            );
             switch (step.kind) {
               case NavigateKind.wait:
                 stage = 'load_wait';
@@ -579,13 +615,19 @@ Future<ParseOutcome> _run(ParserHooks hooks, String targetUrl, {required String 
       },
       onReceivedError: (controller, request, error) {
         if (request.isForMainFrame == true && !loaded.isCompleted) {
-          DevLog.write('ParseWebView', 'event=mainFrameError source=$source site=${hooks.site.id} type=${error.type}');
+          DevLog.write(
+            'ParseWebView',
+            'event=mainFrameError source=$source site=${hooks.site.id} type=${error.type}',
+          );
           loaded.complete(controller);
         }
       },
       onReceivedHttpError: (controller, request, response) {
         if (request.isForMainFrame == true) {
-          DevLog.write('ParseWebView', 'event=httpError source=$source site=${hooks.site.id} status=${response.statusCode ?? 0}');
+          DevLog.write(
+            'ParseWebView',
+            'event=httpError source=$source site=${hooks.site.id} status=${response.statusCode ?? 0}',
+          );
         }
       },
     );
@@ -674,14 +716,22 @@ Future<ParseOutcome> _run(ParserHooks hooks, String targetUrl, {required String 
     }
     stage = 'validate';
     final outcome = validateParserResult(result, hooks.site);
-    DevLog.write('ParseWebView', 'event=success source=$source site=${hooks.site.id} path=$path loads=$loads navigations=$mainNavigations');
+    DevLog.write(
+      'ParseWebView',
+      'event=success source=$source site=${hooks.site.id} path=$path loads=$loads navigations=$mainNavigations',
+    );
     return outcome;
   } catch (error) {
     final code = error is ParseFailure
         ? error.code
-        : error is TimeoutException ? 'TIMEOUT' : 'UNEXPECTED';
+        : error is TimeoutException
+        ? 'TIMEOUT'
+        : 'UNEXPECTED';
     final safeCode = RegExp(r'^[A-Z_]{1,40}$').hasMatch(code) ? code : 'OTHER';
-    DevLog.write('ParseWebView', 'event=failure source=$source site=${hooks.site.id} path=$path loads=$loads navigations=$mainNavigations condition=$stage code=$safeCode');
+    DevLog.write(
+      'ParseWebView',
+      'event=failure source=$source site=${hooks.site.id} path=$path loads=$loads navigations=$mainNavigations condition=$stage code=$safeCode',
+    );
     rethrow;
   } finally {
     await view?.dispose();
