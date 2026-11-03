@@ -18,6 +18,7 @@ import '../services/download_claims.dart';
 import '../services/history_db.dart';
 import '../services/links.dart';
 import '../services/parse_service.dart';
+import '../services/preview_resources.dart';
 import '../services/settings.dart';
 import '../services/update_service.dart';
 
@@ -58,9 +59,16 @@ void backgroundEntry() {
         final shape = values['shape'] as String? ?? '';
         if (RegExp(r'^REQUEST_[A-Z_]+$').hasMatch(code) &&
             RegExp(r'^[a-z0-9.:-]{0,253}$').hasMatch(host) &&
-            RegExp(r'^(thumbRequest|imageRequest|videoRequest)$').hasMatch(field) &&
-            RegExp(r'^(empty|relative|protocol-relative|scheme=[a-z][a-z0-9+.-]*)$').hasMatch(shape)) {
-          await DevLog.write('RequestPolicy', '$code host=$host${code == 'REQUEST_URL_REJECTED' ? ' field=$field shape=$shape' : ''}');
+            RegExp(
+              r'^(thumbRequest|imageRequest|videoRequest)$',
+            ).hasMatch(field) &&
+            RegExp(
+              r'^(empty|relative|protocol-relative|scheme=[a-z][a-z0-9+.-]*)$',
+            ).hasMatch(shape)) {
+          await DevLog.write(
+            'RequestPolicy',
+            '$code host=$host${code == 'REQUEST_URL_REJECTED' ? ' field=$field shape=$shape' : ''}',
+          );
         }
         break;
     }
@@ -223,7 +231,10 @@ Future<void> _handleSubmit(
             }
           }
         } catch (e) {
-          await _log(channel, 'SELECT history lookup failed type=${e.runtimeType}');
+          await _log(
+            channel,
+            'SELECT history lookup failed type=${e.runtimeType}',
+          );
         }
         final site = SiteRegistry.current.byId(post.platform);
         if (site == null) {
@@ -270,17 +281,32 @@ Future<void> _handleSubmit(
             return nativeRequirement(resource);
           }
 
+          Future<List<Map<String, Object?>>> imageFallbacks(String? url) async {
+            final candidates = previewImageCandidates(resources, url);
+            return [
+              for (final resource in candidates.skip(1))
+                await nativeRequirement(resource),
+            ];
+          }
+
           panelItems.add({
             'thumbRequest': await forUrl(thumbUrl),
             'imageRequest': await forUrl(item.url),
+            'thumbFallbacks': await imageFallbacks(thumbUrl),
+            'imageFallbacks': await imageFallbacks(item.url),
             'videoRequest': await forUrl(item.videoUrl ?? item.url),
             'video': item.type == 'video',
-            'live': item.type == 'live' && item.videoUrl != null && item.videoUrl!.isNotEmpty,
+            'live':
+                item.type == 'live' &&
+                item.videoUrl != null &&
+                item.videoUrl!.isNotEmpty,
+            'openOnHold': post.platform == 'tiktok' && item.type == 'video',
             'saved': savedIdx.contains(i),
           });
         }
         await _invoke(channel, 'showSelectPanel', {
           'stickyPreview': settings.bubblePreviewSticky,
+          'postUrl': url,
           'items': panelItems,
         });
         // Keep the engine alive while the user picks.
@@ -335,10 +361,7 @@ Future<void> _handleSubmit(
         requestGalleryAccess: false,
       );
       anyStarted = true;
-      await _log(
-        channel,
-        'DOWNLOAD started ${batch.jobs.length} files',
-      );
+      await _log(channel, 'DOWNLOAD started ${batch.jobs.length} files');
       if (toasts) await _toast(channel, '开始下载 ${batch.jobs.length} 个文件');
       unawaited(_awaitBatchAndNotify(channel, batch, started, url, toasts));
     } on AlreadyDownloading {
@@ -378,7 +401,10 @@ Future<void> _handleSubmit(
       );
       await _error(channel, '', e.code, '该资源地址不在允许范围内');
     } catch (e) {
-      await _log(channel, 'ERROR (${sw.elapsedMilliseconds}ms) type=${e.runtimeType}');
+      await _log(
+        channel,
+        'ERROR (${sw.elapsedMilliseconds}ms) type=${e.runtimeType}',
+      );
       if (toasts) await _toast(channel, '处理失败');
       await _tile(channel, false, null);
       await _bubble(

@@ -82,14 +82,10 @@ export function readXhsAccount() { return JSON.parse((function () {
     if (typeof loggedIn !== 'boolean') return JSON.stringify({ state: 'unknown' });
     if (!loggedIn) return JSON.stringify({ state: 'guest' });
     var info = unwrap(user.userInfo);
-    if (!info || info.guest === true || !info.userId) {
-      return JSON.stringify({ state: 'guest' });
-    }
-    return JSON.stringify({
-      state: 'user',
-      userId: String(info.userId),
-      nickname: info.nickname || ''
-    });
+    var result = { state: 'user' };
+    if (info && info.userId) result.userId = String(info.userId);
+    if (info && info.nickname) result.nickname = String(info.nickname);
+    return JSON.stringify(result);
   } catch (e) {
     return JSON.stringify({ state: 'unknown' });
   }

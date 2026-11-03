@@ -25,12 +25,16 @@ describe('manifest-selected parser hooks', () => {
     vi.stubGlobal('window', {__INITIAL_STATE__: {note: {noteDetailMap: {abc: {}}}}});
     expect(call('xhs', 'ready', {url:'https://www.xiaohongshu.com/explore/xyz'})).toBe(false);
     expect(call('xhs', 'ready', {url:'https://www.xiaohongshu.com/explore/abc'})).toBe(true);
+    expect(call('xhs', 'ready', {url:'https://www.rednote.com/user/profile/user/xyz'})).toBe(false);
+    expect(call('xhs', 'ready', {url:'https://www.rednote.com/user/profile/user/abc'})).toBe(true);
   });
   it('reads optional account state without returning cookies', () => {
     vi.stubGlobal('window', {__INITIAL_STATE__: {user: {loggedIn:true, userInfo: {userId:'123', nickname:'User'}}}});
     expect(call('xhs', 'account')).toEqual({state:'user', userId:'123', nickname:'User'});
     vi.stubGlobal('window', {__INITIAL_STATE__: {user: {loggedIn:false}}});
     expect(call('xhs', 'account')).toEqual({state:'guest'});
+    vi.stubGlobal('window', {__INITIAL_STATE__: {user: {loggedIn:true}}});
+    expect(call('xhs', 'account')).toEqual({state:'user'});
     vi.stubGlobal('window', {});
     expect(call('xhs', 'account')).toEqual({state:'unknown'});
     expect(call('instagram', 'account')).toBeNull();

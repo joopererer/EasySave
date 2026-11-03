@@ -1,0 +1,18 @@
+{
+  "platform": "xhs",
+  "id": "670f1a2b000000001e028b12",
+  "url": "https://www.xiaohongshu.com/explore/670f1a2b000000001e028b12",
+  "author": {},
+  "items": [
+    {
+      "type": "image",
+      "url": "https://sns-img-bd.xhscdn.com/fixture-image",
+      "fallbacks": [
+        "https://ci.xiaohongshu.com/fixture-image?imageView2/format/jpg",
+        "https://sns-img-qc.xhscdn.com/fixture-image",
+        "https://ci.xiaohongshu.com/fixture-image"
+      ]
+    }
+  ],
+  "title": "Profile post"
+}

@@ -27,7 +27,7 @@ const modules: Record<string, Hooks> = {
     ready: (c) => {
       const state = page().__INITIAL_STATE__;
       if (!state) return false;
-      const wanted = /\/(?:explore|discovery\/item)\/([a-zA-Z0-9]+)/.exec(c.url)?.[1];
+      const wanted = /\/(?:explore|discovery\/item|user\/profile\/[^/]+)\/([a-zA-Z0-9]+)/.exec(c.url)?.[1];
       const map = state.note?.noteDetailMap;
       if (map) return wanted ? Object.hasOwn(map, wanted) : Object.keys(map).length > 0;
       const note = state.noteData?.data?.noteData || state.noteData?.data;

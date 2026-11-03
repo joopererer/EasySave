@@ -58,6 +58,7 @@ class SelectPanelView(
     context: Context,
     private val stickyPreview: Boolean = false,
     private val onPolicyRejected: (String, String, String, String) -> Unit = { _, _, _, _ -> },
+    private val onOpenPreview: () -> Unit = {},
     private val onResult: (List<Int>?) -> Unit,
 ) : FrameLayout(context) {
 
@@ -159,13 +160,34 @@ class SelectPanelView(
         }
     }
 
+    private class HoldProgressView(context: Context) : View(context) {
+        var progress = 0f
+            set(value) { field = value; invalidate() }
+        private val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.STROKE
+            strokeWidth = 4f * resources.displayMetrics.density
+            strokeCap = Paint.Cap.ROUND
+        }
+        override fun onDraw(canvas: Canvas) {
+            super.onDraw(canvas)
+            val inset = paint.strokeWidth / 2f
+            paint.color = 0x66FFFFFF
+            canvas.drawArc(inset, inset, width - inset, height - inset, 0f, 360f, false, paint)
+            paint.color = Color.WHITE
+            canvas.drawArc(inset, inset, width - inset, height - inset, -90f, 360f * progress, false, paint)
+        }
+    }
+
     private class Cell(
         val thumbRequest: NativeMediaRequest,
         val imageRequest: NativeMediaRequest,
         val videoRequest: NativeMediaRequest,
+        val thumbFallbacks: List<NativeMediaRequest>,
+        val imageFallbacks: List<NativeMediaRequest>,
         val video: Boolean,
         val live: Boolean,
         val saved: Boolean,
+        val openOnHold: Boolean,
     )
 
     private val main = Handler(Looper.getMainLooper())
@@ -202,6 +224,11 @@ class SelectPanelView(
     private var previewGeneration = 0
     private var previewFrameTimeout: Runnable? = null
     private var previewOpenedAt = 0L
+    private val holdToOpen = HoldToOpen()
+    private var holdAnimator: ValueAnimator? = null
+    private var holdIndicator: HoldProgressView? = null
+    private var holdTrigger: Runnable? = null
+    private var holdPreview = false
 
     // Navigation and video control components
     private var prevArrowBtn: View? = null
@@ -259,7 +286,7 @@ class SelectPanelView(
     }
 
     override fun dispatchTouchEvent(ev: MotionEvent): Boolean {
-        if (!isStickyPreview && previewOverlay?.visibility == View.VISIBLE) {
+        if ((!isStickyPreview || holdPreview) && previewOverlay?.visibility == View.VISIBLE) {
             if (ev.actionMasked == MotionEvent.ACTION_UP || ev.actionMasked == MotionEvent.ACTION_CANCEL) {
                 hidePreview()
                 return true
@@ -275,14 +302,21 @@ class SelectPanelView(
             fun request(key: String) = NativeMediaRequest(
                 m[key] as? Map<*, *>, key, onPolicyRejected,
             )
+            fun fallbackRequests(key: String, field: String) =
+                (m[key] as? List<*>)?.map {
+                    NativeMediaRequest(it as? Map<*, *>, field, onPolicyRejected)
+                } ?: emptyList()
             cells.add(
                 Cell(
                     thumbRequest = request("thumbRequest"),
                     imageRequest = request("imageRequest"),
                     videoRequest = request("videoRequest"),
+                    thumbFallbacks = fallbackRequests("thumbFallbacks", "thumbRequest"),
+                    imageFallbacks = fallbackRequests("imageFallbacks", "imageRequest"),
                     video = m["video"] as? Boolean ?: false,
                     live = m["live"] as? Boolean ?: false,
                     saved = m["saved"] as? Boolean ?: false,
+                    openOnHold = m["openOnHold"] as? Boolean ?: false,
                 )
             )
         }
@@ -587,6 +621,12 @@ class SelectPanelView(
             previewProgress,
             LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT, Gravity.CENTER)
         )
+        holdIndicator = HoldProgressView(context).apply {
+            visibility = View.GONE
+        }
+        overlay.addView(holdIndicator, LayoutParams(dp(48), dp(48), Gravity.CENTER).apply {
+            topMargin = dp(80)
+        })
 
         val topBar = LinearLayout(context).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -728,7 +768,7 @@ class SelectPanelView(
                 alpha = 0.6f
             }
             box.addView(shimmer, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT))
-            if (showThumbs && !cells[i].thumbRequest.requiresAppPreview) {
+            if (showThumbs && (listOf(cells[i].thumbRequest) + cells[i].thumbFallbacks).any { !it.requiresAppPreview }) {
                 shimmers.add(shimmer)
                 startShimmer()
             } else {
@@ -875,7 +915,7 @@ class SelectPanelView(
 
             grid.addView(box)
             if (showThumbs && !cells[i].thumbRequest.requiresAppPreview) {
-                loadThumb(cells[i].thumbRequest, iv, shimmer)
+                loadThumb(listOf(cells[i].thumbRequest) + cells[i].thumbFallbacks, iv, shimmer)
             }
         }
         updateFooter()
@@ -922,6 +962,7 @@ class SelectPanelView(
 
     private fun showPreview(index: Int) {
         if (index !in cells.indices) return
+        cancelHoldPreview()
         previewIndex = index
         val generation = ++previewGeneration
         previewOpenedAt = SystemClock.uptimeMillis()
@@ -942,6 +983,41 @@ class SelectPanelView(
         releasePlayer()
         previewTitle?.setOnClickListener(null)
 
+        if (cell.openOnHold) {
+                holdPreview = true
+                previewTexture?.visibility = View.GONE
+                previewImage?.visibility = View.VISIBLE
+                previewImage?.setImageBitmap(null)
+                previewProgress?.visibility = View.GONE
+                videoControlBar?.visibility = View.GONE
+                previewCloseBtn?.visibility = View.GONE
+                prevArrowBtn?.visibility = View.GONE
+                nextArrowBtn?.visibility = View.GONE
+                previewTitle?.text = "继续按住在 App 中打开"
+                if ((listOf(cell.thumbRequest) + cell.thumbFallbacks).any { !it.requiresAppPreview }) {
+                    loadImage(listOf(cell.thumbRequest) + cell.thumbFallbacks, generation)
+                }
+                val indicator = holdIndicator
+                indicator?.visibility = View.VISIBLE
+                holdToOpen.start(SystemClock.uptimeMillis())
+                val trigger = Runnable {
+                    if (holdToOpen.takeTrigger(SystemClock.uptimeMillis()) &&
+                        previewCurrent(generation)) {
+                        hidePreview()
+                        onOpenPreview()
+                    }
+                }
+                holdTrigger = trigger
+                main.postDelayed(trigger, 3000L)
+                holdAnimator = ValueAnimator.ofInt(0, 1000).apply {
+                    duration = 3000L
+                    addUpdateListener {
+                        indicator?.progress = (it.animatedValue as Int) / 1000f
+                    }
+                    start()
+                }
+                return
+        }
         if (request.requiresAppPreview) {
             if (cell.live) {
                 showLiveStill(cell, generation)
@@ -967,9 +1043,11 @@ class SelectPanelView(
             previewImage?.visibility = View.VISIBLE
             previewImage?.setImageBitmap(null)
             previewTexture?.visibility = View.VISIBLE
-            previewTexture?.alpha = 0f
-            val poster = if (cell.live) cell.imageRequest else cell.thumbRequest
-            if (!poster.requiresAppPreview) loadImage(poster, generation, keepProgress = true)
+            previewTexture?.alpha = 1f
+            previewImage?.bringToFront()
+            val poster = if (cell.live) listOf(cell.imageRequest) + cell.imageFallbacks
+                else listOf(cell.thumbRequest) + cell.thumbFallbacks
+            if (poster.any { !it.requiresAppPreview }) loadImage(poster, generation, keepProgress = true)
             playVideo(cell, generation)
             main.removeCallbacks(updateProgressRunnable)
             main.post(updateProgressRunnable)
@@ -978,7 +1056,7 @@ class SelectPanelView(
             main.removeCallbacks(updateProgressRunnable)
             previewTexture?.visibility = View.GONE
             previewImage?.visibility = View.VISIBLE
-            loadImage(cell.imageRequest, generation)
+            loadImage(listOf(cell.imageRequest) + cell.imageFallbacks, generation)
         }
     }
 
@@ -992,7 +1070,8 @@ class SelectPanelView(
         videoControlBar?.visibility = View.GONE
         previewTexture?.visibility = View.GONE
         previewImage?.visibility = View.VISIBLE
-        if (cell.imageRequest.requiresAppPreview) {
+        val stills = listOf(cell.imageRequest) + cell.imageFallbacks
+        if (stills.all { it.requiresAppPreview }) {
             previewProgress?.visibility = View.GONE
             previewTitle?.text = "请在 App 内预览（点击打开 App）"
             previewTitle?.setOnClickListener {
@@ -1001,15 +1080,25 @@ class SelectPanelView(
                 }
             }
         } else {
-            loadImage(cell.imageRequest, generation)
+            loadImage(stills, generation)
         }
     }
 
     private fun playVideo(cell: Cell, generation: Int) {
         var stopped = false
+        val frameGate = PreviewFrameGate()
         fun logPlayer(event: String, errorCode: String = "none") {
             Log.i("PreviewPlayer", "event=$event host=${cell.videoRequest.diagnosticHost} " +
                 "errorCode=$errorCode headers=${cell.videoRequest.diagnosticHeaderNames}")
+        }
+        fun firstFrame() {
+            if (stopped || !previewCurrent(generation) || !frameGate.firstFrame()) return
+            logPlayer("firstFrame")
+            previewFrameTimeout?.let { main.removeCallbacks(it) }
+            previewFrameTimeout = null
+            previewProgress?.visibility = View.GONE
+            previewTexture?.alpha = 1f
+            previewImage?.visibility = View.GONE
         }
         fun failed(rejected: Boolean = false) {
             if (stopped || !previewCurrent(generation)) return
@@ -1068,7 +1157,10 @@ class SelectPanelView(
                             setOnPreparedListener { player ->
                                 fitVideoToView(player.videoWidth, player.videoHeight)
                                 if (!stopped && previewCurrent(generation) && mediaPlayer === player) {
-                                    try { player.start() } catch (e: Exception) {
+                                    try {
+                                        player.start()
+                                        frameGate.started()
+                                    } catch (e: Exception) {
                                         logPlayer("error", e.javaClass.simpleName.takeIf {
                                             it.matches(Regex("[A-Za-z0-9_]{1,80}"))
                                         } ?: "start")
@@ -1079,12 +1171,7 @@ class SelectPanelView(
                             setOnInfoListener { player, what, _ ->
                                 if (!stopped && previewCurrent(generation) && mediaPlayer === player &&
                                     previewFirstFrame(what)) {
-                                    logPlayer("firstFrame")
-                                    previewFrameTimeout?.let { main.removeCallbacks(it) }
-                                    previewFrameTimeout = null
-                                    previewProgress?.visibility = View.GONE
-                                    previewTexture?.alpha = 1f
-                                    previewImage?.visibility = View.GONE
+                                    firstFrame()
                                 }
                                 false
                             }
@@ -1103,8 +1190,7 @@ class SelectPanelView(
                         failed()
                     }
                 }
-                if (texture.isAvailable) startMp(texture.surfaceTexture!!)
-                else texture.surfaceTextureListener = object : TextureView.SurfaceTextureListener {
+                texture.surfaceTextureListener = object : TextureView.SurfaceTextureListener {
                     override fun onSurfaceTextureAvailable(st: SurfaceTexture, width: Int, height: Int) {
                         startMp(st)
                     }
@@ -1113,24 +1199,21 @@ class SelectPanelView(
                         if (previewCurrent(generation)) releasePlayer()
                         return true
                     }
-                    override fun onSurfaceTextureUpdated(st: SurfaceTexture) {}
+                    override fun onSurfaceTextureUpdated(st: SurfaceTexture) {
+                        firstFrame()
+                    }
                 }
+                if (texture.isAvailable) startMp(texture.surfaceTexture!!)
             }
         }
     }
 
-    private fun loadImage(request: NativeMediaRequest, generation: Int, keepProgress: Boolean = false) {
+    private fun loadImage(requests: List<NativeMediaRequest>, generation: Int, keepProgress: Boolean = false) {
         val target = previewImage ?: return
         target.setImageBitmap(null)
         val maxDim = resources.displayMetrics.widthPixels.coerceAtLeast(resources.displayMetrics.heightPixels)
         pool.execute {
-            var bmp: Bitmap? = null
-            var denied = false
-            try {
-                bmp = decodeSampled(request.readImage(), maxDim)
-            } catch (_: NativeMediaRequest.Rejected) {
-                denied = true
-            } catch (_: Exception) {}
+            val (bmp, denied) = decodeFirstImage(requests, maxDim)
             val result = bmp
             main.post {
                 if (previewCurrent(generation)) {
@@ -1142,7 +1225,18 @@ class SelectPanelView(
         }
     }
 
+    private fun cancelHoldPreview() {
+        holdToOpen.cancel()
+        holdTrigger?.let { main.removeCallbacks(it) }
+        holdTrigger = null
+        holdAnimator?.cancel()
+        holdAnimator = null
+        holdIndicator?.visibility = View.GONE
+        holdPreview = false
+    }
+
     private fun hidePreview() {
+        cancelHoldPreview()
         previewIndex = -1
         previewGeneration++
         releasePlayer()
@@ -1251,15 +1345,9 @@ class SelectPanelView(
         updateFooter()
     }
 
-    private fun loadThumb(request: NativeMediaRequest, target: ImageView, shimmer: View) {
+    private fun loadThumb(requests: List<NativeMediaRequest>, target: ImageView, shimmer: View) {
         pool.execute {
-            var bitmap: Bitmap? = null
-            var denied = false
-            try {
-                bitmap = decodeSampled(request.readImage(), dp(TARGET_PX))
-            } catch (_: NativeMediaRequest.Rejected) {
-                denied = true
-            } catch (_: Exception) {}
+            val (bitmap, denied) = decodeFirstImage(requests, dp(TARGET_PX))
             val bmp = bitmap
             main.post {
                 if (target.isAttachedToWindow) {
@@ -1274,6 +1362,27 @@ class SelectPanelView(
                 }
             }
         }
+    }
+
+    private fun decodeFirstImage(requests: List<NativeMediaRequest>, target: Int): Pair<Bitmap?, Boolean> {
+        var denied = false
+        for (request in requests) {
+            if (request.requiresAppPreview) continue
+            try {
+                val bitmap = decodeSampled(request.readImage(), target)
+                if (bitmap != null) return bitmap to false
+                Log.i("PreviewImage", "event=error host=${request.diagnosticHost} errorCode=decode")
+            } catch (error: NativeMediaRequest.Rejected) {
+                denied = true
+                Log.i("PreviewImage", "event=error host=${request.diagnosticHost} errorCode=${error.code}")
+            } catch (error: Exception) {
+                val code = error.javaClass.simpleName.takeIf {
+                    it.matches(Regex("[A-Za-z0-9_]{1,80}"))
+                } ?: "request"
+                Log.i("PreviewImage", "event=error host=${request.diagnosticHost} errorCode=$code")
+            }
+        }
+        return null to denied
     }
 
     private fun decodeSampled(bytes: ByteArray, target: Int): Bitmap? {

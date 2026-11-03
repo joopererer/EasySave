@@ -30,6 +30,7 @@ class MinePage extends StatefulWidget {
 
 class _MinePageState extends State<MinePage> with WidgetsBindingObserver {
   final Map<String, bool> _loggedIn = {for (final p in loginSiteIds) p: false};
+  SessionStatus? _xhsStatus;
   bool _checkingLogin = true;
   AppSettings _settings = AppSettings();
   String _version = '';
@@ -180,7 +181,12 @@ class _MinePageState extends State<MinePage> with WidgetsBindingObserver {
   }
 
   Future<void> _refreshPlatform(String platform) async {
-    final ok = await checkLogin(platform, entry: 'mine_refresh');
+    final status = platform == 'xhs'
+        ? await probeXhsSessions(entry: 'mine_refresh')
+        : null;
+    final ok = status == null
+        ? await checkLogin(platform, entry: 'mine_refresh')
+        : status == SessionStatus.valid;
     if (!mounted) return;
     if (ok) LoginExpiredBus.clear(platform);
     final account = hasAccountHook(platform)
@@ -188,6 +194,7 @@ class _MinePageState extends State<MinePage> with WidgetsBindingObserver {
         : null;
     setState(() {
       _loggedIn[platform] = ok;
+      if (platform == 'xhs') _xhsStatus = status;
       if (account != null) _nicknames[platform] = account.nickname ?? '';
     });
   }
@@ -195,8 +202,14 @@ class _MinePageState extends State<MinePage> with WidgetsBindingObserver {
   Future<void> _load() async {
     final settings = await AppSettings.load();
     final states = <String, bool>{};
+    SessionStatus? xhsStatus;
     for (final platform in loginSiteIds) {
-      states[platform] = await checkLogin(platform, entry: 'mine_load');
+      if (platform == 'xhs') {
+        xhsStatus = await probeXhsSessions(entry: 'mine_load');
+        states[platform] = xhsStatus == SessionStatus.valid;
+      } else {
+        states[platform] = await checkLogin(platform, entry: 'mine_load');
+      }
       _nicknames[platform] = AccountCache.value(platform)?.nickname ?? '';
     }
     final info = await PackageInfo.fromPlatform();
@@ -204,6 +217,7 @@ class _MinePageState extends State<MinePage> with WidgetsBindingObserver {
     setState(() {
       _settings = settings;
       _loggedIn.addAll(states);
+      _xhsStatus = xhsStatus;
       _checkingLogin = false;
       _version = '${info.version}+${info.buildNumber}';
     });
@@ -242,14 +256,38 @@ class _MinePageState extends State<MinePage> with WidgetsBindingObserver {
   }
 
   Future<void> _openLogin(String platform) async {
+    String? entryUrl;
+    if (platform == 'xhs') {
+      entryUrl = await showDialog<String>(
+        context: context,
+        builder: (context) => SimpleDialog(
+          title: const Text('选择登录站点'),
+          children: [
+            for (final url in xhsProbeUrls())
+              SimpleDialogOption(
+                onPressed: () => Navigator.pop(context, url),
+                child: Text(xhsDomain(Uri.parse(url).host) == 'rednote.com'
+                    ? 'Rednote 登录'
+                    : '小红书登录'),
+              ),
+          ],
+        ),
+      );
+      if (entryUrl == null || !mounted) return;
+    }
     final ok = await Navigator.of(context).push<bool>(
-      MaterialPageRoute<bool>(builder: (_) => LoginPage(platform: platform)),
+      MaterialPageRoute<bool>(builder: (_) => LoginPage(platform: platform, entryUrl: entryUrl)),
     );
     if (!mounted) return;
     setState(() => _checkingLogin = true);
     // Trust the login page result after a successful flow (it verified the
     // session end-to-end); otherwise re-check the cookie store.
-    final loggedIn = ok == true ? true : await checkLogin(platform);
+    final status = platform == 'xhs'
+        ? await probeXhsSessions(entry: 'login_return')
+        : null;
+    final loggedIn = status == null
+        ? (ok == true ? true : await checkLogin(platform))
+        : status == SessionStatus.valid;
     if (!mounted) return;
     if (loggedIn) {
       LoginExpiredBus.clear(platform);
@@ -261,6 +299,7 @@ class _MinePageState extends State<MinePage> with WidgetsBindingObserver {
         : null;
     setState(() {
       _loggedIn[platform] = loggedIn;
+      if (platform == 'xhs') _xhsStatus = status;
       if (account != null) _nicknames[platform] = account.nickname ?? '';
       _checkingLogin = false;
     });
@@ -289,6 +328,7 @@ class _MinePageState extends State<MinePage> with WidgetsBindingObserver {
       if (!mounted) return;
       setState(() {
         _loggedIn[platform] = false;
+        if (platform == 'xhs') _xhsStatus = SessionStatus.invalid;
         _nicknames.remove(platform);
       });
     }
@@ -627,6 +667,9 @@ class _MinePageState extends State<MinePage> with WidgetsBindingObserver {
   /// Subtitle for a platform row: "已登录" / "未登录", plus a hint when a
   /// parse recently proved the stored session is dead.
   Widget _loginSubtitle(String platform) {
+    if (platform == 'xhs' && _xhsStatus == SessionStatus.unknown) {
+      return const Text('无法确认登录状态，请检查网络后重试');
+    }
     final loggedIn = _loggedIn[platform] ?? false;
     final expired = LoginExpiredBus.expired.value.contains(platform);
     if (expired) {
@@ -672,7 +715,14 @@ class _MinePageState extends State<MinePage> with WidgetsBindingObserver {
                       leading: PlatformIcon(platform: platform),
                       title: Text(platformLabel(platform)),
                       subtitle: _loginSubtitle(platform),
-                      trailing: (_loggedIn[platform] ?? false)
+                      trailing: platform == 'xhs' && (_loggedIn[platform] ?? false)
+                          ? Wrap(
+                              children: [
+                                TextButton(onPressed: () => _openLogin(platform), child: const Text('登录站点')),
+                                TextButton(onPressed: () => _logout(platform), child: const Text('退出登录')),
+                              ],
+                            )
+                          : (_loggedIn[platform] ?? false)
                           ? TextButton(
                               onPressed: () => _logout(platform),
                               child: const Text('退出登录'),

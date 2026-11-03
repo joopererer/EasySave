@@ -18,6 +18,14 @@ String parsePathCategory(Uri? uri) {
   return 'other';
 }
 
+String terminalPathCategory(Uri uri) {
+  if (uri.path.isEmpty || uri.path == '/' ||
+      RegExp(r'^/explore/?$', caseSensitive: false).hasMatch(uri.path)) {
+    return 'home';
+  }
+  return parsePathCategory(uri);
+}
+
 String shortLinkHtmlKind(String contentType, String body) {
   if (!contentType.toLowerCase().contains('html')) return 'not_html';
   final meta = RegExp(r'<meta\b[^>]*http-equiv\s*=\s*["\x27]?refresh\b', caseSensitive: false).hasMatch(body);
@@ -161,7 +169,7 @@ Future<String> resolveShortLink(
               .match(current.toString(), includeDisabled: true)
               ?.id !=
           site?.id) {
-        final category = parsePathCategory(current);
+        final category = terminalPathCategory(current);
         final terminal = (site?.terminalPages ?? const [])
             .whereType<Map>().any((rule) => rule['category'] == category);
         if (site != null && site.hasHost(current.host) && terminal) {

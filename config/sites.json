@@ -22,7 +22,7 @@
             }
           ],
           "pathPatterns": [
-            "^/(?:explore|discovery/item)/([A-Za-z0-9]+)"
+            "^/(?:explore|discovery/item|user/profile/[^/]+)/([A-Za-z0-9]+)"
           ]
         },
         {
@@ -78,7 +78,7 @@
     "normalize": {
       "sourceId": {
         "source": "path",
-        "pattern": "^/(?:explore|discovery/item)/([A-Za-z0-9]+)"
+        "pattern": "^/(?:explore|discovery/item|user/profile/[^/]+)/([A-Za-z0-9]+)"
       },
       "canonicalTemplate": "https://www.xiaohongshu.com/explore/{id}",
       "preserveLoadQuery": [
@@ -92,6 +92,11 @@
       "timeoutMs": 30000,
       "readyHook": "xhs_ready",
       "terminalPages": [
+        {
+          "category": "home",
+          "code": "UNSUPPORTED_URL",
+          "message": "不支持的页面类型"
+        },
         {
           "category": "login",
           "code": "LOGIN_REQUIRED",
@@ -124,7 +129,13 @@
       "cookieUrls": [
         "https://www.xiaohongshu.com/",
         "https://www.xiaohongshu.com/explore",
+        "https://www.rednote.com/",
+        "https://www.rednote.com/explore",
         "https://edith.xiaohongshu.com/"
+      ],
+      "probeUrls": [
+        "https://www.xiaohongshu.com/explore",
+        "https://www.rednote.com/explore"
       ],
       "probeHook": "probeSession",
       "loginHint": "页面加载后输入手机号获取验证码登录（也可切换密码登录），登录成功会自动返回。登录状态保存在本机，重启 App 依然有效。"
@@ -148,7 +159,10 @@
       "headers": {
         "Referer": "https://www.xiaohongshu.com/"
       },
-      "cookieDomains": [],
+      "cookieDomains": [
+        "xiaohongshu.com",
+        "rednote.com"
+      ],
       "transport": "background",
       "resumable": true
     },

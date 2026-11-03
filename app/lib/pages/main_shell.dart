@@ -123,9 +123,11 @@ class _MainShellState extends State<MainShell> with WidgetsBindingObserver {
   void _consumeHostOpen() {
     final url = HostBridge.openRequest.value;
     if (url == null || url.isEmpty) return;
+    final parsePage = _parseKey.currentState;
+    if (parsePage == null) return;
     HostBridge.openRequest.value = null;
     _select(0);
-    _parseKey.currentState?.showExternalUrl(url);
+    parsePage.showExternalUrl(url);
   }
 
   @override

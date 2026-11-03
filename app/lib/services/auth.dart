@@ -73,8 +73,15 @@ String? loginUserAgent(String platform) =>
 
 List<String> _cookieUrls(String platform) {
   final auth = SiteRegistry.current.byId(platform)?.auth;
-  return (auth?['cookieUrls'] as List?)?.cast<String>() ??
+  final urls =
+      (auth?['cookieUrls'] as List?)?.cast<String>() ??
       [loginEntryUrl(platform)];
+  if (platform != 'xhs') return urls;
+  final builtin =
+      (SiteRegistry.builtinById('xhs')?.auth['cookieUrls'] as List?)
+          ?.cast<String>() ??
+      const <String>[];
+  return {...urls, ...builtin}.toList();
 }
 
 bool _isSessionCookie(String platform, String name) =>
@@ -84,6 +91,32 @@ bool _isSessionCookie(String platform, String name) =>
 
 bool hasAccountHook(String platform) =>
     SiteRegistry.current.byId(platform)?.auth['stateHook'] != null;
+
+enum SessionStatus { valid, invalid, unknown }
+
+bool shouldCachePageAccount(String platform, bool loggedIn) =>
+    platform != 'xhs' || loggedIn;
+
+SessionStatus combineXhsSessionStates(Iterable<bool?> states) {
+  final values = states.toList();
+  if (values.any((state) => state == true)) return SessionStatus.valid;
+  if (values.length == 2 && values.every((state) => state == false)) {
+    return SessionStatus.invalid;
+  }
+  return SessionStatus.unknown;
+}
+
+bool? xhsDomainObservation(Uri target, Uri? landed, bool? loggedIn) {
+  final domain = xhsDomain(target.host);
+  return domain != null && domain == xhsDomain(landed?.host) ? loggedIn : null;
+}
+
+List<String> xhsProbeUrls() {
+  final site = SiteRegistry.current.byId('xhs');
+  final configured = site?.auth['probeUrls'] as List?;
+  final builtin = SiteRegistry.builtinById('xhs')?.auth['probeUrls'] as List?;
+  return (configured ?? builtin ?? const []).cast<String>();
+}
 
 String? xhsDomain(String? host) {
   final value = host?.toLowerCase() ?? '';
@@ -103,7 +136,9 @@ Future<String> _xhsCookiePresence(String url) async {
   try {
     final cookies = await CookieManager.instance().getCookies(url: WebUri(url));
     final present = cookies.map((cookie) => cookie.name).toSet();
-    return names.map((name) => '$name-${present.contains(name) ? "present" : "absent"}').join(',');
+    return names
+        .map((name) => '$name-${present.contains(name) ? "present" : "absent"}')
+        .join(',');
   } catch (_) {
     return names.map((name) => '$name-unknown').join(',');
   }
@@ -116,7 +151,10 @@ Future<void> logXhsWebViewCookies(Uri? uri) async {
   final presence = await _xhsCookiePresence(
     uri.replace(query: null, fragment: null).toString(),
   );
-  await DevLog.write('XhsLogin', 'event=webview domain=$domain presence=$presence');
+  await DevLog.write(
+    'XhsLogin',
+    'event=webview domain=$domain presence=$presence',
+  );
 }
 
 Future<void> _logXhsCheck({
@@ -134,12 +172,12 @@ Future<void> _logXhsCheck({
   await DevLog.write(
     'XhsLogin',
     'event=check entry=$entry target=${xhsDomain(target?.host) ?? "none"} '
-    'landed=${xhsDomain(landed?.host) ?? "none"} '
-    'path=${landed == null ? "unknown" : parsePathCategory(landed)} '
-    'redirects=${redirects ?? "unknown"} loggedIn=${loggedIn ?? "missing"} '
-    'redirectDomain=${xhsDomain(redirectTarget?.host) ?? "none"} '
-    'redirectPath=${redirectTarget == null ? "none" : parsePathCategory(redirectTarget)} '
-    'xiaohongshu=[$xhs] rednote=[$rednote] result=$result condition=$condition',
+        'landed=${xhsDomain(landed?.host) ?? "none"} '
+        'path=${landed == null ? "unknown" : parsePathCategory(landed)} '
+        'redirects=${redirects ?? "unknown"} loggedIn=${loggedIn ?? "missing"} '
+        'redirectDomain=${xhsDomain(redirectTarget?.host) ?? "none"} '
+        'redirectPath=${redirectTarget == null ? "none" : parsePathCategory(redirectTarget)} '
+        'xiaohongshu=[$xhs] rednote=[$rednote] result=$result condition=$condition',
   );
 }
 
@@ -157,7 +195,11 @@ Future<void> logXhsPageCheck(
   await _logXhsCheck(
     entry: entry,
     condition: 'page_state',
-    result: loggedIn == null ? 'unknown' : loggedIn ? 'valid' : 'invalid',
+    result: loggedIn == null
+        ? 'unknown'
+        : loggedIn
+        ? 'valid'
+        : 'invalid',
     landed: uri,
     loggedIn: loggedIn,
   );
@@ -210,27 +252,148 @@ Future<bool> checkLogin(
   if (webViewController != null) {
     final account = await readAccount(platform, webViewController);
     if (account != null) {
-      await AccountCache.save(platform, account);
+      if (shouldCachePageAccount(platform, account.loggedIn)) {
+        await AccountCache.save(platform, account);
+      }
       if (platform == 'xhs') {
         unawaited(logXhsPageCheck(webViewController, entry, account.loggedIn));
       }
       return account.loggedIn;
     }
+    if (platform == 'xhs') return false;
   }
 
-  final cached = await AccountCache.load(platform);
-  if (cached != null) {
-    if (platform == 'xhs') {
-      unawaited(_logXhsCheck(
-        entry: entry, condition: 'cached_page_state',
-        result: cached.loggedIn ? 'valid' : 'invalid',
-      ));
-    }
-    return cached.loggedIn;
+  if (platform == 'xhs') {
+    return await probeXhsSessions(entry: entry) == SessionStatus.valid;
   }
+  final cached = await AccountCache.load(platform);
+  if (cached != null) return cached.loggedIn;
   // Nothing cached yet (e.g. right after an app update): fall back to the
   // cookie jar plus a cheap network probe, which is accurate but slower.
   return verifyAccountSession(platform, entry: entry);
+}
+
+/// Probe each configured origin in its own WebView, using its own cookie jar.
+Future<SessionStatus> probeXhsSessions({String entry = 'unspecified'}) async {
+  final urls = xhsProbeUrls();
+  if (urls.length != 2 ||
+      urls.map((url) => xhsDomain(Uri.tryParse(url)?.host)).toSet().length !=
+          2 ||
+      urls.any((url) => xhsDomain(Uri.tryParse(url)?.host) == null)) {
+    await _logXhsCheck(
+      entry: entry,
+      condition: 'probe_configuration',
+      result: 'unknown',
+    );
+    return SessionStatus.unknown;
+  }
+  final observations = await Future.wait(
+    urls.map((url) => _probeXhsDomain(Uri.parse(url), entry)),
+  );
+  final status = combineXhsSessionStates(
+    observations.map((value) => value?.loggedIn),
+  );
+  if (status == SessionStatus.valid) {
+    await AccountCache.save(
+      'xhs',
+      observations.firstWhere((value) => value?.loggedIn == true)!,
+    );
+  } else if (status == SessionStatus.invalid) {
+    await AccountCache.clear('xhs');
+  }
+  return status;
+}
+
+Future<SiteAccount?> _probeXhsDomain(Uri target, String entry) async {
+  final answer = Completer<SiteAccount?>();
+  HeadlessInAppWebView? view;
+  Timer? poll;
+  Uri? landed;
+  var checking = false;
+  var navigation = 0;
+  Future<void> check(InAppWebViewController controller) async {
+    if (checking || answer.isCompleted) return;
+    checking = true;
+    final generation = navigation;
+    try {
+      final current = await controller.getUrl();
+      if (current == null || xhsDomain(current.host) != xhsDomain(target.host)) {
+        return;
+      }
+      final account = await readAccount('xhs', controller);
+      if (generation != navigation || answer.isCompleted || account == null) {
+        return;
+      }
+      landed = current;
+      answer.complete(account);
+    } catch (error) {
+      await DevLog.write(
+        'XhsLogin',
+        'event=page_state_error type=${error.runtimeType}',
+      );
+    } finally {
+      checking = false;
+    }
+  }
+
+  try {
+    view = HeadlessInAppWebView(
+      initialUrlRequest: URLRequest(url: WebUri.uri(target)),
+      initialSettings: InAppWebViewSettings(
+        javaScriptEnabled: true,
+        domStorageEnabled: true,
+        databaseEnabled: true,
+        sharedCookiesEnabled: true,
+        thirdPartyCookiesEnabled: true,
+        userAgent: loginUserAgent('xhs'),
+      ),
+      onLoadStart: (_, uri) {
+        navigation++;
+        landed = uri;
+      },
+      onLoadStop: (controller, uri) {
+        if (answer.isCompleted) return;
+        landed = uri;
+        unawaited(check(controller));
+        poll?.cancel();
+        poll = Timer.periodic(const Duration(milliseconds: 500), (_) {
+          unawaited(check(controller));
+        });
+      },
+      onReceivedError: (_, request, _) {
+        if (request.isForMainFrame == true && !answer.isCompleted) {
+          answer.complete(null);
+        }
+      },
+    );
+    await view.run();
+    return await answer.future.timeout(
+      const Duration(seconds: 10),
+      onTimeout: () => null,
+    );
+  } catch (error) {
+    await DevLog.write(
+      'XhsLogin',
+      'event=probe_error type=${error.runtimeType}',
+    );
+    return null;
+  } finally {
+    poll?.cancel();
+    final account = answer.isCompleted ? await answer.future : null;
+    await _logXhsCheck(
+      entry: entry,
+      condition: account == null ? 'page_state_missing' : 'page_state',
+      result: account == null
+          ? 'unknown'
+          : account.loggedIn
+          ? 'valid'
+          : 'invalid',
+      target: target,
+      landed: landed,
+      loggedIn: account?.loggedIn,
+    );
+    await view?.dispose();
+  }
 }
 
 /// Signed-in XHS user, as read from the page itself.
@@ -310,13 +473,19 @@ abstract final class AccountCache {
 }
 
 /// A cookie is a prerequisite; the optional signed probe interprets the feed.
-Future<bool> verifyAccountSession(String platform, {String entry = 'unspecified'}) async {
+Future<bool> verifyAccountSession(
+  String platform, {
+  String entry = 'unspecified',
+}) async {
   if (!await isLoggedIn(platform)) {
     if (platform == 'xhs') {
-      unawaited(_logXhsCheck(
-        entry: entry, condition: 'no_configured_cookie',
-        result: 'invalid',
-      ));
+      unawaited(
+        _logXhsCheck(
+          entry: entry,
+          condition: 'no_configured_cookie',
+          result: 'invalid',
+        ),
+      );
     }
     return false;
   }
@@ -364,13 +533,20 @@ Future<bool> verifyAccountSession(String platform, {String entry = 'unspecified'
           if (platform == 'xhs') {
             final target = Uri.parse(loginEntryUrl(platform));
             final location = response.headers.value(HttpHeaders.locationHeader);
-            final redirectTarget = location == null ? null : target.resolve(location);
-            unawaited(_logXhsCheck(
-              entry: entry, condition: 'http_probe',
-              result: value == false ? 'invalid' : 'valid',
-              target: target, landed: target,
-              redirects: 0, redirectTarget: redirectTarget,
-            ));
+            final redirectTarget = location == null
+                ? null
+                : target.resolve(location);
+            unawaited(
+              _logXhsCheck(
+                entry: entry,
+                condition: 'http_probe',
+                result: value == false ? 'invalid' : 'valid',
+                target: target,
+                landed: target,
+                redirects: 0,
+                redirectTarget: redirectTarget,
+              ),
+            );
           }
           if (!answer.isCompleted) answer.complete(value != false);
         } catch (_) {

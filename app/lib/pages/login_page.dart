@@ -20,13 +20,19 @@ import '../services/site_registry.dart';
 import '../services/login_navigation.dart';
 
 class LoginPage extends StatefulWidget {
-  const LoginPage({super.key, required this.platform, this.windowId});
+  const LoginPage({
+    super.key,
+    required this.platform,
+    this.windowId,
+    this.entryUrl,
+  });
 
   final String platform;
 
   /// Attach OAuth windows to their original WebView transport so window.opener
   /// and window.close work. Loading their URL in the parent loses that context.
   final int? windowId;
+  final String? entryUrl;
 
   @override
   State<LoginPage> createState() => _LoginPageState();
@@ -39,6 +45,7 @@ class _LoginPageState extends State<LoginPage> {
   bool _handlingCallback = false;
   bool _callbackNoticeShown = false;
   bool _googleNoticeOpen = false;
+  String? _selectedEntryUrl;
 
   /// Set when the main document failed to load; shows the retry card.
   String? _loadError;
@@ -55,7 +62,15 @@ class _LoginPageState extends State<LoginPage> {
   Map get _auth => SiteRegistry.current.byId(widget.platform)?.auth ?? {};
   bool get _externalGoogleNotice => _auth['externalGoogleNotice'] == true;
 
-  String get _entryUrl => loginEntryUrl(widget.platform);
+  String get _entryUrl =>
+      _selectedEntryUrl ?? widget.entryUrl ?? loginEntryUrl(widget.platform);
+
+  Future<bool> _onRequestedXhsDomain(InAppWebViewController? controller) async {
+    if (widget.platform != 'xhs') return true;
+    if (controller == null) return false;
+    final current = await controller.getUrl();
+    return xhsDomain(current?.host) == xhsDomain(Uri.parse(_entryUrl).host);
+  }
 
   Future<void> _showGoogleLoginNotice() async {
     if (!mounted || _googleNoticeOpen) return;
@@ -97,6 +112,7 @@ class _LoginPageState extends State<LoginPage> {
               builder: (_) => LoginPage(
                 platform: widget.platform,
                 windowId: action.windowId,
+                entryUrl: _entryUrl,
               ),
             ),
           )
@@ -119,6 +135,7 @@ class _LoginPageState extends State<LoginPage> {
     _pollTimer = Timer.periodic(const Duration(milliseconds: 1500), (_) async {
       final controller = _controller;
       if (controller == null || _verifying) return;
+      if (!await _onRequestedXhsDomain(controller)) return;
       final account = await readAccount(widget.platform, controller);
       if (widget.platform == 'xhs') {
         unawaited(logXhsPageCheck(controller, 'login_poll', account?.loggedIn));
@@ -154,11 +171,13 @@ class _LoginPageState extends State<LoginPage> {
     if (!mounted) return false;
 
     setState(() => _verifying = true);
-    final ok = await checkLogin(
-      widget.platform,
-      webViewController: _controller,
-      entry: 'login_complete',
-    );
+    final ok =
+        await _onRequestedXhsDomain(_controller) &&
+        await checkLogin(
+          widget.platform,
+          webViewController: _controller,
+          entry: 'login_complete',
+        );
     if (!mounted) return ok;
     setState(() => _verifying = false);
 
@@ -206,10 +225,9 @@ class _LoginPageState extends State<LoginPage> {
     try {
       await Future<void>.delayed(const Duration(milliseconds: 600));
       if (!mounted) return;
-      final ok = await checkLogin(
-        widget.platform,
-        webViewController: _controller,
-      );
+      final ok =
+          await _onRequestedXhsDomain(_controller) &&
+          await checkLogin(widget.platform, webViewController: _controller);
       if (!mounted) return;
       if (ok) {
         LoginExpiredBus.clear(widget.platform);
@@ -242,6 +260,27 @@ class _LoginPageState extends State<LoginPage> {
 
   @override
   Widget build(BuildContext context) {
+    if (widget.platform == 'xhs' &&
+        widget.entryUrl == null &&
+        _selectedEntryUrl == null &&
+        widget.windowId == null) {
+      return Scaffold(
+        appBar: AppBar(title: const Text('选择登录站点')),
+        body: ListView(
+          children: [
+            for (final url in xhsProbeUrls())
+              ListTile(
+                title: Text(
+                  xhsDomain(Uri.parse(url).host) == 'rednote.com'
+                      ? 'Rednote 登录'
+                      : '小红书登录',
+                ),
+                onTap: () => setState(() => _selectedEntryUrl = url),
+              ),
+          ],
+        ),
+      );
+    }
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final bannerBg = isDark ? const Color(0xFF26201C) : Colors.blue.shade50;
     final bannerText = isDark ? const Color(0xFFF5ECE6) : Colors.blue.shade900;

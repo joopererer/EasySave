@@ -86,7 +86,7 @@ String _shortLinkStrategy(Map rule) => rule['strategy'] as String? ?? 'http';
 
 ParseFailure? terminalPageFailure(SiteDefinition site, Uri? uri) {
   if (uri == null || !site.hasHost(uri.host)) return null;
-  final category = parsePathCategory(uri);
+  final category = terminalPathCategory(uri);
   for (final rule in site.terminalPages) {
     if (rule is Map && rule['category'] == category) {
       return ParseFailure(rule['code'] as String, rule['message'] as String);
@@ -139,7 +139,9 @@ Future<T> resolveAndEnterParse<T>(
     }
     final terminal = terminalPageFailure(site, Uri.tryParse(resolved));
     if (terminal != null) {
-      if (fallback) return enter(url, null);
+      if (fallback && terminal.code != ParseErrorCode.unsupportedUrl) {
+        return enter(url, null);
+      }
       throw terminal;
     }
     if (resolved == url) {
@@ -253,6 +255,7 @@ Future<bool> _loggedIn(
   if (account is Map && {'user', 'guest'}.contains(account['state'])) {
     return account['state'] == 'user';
   }
+  if (hooks.site.id == 'xhs') return false;
   final loginUrl = hooks.site.auth['loginUrl'];
   if (loginUrl is! String) return false;
   final names = (hooks.site.auth['sessionCookieNames'] as List).cast<String>();

@@ -238,7 +238,7 @@ class HostService : Service() {
                         val args = call.arguments as? Map<*, *>
                         val items = args?.get("items") as? List<Any?> ?: emptyList()
                         val stickyPreview = args?.get("stickyPreview") as? Boolean ?: false
-                        showSelectPanel(items, stickyPreview)
+                        showSelectPanel(items, stickyPreview, args?.get("postUrl") as? String)
                         result.success(null)
                     }
                     "unmountSelectPanel" -> {
@@ -278,7 +278,7 @@ class HostService : Service() {
 
     /// Show the native "选择下载" panel as an overlay window. A FlutterView in
     /// an overlay proved unreliable, so this is a plain Android view tree.
-    private fun showSelectPanel(items: List<Any?>, stickyPreview: Boolean = false) {
+    private fun showSelectPanel(items: List<Any?>, stickyPreview: Boolean = false, postUrl: String? = null) {
         handler.post {
             unmountSelectPanel()
             try {
@@ -292,6 +292,25 @@ class HostService : Service() {
                     onPolicyRejected = { code, host, field, shape ->
                         handler.post {
                             channel?.invokeMethod("mediaPolicyRejected", mapOf("code" to code, "host" to host, "field" to field, "shape" to shape))
+                        }
+                    },
+                    onOpenPreview = {
+                        if (!postUrl.isNullOrBlank()) {
+                            val intent = Intent(this, MainActivity::class.java).apply {
+                                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+                                putExtra(MainActivity.EXTRA_OPEN_URL, postUrl)
+                            }
+                            try {
+                                startActivity(intent)
+                                unmountSelectPanel()
+                                channel?.invokeMethod("selectResult", null)
+                            } catch (error: android.content.ActivityNotFoundException) {
+                                Log.e(TAG, "open preview failed: activity unavailable")
+                                android.widget.Toast.makeText(this, "无法打开 App，请重试", android.widget.Toast.LENGTH_SHORT).show()
+                            } catch (error: SecurityException) {
+                                Log.e(TAG, "open preview failed: permission denied")
+                                android.widget.Toast.makeText(this, "无法打开 App，请重试", android.widget.Toast.LENGTH_SHORT).show()
+                            }
                         }
                     }) { picked ->
                     unmountSelectPanel()

@@ -8,6 +8,11 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
+  test('a guest page on one XHS domain cannot clear the shared account', () {
+    expect(shouldCachePageAccount('xhs', false), isFalse);
+    expect(shouldCachePageAccount('xhs', true), isTrue);
+    expect(shouldCachePageAccount('instagram', false), isTrue);
+  });
   TestWidgetsFlutterBinding.ensureInitialized();
   tearDown(SiteRegistry.useBuiltin);
 
@@ -85,5 +90,25 @@ void main() {
     expect(xhsDomain('www.rednote.com'), 'rednote.com');
     expect(xhsDomain('www.xiaohongshu.com'), 'xiaohongshu.com');
     expect(xhsDomain('rednote.com.example.org'), isNull);
+  });
+
+  test('XHS two-domain session state does not turn unknown into logged out', () {
+    expect(combineXhsSessionStates([true, null]), SessionStatus.valid);
+    expect(combineXhsSessionStates([false, true]), SessionStatus.valid);
+    expect(combineXhsSessionStates([false, false]), SessionStatus.invalid);
+    expect(combineXhsSessionStates([false, null]), SessionStatus.unknown);
+    expect(combineXhsSessionStates([null, null]), SessionStatus.unknown);
+    expect(combineXhsSessionStates([false]), SessionStatus.unknown);
+  });
+
+  test('redirect to another domain cannot invalidate the original session', () {
+    final target = Uri.parse('https://www.xiaohongshu.com/explore');
+    final rednoteLogin = Uri.parse('https://www.rednote.com/login');
+    expect(xhsDomainObservation(target, rednoteLogin, false), isNull);
+    expect(xhsDomainObservation(target, Uri.parse('https://www.xiaohongshu.com/login'), false), isFalse);
+    expect(combineXhsSessionStates([
+      xhsDomainObservation(target, rednoteLogin, false),
+      false,
+    ]), SessionStatus.unknown);
   });
 }

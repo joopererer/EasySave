@@ -183,6 +183,30 @@ void main() {
     }
   });
 
+  test('XHS short links landing on home fail without waiting for WebView', () async {
+    SiteRegistry.useBuiltin();
+    const input = 'https://xhslink.cn/o/fixture';
+    final site = SiteRegistry.current.match(input)!;
+    for (final path in ['/', '/explore', '/explore/']) {
+      await expectLater(
+        resolveAndEnterParse(input, site, (_, _) async => fail('must not parse'),
+          readRedirect: (_) async => 'https://www.xiaohongshu.com$path'),
+        throwsA(isA<ParseFailure>().having((e) => e.code, 'code', 'UNSUPPORTED_URL')),
+      );
+    }
+    expect(terminalPageFailure(site, Uri.parse('https://www.rednote.com/explore/abc')), isNull);
+  });
+
+  test('XHS profile post routes share the declared canonical ID', () {
+    SiteRegistry.useBuiltin();
+    for (final domain in ['www.xiaohongshu.com', 'www.rednote.com']) {
+      final url = 'https://$domain/user/profile/author/670f1a2b000000001e028b12';
+      expect(SiteRegistry.current.match(url)?.id, 'xhs');
+      expect(SiteRegistry.current.canonicalUrl(url),
+          'https://www.xiaohongshu.com/explore/670f1a2b000000001e028b12');
+    }
+  });
+
   test('HTTP ending on another short-link page falls back to original link', () async {
     SiteRegistry.useBuiltin();
     const input = 'https://xhslink.cn/o/71TKM3kfsK1';

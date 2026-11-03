@@ -1289,14 +1289,10 @@ var EasySaveParser = (() => {
         if (typeof loggedIn !== "boolean") return JSON.stringify({ state: "unknown" });
         if (!loggedIn) return JSON.stringify({ state: "guest" });
         var info = unwrap(user.userInfo);
-        if (!info || info.guest === true || !info.userId) {
-          return JSON.stringify({ state: "guest" });
-        }
-        return JSON.stringify({
-          state: "user",
-          userId: String(info.userId),
-          nickname: info.nickname || ""
-        });
+        var result = { state: "user" };
+        if (info && info.userId) result.userId = String(info.userId);
+        if (info && info.nickname) result.nickname = String(info.nickname);
+        return JSON.stringify(result);
       } catch (e) {
         return JSON.stringify({ state: "unknown" });
       }
@@ -1339,7 +1335,7 @@ var EasySaveParser = (() => {
       ready: (c) => {
         const state = page().__INITIAL_STATE__;
         if (!state) return false;
-        const wanted = /\/(?:explore|discovery\/item)\/([a-zA-Z0-9]+)/.exec(c.url)?.[1];
+        const wanted = /\/(?:explore|discovery\/item|user\/profile\/[^/]+)\/([a-zA-Z0-9]+)/.exec(c.url)?.[1];
         const map = state.note?.noteDetailMap;
         if (map) return wanted ? Object.hasOwn(map, wanted) : Object.keys(map).length > 0;
         const note = state.noteData?.data?.noteData || state.noteData?.data;

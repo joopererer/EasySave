@@ -289,6 +289,7 @@ void _validateSemantics(Map<String, dynamic> payload) {
     for (final raw in [
       if (auth['loginUrl'] != null) auth['loginUrl'],
       ...auth['cookieUrls'] as List? ?? [],
+      ...auth['probeUrls'] as List? ?? [],
     ]) {
       final uri = Uri.parse(raw as String);
       final allowed = routes.any(

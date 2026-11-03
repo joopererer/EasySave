@@ -26,6 +26,8 @@ class SupportedLinksTest {
     }
     @Test fun existingPlatformsRemainSupported() {
         for (url in listOf("https://www.xiaohongshu.com/explore/abc", "https://xhslink.com/abc",
+            "https://www.rednote.com/user/profile/user/abc",
+            "https://www.xiaohongshu.com/user/profile/user/abc",
             "https://www.instagram.com/p/abc", "https://x.com/user/status/123", "https://twitter.com/i/status/123", "https://t.co/abc")) {
             assertTrue(url, SupportedLinks.containsSupportedUrl(url))
         }

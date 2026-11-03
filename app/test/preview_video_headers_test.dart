@@ -35,7 +35,7 @@ void main() {
     },
   );
 
-  for (final platform in ['xhs', 'x', 'instagram']) {
+  for (final platform in ['x', 'instagram']) {
     test('$platform preview declaration has no Cookie scope', () {
       final site = SiteRegistry.current.byId(platform)!;
       final policy = MediaRequestPolicy(site, logRejection: (_, _) {});
@@ -48,6 +48,27 @@ void main() {
       expect(item.single.request.cookieDomains, isEmpty);
     });
   }
+
+  test('XHS CDN preview does not forward either site domain cookie', () async {
+    final calls = <Uri>[];
+    final policy = MediaRequestPolicy(
+      SiteRegistry.current.byId('xhs')!,
+      readCookie: (uri) async {
+        calls.add(uri);
+        return 'fixture=FAKE';
+      },
+      logRejection: (_, _) {},
+    );
+    final resource = policy
+        .resourcesFor(
+          MediaItem(type: 'video', url: 'https://media.xhscdn.com/file.mp4'),
+        )
+        .single;
+    expect(resource.request.cookieDomains, ['xiaohongshu.com', 'rednote.com']);
+    final authorized = await policy.authorize(resource);
+    expect(calls, isEmpty);
+    expect(authorized.wireHeaders.containsKey('Cookie'), isFalse);
+  });
 
   test('policy rejection has a fixed user-facing message', () {
     expect(

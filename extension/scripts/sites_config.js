@@ -67,7 +67,7 @@ export function validatePayload(payload, schema) {
     }
 
     if (site.auth.mode !== 'none' && !site.auth.loginUrl) throw new Error('Missing login URL');
-    for (const raw of [site.auth.loginUrl, ...(site.auth.cookieUrls || [])].filter(Boolean)) {
+    for (const raw of [site.auth.loginUrl, ...(site.auth.cookieUrls || []), ...(site.auth.probeUrls || [])].filter(Boolean)) {
       const u = new URL(raw);
       if (u.protocol !== 'https:' || u.username || u.password || !site.match.routes.some(r => r.hosts.some(h =>
         u.hostname === h.domain || h.includeSubdomains && u.hostname.endsWith('.' + h.domain)))) throw new Error('Invalid login URL');
