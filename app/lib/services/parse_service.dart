@@ -2,6 +2,7 @@
 import 'dart:async';
 import 'dart:collection';
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 import 'package:http/http.dart' as http;
@@ -83,6 +84,17 @@ void _logParseCheck(
 /// must keep that split, so only `http` is expanded here.
 String _shortLinkStrategy(Map rule) => rule['strategy'] as String? ?? 'http';
 
+ParseFailure? terminalPageFailure(SiteDefinition site, Uri? uri) {
+  if (uri == null || !site.hasHost(uri.host)) return null;
+  final category = parsePathCategory(uri);
+  for (final rule in site.terminalPages) {
+    if (rule is Map && rule['category'] == category) {
+      return ParseFailure(rule['code'] as String, rule['message'] as String);
+    }
+  }
+  return null;
+}
+
 /// Resolve a declared short link, validate the final route, then enter parsing.
 /// The load URL keeps tokens; canonicalization is for identity, not navigation.
 /// [enter] receives a null canonical URL when the WebView resolves the link.
@@ -102,27 +114,45 @@ Future<T> resolveAndEnterParse<T>(
   }
   var resolved = url;
   if (rule != null) {
+    final fallback = site.shortLinkFallback(uri, rule) == 'webview';
     try {
       resolved = await resolveShortLink(
         url,
         readRedirect: readRedirect,
-        timeout: timeout,
+        timeout: fallback && (timeout == null || timeout > const Duration(seconds: 5))
+            ? const Duration(seconds: 5) : timeout,
       );
     } on FormatException {
+      if (fallback) return enter(url, null);
       _logParseCheck(
         'SHORT_TARGET_REJECTED',
         site,
         actual: _hostPathOf(url),
       );
       throw ParseFailure(ParseErrorCode.invalidPage, '短链跳转目标不受支持');
+    } on TimeoutException {
+      if (fallback) return enter(url, null);
+      rethrow;
+    } on IOException {
+      if (fallback) return enter(url, null);
+      rethrow;
+    }
+    final terminal = terminalPageFailure(site, Uri.tryParse(resolved));
+    if (terminal != null) {
+      if (fallback) return enter(url, null);
+      throw terminal;
     }
     if (resolved == url) {
+      if (fallback) return enter(url, null);
       _logParseCheck('SHORT_NOT_EXPANDED', site, actual: _hostPathOf(url));
       throw ParseFailure(ParseErrorCode.invalidPage, '短链未能展开，请重试');
     }
   }
   final target = SiteRegistry.current.match(resolved);
   if (target?.id != site.id) {
+    if (rule != null && site.shortLinkFallback(uri, rule) == 'webview') {
+      return enter(url, null);
+    }
     _logParseCheck(
       'SHORT_TARGET_SITE',
       site,
@@ -133,6 +163,9 @@ Future<T> resolveAndEnterParse<T>(
   }
   final canonical = SiteRegistry.current.canonicalUrl(resolved);
   if (canonical == null) {
+    if (rule != null && site.shortLinkFallback(uri, rule) == 'webview') {
+      return enter(url, null);
+    }
     _logParseCheck('SHORT_TARGET_NOT_POST', site, actual: _hostPathOf(resolved));
     throw ParseFailure(ParseErrorCode.invalidPage, '短链跳转目标不是作品页面');
   }
@@ -410,6 +443,9 @@ Future<NavigateStep> navigateStep({
   required bool alreadyNavigated,
   required Future<dynamic> Function() navigate,
 }) async {
+  final uri = Uri.tryParse(currentUrl);
+  final terminal = terminalPageFailure(site, uri);
+  if (terminal != null) throw terminal;
   final action = await navigate();
   if (action is Map) {
     if (action['wait'] == true) return const NavigateStep(NavigateKind.wait);
@@ -424,7 +460,6 @@ Future<NavigateStep> navigateStep({
     return const NavigateStep(NavigateKind.parse);
   }
   if (action == null) {
-    final uri = Uri.tryParse(currentUrl);
     final isPostPage =
         uri != null && site.sourceId(uri) != null && site.hasHost(uri.host);
     return NavigateStep(
@@ -432,16 +467,6 @@ Future<NavigateStep> navigateStep({
     );
   }
   return const NavigateStep(NavigateKind.parse);
-}
-
-String parsePathCategory(Uri? uri) {
-  final path = uri?.path.toLowerCase() ?? '';
-  if (RegExp(r'^/explore(?:/|$)').hasMatch(path)) return 'explore';
-  if (RegExp(r'^/discovery/item(?:/|$)').hasMatch(path)) return 'discovery/item';
-  if (path.contains('404')) return '404';
-  if (path.contains('login')) return 'login';
-  if (path.contains('captcha') || path.contains('verify')) return 'captcha';
-  return 'other';
 }
 
 Future<ParseOutcome> _run(ParserHooks hooks, String targetUrl, {required String source}) async {

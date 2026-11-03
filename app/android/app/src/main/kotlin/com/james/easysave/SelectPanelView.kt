@@ -200,6 +200,7 @@ class SelectPanelView(
     private var previewVideoFile: java.io.File? = null
     private var previewIndex = -1
     private var previewGeneration = 0
+    private var previewFrameTimeout: Runnable? = null
     private var previewOpenedAt = 0L
 
     // Navigation and video control components
@@ -963,8 +964,12 @@ class SelectPanelView(
             playPauseBtn?.isPlaying = true
             videoSeekBar?.progress = 0
             videoTimeText?.text = "00:00 / 00:00"
-            previewImage?.visibility = View.GONE
+            previewImage?.visibility = View.VISIBLE
+            previewImage?.setImageBitmap(null)
             previewTexture?.visibility = View.VISIBLE
+            previewTexture?.alpha = 0f
+            val poster = if (cell.live) cell.imageRequest else cell.thumbRequest
+            if (!poster.requiresAppPreview) loadImage(poster, generation, keepProgress = true)
             playVideo(cell, generation)
             main.removeCallbacks(updateProgressRunnable)
             main.post(updateProgressRunnable)
@@ -980,9 +985,10 @@ class SelectPanelView(
     private fun previewCurrent(generation: Int) =
         previewGeneration == generation && previewOverlay?.visibility == View.VISIBLE
 
-    private fun showLiveStill(cell: Cell, generation: Int) {
+    private fun showLiveStill(cell: Cell, generation: Int, failed: Boolean = false) {
         if (!previewCurrent(generation)) return
         releasePlayer()
+        if (failed) previewTitle?.text = "视频加载失败，显示静态图"
         videoControlBar?.visibility = View.GONE
         previewTexture?.visibility = View.GONE
         previewImage?.visibility = View.VISIBLE
@@ -1000,13 +1006,17 @@ class SelectPanelView(
     }
 
     private fun playVideo(cell: Cell, generation: Int) {
+        var stopped = false
         fun failed(rejected: Boolean = false) {
-            if (!previewCurrent(generation)) return
-            if (cell.live) showLiveStill(cell, generation)
+            if (stopped || !previewCurrent(generation)) return
+            stopped = true
+            if (cell.live) showLiveStill(cell, generation, failed = true)
             else {
                 releasePlayer()
+                previewTexture?.visibility = View.GONE
+                previewImage?.visibility = View.VISIBLE
                 previewProgress?.visibility = View.GONE
-                if (rejected) previewTitle?.text = "该资源地址不在允许范围内"
+                previewTitle?.text = if (rejected) "该资源地址不在允许范围内" else "视频加载失败，请重试"
             }
         }
         pool.execute {
@@ -1029,8 +1039,11 @@ class SelectPanelView(
                 }
                 previewVideoFile = file
                 val texture = previewTexture ?: run { failed(); return@post }
+                val timeout = Runnable { failed() }
+                previewFrameTimeout = timeout
+                main.postDelayed(timeout, 15000L)
                 fun startMp(surfaceTexture: SurfaceTexture) {
-                    if (!previewCurrent(generation)) return
+                    if (stopped || !previewCurrent(generation)) return
                     try {
                         val player = MediaPlayer()
                         mediaPlayer = player
@@ -1045,10 +1058,20 @@ class SelectPanelView(
                             }
                             setOnPreparedListener { player ->
                                 fitVideoToView(player.videoWidth, player.videoHeight)
-                                if (previewCurrent(generation)) {
-                                    previewProgress?.visibility = View.GONE
+                                if (!stopped && previewCurrent(generation) && mediaPlayer === player) {
                                     try { player.start() } catch (_: Exception) { failed() }
                                 }
+                            }
+                            setOnInfoListener { player, what, _ ->
+                                if (!stopped && previewCurrent(generation) && mediaPlayer === player &&
+                                    previewFirstFrame(what)) {
+                                    previewFrameTimeout?.let { main.removeCallbacks(it) }
+                                    previewFrameTimeout = null
+                                    previewProgress?.visibility = View.GONE
+                                    previewTexture?.alpha = 1f
+                                    previewImage?.visibility = View.GONE
+                                }
+                                false
                             }
                             setOnErrorListener { _, _, _ ->
                                 failed()
@@ -1076,7 +1099,7 @@ class SelectPanelView(
         }
     }
 
-    private fun loadImage(request: NativeMediaRequest, generation: Int) {
+    private fun loadImage(request: NativeMediaRequest, generation: Int, keepProgress: Boolean = false) {
         val target = previewImage ?: return
         target.setImageBitmap(null)
         val maxDim = resources.displayMetrics.widthPixels.coerceAtLeast(resources.displayMetrics.heightPixels)
@@ -1091,8 +1114,8 @@ class SelectPanelView(
             val result = bmp
             main.post {
                 if (previewCurrent(generation)) {
-                    previewProgress?.visibility = View.GONE
-                    if (denied) previewTitle?.text = "该资源地址不在允许范围内"
+                    if (!keepProgress) previewProgress?.visibility = View.GONE
+                    if (denied && !keepProgress) previewTitle?.text = "该资源地址不在允许范围内"
                     if (result != null) target.setImageBitmap(result)
                 }
             }
@@ -1137,6 +1160,8 @@ class SelectPanelView(
 
     private fun releasePlayer() {
         main.removeCallbacks(updateProgressRunnable)
+        previewFrameTimeout?.let { main.removeCallbacks(it) }
+        previewFrameTimeout = null
         try {
             mediaPlayer?.stop()
         } catch (_: Exception) {}
@@ -1272,6 +1297,8 @@ class SelectPanelView(
 internal data class VideoFit(val scaleX: Float, val scaleY: Float)
 
 internal fun previewUsesVideo(video: Boolean, live: Boolean) = video || live
+
+internal fun previewFirstFrame(info: Int) = info == MediaPlayer.MEDIA_INFO_VIDEO_RENDERING_START
 
 internal fun videoFitScale(
     videoWidth: Int,

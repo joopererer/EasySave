@@ -12,6 +12,10 @@ class SiteDefinition {
   bool get enabled => data['enabled'] == true;
   Map get auth => data['auth'] as Map;
   Map get load => data['load'] as Map;
+  List get terminalPages =>
+      (load['terminalPages'] as List?) ??
+      (SiteRegistry.builtinById(id)?.load['terminalPages'] as List?) ??
+      const [];
   Map get normalization => data['normalize'] as Map;
   String get parserModule => data['parserModule'] as String;
   String get authorIdRule =>
@@ -45,6 +49,10 @@ class SiteDefinition {
                 )),
       )
       .firstOrNull;
+
+  String? shortLinkFallback(Uri uri, Map rule) =>
+      (rule['fallbackStrategy'] as String?) ??
+      (SiteRegistry.builtinById(id)?.shortLink(uri)?['fallbackStrategy'] as String?);
 
   String? sourceId(Uri uri) {
     final source = normalization['sourceId'] as Map;
@@ -82,6 +90,8 @@ class SiteRegistry {
   static SiteRegistry _builtin() => SiteRegistry(
     (jsonDecode(builtinSitesJson) as List).cast<Map<String, dynamic>>(),
   );
+  static final SiteRegistry _builtinDefinitions = _builtin();
+  static SiteDefinition? builtinById(String id) => _builtinDefinitions.byId(id);
   static SiteRegistry current = _builtin();
   static void useBuiltin() => current = _builtin();
   static void activate(Iterable<Map<String, dynamic>> sites) =>

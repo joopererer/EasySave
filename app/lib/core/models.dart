@@ -10,6 +10,7 @@ abstract final class ParseErrorCode {
   static const privateOrUnavailable = 'PRIVATE_OR_UNAVAILABLE';
   static const blocked = 'BLOCKED';
   static const invalidPage = 'INVALID_PAGE';
+  static const postNotFound = 'POST_NOT_FOUND';
   static const unsupportedUrl = 'UNSUPPORTED_URL';
   static const timeout = 'TIMEOUT';
 }
@@ -43,6 +44,8 @@ class MediaItem {
     this.duration,
     this.fallbacks = const [],
     this.requestResources,
+    this.localFilename,
+    this.localVideoFilename,
   });
 
   factory MediaItem.fromJson(Map<String, dynamic> json) => MediaItem(
@@ -71,6 +74,9 @@ class MediaItem {
   final String url;
   final bool? isGif;
   final String? videoUrl;
+  /// Local history identifiers, never used as network request URLs.
+  final String? localFilename;
+  final String? localVideoFilename;
 
   /// Still-image cover for a video item (XHS `imageList[0]`). IG video
   /// items already carry the preview in `url`, so this stays null there.

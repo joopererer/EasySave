@@ -337,24 +337,38 @@ class HistoryRecord {
   /// to the stored thumbnail when no item list was persisted.
   ParsedPost toPost() {
     final items = <MediaItem>[];
+    String? remote(String? value) {
+      if (value == null || value.isEmpty) return null;
+      final uri = Uri.tryParse(value);
+      return uri != null && {'http', 'https'}.contains(uri.scheme) && uri.host.isNotEmpty
+          ? value : null;
+    }
     if (itemsJson != null) {
       try {
         final decoded = jsonDecode(itemsJson!) as List;
         for (final raw in decoded) {
           final map = (raw as Map).cast<String, Object?>();
+          final url = map['url'] as String? ?? '';
+          final videoUrl = map['videoUrl'] as String?;
+          final type = map['type'] as String? ?? 'image';
+          final fallbacks = (map['fallbacks'] as List?)
+                  ?.whereType<String>().where((value) => remote(value) != null).toList() ??
+              const <String>[];
+          final networkUrl = remote(url) ??
+              (type != 'video' && fallbacks.isNotEmpty ? fallbacks.first : null);
           items.add(
             MediaItem(
-              type: map['type'] as String? ?? 'image',
-              url: map['url'] as String? ?? '',
-              videoUrl: map['videoUrl'] as String?,
-              posterUrl: map['posterUrl'] as String?,
+              type: type,
+              url: networkUrl ?? '',
+              videoUrl: remote(videoUrl),
+              localFilename: remote(url) == null && url.isNotEmpty ? url : null,
+              localVideoFilename: remote(videoUrl) == null ? videoUrl : null,
+              posterUrl: remote(map['posterUrl'] as String?),
               width: map['width'] as num?,
               height: map['height'] as num?,
               duration: map['duration'] as num?,
               isGif: map['isGif'] as bool?,
-              fallbacks:
-                  (map['fallbacks'] as List?)?.whereType<String>().toList() ??
-                  const [],
+              fallbacks: fallbacks,
             ),
           );
         }
@@ -363,7 +377,8 @@ class HistoryRecord {
       }
     }
     if (items.isEmpty && thumbnailUrl != null && thumbnailUrl!.isNotEmpty) {
-      items.add(MediaItem(type: 'image', url: thumbnailUrl!));
+      items.add(MediaItem(type: 'image', url: remote(thumbnailUrl) ?? '',
+          localFilename: remote(thumbnailUrl) == null ? thumbnailUrl : null));
     }
     if (items.isEmpty && files.isNotEmpty) {
       final byIndex = <int, List<HistoryFile>>{};
@@ -379,23 +394,25 @@ class HistoryRecord {
           items.add(
             MediaItem(
               type: 'live',
-              url: img.filename,
-              videoUrl: vid.filename,
+              url: '',
+              localFilename: img.filename,
+              localVideoFilename: vid.filename,
             ),
           );
         } else if (img != null) {
           items.add(
             MediaItem(
               type: 'image',
-              url: img.filename,
+              url: '',
+              localFilename: img.filename,
             ),
           );
         } else if (vid != null) {
           items.add(
             MediaItem(
               type: 'video',
-              url: vid.filename,
-              videoUrl: vid.filename,
+              url: '',
+              localVideoFilename: vid.filename,
             ),
           );
         }

@@ -53,6 +53,7 @@
           "includeSubdomains": false
         },
         "strategy": "http",
+        "fallbackStrategy": "webview",
         "maxRedirects": 5
       },
       {
@@ -61,6 +62,7 @@
           "includeSubdomains": false
         },
         "strategy": "http",
+        "fallbackStrategy": "webview",
         "maxRedirects": 5
       },
       {
@@ -69,6 +71,7 @@
           "includeSubdomains": false
         },
         "strategy": "http",
+        "fallbackStrategy": "webview",
         "maxRedirects": 5
       }
     ],
@@ -88,6 +91,23 @@
       "mode": "webview",
       "timeoutMs": 30000,
       "readyHook": "xhs_ready",
+      "terminalPages": [
+        {
+          "category": "login",
+          "code": "LOGIN_REQUIRED",
+          "message": "小红书要求登录，请在 App 内登录后重试"
+        },
+        {
+          "category": "captcha",
+          "code": "LOGIN_REQUIRED",
+          "message": "小红书要求登录，请在 App 内登录后重试"
+        },
+        {
+          "category": "404",
+          "code": "POST_NOT_FOUND",
+          "message": "帖子不存在，或链接已失效"
+        }
+      ],
       "userAgent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36"
     },
     "auth": {

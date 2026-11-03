@@ -98,6 +98,12 @@ class CoverImage extends StatefulWidget {
 class _CoverImageState extends State<CoverImage> {
   @override
   Widget build(BuildContext context) {
+    if (widget.item.url.isEmpty && (widget.item.posterUrl?.isEmpty ?? true)) {
+      return const ColoredBox(
+        color: Colors.black12,
+        child: Center(child: Icon(Icons.broken_image)),
+      );
+    }
     return Image(
       image: CdnImage(
         widget.item,

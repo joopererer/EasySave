@@ -18,6 +18,11 @@ class VideoFitTest {
         org.junit.Assert.assertTrue(previewUsesVideo(true, false))
         org.junit.Assert.assertFalse(previewUsesVideo(false, false))
     }
+
+    @Test fun loadingEndsOnlyWhenVideoStartsRendering() {
+        org.junit.Assert.assertTrue(previewFirstFrame(3))
+        org.junit.Assert.assertFalse(previewFirstFrame(0))
+    }
     @Test
     fun portraitClipInATallerViewScalesToFullWidth() {
         // 1080x1920 video inside a 1080x2400 view: width-limited.

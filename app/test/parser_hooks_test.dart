@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'package:easysave/services/parse_service.dart';
+import 'package:easysave/services/links.dart';
 import 'package:easysave/services/site_registry.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -17,6 +18,22 @@ void main() {
     ]) {
       expect(parsePathCategory(Uri.parse(raw)), category);
     }
+  });
+  test('configured terminal pages fail before invoking navigation hook', () async {
+    SiteRegistry.useBuiltin();
+    final site = SiteRegistry.current.byId('xhs')!;
+    for (final (path, code) in [('/login', 'LOGIN_REQUIRED'), ('/captcha', 'LOGIN_REQUIRED'), ('/404', 'POST_NOT_FOUND')]) {
+      var invoked = false;
+      await expectLater(
+        navigateStep(site: site, currentUrl: 'https://www.xiaohongshu.com$path',
+          alreadyNavigated: false, navigate: () async { invoked = true; return null; }),
+        throwsA(isA<ParseFailure>().having((e) => e.code, 'code', code)),
+      );
+      expect(invoked, isFalse);
+    }
+    final normal = await navigateStep(site: site, currentUrl: 'https://www.xiaohongshu.com/explore/abc',
+      alreadyNavigated: false, navigate: () async => null);
+    expect(normal.kind, NavigateKind.parse);
   });
   test('valid empty hook results are silent; invalid results are logged', () {
     final site = SiteRegistry.current.byId('xhs')!;

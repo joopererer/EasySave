@@ -6,6 +6,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import '../widgets/ai_label_badge.dart';
 import 'package:flutter/services.dart';
+import 'package:photo_manager/photo_manager.dart';
 
 import '../core/dev_log.dart';
 import '../core/models.dart';
@@ -20,6 +21,31 @@ import '../theme/app_theme.dart';
 import '../widgets/download_sheet.dart';
 import '../widgets/gallery_browser.dart';
 import '../widgets/shared.dart';
+import '../widgets/verified_asset_image.dart';
+
+class PreviewItemCover extends StatelessWidget {
+  const PreviewItemCover({
+    super.key,
+    required this.item,
+    required this.platform,
+    this.asset,
+    this.verifyExistence,
+  });
+
+  final MediaItem item;
+  final String platform;
+  final AssetEntity? asset;
+  final Future<bool> Function(String)? verifyExistence;
+
+  @override
+  Widget build(BuildContext context) {
+    final remote = CoverImage(item: item, platform: platform, cacheWidth: 400);
+    final local = asset;
+    return local == null
+        ? remote
+        : VerifiedAssetImage(local, fallback: remote, verifyExistence: verifyExistence);
+  }
+}
 
 class PreviewPage extends StatefulWidget {
   const PreviewPage({
@@ -65,6 +91,8 @@ class _PreviewPageState extends State<PreviewPage> {
     for (var i = 0; i < _post.items.length; i++) i,
   ];
   Set<int> _downloaded = {};
+  Map<int, AssetEntity> _localAssets = {};
+  Map<int, AssetEntity> _localMotions = {};
   // Thumbnails only start fetching after the push transition settles:
   // firing N concurrent original-size downloads inside the animation
   // starves the raster thread and freezes the transition mid-way.
@@ -198,11 +226,15 @@ class _PreviewPageState extends State<PreviewPage> {
       setState(() => _post = merged);
     } catch (_) {}
 
-    final downloaded = await GalleryLocatorService.instance
-        .findDownloadedIndices(_post);
+    final assets = await GalleryLocatorService.instance.matchPostItems(_post);
+    final motions = _post.items.any((item) => item.type == 'live')
+        ? await GalleryLocatorService.instance.matchPostItems(_post, liveVideoOnly: true)
+        : <int, AssetEntity>{};
     if (!mounted) return;
     setState(() {
-      _downloaded = downloaded;
+      _localAssets = assets;
+      _localMotions = motions;
+      _downloaded = assets.keys.toSet();
     });
   }
 
@@ -249,6 +281,9 @@ class _PreviewPageState extends State<PreviewPage> {
                 fallbacks: _post.items[i].fallbacks,
                 requestResources: _post.items[i].requestResources,
                 isGif: _post.items[i].isGif ?? false,
+                asset: _localAssets[i],
+                liveVideoAsset: _localMotions[i],
+                filename: _post.items[i].localFilename,
                 status: FileStatus.found,
               ),
           ],
@@ -510,11 +545,10 @@ class _PreviewPageState extends State<PreviewPage> {
                               Radius.circular(AppTokens.thumbRadius - 3),
                             ),
                             child: _imagesReady
-                                ? CoverImage(
-                                    key: ValueKey(item.url),
+                                ? PreviewItemCover(
                                     item: item,
-                                    platform: (post.platform),
-                                    cacheWidth: 400,
+                                    platform: post.platform,
+                                    asset: _localAssets[index],
                                   )
                                 : const ColoredBox(color: Colors.black12),
                           ),

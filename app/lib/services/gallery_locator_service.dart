@@ -763,7 +763,7 @@ class GalleryLocatorService extends ChangeNotifier {
 
   /// Locate the album asset behind each item of [post] (index -> asset) using
   /// the persisted history record first, then a postId + sequence scan.
-  Future<Map<int, AssetEntity>> matchPostItems(ParsedPost post) async {
+  Future<Map<int, AssetEntity>> matchPostItems(ParsedPost post, {bool liveVideoOnly = false}) async {
     final result = <int, AssetEntity>{};
     try {
       if (hasAccess && !_scanned) {
@@ -774,6 +774,9 @@ class GalleryLocatorService extends ChangeNotifier {
       if (record != null && !record.isDeleted && record.files.isNotEmpty) {
         final is1Based = record.files.every((f) => f.itemIndex > 0);
         for (final file in record.files) {
+          final zeroBased = is1Based ? file.itemIndex - 1 : file.itemIndex;
+          if (zeroBased < 0 || zeroBased >= post.items.length) continue;
+          if (liveVideoOnly && (file.isImage || post.items[zeroBased].type != 'live')) continue;
           final asset = await locateAssetAsync(
             file,
             post.id,
@@ -785,8 +788,12 @@ class GalleryLocatorService extends ChangeNotifier {
               evictMediaIds([asset.id]);
               continue;
             }
-            final zeroBased = is1Based ? file.itemIndex - 1 : file.itemIndex;
-            result[zeroBased] = asset;
+            final previous = result[zeroBased];
+            final preferredType = liveVideoOnly || post.items[zeroBased].type == 'video'
+                ? AssetType.video : AssetType.image;
+            if (previous == null || (asset.type == preferredType && previous.type != preferredType)) {
+              result[zeroBased] = asset;
+            }
           }
         }
       }
@@ -803,7 +810,8 @@ class GalleryLocatorService extends ChangeNotifier {
           for (var i = 0; i < post.items.length; i++) {
             if (result.containsKey(i)) continue;
             final it = post.items[i];
-            final isImage = it.type != 'video';
+            if (liveVideoOnly && it.type != 'live') continue;
+            final isImage = !liveVideoOnly && it.type != 'video';
             final seq = i + 1;
             final matched = matches.where((a) {
               if (isImage && a.type != AssetType.image) return false;

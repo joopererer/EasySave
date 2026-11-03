@@ -133,41 +133,92 @@ void main() {
     expect(resolved, 'https://www.tiktok.com/@creator/video/1234567890123456789');
   });
 
-  test('http short link that never redirects fails clearly', () async {
+  test('XHS short link without an HTTP redirect falls back to WebView', () async {
     SiteRegistry.useBuiltin();
     const input = 'https://xhslink.cn/o/71TKM3kfsK1';
     final site = SiteRegistry.current.match(input)!;
-    await expectLater(
-      resolveAndEnterParse(
+    final result = await resolveAndEnterParse(
         input,
         site,
-        (_, _) async => fail('parser must not run'),
+        (load, canonical) async {
+          expect(load, input);
+          expect(canonical, isNull);
+          return 'webview';
+        },
         readRedirect: (_) async => null,
-      ),
-      throwsA(
-        isA<ParseFailure>().having(
-          (e) => e.message,
-          'message',
-          contains('短链未能展开'),
-        ),
-      ),
-    );
+      );
+    expect(result, 'webview');
   });
 
   test('short link expansion respects declared timeout', () async {
     SiteRegistry.useBuiltin();
     const input = 'https://xhslink.cn/o/71TKM3kfsK1';
     final site = SiteRegistry.current.match(input)!;
-    await expectLater(
-      resolveAndEnterParse(
+    final result = await resolveAndEnterParse(
         input,
         site,
-        (_, _) async => fail('parser must not run'),
+        (load, canonical) async {
+          expect(load, input);
+          expect(canonical, isNull);
+          return 'webview';
+        },
         readRedirect: (_) => Completer<String?>().future,
         timeout: const Duration(milliseconds: 20),
-      ),
-      throwsA(isA<TimeoutException>()),
-    );
+      );
+    expect(result, 'webview');
+  });
+
+  test('HTTP terminal redirects are retried in WebView before classification', () async {
+    SiteRegistry.useBuiltin();
+    const input = 'https://xhslink.cn/o/71TKM3kfsK1';
+    final site = SiteRegistry.current.match(input)!;
+    for (final path in ['/login', '/captcha', '/404']) {
+      final result = await resolveAndEnterParse(input, site, (load, canonical) async {
+          expect(load, input);
+          expect(canonical, isNull);
+          return 'webview';
+        },
+          readRedirect: (_) async => 'https://www.xiaohongshu.com$path');
+      expect(result, 'webview');
+    }
+  });
+
+  test('HTTP ending on another short-link page falls back to original link', () async {
+    SiteRegistry.useBuiltin();
+    const input = 'https://xhslink.cn/o/71TKM3kfsK1';
+    final site = SiteRegistry.current.match(input)!;
+    var calls = 0;
+    final result = await resolveAndEnterParse(input, site, (load, canonical) async {
+      expect(load, input);
+      expect(canonical, isNull);
+      return 'webview';
+    }, readRedirect: (_) async => calls++ == 0 ? 'https://xhslink.com/landing' : null);
+    expect(result, 'webview');
+  });
+
+  test('cached older manifest inherits builtin terminal and short-link defaults', () async {
+    SiteRegistry.useBuiltin();
+    final builtin = SiteRegistry.current.byId('xhs')!;
+    final old = SiteDefinition({
+      ...builtin.data,
+      'load': {...builtin.load}..remove('terminalPages'),
+      'shortLinks': [
+        for (final raw in builtin.data['shortLinks'] as List)
+          {...raw as Map<String, dynamic>}..remove('fallbackStrategy'),
+      ],
+    });
+    expect(terminalPageFailure(old, Uri.parse('https://www.xiaohongshu.com/login'))?.code, 'LOGIN_REQUIRED');
+    final uri = Uri.parse('https://xhslink.cn/o/abc');
+    expect(old.shortLinkFallback(uri, old.shortLink(uri)!), 'webview');
+    final explicit = {...old.shortLink(uri)!, 'fallbackStrategy': 'none'};
+    expect(old.shortLinkFallback(uri, explicit), 'none');
+  });
+
+  test('HTML redirect diagnostics expose only a fixed category', () {
+    expect(shortLinkHtmlKind('text/html', '<meta http-equiv="refresh" content="0">'), 'meta');
+    expect(shortLinkHtmlKind('text/html', '<script>window.location.href="hidden"</script>'), 'js');
+    expect(shortLinkHtmlKind('text/html', '<p>text</p>'), 'none');
+    expect(shortLinkHtmlKind('application/json', '{}'), 'not_html');
   });
 
   test('short link cannot enter a different site', () async {

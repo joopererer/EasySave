@@ -42,6 +42,11 @@ ErrorCopy errorCopyFor(String code) {
         message: '该帖子不存在、私密或已删除',
         action: ErrorAction.backHome,
       );
+    case ParseErrorCode.postNotFound:
+      return const ErrorCopy(
+        message: '帖子不存在，或链接已失效',
+        action: ErrorAction.backHome,
+      );
     case ParseErrorCode.blocked:
       return const ErrorCopy(
         message: '请求被对方限制，请稍后再试',

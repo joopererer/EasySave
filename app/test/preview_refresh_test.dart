@@ -1,5 +1,8 @@
+import 'dart:async';
 import 'dart:io';
 import 'package:easysave/core/models.dart';
+import 'package:easysave/pages/preview_page.dart';
+import 'package:easysave/widgets/shared.dart';
 import 'package:easysave/services/history_db.dart';
 import 'package:easysave/services/verified_media.dart';
 import 'package:easysave/widgets/verified_asset_image.dart';
@@ -22,6 +25,19 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('network thumbnail'), findsOneWidget);
     expect(find.byIcon(Icons.broken_image), findsNothing);
+  });
+  testWidgets('preview waits for local verification before building remote cover', (tester) async {
+    final asset = AssetEntity(id: 'local', typeInt: 1, width: 10, height: 10);
+    final result = Completer<bool>();
+    await tester.pumpWidget(MaterialApp(home: PreviewItemCover(
+      item: MediaItem(type: 'image', url: ''),
+      platform: 'xhs', asset: asset, verifyExistence: (_) => result.future,
+    )));
+    expect(find.byType(CoverImage), findsNothing);
+    result.complete(false);
+    await tester.pumpAndSettle();
+    expect(find.byType(CoverImage), findsOneWidget);
+    expect(find.byIcon(Icons.broken_image), findsOneWidget);
   });
   test('fresh nonempty metadata merges; empty values and saved time survive', () async {
     final dir = await Directory.systemTemp.createTemp('preview_refresh');

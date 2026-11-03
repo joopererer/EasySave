@@ -2,8 +2,28 @@
 // Pure Dart, unit-tested (extractLink/isSupportedLink); resolveShortLink
 // needs network and is covered by widget-free manual testing.
 
+import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
+import '../core/dev_log.dart';
 import 'site_registry.dart';
+
+String parsePathCategory(Uri? uri) {
+  final path = uri?.path.toLowerCase() ?? '';
+  if (RegExp(r'^/explore(?:/|$)').hasMatch(path)) return 'explore';
+  if (RegExp(r'^/discovery/item(?:/|$)').hasMatch(path)) return 'discovery/item';
+  if (path.contains('404')) return '404';
+  if (path.contains('login')) return 'login';
+  if (path.contains('captcha') || path.contains('verify')) return 'captcha';
+  return 'other';
+}
+
+String shortLinkHtmlKind(String contentType, String body) {
+  if (!contentType.toLowerCase().contains('html')) return 'not_html';
+  final meta = RegExp(r'<meta\b[^>]*http-equiv\s*=\s*["\x27]?refresh\b', caseSensitive: false).hasMatch(body);
+  final js = RegExp(r'(?:window\.)?location(?:\.href|\.replace|\.assign)?\s*[=(]', caseSensitive: false).hasMatch(body);
+  return meta && js ? 'both' : meta ? 'meta' : js ? 'js' : 'none';
+}
 
 final _candidatePattern = RegExp(
   r"https?://[^\s<>"
@@ -141,6 +161,12 @@ Future<String> resolveShortLink(
               .match(current.toString(), includeDisabled: true)
               ?.id !=
           site?.id) {
+        final category = parsePathCategory(current);
+        final terminal = (site?.terminalPages ?? const [])
+            .whereType<Map>().any((rule) => rule['category'] == category);
+        if (site != null && site.hasHost(current.host) && terminal) {
+          return current.toString();
+        }
         throw const FormatException('短链跳转目标不受支持');
       }
       String? location;
@@ -155,7 +181,24 @@ Future<String> resolveShortLink(
         );
         final response = await bounded(request.close());
         location = response.headers.value(HttpHeaders.locationHeader);
-        await bounded(response.drain<void>());
+        final bytes = <int>[];
+        await bounded(() async {
+          await for (final chunk in response) {
+            final remaining = 32768 - bytes.length;
+            if (remaining <= 0) break;
+            bytes.addAll(chunk.take(remaining));
+            if (bytes.length >= 32768) break;
+          }
+        }());
+        final next = location == null ? null : current.resolve(location);
+        final host = next?.host.toLowerCase() ?? '';
+        final safeHost = RegExp(r'^[a-z0-9.:-]{1,253}$').hasMatch(host) ? host : '-';
+        final kind = shortLinkHtmlKind(
+          response.headers.contentType?.mimeType ?? '',
+          utf8.decode(bytes, allowMalformed: true),
+        );
+        unawaited(DevLog.write('ShortLink',
+          'status=${response.statusCode} location=${location == null ? 0 : 1} host=$safeHost path=${parsePathCategory(next)} hop=${i + 1} html=$kind'));
       }
       if (location == null) return current.toString();
       current = current.resolve(location);
