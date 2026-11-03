@@ -97,6 +97,7 @@ void main() {
           rejected('REQUEST_URL_REJECTED'),
         );
         expect(lines.last, contains('field=url shape=$shape'));
+        expect(lines.last, contains('itemType=image'));
         expect(lines.last, isNot(contains('secret')));
       }
     } finally {

@@ -268,6 +268,53 @@ void main() {
       expect(await storedFilesJson(), hasLength(4));
     });
 
+    test('stale gallery scan preserves files saved after its snapshot', () async {
+      await db.upsert(recordWith(savedRows().take(2).toList()));
+      final stale = (await db.getByPostId(_postId))!;
+      final more = [
+        for (var i = 5; i <= 11; i++)
+          savedRows().first.copyWith(
+            filename: '${_postId}_$i.jpg',
+            mediaId: '$i',
+            itemIndex: i,
+          ),
+      ];
+      await db.upsert(recordWith([...savedRows(), ...more]));
+      final scanned = [
+        for (final file in stale.files) file.copyWith(status: FileStatus.found),
+      ];
+      final merged = await db.syncScannedFiles(stale.id!, stale.files, scanned);
+      expect(merged, hasLength(11));
+      expect(merged.take(2).every((file) => file.status == FileStatus.found), isTrue);
+      final persisted = await storedFilesJson();
+      expect(persisted, hasLength(11));
+      expect(historyFilesNeedRepair(jsonEncode(persisted)), isFalse);
+    });
+
+    test('stale scan cannot replace a newer media id for the same item', () async {
+      await db.upsert(recordWith(savedRows().take(1).toList()));
+      final stale = (await db.getByPostId(_postId))!;
+      await db.upsert(recordWith([
+        stale.files.single.copyWith(mediaId: 'new-id'),
+      ]));
+      final merged = await db.syncScannedFiles(stale.id!, stale.files, [
+        stale.files.single.copyWith(mediaId: 'old-scan-id', status: FileStatus.found),
+      ]);
+      expect(merged.single.mediaId, 'new-id');
+    });
+
+    test('scan cannot assign an already claimed media id to another row', () async {
+      await db.upsert(recordWith(savedRows().take(2).toList()));
+      final record = (await db.getByPostId(_postId))!;
+      final merged = await db.syncScannedFiles(record.id!, record.files, [
+        record.files.first,
+        record.files.last.copyWith(mediaId: record.files.first.mediaId, status: FileStatus.found),
+      ]);
+      expect(merged, hasLength(2));
+      expect(merged.last.mediaId, record.files.last.mediaId);
+      expect(historyFilesNeedRepair(jsonEncode([for (final f in merged) f.toMap()])), isFalse);
+    });
+
     test('getByPostId repairs the row in the database', () async {
       await writeDamagedRow();
       expect((await storedFilesJson()), hasLength(5));

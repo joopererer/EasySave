@@ -49,12 +49,13 @@ Future<void> waitForParserState(
 Future<ParsedPost> parsePostUrl(String url) async =>
     (await parsePostOutcome(url)).data;
 
-/// Host + path only: DevLog already strips queries, this keeps them out of the
-/// message before it is even formatted.
+/// Only a validated host and a fixed path category may be logged.
 String _hostPathOf(String url) {
   final uri = Uri.tryParse(url);
   if (uri == null || uri.host.isEmpty) return '-';
-  return '${uri.host.toLowerCase()}${uri.path}';
+  final host = uri.host.toLowerCase();
+  if (!RegExp(r'^[a-z0-9.:-]{1,253}$').hasMatch(host)) return '-';
+  return 'host=$host path=${parsePathCategory(uri)}';
 }
 
 /// Log one result check so a device failure names the check and both sides.
@@ -154,7 +155,10 @@ Future<ParseOutcome> parsePostOutcome(String url, {String source = 'app'}) async
   // Loading also validates the cached script and activates the matching registry.
   final script = await ParserManager.instance.getActiveScript().timeout(
     budget,
-    onTimeout: () => throw ParseFailure(ParseErrorCode.timeout, '加载页面超时，请重试'),
+    onTimeout: () {
+      DevLog.write('ParseWebView', 'event=failure source=$source site=${preSite.id} condition=script_timeout code=TIMEOUT');
+      throw ParseFailure(ParseErrorCode.timeout, '加载页面超时，请重试');
+    },
   );
   final site = SiteRegistry.current.match(url, includeDisabled: true);
   if (site == null) {
@@ -197,7 +201,10 @@ Future<ParseOutcome> parsePostOutcome(String url, {String source = 'app'}) async
       return result;
     })().timeout(
       remaining(),
-      onTimeout: () => throw ParseFailure(ParseErrorCode.timeout, '加载页面超时，请重试'),
+      onTimeout: () {
+        DevLog.write('ParseWebView', 'event=failure source=$source site=${site.id} condition=budget code=TIMEOUT');
+        throw ParseFailure(ParseErrorCode.timeout, '加载页面超时，请重试');
+      },
     );
   } on TimeoutException {
     throw ParseFailure(ParseErrorCode.timeout, '加载页面超时，请重试');
@@ -427,12 +434,26 @@ Future<NavigateStep> navigateStep({
   return const NavigateStep(NavigateKind.parse);
 }
 
+String parsePathCategory(Uri? uri) {
+  final path = uri?.path.toLowerCase() ?? '';
+  if (RegExp(r'^/explore(?:/|$)').hasMatch(path)) return 'explore';
+  if (RegExp(r'^/discovery/item(?:/|$)').hasMatch(path)) return 'discovery/item';
+  if (path.contains('404')) return '404';
+  if (path.contains('login')) return 'login';
+  if (path.contains('captcha') || path.contains('verify')) return 'captcha';
+  return 'other';
+}
+
 Future<ParseOutcome> _run(ParserHooks hooks, String targetUrl, {required String source}) async {
   final jsonMode = hooks.site.load['mode'] == 'json';
   final target = Uri.tryParse(targetUrl);
   DevLog.write('ParseWebView', 'event=start source=$source site=${hooks.site.id} hasQuery=${target?.hasQuery == true ? 1 : 0}');
   final loaded = Completer<InAppWebViewController>();
   var navigated = false;
+  var loads = 0;
+  var mainNavigations = 0;
+  var path = parsePathCategory(target);
+  var stage = 'load_wait';
   HeadlessInAppWebView? view;
   try {
     view = HeadlessInAppWebView(
@@ -464,6 +485,7 @@ Future<ParseOutcome> _run(ParserHooks hooks, String targetUrl, {required String 
       ),
       shouldOverrideUrlLoading: (controller, action) async {
         final uri = action.request.url;
+        if (action.isForMainFrame == true) mainNavigations++;
         if (uri == null || isLoopbackHost(uri.host)) {
           return NavigationActionPolicy.CANCEL;
         }
@@ -480,9 +502,12 @@ Future<ParseOutcome> _run(ParserHooks hooks, String targetUrl, {required String 
       },
       onLoadStop: (controller, uri) async {
         if (loaded.isCompleted) return;
-        DevLog.write('ParseWebView', 'event=loadStop source=$source site=${hooks.site.id} hasQuery=${uri?.hasQuery == true ? 1 : 0}');
+        loads++;
+        path = parsePathCategory(uri);
+        DevLog.write('ParseWebView', 'event=loadStop source=$source site=${hooks.site.id} hasQuery=${uri?.hasQuery == true ? 1 : 0} path=$path loads=$loads navigations=$mainNavigations');
         try {
           if (!jsonMode) {
+            stage = 'navigate';
             final current = uri?.toString() ?? targetUrl;
             final step = await navigateStep(
               site: hooks.site,
@@ -490,14 +515,17 @@ Future<ParseOutcome> _run(ParserHooks hooks, String targetUrl, {required String 
               alreadyNavigated: navigated,
               navigate: () => hooks.call(controller, 'navigate', current),
             );
+            DevLog.write('ParseWebView', 'event=navigate source=$source site=${hooks.site.id} path=$path loads=$loads navigations=$mainNavigations condition=${step.kind.name}');
             switch (step.kind) {
               case NavigateKind.wait:
+                stage = 'load_wait';
                 return;
               case NavigateKind.load:
                 navigated = true;
                 await controller.loadUrl(
                   urlRequest: URLRequest(url: WebUri(step.url!)),
                 );
+                stage = 'load_wait';
                 return;
               case NavigateKind.invalid:
                 _logParseCheck(
@@ -592,10 +620,13 @@ Future<ParseOutcome> _run(ParserHooks hooks, String targetUrl, {required String 
         'input': utf8.decode(response.bodyBytes),
       });
     } else {
+      stage = 'prepare';
       await hooks.call(controller, 'prepare', currentUrl);
+      stage = 'ready';
       await waitForParserState(
         () async => await hooks.call(controller, 'ready', currentUrl) == true,
       );
+      stage = 'parse';
       result = await hooks.call(controller, 'parsePage', currentUrl);
     }
     if (result is Map && result['ok'] != true && result['error'] is Map) {
@@ -608,7 +639,17 @@ Future<ParseOutcome> _run(ParserHooks hooks, String targetUrl, {required String 
         result = {...result, 'error': error};
       } catch (_) {}
     }
-    return validateParserResult(result, hooks.site);
+    stage = 'validate';
+    final outcome = validateParserResult(result, hooks.site);
+    DevLog.write('ParseWebView', 'event=success source=$source site=${hooks.site.id} path=$path loads=$loads navigations=$mainNavigations');
+    return outcome;
+  } catch (error) {
+    final code = error is ParseFailure
+        ? error.code
+        : error is TimeoutException ? 'TIMEOUT' : 'UNEXPECTED';
+    final safeCode = RegExp(r'^[A-Z_]{1,40}$').hasMatch(code) ? code : 'OTHER';
+    DevLog.write('ParseWebView', 'event=failure source=$source site=${hooks.site.id} path=$path loads=$loads navigations=$mainNavigations condition=$stage code=$safeCode');
+    rethrow;
   } finally {
     await view?.dispose();
   }

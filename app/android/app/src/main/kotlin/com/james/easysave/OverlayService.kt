@@ -112,6 +112,7 @@ class OverlayService : Service() {
     private var isSnappedToLeft = false
     private var autoHideEnabled = true
     private var lastBubbleBounds: BubbleBounds? = null
+    private var bubbleTouched = false
 
     // Drag-to-close target.
     private var closeView: View? = null
@@ -235,19 +236,27 @@ class OverlayService : Service() {
         val view = bubbleContainer ?: return
         val params = bubbleParams ?: return
         val previous = lastBubbleBounds ?: return
-        val fraction = previous.fraction(params.y, dp(SIZE_DP))
+        pendingRotationFraction = previous.fraction(params.y, dp(SIZE_DP))
         removeMenu()
         removeClose()
-        view.post {
-            val bounds = bubbleBounds()
-            params.x = bounds.snapX(isSnappedToLeft, dp(SIZE_DP))
-            params.y = bounds.yAt(fraction, dp(SIZE_DP))
-            lastBubbleBounds = bounds
-            try {
-                wm?.updateViewLayout(view, params)
-            } catch (e: Exception) {
-                Log.e(TAG, "rotation reposition failed", e)
-            }
+        view.requestApplyInsets()
+    }
+
+    private var pendingRotationFraction: Float? = null
+
+    private fun resnapAfterInsets(view: View, params: WindowManager.LayoutParams) {
+        val previous = lastBubbleBounds ?: return
+        val bounds = bubbleBounds()
+        if (bubbleTouched) return
+        val position = resnappedPosition(previous, bounds, params.y, dp(SIZE_DP), isSnappedToLeft, pendingRotationFraction) ?: return
+        pendingRotationFraction = null
+        params.x = position.first
+        params.y = position.second
+        lastBubbleBounds = bounds
+        try {
+            wm?.updateViewLayout(view, params)
+        } catch (e: Exception) {
+            Log.e(TAG, "insets reposition failed", e)
         }
     }
 
@@ -334,6 +343,12 @@ class OverlayService : Service() {
             clipChildren = false
             clipToPadding = false
         }
+        container.setOnApplyWindowInsetsListener { view, insets ->
+            view.postOnAnimation {
+                if (bubbleContainer === view) resnapAfterInsets(view, params)
+            }
+            insets
+        }
         val v = BubbleView(this)
         v.alpha = 0.8f
         container.addView(v, FrameLayout.LayoutParams(dp(SIZE_DP), dp(SIZE_DP)))
@@ -359,6 +374,7 @@ class OverlayService : Service() {
         container.setOnTouchListener { view, e ->
             when (e.action) {
                 MotionEvent.ACTION_DOWN -> {
+                    bubbleTouched = true
                     startX = params.x
                     startY = params.y
                     touchX = e.rawX
@@ -395,10 +411,12 @@ class OverlayService : Service() {
                     true
                 }
                 MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                    bubbleTouched = false
                     if (dragging) {
                         if (overClose) closeBubble() else snap(params, view)
                         removeClose()
                     } else {
+                        resnapAfterInsets(view, params)
                         onClickBubble()
                     }
                     true
@@ -417,6 +435,7 @@ class OverlayService : Service() {
 
     private fun snap(params: WindowManager.LayoutParams, view: View) {
         val bounds = bubbleBounds()
+        pendingRotationFraction = null
         lastBubbleBounds = bounds
         isSnappedToLeft = (params.x + dp(SIZE_DP) / 2 < (bounds.left + bounds.right) / 2)
         params.x = bounds.snapX(isSnappedToLeft, dp(SIZE_DP))

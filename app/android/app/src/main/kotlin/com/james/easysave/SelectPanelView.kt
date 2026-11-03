@@ -164,6 +164,7 @@ class SelectPanelView(
         val imageRequest: NativeMediaRequest,
         val videoRequest: NativeMediaRequest,
         val video: Boolean,
+        val live: Boolean,
         val saved: Boolean,
     )
 
@@ -198,6 +199,7 @@ class SelectPanelView(
     private var mediaPlayer: MediaPlayer? = null
     private var previewVideoFile: java.io.File? = null
     private var previewIndex = -1
+    private var previewGeneration = 0
     private var previewOpenedAt = 0L
 
     // Navigation and video control components
@@ -278,6 +280,7 @@ class SelectPanelView(
                     imageRequest = request("imageRequest"),
                     videoRequest = request("videoRequest"),
                     video = m["video"] as? Boolean ?: false,
+                    live = m["live"] as? Boolean ?: false,
                     saved = m["saved"] as? Boolean ?: false,
                 )
             )
@@ -533,7 +536,7 @@ class SelectPanelView(
                 return false
             }
             override fun onSingleTapConfirmed(e: MotionEvent): Boolean {
-                if (previewIndex in cells.indices && cells[previewIndex].video) {
+                if (previewIndex in cells.indices && previewUsesVideo(cells[previewIndex].video, cells[previewIndex].live)) {
                     togglePlayPause()
                     return true
                 }
@@ -919,9 +922,11 @@ class SelectPanelView(
     private fun showPreview(index: Int) {
         if (index !in cells.indices) return
         previewIndex = index
+        val generation = ++previewGeneration
         previewOpenedAt = SystemClock.uptimeMillis()
         val cell = cells[index]
-        val request = if (cell.video) cell.videoRequest else cell.imageRequest
+        val playMotion = previewUsesVideo(cell.video, cell.live)
+        val request = if (playMotion) cell.videoRequest else cell.imageRequest
         previewTitle?.text = if (cell.video) {
             "视频预览 (${index + 1}/${cells.size})"
         } else {
@@ -934,8 +939,13 @@ class SelectPanelView(
         previewProgress?.visibility = View.VISIBLE
 
         releasePlayer()
+        previewTitle?.setOnClickListener(null)
 
         if (request.requiresAppPreview) {
+            if (cell.live) {
+                showLiveStill(cell, generation)
+                return
+            }
             previewTexture?.visibility = View.GONE
             previewImage?.visibility = View.GONE
             previewProgress?.visibility = View.GONE
@@ -948,16 +958,14 @@ class SelectPanelView(
             }
             return
         }
-        previewTitle?.setOnClickListener(null)
-
-        if (cell.video) {
+        if (playMotion) {
             videoControlBar?.visibility = if (isStickyPreview) View.VISIBLE else View.GONE
             playPauseBtn?.isPlaying = true
             videoSeekBar?.progress = 0
             videoTimeText?.text = "00:00 / 00:00"
             previewImage?.visibility = View.GONE
             previewTexture?.visibility = View.VISIBLE
-            playVideo(cell.videoRequest)
+            playVideo(cell, generation)
             main.removeCallbacks(updateProgressRunnable)
             main.post(updateProgressRunnable)
         } else {
@@ -965,41 +973,70 @@ class SelectPanelView(
             main.removeCallbacks(updateProgressRunnable)
             previewTexture?.visibility = View.GONE
             previewImage?.visibility = View.VISIBLE
-            loadImage(cell.imageRequest)
+            loadImage(cell.imageRequest, generation)
         }
     }
 
-    private fun playVideo(request: NativeMediaRequest) {
-        val index = previewIndex
+    private fun previewCurrent(generation: Int) =
+        previewGeneration == generation && previewOverlay?.visibility == View.VISIBLE
+
+    private fun showLiveStill(cell: Cell, generation: Int) {
+        if (!previewCurrent(generation)) return
+        releasePlayer()
+        videoControlBar?.visibility = View.GONE
+        previewTexture?.visibility = View.GONE
+        previewImage?.visibility = View.VISIBLE
+        if (cell.imageRequest.requiresAppPreview) {
+            previewProgress?.visibility = View.GONE
+            previewTitle?.text = "请在 App 内预览（点击打开 App）"
+            previewTitle?.setOnClickListener {
+                context.packageManager.getLaunchIntentForPackage(context.packageName)?.let {
+                    context.startActivity(it)
+                }
+            }
+        } else {
+            loadImage(cell.imageRequest, generation)
+        }
+    }
+
+    private fun playVideo(cell: Cell, generation: Int) {
+        fun failed(rejected: Boolean = false) {
+            if (!previewCurrent(generation)) return
+            if (cell.live) showLiveStill(cell, generation)
+            else {
+                releasePlayer()
+                previewProgress?.visibility = View.GONE
+                if (rejected) previewTitle?.text = "该资源地址不在允许范围内"
+            }
+        }
         pool.execute {
             val file = java.io.File(context.cacheDir, "policy_preview_${System.nanoTime()}.mp4")
             try {
-                request.writeVideo(file)
+                cell.videoRequest.writeVideo(file)
             } catch (e: NativeMediaRequest.Rejected) {
                 file.delete()
-                main.post {
-                    if (previewIndex == index) {
-                        previewProgress?.visibility = View.GONE
-                        previewTitle?.text = "该资源地址不在允许范围内"
-                    }
-                }
+                main.post { failed(true) }
                 return@execute
             } catch (_: Exception) {
                 file.delete()
-                main.post { if (previewIndex == index) previewProgress?.visibility = View.GONE }
+                main.post { failed() }
                 return@execute
             }
             main.post {
-                if (previewIndex != index || previewOverlay?.visibility != View.VISIBLE) {
+                if (!previewCurrent(generation)) {
                     file.delete()
                     return@post
                 }
                 previewVideoFile = file
-                val texture = previewTexture ?: return@post
+                val texture = previewTexture ?: run { failed(); return@post }
                 fun startMp(surfaceTexture: SurfaceTexture) {
+                    if (!previewCurrent(generation)) return
                     try {
-                        mediaPlayer = MediaPlayer().apply {
-                            setSurface(android.view.Surface(surfaceTexture))
+                        val player = MediaPlayer()
+                        mediaPlayer = player
+                        player.apply {
+                            val surface = android.view.Surface(surfaceTexture)
+                            try { setSurface(surface) } finally { surface.release() }
                             setVolume(0f, 0f)
                             isLooping = true
                             setDataSource(file.absolutePath)
@@ -1008,19 +1045,19 @@ class SelectPanelView(
                             }
                             setOnPreparedListener { player ->
                                 fitVideoToView(player.videoWidth, player.videoHeight)
-                                if (previewIndex == index && previewOverlay?.visibility == View.VISIBLE) {
+                                if (previewCurrent(generation)) {
                                     previewProgress?.visibility = View.GONE
-                                    start()
+                                    try { player.start() } catch (_: Exception) { failed() }
                                 }
                             }
                             setOnErrorListener { _, _, _ ->
-                                previewProgress?.visibility = View.GONE
+                                failed()
                                 true
                             }
                             prepareAsync()
                         }
                     } catch (_: Exception) {
-                        previewProgress?.visibility = View.GONE
+                        failed()
                     }
                 }
                 if (texture.isAvailable) startMp(texture.surfaceTexture!!)
@@ -1030,7 +1067,7 @@ class SelectPanelView(
                     }
                     override fun onSurfaceTextureSizeChanged(st: SurfaceTexture, width: Int, height: Int) {}
                     override fun onSurfaceTextureDestroyed(st: SurfaceTexture): Boolean {
-                        releasePlayer()
+                        if (previewCurrent(generation)) releasePlayer()
                         return true
                     }
                     override fun onSurfaceTextureUpdated(st: SurfaceTexture) {}
@@ -1039,9 +1076,8 @@ class SelectPanelView(
         }
     }
 
-    private fun loadImage(request: NativeMediaRequest) {
+    private fun loadImage(request: NativeMediaRequest, generation: Int) {
         val target = previewImage ?: return
-        val index = previewIndex
         target.setImageBitmap(null)
         val maxDim = resources.displayMetrics.widthPixels.coerceAtLeast(resources.displayMetrics.heightPixels)
         pool.execute {
@@ -1054,7 +1090,7 @@ class SelectPanelView(
             } catch (_: Exception) {}
             val result = bmp
             main.post {
-                if (previewIndex == index && previewOverlay?.visibility == View.VISIBLE) {
+                if (previewCurrent(generation)) {
                     previewProgress?.visibility = View.GONE
                     if (denied) previewTitle?.text = "该资源地址不在允许范围内"
                     if (result != null) target.setImageBitmap(result)
@@ -1065,6 +1101,7 @@ class SelectPanelView(
 
     private fun hidePreview() {
         previewIndex = -1
+        previewGeneration++
         releasePlayer()
         previewOverlay?.visibility = View.GONE
         previewImage?.setImageBitmap(null)
@@ -1102,8 +1139,8 @@ class SelectPanelView(
         main.removeCallbacks(updateProgressRunnable)
         try {
             mediaPlayer?.stop()
-            mediaPlayer?.release()
         } catch (_: Exception) {}
+        mediaPlayer?.release()
         mediaPlayer = null
         previewVideoFile?.delete()
         previewVideoFile = null
@@ -1233,6 +1270,8 @@ class SelectPanelView(
  * it out of shape.
  */
 internal data class VideoFit(val scaleX: Float, val scaleY: Float)
+
+internal fun previewUsesVideo(video: Boolean, live: Boolean) = video || live
 
 internal fun videoFitScale(
     videoWidth: Int,

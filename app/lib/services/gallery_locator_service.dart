@@ -743,10 +743,10 @@ class GalleryLocatorService extends ChangeNotifier {
     }
 
     if (changed && record.id != null) {
-      record.files.clear();
-      record.files.addAll(updatedFiles);
       final db = await HistoryDb.instance();
-      await db.updateFiles(record.id!, updatedFiles, source: 'gallery-scan');
+      final merged = await db.syncScannedFiles(record.id!, record.files, updatedFiles);
+      record.files.clear();
+      record.files.addAll(merged);
     }
   }
 

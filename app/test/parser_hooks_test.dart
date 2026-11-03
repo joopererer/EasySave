@@ -6,6 +6,18 @@ import 'package:flutter_test/flutter_test.dart';
 
 void main() {
   tearDown(SiteRegistry.useBuiltin);
+  test('navigation diagnostics classify paths without exposing path or query', () {
+    for (final (raw, category) in [
+      ('https://example.test/explore/private?token=secret', 'explore'),
+      ('https://example.test/discovery/item/private?token=secret', 'discovery/item'),
+      ('https://example.test/404?token=secret', '404'),
+      ('https://example.test/login?token=secret', 'login'),
+      ('https://example.test/captcha?token=secret', 'captcha'),
+      ('https://example.test/private?token=secret', 'other'),
+    ]) {
+      expect(parsePathCategory(Uri.parse(raw)), category);
+    }
+  });
   test('valid empty hook results are silent; invalid results are logged', () {
     final site = SiteRegistry.current.byId('xhs')!;
     final lines = <String>[];

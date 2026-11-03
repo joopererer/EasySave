@@ -842,6 +842,72 @@ class HistoryDb {
     notifyChanged('updateFiles id=$id rows=$rows');
   }
 
+  /// Apply scan results to the current database rows, not the snapshot that
+  /// was read before the asynchronous album lookup.
+  Future<List<HistoryFile>> syncScannedFiles(
+    int id,
+    List<HistoryFile> before,
+    List<HistoryFile> scanned,
+  ) async {
+    if (before.length != scanned.length) {
+      throw ArgumentError('Scan results must match the input file list');
+    }
+    final result = await _db.transaction((txn) async {
+      final rows = await txn.query(
+        'history_records', where: 'id = ?', whereArgs: [id], limit: 1,
+      );
+      if (rows.isEmpty) throw StateError('History record no longer exists');
+      final record = HistoryRecord.fromMap(rows.first);
+      final changes = <String, (HistoryFile, HistoryFile)>{};
+      for (var i = 0; i < before.length; i++) {
+        final old = before[i], updated = scanned[i];
+        if (old.itemIndex != updated.itemIndex || old.isImage != updated.isImage) {
+          throw ArgumentError('Scan cannot change file identity');
+        }
+        changes['${old.itemIndex}_${old.isImage}'] = (old, updated);
+      }
+      final merged = <HistoryFile>[];
+      final claimedMediaIds = record.files
+          .map((file) => file.mediaId)
+          .whereType<String>()
+          .where((id) => id.isNotEmpty)
+          .toSet();
+      for (final current in record.files) {
+        final change = changes['${current.itemIndex}_${current.isImage}'];
+        final proposedId = change?.$2.mediaId;
+        if (change == null ||
+            current.filename != change.$1.filename ||
+            current.mediaId != change.$1.mediaId ||
+            current.assetId != change.$1.assetId ||
+            (proposedId != null && proposedId.isNotEmpty &&
+                proposedId != current.mediaId && claimedMediaIds.contains(proposedId))) {
+          merged.add(current);
+        } else {
+          if (proposedId != null && proposedId.isNotEmpty) claimedMediaIds.add(proposedId);
+          merged.add(current.copyWith(
+            mediaId: change.$2.mediaId,
+            status: change.$2.status,
+            relativePath: change.$2.relativePath,
+          ));
+        }
+      }
+      final repaired = repairHistoryFiles(merged) ?? merged;
+      validateHistoryFiles(repaired);
+      final encoded = jsonEncode([for (final file in repaired) file.toMap()]);
+      final changed = encoded != rows.first['files_json'];
+      if (changed) {
+        await txn.update('history_records', {'files_json': encoded},
+          where: 'id = ?', whereArgs: [id]);
+      }
+      return (files: repaired, postId: record.postId, changed: changed);
+    });
+    if (result.changed) {
+      DevLog.write('HIST', 'file rows written source=gallery-scan post=${result.postId} count=${result.files.length}');
+      notifyChanged('gallery scan post=${result.postId}');
+    }
+    return result.files;
+  }
+
   /// Rewrite one stored record whose `files_json` still carries the 0-based or
   /// duplicated rows left by the old inference path. Only the database row
   /// changes: no album file is deleted, renamed or rewritten.

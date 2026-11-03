@@ -172,7 +172,7 @@ Future<void> _handleSubmit(
   try {
     await ParserManager.instance.init();
   } catch (e) {
-    await _log(channel, 'ParserManager init FAILED: $e');
+    await _log(channel, 'ParserManager init FAILED type=${e.runtimeType}');
   }
 
   final manager = DownloadManager.instance;
@@ -192,7 +192,7 @@ Future<void> _handleSubmit(
         // The headless engine has no PlatformPlugin, so Clipboard.setData would
         // hang; set it natively via HostService instead.
         await _invoke(channel, 'clipboard', cap);
-        await _log(channel, 'CAPTION copied ${cap.length} chars :: $url');
+        await _log(channel, 'CAPTION copied ${cap.length} chars');
         anyStarted = true;
         await _tile(channel, false, null);
         await _bubble(channel, false, 1, 1, null, false);
@@ -223,7 +223,7 @@ Future<void> _handleSubmit(
             }
           }
         } catch (e) {
-          await _log(channel, 'SELECT history lookup failed: $e');
+          await _log(channel, 'SELECT history lookup failed type=${e.runtimeType}');
         }
         final site = SiteRegistry.current.byId(post.platform);
         if (site == null) {
@@ -275,6 +275,7 @@ Future<void> _handleSubmit(
             'imageRequest': await forUrl(item.url),
             'videoRequest': await forUrl(item.videoUrl ?? item.url),
             'video': item.type == 'video',
+            'live': item.type == 'live' && item.videoUrl != null && item.videoUrl!.isNotEmpty,
             'saved': savedIdx.contains(i),
           });
         }
@@ -292,7 +293,7 @@ Future<void> _handleSubmit(
         _selectCompleter = null;
         await _invoke(channel, 'unmountSelectPanel');
         if (selected == null || selected.isEmpty) {
-          await _log(channel, 'SELECT cancelled :: $url');
+          await _log(channel, 'SELECT cancelled');
           await _tile(channel, false, null);
           await _bubble(channel, false, 0, 0, null, false);
           await _invoke(channel, 'idle');
@@ -310,7 +311,7 @@ Future<void> _handleSubmit(
         anyStarted = true;
         await _log(
           channel,
-          'DOWNLOAD started ${batch.jobs.length} files (selected) :: $url',
+          'DOWNLOAD started ${batch.jobs.length} files (selected)',
         );
         if (toasts) await _toast(channel, '开始下载 ${batch.jobs.length} 个文件');
         unawaited(_awaitBatchAndNotify(channel, batch, started, url, toasts));
@@ -319,7 +320,7 @@ Future<void> _handleSubmit(
       if (post.items.isEmpty) {
         await _log(
           channel,
-          'PARSE OK but no items (${sw.elapsedMilliseconds}ms) :: $url',
+          'PARSE OK but no items (${sw.elapsedMilliseconds}ms)',
         );
         await _notify(channel, '该帖子没有可保存的内容');
         continue;
@@ -336,7 +337,7 @@ Future<void> _handleSubmit(
       anyStarted = true;
       await _log(
         channel,
-        'DOWNLOAD started ${batch.jobs.length} files :: $url',
+        'DOWNLOAD started ${batch.jobs.length} files',
       );
       if (toasts) await _toast(channel, '开始下载 ${batch.jobs.length} 个文件');
       unawaited(_awaitBatchAndNotify(channel, batch, started, url, toasts));
@@ -350,7 +351,7 @@ Future<void> _handleSubmit(
     } on ParseFailure catch (e) {
       await _log(
         channel,
-        'PARSE FAIL[${e.code}] (${sw.elapsedMilliseconds}ms) ${e.message} :: $url',
+        'PARSE FAIL[${e.code}] (${sw.elapsedMilliseconds}ms)',
       );
       if (e.code == ParseErrorCode.loginRequired) {
         if (toasts) await _toast(channel, '需要登录：${e.message}');
@@ -377,7 +378,7 @@ Future<void> _handleSubmit(
       );
       await _error(channel, '', e.code, '该资源地址不在允许范围内');
     } catch (e) {
-      await _log(channel, 'ERROR (${sw.elapsedMilliseconds}ms) $e :: $url');
+      await _log(channel, 'ERROR (${sw.elapsedMilliseconds}ms) type=${e.runtimeType}');
       if (toasts) await _toast(channel, '处理失败');
       await _tile(channel, false, null);
       await _bubble(
@@ -439,12 +440,12 @@ Future<void> _awaitBatchAndNotify(
           '下载失败';
       await _log(
         channel,
-        'DOWNLOAD failed: $ok/$total ok, $failed failed, ${secs}s :: $url',
+        'DOWNLOAD failed: $ok/$total ok, $failed failed, ${secs}s',
       );
       if (toasts) await _toast(channel, '下载失败：成功 $ok/$total');
       await _notify(channel, '下载失败：成功 $ok/$total —— $firstError');
     } else {
-      await _log(channel, 'DOWNLOAD done: $ok/$total in ${secs}s :: $url');
+      await _log(channel, 'DOWNLOAD done: $ok/$total in ${secs}s');
       if (toasts) await _toast(channel, '下载完成：$ok/$total 个文件');
       await _notify(channel, '下载完成：$ok/$total 个文件');
     }

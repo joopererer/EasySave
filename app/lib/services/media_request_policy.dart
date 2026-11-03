@@ -95,7 +95,7 @@ class MediaRequestPolicy {
     return match == null ? 'relative' : 'scheme=${match.group(1)!.toLowerCase()}';
   }
 
-  Never _reject(String code, String raw, {String field = 'unknown'}) {
+  Never _reject(String code, String raw, {String field = 'unknown', String? itemType}) {
     final host = _host(raw);
     final logger = _logRejection;
     if (logger != null) {
@@ -103,7 +103,7 @@ class MediaRequestPolicy {
     } else {
       unawaited(DevLog.write(
         'RequestPolicy',
-        '$code host=$host${code == 'REQUEST_URL_REJECTED' ? ' field=$field shape=${_shape(raw)}' : ''}',
+        '$code host=$host${code == 'REQUEST_URL_REJECTED' ? ' field=$field shape=${_shape(raw)}${itemType == null ? '' : ' itemType=$itemType'}' : ''}',
       ));
     }
     throw MediaPolicyException(code, host);
@@ -134,7 +134,7 @@ class MediaRequestPolicy {
 
   /// Validate every candidate, including ones that have not yet been attempted.
   /// No cookies are read here, so callers can validate a complete resource set.
-  Uri validate(MediaRequestResource resource, {String? field}) {
+  Uri validate(MediaRequestResource resource, {String? field, String? itemType}) {
     final raw = resource.url;
     final uri = Uri.tryParse(raw);
     if (uri == null ||
@@ -144,7 +144,7 @@ class MediaRequestPolicy {
         uri.userInfo.isNotEmpty ||
         _userinfo.hasMatch(raw) ||
         _controls.hasMatch(raw)) {
-      _reject('REQUEST_URL_REJECTED', raw, field: field ?? resource.role.name);
+      _reject('REQUEST_URL_REJECTED', raw, field: field ?? resource.role.name, itemType: itemType);
     }
     final config = site.data['download'] as Map;
     final hosts = (config['mediaHosts'] as List).cast<Map>();
@@ -271,7 +271,8 @@ class MediaRequestPolicy {
             ),
         ];
     for (var i = 0; i < result.length; i++) {
-      validate(result[i], field: slots[i].$4);
+      validate(result[i], field: slots[i].$4,
+        itemType: const {'image', 'video', 'live'}.contains(item.type) ? item.type : 'other');
     }
     return List.unmodifiable(result);
   }

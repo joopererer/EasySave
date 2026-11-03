@@ -13,6 +13,11 @@ import org.junit.Test
  * black.
  */
 class VideoFitTest {
+    @Test fun liveAndVideoUseMotionWhileImagesUseStill() {
+        org.junit.Assert.assertTrue(previewUsesVideo(false, true))
+        org.junit.Assert.assertTrue(previewUsesVideo(true, false))
+        org.junit.Assert.assertFalse(previewUsesVideo(false, false))
+    }
     @Test
     fun portraitClipInATallerViewScalesToFullWidth() {
         // 1080x1920 video inside a 1080x2400 view: width-limited.
