@@ -2,7 +2,10 @@ package com.james.easysave
 
 import android.content.Context
 import android.util.Log
+import java.io.RandomAccessFile
 import java.io.File
+import java.nio.ByteBuffer
+import java.util.concurrent.locks.ReentrantLock
 
 /** Native diagnostics sink shared with Dart's application-support DevLog. */
 internal object NativeLog {
@@ -35,8 +38,37 @@ internal object NativeLog {
         runCatching {
             val dir = File(context.filesDir, "app_flutter")
             if (!dir.exists()) dir.mkdirs()
-            val file = File(dir, fileName)
-            file.appendText("[${if (priority >= Log.ERROR) "ERROR" else if (priority >= Log.WARN) "WARN" else "INFO"}] [$tag] $safe\n")
+            NativeLogFileWriter(File(dir, fileName)).append(
+                "[${if (priority >= Log.ERROR) "ERROR" else if (priority >= Log.WARN) "WARN" else "INFO"}] [$tag] $safe\n"
+            )
+        }
+    }
+}
+
+internal class NativeLogFileWriter(
+    private val file: File,
+) {
+    private companion object {
+        val processLock = ReentrantLock()
+    }
+
+    fun append(line: String) {
+        val lockFile = File("${file.path}.lock")
+        lockFile.parentFile?.mkdirs()
+        processLock.lock()
+        try {
+            RandomAccessFile(lockFile, "rw").use { lockHandle ->
+                lockHandle.channel.lock().use {
+                    file.parentFile?.mkdirs()
+                    RandomAccessFile(file, "rw").use { output ->
+                        output.channel.position(output.length())
+                        output.channel.write(ByteBuffer.wrap(line.toByteArray(Charsets.UTF_8)))
+                        output.fd.sync()
+                    }
+                }
+            }
+        } finally {
+            processLock.unlock()
         }
     }
 }

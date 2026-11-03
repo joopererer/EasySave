@@ -39,7 +39,6 @@ abstract final class DevLog {
 
   static const String _redacted = '<redacted>';
 
-
   /// Any http(s) URL inside a message.
   static final RegExp _urlPattern = RegExp(r'''https?://[^\s"'<>]+''');
 
@@ -110,21 +109,26 @@ abstract final class DevLog {
 
   /// Append a line, rotating when the file grows past [maxFileBytes].
   static Future<void> _append(File file, String line) async {
-    final text = '$line\n';
-    var length = 0;
+    final lockFile = File('${file.path}.lock');
+    final lock = await lockFile.open(mode: FileMode.write);
     try {
-      if (await file.exists()) length = await file.length();
-    } catch (_) {
-      length = 0;
+      await lock.lock(FileLock.exclusive);
+      var length = await file.exists() ? await file.length() : 0;
+      final text = '$line\n';
+      if (length + text.length > maxFileBytes) {
+        await _rotate(file);
+      }
+      final output = await file.open(mode: FileMode.append);
+      try {
+        await output.writeString(text);
+        await output.flush();
+      } finally {
+        await output.close();
+      }
+    } finally {
+      await lock.unlock();
+      await lock.close();
     }
-    if (length + text.length > maxFileBytes) {
-      await _rotate(file);
-    }
-    await file.writeAsString(
-      text,
-      mode: FileMode.append,
-      flush: true,
-    );
   }
 
   /// v16dl.log -> v16dl.log.1 (the previous backup is dropped).
@@ -149,10 +153,7 @@ abstract final class DevLog {
     //    semicolons, so we must redact the entire line to prevent leaking
     //    any session token.
     out = out.replaceAllMapped(
-      RegExp(
-        r'''\b(Cookie|Set-Cookie)\s*:\s*.*''',
-        caseSensitive: false,
-      ),
+      RegExp(r'''\b(Cookie|Set-Cookie)\s*:\s*.*''', caseSensitive: false),
       (m) => '${m.group(1)}: $_redacted',
     );
     // 2. Other sensitive key=value / key: value pairs.
@@ -170,10 +171,7 @@ abstract final class DevLog {
     // 3. fallback for a stray "Bearer xxx" that didn't follow a sensitive
     //    key (e.g. an exception message saying "missing Bearer abc").
     out = out.replaceAllMapped(
-      RegExp(
-        r'''\b(Bearer|Basic)\s+[A-Za-z0-9._\-]+''',
-        caseSensitive: false,
-      ),
+      RegExp(r'''\b(Bearer|Basic)\s+[A-Za-z0-9._\-]+''', caseSensitive: false),
       (m) => _redacted,
     );
     // 4. URLs -> host + path (no query, no fragment)
