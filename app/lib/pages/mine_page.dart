@@ -9,6 +9,7 @@ import '../core/dev_log.dart';
 import '../services/album_name_registry.dart';
 import '../services/auth.dart';
 import '../widgets/shared.dart';
+import '../widgets/xhs_login_choices.dart';
 import '../services/bubble_service.dart';
 import '../services/gallery_locator_service.dart';
 import '../services/history_backfill_service.dart';
@@ -22,7 +23,9 @@ import 'backup_restore_page.dart';
 import 'login_page.dart';
 
 class MinePage extends StatefulWidget {
-  const MinePage({super.key});
+  const MinePage({super.key, this.xhsSessionProbe = probeXhsSessions});
+
+  final Future<SessionStatus> Function({String entry}) xhsSessionProbe;
 
   @override
   State<MinePage> createState() => _MinePageState();
@@ -182,7 +185,7 @@ class _MinePageState extends State<MinePage> with WidgetsBindingObserver {
 
   Future<void> _refreshPlatform(String platform) async {
     final status = platform == 'xhs'
-        ? await probeXhsSessions(entry: 'mine_refresh')
+        ? await widget.xhsSessionProbe(entry: 'mine_refresh')
         : null;
     final ok = status == null
         ? await checkLogin(platform, entry: 'mine_refresh')
@@ -205,7 +208,7 @@ class _MinePageState extends State<MinePage> with WidgetsBindingObserver {
     SessionStatus? xhsStatus;
     for (final platform in loginSiteIds) {
       if (platform == 'xhs') {
-        xhsStatus = await probeXhsSessions(entry: 'mine_load');
+        xhsStatus = await widget.xhsSessionProbe(entry: 'mine_load');
         states[platform] = xhsStatus == SessionStatus.valid;
       } else {
         states[platform] = await checkLogin(platform, entry: 'mine_load');
@@ -263,15 +266,7 @@ class _MinePageState extends State<MinePage> with WidgetsBindingObserver {
         builder: (context) => SimpleDialog(
           title: const Text('选择登录站点'),
           children: [
-            for (final url in xhsProbeUrls())
-              SimpleDialogOption(
-                onPressed: () => Navigator.pop(context, url),
-                child: Text(
-                  xhsDomain(Uri.parse(url).host) == 'rednote.com'
-                      ? 'Rednote 登录'
-                      : '小红书登录',
-                ),
-              ),
+            XhsLoginChoices(onSelected: (url) => Navigator.pop(context, url)),
           ],
         ),
       );
@@ -287,7 +282,7 @@ class _MinePageState extends State<MinePage> with WidgetsBindingObserver {
     // Trust the login page result after a successful flow (it verified the
     // session end-to-end); otherwise re-check the cookie store.
     final status = platform == 'xhs'
-        ? await probeXhsSessions(entry: 'login_return')
+        ? await widget.xhsSessionProbe(entry: 'login_return')
         : null;
     final loggedIn = status == null
         ? (ok == true ? true : await checkLogin(platform))

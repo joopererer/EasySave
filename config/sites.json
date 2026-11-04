@@ -123,7 +123,7 @@
         "galaxy_creator_session_id",
         "login_token"
       ],
-      "loginUrl": "https://www.xiaohongshu.com/explore",
+      "loginUrl": "https://www.xiaohongshu.com/login",
       "userAgent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36",
       "stateHook": "account",
       "cookieUrls": [
@@ -142,7 +142,7 @@
         "rednote.com": "https://www.rednote.com/explore/{id}"
       },
       "probeHook": "probeSession",
-      "loginHint": "只需登录其中一个站点：小红书（中国大陆账号）或 rednote（海外账号）。登录成功会自动返回，状态保存在本机。"
+      "loginHint": "小红书（中国大陆账号）请使用电脑版扫码登录：截屏后用小红书 App 的“扫一扫 → 从相册选择”完成登录。rednote（海外账号）按页面提示登录。只有页面确认已登录后才会自动返回，状态保存在本机。"
     },
     "parserModule": "xhs",
     "download": {

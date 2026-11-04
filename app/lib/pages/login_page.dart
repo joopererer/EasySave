@@ -18,6 +18,7 @@ import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 import '../services/auth.dart';
 import '../services/site_registry.dart';
 import '../services/login_navigation.dart';
+import '../widgets/xhs_login_choices.dart';
 
 class LoginPage extends StatefulWidget {
   const LoginPage({
@@ -272,18 +273,10 @@ class _LoginPageState extends State<LoginPage> {
         widget.windowId == null) {
       return Scaffold(
         appBar: AppBar(title: const Text('选择登录站点')),
-        body: ListView(
-          children: [
-            for (final url in xhsProbeUrls())
-              ListTile(
-                title: Text(
-                  xhsDomain(Uri.parse(url).host) == 'rednote.com'
-                      ? 'rednote（海外账号）'
-                      : '小红书（中国大陆账号）',
-                ),
-                onTap: () => setState(() => _selectedEntryUrl = url),
-              ),
-          ],
+        body: SingleChildScrollView(
+          child: XhsLoginChoices(
+            onSelected: (url) => setState(() => _selectedEntryUrl = url),
+          ),
         ),
       );
     }
@@ -322,8 +315,11 @@ class _LoginPageState extends State<LoginPage> {
             padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
             color: bannerBg,
             child: Text(
-              _auth['loginHint'] as String? ??
-                  '请在此页面完成登录，成功后点右上角“完成”。登录状态保存在本机，重启 App 依然有效。',
+              widget.platform == 'xhs' &&
+                      xhsDomain(Uri.parse(_entryUrl).host) == 'xiaohongshu.com'
+                  ? xhsQrLoginHint
+                  : _auth['loginHint'] as String? ??
+                        '请在此页面完成登录，成功后点右上角“完成”。登录状态保存在本机，重启 App 依然有效。',
               style: TextStyle(fontSize: 12, color: bannerText, height: 1.5),
             ),
           ),
@@ -351,6 +347,12 @@ class _LoginPageState extends State<LoginPage> {
                         MixedContentMode.MIXED_CONTENT_COMPATIBILITY_MODE,
                     mediaPlaybackRequiresUserGesture: false,
                     userAgent: loginUserAgent(widget.platform),
+                    preferredContentMode: widget.platform == 'xhs'
+                        ? UserPreferredContentMode.DESKTOP
+                        : UserPreferredContentMode.RECOMMENDED,
+                    useWideViewPort: true,
+                    loadWithOverviewMode: true,
+                    supportZoom: true,
                   ),
                   onWebViewCreated: (controller) => _controller = controller,
                   onLoadStart: (_, _) {
@@ -444,6 +446,14 @@ class _LoginPageState extends State<LoginPage> {
                     });
                   },
                   onLoadStop: (controller, url) {
+                    if (widget.platform == 'xhs' &&
+                        xhsDomain(Uri.parse(_entryUrl).host) ==
+                            'xiaohongshu.com' &&
+                        xhsDomain(url?.host) == 'xiaohongshu.com') {
+                      unawaited(
+                        controller.evaluateJavascript(source: xhsPreferQrLogin),
+                      );
+                    }
                     // A real page finished loading: allow one more loopback
                     // notice if the hand-off happens again later.
                     _callbackNoticeShown = false;

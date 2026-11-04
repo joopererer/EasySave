@@ -315,7 +315,11 @@ Future<bool> checkLogin(
   InAppWebViewController? webViewController,
   String entry = 'unspecified',
 }) async {
-  if (!hasAccountHook(platform)) return isLoggedIn(platform);
+  // A guest XHS page also receives web_session. Missing page-state support
+  // must fail closed instead of upgrading cookie presence to authentication.
+  if (!hasAccountHook(platform)) {
+    return platform == 'xhs' ? false : isLoggedIn(platform);
+  }
 
   if (webViewController != null) {
     final account = await readAccount(platform, webViewController);
@@ -341,7 +345,8 @@ Future<bool> checkLogin(
   return verifyAccountSession(platform, entry: entry);
 }
 
-/// Probe each configured origin in its own WebView, using its own cookie jar.
+/// Probe each origin in a separate WebView using domain-scoped cookies from
+/// Android's shared WebView cookie store.
 Future<SessionStatus> probeXhsSessions({String entry = 'unspecified'}) async {
   final urls = xhsProbeUrls();
   if (urls.length != 2 ||

@@ -15,6 +15,7 @@
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
 import 'package:path_provider/path_provider.dart';
 
 /// Severity of a log line.
@@ -28,6 +29,15 @@ enum DevLogLevel {
 }
 
 abstract final class DevLog {
+  static const _channel = MethodChannel('easysave/dev_log');
+  static Future<void> _tail = Future<void>.value();
+
+  static Future<T> _serial<T>(Future<T> Function() operation) {
+    final next = _tail.then((_) => operation());
+    _tail = next.then<void>((_) {}, onError: (Object _, StackTrace __) {});
+    return next;
+  }
+
   /// Base name of the log file inside the app's private files directory.
   static const String fileName = 'v16dl.log';
 
@@ -52,12 +62,19 @@ abstract final class DevLog {
     DevLogLevel level = DevLogLevel.info,
   }) async {
     if (level == DevLogLevel.debug && kReleaseMode) return;
-    final line = '[${level.name.toUpperCase()}] [$tag] ${scrub(message)}';
+    final line =
+        '[${level.name.toUpperCase()}] [${scrub(tag)}] ${scrub(message)}'
+            .replaceAll('\r', r'\r')
+            .replaceAll('\n', r'\n');
     debugPrint(line);
     try {
+      if (defaultTargetPlatform == TargetPlatform.android) {
+        await _channel.invokeMethod<void>('append', '$line\n');
+        return;
+      }
       final dir = await _privateDir();
       if (dir == null) return;
-      await _append(File('${dir.path}/$fileName'), line);
+      await _serial(() => _append(File('${dir.path}/$fileName'), line));
     } catch (_) {
       // Logging must never break the caller.
     }
@@ -68,6 +85,9 @@ abstract final class DevLog {
   /// automatically.
   static Future<String?> exportToExternal() async {
     try {
+      if (defaultTargetPlatform == TargetPlatform.android) {
+        return await _channel.invokeMethod<String>('export');
+      }
       final dir = await _privateDir();
       final external = await getExternalStorageDirectory();
       if (dir == null || external == null) return null;
@@ -84,6 +104,10 @@ abstract final class DevLog {
   /// Remove every log file (app private dir).
   static Future<void> clear() async {
     try {
+      if (defaultTargetPlatform == TargetPlatform.android) {
+        await _channel.invokeMethod<void>('clear');
+        return;
+      }
       final dir = await _privateDir();
       if (dir == null) return;
       for (var i = 0; i < keepFiles; i++) {
