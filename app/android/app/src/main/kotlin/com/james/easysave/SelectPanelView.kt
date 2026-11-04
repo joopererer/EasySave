@@ -755,6 +755,7 @@ class SelectPanelView(
     }
 
     private fun render() {
+        NativeThumbBitmaps.configure(context)
         grid.removeAllViews()
         syncers.clear()
         shimmers.clear()
@@ -783,6 +784,12 @@ class SelectPanelView(
                 scaleType = ImageView.ScaleType.CENTER_CROP
             }
             box.addView(iv, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT))
+            val memory = if (showThumbs && cells[i].thumbRequest.canUseMemory())
+                NativeThumbBitmaps.get(cells[i].thumbRequest.bitmapKey(cell)) else null
+            if (memory != null) {
+                iv.setImageBitmap(memory)
+                NativeLog.i("ThumbLoad", "event=memory_hit queue=read waitMs=0 ioMs=0 ms=0 key=${cells[i].thumbRequest.cacheLabel}")
+            }
 
             // Shimmer placeholder while the thumbnail is still downloading.
             val shimmer = View(context).apply {
@@ -793,7 +800,7 @@ class SelectPanelView(
                 alpha = 0.6f
             }
             box.addView(shimmer, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT))
-            if (showThumbs && (listOf(cells[i].thumbRequest) + cells[i].thumbFallbacks).any { !it.requiresAppPreview }) {
+            if (memory == null && showThumbs && (listOf(cells[i].thumbRequest) + cells[i].thumbFallbacks).any { !it.requiresAppPreview }) {
                 shimmers.add(shimmer)
                 startShimmer()
             } else {
@@ -952,7 +959,7 @@ class SelectPanelView(
             }
 
             grid.addView(box)
-            if (showThumbs && !cells[i].thumbRequest.requiresAppPreview) {
+            if (memory == null && showThumbs && !cells[i].thumbRequest.requiresAppPreview) {
                 // Start only visible cells. ScrollView layout creates all number
                 // selectors, but offscreen selectors do not fetch or decode.
                 var started = false
@@ -1414,9 +1421,17 @@ class SelectPanelView(
     }
 
     private fun loadThumb(requests: List<NativeMediaRequest>, target: ImageView, shimmer: View) {
-        pool.execute {
-            val (bitmap, denied) = decodeFirstImage(requests, dp(TARGET_PX))
-            val bmp = bitmap
+        val pixels = target.width.takeIf { it > 0 } ?: dp(TARGET_PX)
+        val first = requests.firstOrNull()
+        val memory = if (first?.canUseMemory() == true) NativeThumbBitmaps.get(first.bitmapKey(pixels)) else null
+        if (memory != null) {
+            target.setImageBitmap(memory)
+            shimmer.visibility = View.GONE
+            shimmers.remove(shimmer)
+            NativeLog.i("ThumbLoad", "event=memory_hit queue=read waitMs=0 ioMs=0 ms=0 key=${first?.cacheLabel}")
+            return
+        }
+        fun display(bmp: Bitmap?, denied: Boolean) {
             main.post {
                 if (target.isAttachedToWindow) {
                     if (bmp != null) target.setImageBitmap(bmp)
@@ -1445,6 +1460,30 @@ class SelectPanelView(
                 }
             }
         }
+        fun next(index: Int, denied: Boolean, retry: Boolean = true) {
+            if (index >= requests.size) { display(null, denied); return }
+            val request = requests[index]
+            if (request.requiresAppPreview) { next(index + 1, denied); return }
+            request.imageAsync { bytes, error ->
+                if (bytes == null) { next(index + 1, denied || error is NativeMediaRequest.Rejected); return@imageAsync }
+                val queued = System.nanoTime()
+                NativeThumbBitmaps.decoders.execute {
+                    val start = System.nanoTime()
+                    val bitmap = runCatching { decodeSampled(bytes, pixels) }.getOrNull()
+                    val end = System.nanoTime()
+                    NativeLog.i("ThumbLoad", "event=decode queue=read worker=bitmap waitMs=${(start - queued) / 1_000_000} ioMs=${(end - start) / 1_000_000} ms=${(end - queued) / 1_000_000} key=${request.cacheLabel}")
+                    if (bitmap != null) {
+                        NativeThumbBitmaps.put(first?.bitmapKey(pixels), bitmap, request.memoryExpiry())
+                        display(bitmap, false)
+                    } else if (retry && request.cacheKey != null) {
+                        SharedPreviewBridge.queues.write(request.cacheLabel, { SharedPreviewBridge.invalidate(request.cacheKey) }) {
+                            next(index, denied, false)
+                        }
+                    } else next(index + 1, denied)
+                }
+            }
+        }
+        next(0, false)
     }
 
     private fun decodeFirstImage(requests: List<NativeMediaRequest>, target: Int): Pair<Bitmap?, Boolean> {

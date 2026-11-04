@@ -84,11 +84,10 @@ internal class ThumbnailFiles(private val root: File, private val maxBytes: Long
         }
         cleaned = true
     }
-    @Synchronized fun read(key: String): File? {
-        clean()
+    fun read(key: String): File? {
         if (!key.matches(Regex("[a-f0-9]{64}"))) return null
         val file = File(root, key)
-        if (!file.exists() || file.lastModified() <= now() || !valid(file)) { file.delete(); return null }
+        if (!file.exists() || file.lastModified() <= now()) return null
         return file
     }
     @Synchronized fun write(key: String, bytes: ByteArray, expires: Long): File? {
@@ -112,7 +111,7 @@ internal class ThumbnailFiles(private val root: File, private val maxBytes: Long
         file.setLastModified(minOf(expires, now() + 10 * 60_000L))
         return file
     }
-    @Synchronized fun readPath(path: String): ByteArray? {
+    fun readPath(path: String): ByteArray? {
         val file = File(path).canonicalFile
         if (file.parentFile != root.canonicalFile) return null
         return read(file.name)?.takeIf { it.length() <= 10 * 1024 * 1024 }?.readBytes()
@@ -134,10 +133,37 @@ internal class ThumbnailFlights {
 }
 
 internal object SharedPreviewBridge {
+    internal val queues = ThumbnailQueues()
     private val posts = ParsedHandoff()
     private var files: ThumbnailFiles? = null
     private var thumbnailChannel: MethodChannel? = null
     private val flights = ThumbnailFlights()
+    private val visible = ThumbnailVisibility()
+    fun invalidate(key: String) { files?.remove(key); NativeThumbBitmaps.remove(key) }
+    fun detach(messenger: BinaryMessenger) { visible.detach(messenger) }
+    private fun prefetchIdle(key: String?): Boolean = visible.idle(key)
+    fun imageAsync(cacheKey: String?, token: String, label: String, complete: (ByteArray?) -> Unit) {
+        queues.read(label, { cacheKey?.let { files?.read(it)?.let { file -> files?.readPath(file.path) } } }) {
+            val bytes = it.getOrNull()
+            if (bytes != null) complete(bytes) else imageKeyAsync(token, complete)
+        }
+    }
+    fun imageKeyAsync(key: String, complete: (ByteArray?) -> Unit) {
+        if (!key.matches(Regex("[a-f0-9]{64}"))) { complete(null); return }
+        Handler(Looper.getMainLooper()).post {
+            val channel = thumbnailChannel
+            if (channel == null) { complete(null); return@post }
+            channel.invokeMethod("fetchThumbnail", key, object : MethodChannel.Result {
+                override fun success(result: Any?) {
+                    val path = result as? String
+                    if (path == null) complete(null)
+                    else queues.read(key, { files?.readPath(path) }) { complete(it.getOrNull()) }
+                }
+                override fun error(code: String, message: String?, details: Any?) { complete(null) }
+                override fun notImplemented() { complete(null) }
+            })
+        }
+    }
     fun image(path: String) = files?.readPath(path)
     fun imageKey(key: String): ByteArray? {
         if (!key.matches(Regex("[a-f0-9]{64}"))) return null
@@ -157,32 +183,61 @@ internal object SharedPreviewBridge {
         return path?.let { image(it) }
     }
     fun register(context: Context, messenger: BinaryMessenger, background: Boolean = false) {
-        if (files == null) files = ThumbnailFiles(File(context.cacheDir, "easysave_thumbnails"))
+        if (files == null) {
+            files = ThumbnailFiles(File(context.cacheDir, "easysave_thumbnails"))
+            queues.write("maintenance", { files!!.clean() }) {}
+        }
         val channel = MethodChannel(messenger, "easysave/shared_preview",
-            io.flutter.plugin.common.StandardMethodCodec.INSTANCE, messenger.makeBackgroundTaskQueue())
+            io.flutter.plugin.common.StandardMethodCodec.INSTANCE,
+            messenger.makeBackgroundTaskQueue(BinaryMessenger.TaskQueueOptions().setIsSerial(false)))
         if (background) thumbnailChannel = channel
         channel.setMethodCallHandler { call, result ->
             try {
                 val args = call.arguments as? Map<*, *> ?: emptyMap<Any, Any>()
+                val label = (args["label"] as? String)?.takeIf { it.matches(Regex("[A-Za-z0-9_:.-]{1,180}")) }
+                    ?: args["key"] as? String ?: "maintenance"
                 when (call.method) {
                     "putParsed" -> { posts.put(args); result.success(null) }
                     "getParsed" -> result.success(posts.get(args["key"] as String))
                     "lookupParsed" -> result.success(posts.lookup(args["key"] as String))
+                    "thumbnailVisibleBegin" -> {
+                        visible.begin(args["key"] as String, messenger)
+                        result.success(null)
+                    }
+                    "thumbnailVisibleEnd" -> {
+                        visible.end(args["key"] as String, messenger)
+                        result.success(null)
+                    }
                     "thumbnailPrefetchAllowed" -> {
                         val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
                         val caps = cm.getNetworkCapabilities(cm.activeNetwork)
-                        result.success(caps != null && (caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) ||
+                        result.success(prefetchIdle(args["key"] as? String) && caps != null && (caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) ||
                             cm.restrictBackgroundStatus != ConnectivityManager.RESTRICT_BACKGROUND_STATUS_ENABLED))
                     }
+                    "thumbnailPrefetchIdle" -> result.success(prefetchIdle(args["key"] as? String))
+                    "thumbnailVisible" -> result.success(visible.contains(args["key"] as String))
                     "thumbnailAcquire" -> flights.acquire(args["key"] as String) { result.success(it) }
                     "thumbnailRelease" -> {
                         flights.release(args["key"] as String)
                         result.success(null)
                     }
-                    "thumbnailDelete" -> { files!!.remove(args["key"] as String); result.success(null) }
-                    "thumbnailRead" -> result.success(files!!.read(args["key"] as String)?.path)
-                    "thumbnailWrite" -> result.success(files!!.write(args["key"] as String,
-                        args["bytes"] as ByteArray, (args["expires"] as Number).toLong())?.path)
+                    "thumbnailDelete" -> queues.write(args["key"] as String, { files!!.remove(args["key"] as String)
+                        NativeThumbBitmaps.remove(args["key"] as String) }) {
+                        it.fold({ result.success(null) }) { result.error("PREVIEW_CACHE_IO", "Cache delete failed", null) }
+                    }
+                    "thumbnailRead" -> {
+                        if (args["prefetch"] == true) queues.prefetchReadInfo(label, { files!!.read(args["key"] as String)?.path }) {
+                            it.fold(result::success) { result.error("PREVIEW_CACHE_IO", "Cache read failed", null) }
+                        } else if (args["timing"] == true) queues.readInfo(label, { files!!.read(args["key"] as String)?.path }) {
+                            it.fold(result::success) { result.error("PREVIEW_CACHE_IO", "Cache read failed", null) }
+                        } else queues.read(label, { files!!.read(args["key"] as String)?.path }) {
+                            it.fold(result::success) { result.error("PREVIEW_CACHE_IO", "Cache read failed", null) }
+                        }
+                    }
+                    "thumbnailWrite" -> queues.write(label, { files!!.write(args["key"] as String,
+                        args["bytes"] as ByteArray, (args["expires"] as Number).toLong())?.path }) {
+                        it.fold(result::success) { result.error("PREVIEW_CACHE_IO", "Cache write failed", null) }
+                    }
                     else -> result.notImplemented()
                 }
             } catch (_: Exception) { result.error("PREVIEW_CACHE_IO", "Preview cache operation failed", null) }

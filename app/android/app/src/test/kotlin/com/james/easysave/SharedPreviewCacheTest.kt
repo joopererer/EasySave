@@ -32,13 +32,14 @@ class SharedPreviewCacheTest {
         assertArrayEquals(byteArrayOf(1, 2), cache.read(key)!!.readBytes())
         assertFalse(root.resolve("$key.tmp").exists())
     }
-    @Test fun firstReadCleansOnlyItsOwnCorruptFiles() {
+    @Test fun maintenanceCleansOnlyItsOwnCorruptFiles() {
         val root = Files.createTempDirectory("easysave-clean-thumb-").toFile()
         val key = "e".repeat(64)
         root.resolve(key).apply { writeBytes(byteArrayOf(9)); setLastModified(2000L) }
         root.resolve("interrupted.tmp").writeBytes(byteArrayOf(9))
         val unrelated = root.parentFile.resolve("unrelated-${root.name}").apply { writeBytes(byteArrayOf(9)) }
         val cache = ThumbnailFiles(root, validateImage = { false }) { 1L }
+        cache.clean()
         assertNull(cache.read(key))
         assertTrue(root.listFiles()!!.isEmpty())
         assertTrue(unrelated.exists())

@@ -7,9 +7,11 @@ import io.flutter.plugin.common.MethodChannel
 import java.io.RandomAccessFile
 import java.io.File
 import java.util.concurrent.locks.ReentrantLock
+import java.util.concurrent.Executors
 
 /** Native diagnostics sink shared with Dart's application-support DevLog. */
 internal object NativeLog {
+    private val disk = Executors.newSingleThreadExecutor()
     @Volatile private var appContext: Context? = null
     private const val fileName = "v16dl.log"
     private val url = Regex("""https?://[^\s"'<>]+""")
@@ -24,6 +26,13 @@ internal object NativeLog {
     fun register(context: Context, messenger: BinaryMessenger) {
         init(context)
         MethodChannel(messenger, "easysave/dev_log").setMethodCallHandler { call, result ->
+            if (call.method == "append") {
+                val line = call.arguments as String
+                disk.execute { runCatching { NativeLogFileWriter(File(context.filesDir, fileName)).append(line) } }
+                result.success(null)
+                return@setMethodCallHandler
+            }
+            disk.execute {
             try {
                 val writer = NativeLogFileWriter(File(context.filesDir, fileName))
                 when (call.method) {
@@ -32,13 +41,14 @@ internal object NativeLog {
                     "export" -> {
                         val target = context.getExternalFilesDir(null)?.let { File(it, fileName) }
                         result.success(target?.let { writer.export(it) })
-                        return@setMethodCallHandler
+                        return@execute
                     }
-                    else -> { result.notImplemented(); return@setMethodCallHandler }
+                    else -> { result.notImplemented(); return@execute }
                 }
                 result.success(null)
             } catch (_: Exception) {
                 result.error("LOG_IO", "Log operation failed", null)
+            }
             }
         }
         i("NativeLog", "event=ready sink=files/v16dl.log transport=easysave/dev_log")
@@ -59,12 +69,14 @@ internal object NativeLog {
         }
         Log.println(priority, tag, safe)
         val context = appContext ?: return
+        disk.execute {
         runCatching {
             val dir = context.filesDir
             if (!dir.exists()) dir.mkdirs()
             NativeLogFileWriter(File(dir, fileName)).append(
                 "[${if (priority >= Log.ERROR) "ERROR" else if (priority >= Log.WARN) "WARN" else "INFO"}] [$tag] $safe\n"
             )
+        }
         }
     }
 }
@@ -88,7 +100,9 @@ internal class NativeLogFileWriter(
             RandomAccessFile(file, "rw").use { output ->
                 output.seek(output.length())
                 output.write(bytes)
-                output.fd.sync()
+                // Diagnostic lines need ordered visibility to export, not a
+                // device-wide forced flush per thumbnail event. close() keeps
+                // writes visible without turning logging into an fsync storm.
             }
         }
     }

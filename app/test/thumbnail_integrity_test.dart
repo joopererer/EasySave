@@ -43,6 +43,7 @@ void main() {
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(channel, (call) async {
           if (call.method == 'thumbnailPrefetchAllowed') return prefetchAllowed;
+          if (call.method == 'thumbnailPrefetchIdle') return true;
           final args = call.arguments as Map;
           final key = args['key'] as String;
           switch (call.method) {

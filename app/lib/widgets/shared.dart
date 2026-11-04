@@ -335,32 +335,36 @@ class CdnImage extends ImageProvider<CdnImage> {
     for (var attempt = 0; ; attempt++) {
       final fetched = await _fetchBytes();
       final buffer = await ui.ImmutableBuffer.fromUint8List(fetched.bytes);
-      final timer = Stopwatch()..start();
       try {
-        final codec = await SharedThumbnailCache.decodeSlots.run(() async {
-          final codec = await decode(
-            buffer,
-            getTargetSize: cacheWidth == null
-                ? null
-                : (width, height) {
-                    final target = cacheWidth!.clamp(1, width);
-                    return ui.TargetImageSize(
-                      width: target,
-                      height: (height * target / width).round().clamp(
-                        1,
-                        height,
-                      ),
-                    );
-                  },
-          );
-          try {
-            final frame = await codec.getNextFrame();
-            return _LimitedCodec(codec, cacheIdentity, frame);
-          } catch (_) {
-            codec.dispose();
-            rethrow;
-          }
-        });
+        final codec = await SharedThumbnailCache.decodeSlots.run(
+          () async {
+            final codec = await decode(
+              buffer,
+              getTargetSize: cacheWidth == null
+                  ? null
+                  : (width, height) {
+                      final target = cacheWidth!.clamp(1, width);
+                      return ui.TargetImageSize(
+                        width: target,
+                        height: (height * target / width).round().clamp(
+                          1,
+                          height,
+                        ),
+                      );
+                    },
+            );
+            try {
+              final frame = await codec.getNextFrame();
+              return _LimitedCodec(codec, cacheIdentity, frame);
+            } catch (_) {
+              codec.dispose();
+              rethrow;
+            }
+          },
+          event: 'decode',
+          queue: 'read',
+          key: cacheIdentity,
+        );
         return codec;
       } catch (error) {
         // Non-image bytes (an mp4 poster fallback) fail here, not at the request.
@@ -373,13 +377,6 @@ class CdnImage extends ImageProvider<CdnImage> {
           cacheIdentity,
         );
         if (attempt >= 1) rethrow;
-      } finally {
-        unawaited(
-          DevLog.write(
-            'ThumbLoad',
-            'event=decode ms=${timer.elapsedMilliseconds} key=${safeCacheLabel(cacheIdentity)}',
-          ),
-        );
       }
     }
   }
@@ -419,19 +416,12 @@ class _LimitedCodec implements ui.Codec {
       _first = null;
       return Future.value(first);
     }
-    return SharedThumbnailCache.decodeSlots.run(() async {
-      final timer = Stopwatch()..start();
-      try {
-        return await codec.getNextFrame();
-      } finally {
-        unawaited(
-          DevLog.write(
-            'ThumbLoad',
-            'event=decode ms=${timer.elapsedMilliseconds} key=${safeCacheLabel(identity)}',
-          ),
-        );
-      }
-    });
+    return SharedThumbnailCache.decodeSlots.run(
+      codec.getNextFrame,
+      event: 'decode',
+      queue: 'read',
+      key: identity,
+    );
   }
 }
 

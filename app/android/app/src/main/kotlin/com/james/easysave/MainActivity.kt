@@ -159,6 +159,11 @@ class MainActivity : FlutterActivity() {
         super.onStop()
     }
 
+    override fun cleanUpFlutterEngine(flutterEngine: FlutterEngine) {
+        SharedPreviewBridge.detach(flutterEngine.dartExecutor.binaryMessenger)
+        super.cleanUpFlutterEngine(flutterEngine)
+    }
+
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         NativeLog.register(this, flutterEngine.dartExecutor.binaryMessenger)
         SharedPreviewBridge.register(this, flutterEngine.dartExecutor.binaryMessenger)

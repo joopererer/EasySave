@@ -45,6 +45,7 @@ void main() {
             final key = args['key'] as String;
             expect(key, matches(r'^[a-f0-9]{64}$'));
             if (call.method == 'thumbnailRead') return files[key];
+            if (call.method != 'thumbnailWrite') return null;
             if (call.method == 'thumbnailAcquire' ||
                 call.method == 'thumbnailRelease')
               return null;

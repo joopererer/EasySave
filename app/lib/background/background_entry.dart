@@ -250,6 +250,11 @@ Future<void> _handleSubmit(
               (resource.role == MediaResourceRole.fallback &&
                   resource.fallbackFor != MediaResourceRole.video)) {
             return {
+              'cacheIdentity': safeCacheLabel(identity),
+              'cacheKey': opaquePreviewKey(identity),
+              if (resource.request.expiresAt != null)
+                'expiresAtMs':
+                    resource.request.expiresAt!.millisecondsSinceEpoch,
               'sharedImageKey': SharedThumbnailCache.instance.registerResource(
                 mediaPolicy,
                 resource,

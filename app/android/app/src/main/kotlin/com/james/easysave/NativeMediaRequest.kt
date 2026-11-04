@@ -17,6 +17,19 @@ internal class NativeMediaRequest(
 ) {
     private val localImagePath = raw?.get("localImagePath") as? String
     private val sharedImageKey = raw?.get("sharedImageKey") as? String
+    val cacheKey = (raw?.get("cacheKey") as? String)?.takeIf { it.matches(Regex("[a-f0-9]{64}")) }
+    val cacheLabel = (raw?.get("cacheIdentity") as? String)?.takeIf { it.matches(Regex("[A-Za-z0-9_:.-]{1,180}")) } ?: cacheKey ?: "unbound"
+    fun bitmapKey(width: Int) = cacheKey?.let { "$it:$width" }
+    fun memoryExpiry() = minOf(expiresAtMs ?: Long.MAX_VALUE, System.currentTimeMillis() + 600_000L)
+    fun canUseMemory() = expiresAtMs == null || expiresAtMs > System.currentTimeMillis()
+    fun imageAsync(complete: (ByteArray?, Exception?) -> Unit) {
+        if (!canUseMemory()) { complete(null, Rejected("REQUEST_EXPIRED", diagnosticHost)); return }
+        if (sharedImageKey != null) {
+            SharedPreviewBridge.imageAsync(cacheKey, sharedImageKey, cacheLabel) { complete(it, null) }
+        } else NativeThumbBitmaps.legacyNetwork.execute {
+            try { complete(readImage(), null) } catch (error: Exception) { complete(null, error) }
+        }
+    }
     val requiresAppPreview: Boolean = sharedImageKey == null && localImagePath == null && (raw == null || raw["requiresAppPreview"] == true)
     val url: String = raw?.get("url") as? String ?: ""
     private val headers = raw?.get("headers") as? Map<*, *> ?: emptyMap<Any, Any>()

@@ -99,8 +99,8 @@ DateTime? mediaUrlExpiry(String value) {
   return null;
 }
 
-/// Dart alone authorizes and downloads images. Native file operations serialize
-/// all engines against one 64 MiB directory and return only approved local paths.
+/// One authorized download implementation for both engines. Disk reads,
+/// foreground downloads, validation and speculative work have separate budgets.
 class SharedThumbnailCache {
   SharedThumbnailCache({
     http.Client? client,
@@ -149,6 +149,10 @@ class SharedThumbnailCache {
             await Future<void>.delayed(const Duration(milliseconds: 100));
           }
           try {
+            while (await channel.invokeMethod<bool>('thumbnailPrefetchIdle') ==
+                false) {
+              await Future<void>.delayed(const Duration(milliseconds: 50));
+            }
             if (await channel.invokeMethod<bool>('thumbnailPrefetchAllowed') !=
                 true) {
               _prefetched.remove('${next.platform}:${next.id}');
@@ -175,6 +179,7 @@ class SharedThumbnailCache {
                 await load(
                   policy,
                   resource,
+                  prefetch: true,
                   identity: thumbnailIdentity(
                     next.platform,
                     next.id,
@@ -201,8 +206,12 @@ class SharedThumbnailCache {
 
   static final decodeSlots = ThumbnailSlots(2);
   static final _downloadSlots = ThumbnailSlots(4);
+  static final _prefetchSlots = ThumbnailSlots(1);
+  static final _validationSlots = ThumbnailSlots(2);
+  static final _prefetchValidationSlots = ThumbnailSlots(1);
 
-  Future<void> _validate(Uint8List bytes) => decodeSlots.run(() async {
+  void _checkContainer(Uint8List bytes) {
+    if (bytes.length < 12) throw const FormatException('THUMBNAIL_INVALID');
     // Some codecs deliberately render partial JPEGs. Reject incomplete
     // containers before asking the codec for dimensions/pixels.
     if (bytes.length >= 2 &&
@@ -230,26 +239,39 @@ class SharedThumbnailCache {
             bytes.length) {
       throw const FormatException('THUMBNAIL_TRUNCATED_WEBP');
     }
-    final buffer = await ui.ImmutableBuffer.fromUint8List(bytes);
-    ui.ImageDescriptor? descriptor;
-    ui.Codec? codec;
-    try {
-      descriptor = await ui.ImageDescriptor.encoded(buffer);
-      if (descriptor.width <= 0 || descriptor.height <= 0) {
-        throw const FormatException('THUMBNAIL_DIMENSIONS');
+  }
+
+  Future<void> _validate(
+    Uint8List bytes, {
+    bool prefetch = false,
+    required String label,
+  }) => (prefetch ? _prefetchValidationSlots : _validationSlots).run(
+    () async {
+      _checkContainer(bytes);
+      final buffer = await ui.ImmutableBuffer.fromUint8List(bytes);
+      ui.ImageDescriptor? descriptor;
+      ui.Codec? codec;
+      try {
+        descriptor = await ui.ImageDescriptor.encoded(buffer);
+        if (descriptor.width <= 0 || descriptor.height <= 0) {
+          throw const FormatException('THUMBNAIL_DIMENSIONS');
+        }
+        codec = await descriptor.instantiateCodec(
+          targetWidth: 1,
+          targetHeight: 1,
+        );
+        final frame = await codec.getNextFrame();
+        frame.image.dispose();
+      } finally {
+        codec?.dispose();
+        descriptor?.dispose();
+        buffer.dispose();
       }
-      codec = await descriptor.instantiateCodec(
-        targetWidth: 1,
-        targetHeight: 1,
-      );
-      final frame = await codec.getNextFrame();
-      frame.image.dispose();
-    } finally {
-      codec?.dispose();
-      descriptor?.dispose();
-      buffer.dispose();
-    }
-  });
+    },
+    event: 'validate',
+    queue: prefetch ? 'prefetch' : 'write',
+    key: label,
+  );
 
   Future<void> _delete(String key) async {
     try {
@@ -295,20 +317,47 @@ class SharedThumbnailCache {
     MediaRequestPolicy policy,
     MediaRequestResource resource, {
     String? identity,
+    bool prefetch = false,
   }) async {
     policy.validate(resource);
     final label =
         identity ??
         '${policy.site.id}:unbound:${identityHashCode(resource)}:${resource.role.name}';
     final key = opaquePreviewKey(label);
-    final previous = _pending[key];
-    if (previous != null) return previous;
-    final future = _singleFlight(policy, resource, key, label);
-    _pending[key] = future;
+    if (!prefetch) {
+      try {
+        await channel.invokeMethod<void>('thumbnailVisibleBegin', {'key': key});
+      } on MissingPluginException {
+        /* Non-Android host. */
+      }
+    }
     try {
-      return await future;
+      // Check committed files before admission to any download/validation queue.
+      final cached = await _read(
+        policy,
+        resource,
+        key,
+        label,
+        prefetch: prefetch,
+      );
+      if (cached != null) return cached;
+      final afterRead = _pending[key];
+      if (afterRead != null) return await afterRead;
+      final future = _singleFlight(policy, resource, key, label, prefetch);
+      _pending[key] = future;
+      try {
+        return await future;
+      } finally {
+        _pending.remove(key);
+      }
     } finally {
-      _pending.remove(key);
+      if (!prefetch) {
+        try {
+          await channel.invokeMethod<void>('thumbnailVisibleEnd', {'key': key});
+        } on MissingPluginException {
+          /* Non-Android host. */
+        }
+      }
     }
   }
 
@@ -317,6 +366,7 @@ class SharedThumbnailCache {
     MediaRequestResource resource,
     String key,
     String label,
+    bool prefetch,
   ) async {
     var acquired = false;
     try {
@@ -330,7 +380,13 @@ class SharedThumbnailCache {
               }) ??
               true;
           if (!acquired) {
-            final cached = await _read(policy, resource, key, label);
+            final cached = await _read(
+              policy,
+              resource,
+              key,
+              label,
+              prefetch: prefetch,
+            );
             if (cached != null) return cached;
           }
         }
@@ -339,7 +395,7 @@ class SharedThumbnailCache {
       }
       for (var attempt = 0; ; attempt++) {
         try {
-          return await _load(policy, resource, key, label);
+          return await _load(policy, resource, key, label, prefetch);
         } on MediaPolicyException {
           rethrow;
         } catch (_) {
@@ -359,17 +415,32 @@ class SharedThumbnailCache {
     MediaRequestPolicy policy,
     MediaRequestResource resource,
     String key,
-    String label,
-  ) async {
+    String label, {
+    bool prefetch = false,
+  }) async {
     final timer = Stopwatch()..start();
+    var waitMs = 0;
     try {
-      final path = await channel.invokeMethod<String>('thumbnailRead', {
+      final info = await channel.invokeMethod<dynamic>('thumbnailRead', {
         'key': key,
+        'label': safeCacheLabel(label),
+        'timing': true,
+        'prefetch': prefetch,
       });
+      final String? path = info is Map
+          ? info['path'] as String?
+          : info as String?;
+      final nativeIo = info is Map ? (info['ioMs'] as num?)?.toInt() ?? 0 : 0;
+      waitMs = (timer.elapsedMilliseconds - nativeIo).clamp(
+        0,
+        timer.elapsedMilliseconds,
+      );
       if (path == null) return null;
       final bytes = await File(path).readAsBytes();
       try {
-        await _validate(bytes);
+        // Committed bytes were validated before atomic publication. Do not
+        // re-decode hits or put reads behind validation of unrelated downloads.
+        _checkContainer(bytes);
       } catch (_) {
         await _delete(key);
         return null;
@@ -388,7 +459,7 @@ class SharedThumbnailCache {
       unawaited(
         DevLog.write(
           'ThumbLoad',
-          'event=cache_read ms=${timer.elapsedMilliseconds} key=${safeCacheLabel(label)}',
+          'event=cache_read layer=dart queue=${prefetch ? 'prefetch' : 'read'} waitMs=$waitMs ioMs=${timer.elapsedMilliseconds - waitMs} ms=${timer.elapsedMilliseconds} key=${safeCacheLabel(label)}',
         ),
       );
     }
@@ -399,20 +470,74 @@ class SharedThumbnailCache {
     MediaRequestResource resource,
     String key,
     String label,
+    bool prefetch,
   ) async {
-    final cached = await _read(policy, resource, key, label);
+    final cached = await _read(
+      policy,
+      resource,
+      key,
+      label,
+      prefetch: prefetch,
+    );
     if (cached != null) return cached;
-    return _downloadSlots.run(() => _download(policy, resource, key, label));
+    var speculative = prefetch;
+    if (prefetch) {
+      while (true) {
+        bool idle = true;
+        try {
+          if (await channel.invokeMethod<bool>('thumbnailVisible', {
+                'key': key,
+              }) ==
+              true) {
+            speculative = false;
+            break;
+          }
+          idle =
+              await channel.invokeMethod<bool>('thumbnailPrefetchIdle', {
+                'key': key,
+              }) ??
+              true;
+        } on MissingPluginException {
+          /* Non-Android host. */
+        }
+        if (idle) break;
+        await Future<void>.delayed(const Duration(milliseconds: 50));
+      }
+    }
+    final bytes = await (speculative ? _prefetchSlots : _downloadSlots).run(
+      () => _download(policy, resource, label),
+      event: 'network',
+      queue: speculative ? 'prefetch' : 'download',
+      key: label,
+    );
+    await _validate(bytes, prefetch: speculative, label: label);
+    policy.validate(resource);
+    final expires = DateTime.now().add(const Duration(minutes: 10));
+    String? path;
+    try {
+      path = await channel.invokeMethod<String>('thumbnailWrite', {
+        'key': key,
+        'label': safeCacheLabel(label),
+        'bytes': bytes,
+        'expires': expires.millisecondsSinceEpoch,
+      });
+    } on MissingPluginException {
+      /* Memory-only non-Android host. */
+    }
+    unawaited(
+      DevLog.write('ThumbCache', 'event=store key=${safeCacheLabel(label)}'),
+    );
+    return (bytes: bytes, path: path);
   }
 
-  Future<({Uint8List bytes, String? path})> _download(
+  Future<Uint8List> _download(
     MediaRequestPolicy policy,
     MediaRequestResource resource,
-    String key,
     String label,
   ) async {
-    final timer = Stopwatch()..start();
-    await DevLog.write('ThumbCache', 'event=miss key=${safeCacheLabel(label)}');
+    unawaited(
+      DevLog.write('ThumbCache', 'event=miss key=${safeCacheLabel(label)}'),
+    );
     final response = await sendAuthorizedMediaGet(
       client,
       policy,
@@ -437,30 +562,7 @@ class SharedThumbnailCache {
         bytes.length != response.contentLength) {
       throw const HttpException('THUMBNAIL_TRUNCATED');
     }
-    await _validate(bytes);
-    unawaited(
-      DevLog.write(
-        'ThumbLoad',
-        'event=network ms=${timer.elapsedMilliseconds} key=${safeCacheLabel(label)}',
-      ),
-    );
-    policy.validate(resource);
-    final expires = DateTime.now().add(const Duration(minutes: 10));
-    String? path;
-    try {
-      path = await channel.invokeMethod<String>('thumbnailWrite', {
-        'key': key,
-        'bytes': bytes,
-        'expires': expires.millisecondsSinceEpoch,
-      });
-    } on MissingPluginException {
-      /* Keep the existing in-memory path on other hosts. */
-    }
-    await DevLog.write(
-      'ThumbCache',
-      'event=store key=${safeCacheLabel(label)}',
-    );
-    return (bytes: bytes, path: path);
+    return bytes;
   }
 }
 
@@ -470,7 +572,13 @@ class ThumbnailSlots {
   final int limit;
   int _active = 0;
   final _waiting = <Completer<void>>[];
-  Future<T> run<T>(Future<T> Function() action) async {
+  Future<T> run<T>(
+    Future<T> Function() action, {
+    String? event,
+    String queue = 'read',
+    String? key,
+  }) async {
+    final timer = Stopwatch()..start();
     if (_active >= limit) {
       final ready = Completer<void>();
       _waiting.add(ready);
@@ -478,9 +586,17 @@ class ThumbnailSlots {
     } else {
       _active++;
     }
+    final waitMs = timer.elapsedMilliseconds;
     try {
       return await action();
     } finally {
+      if (event != null)
+        unawaited(
+          DevLog.write(
+            'ThumbLoad',
+            'event=$event layer=dart queue=$queue waitMs=$waitMs ioMs=${timer.elapsedMilliseconds - waitMs} ms=${timer.elapsedMilliseconds} key=${safeCacheLabel(key ?? 'unbound')}',
+          ),
+        );
       if (_waiting.isNotEmpty) {
         _waiting.removeAt(0).complete();
       } else {
