@@ -104,8 +104,40 @@ APK 检查会核实真实 SelectPanelView 的 LIVE 常量、ScrollView 构建与
 - `git diff --check` 通过。早期新增测试的 mock 参数错误和本机 JAVA_HOME/Gradle 参数问题均已修正后重跑；
   没有在失败门禁状态提交。
 
-实现提交与 APK 哈希在构建完成后补充。APK 检查脚本为 `tools/verify_build22_apk.py`，
+实现提交：`76bd3459df24916d1fc143b58566c2ef00afa37f`。上述门禁通过后先提交，再运行
+`flutter build apk --debug --no-pub --build-name=1.10.0 --build-number=22`，assembleDebug 51.1 秒，退出 0。
+
+- APK：`app/build/app/outputs/flutter-apk/EasySave-1.10.0-build22-debug.apk`（173,555,585 bytes）。
+- SHA-256：`0428ba2e0725448476841d189604b1e0409b5e1102cb0b9df502eced72107295`。
+- aapt：`com.james.easysave`，versionName **1.10.0**，versionCode **22**；
+  ACCESS_NETWORK_STATE 权限存在。内置 parserVersion **1.4.4**，parser.js SHA-256 与 manifest 一致。
+- 构建日志：`app/build/build22-apk-build.log`；包信息：`app/build/build22-apk-badging.log`。
+- 最终命名 APK 与构建原始 `app-debug.apk` 的 SHA-256 完全一致。
+
+APK 检查脚本为 `tools/verify_build22_apk.py`，
 保留提取的 DEX 在 `app/build/build22-apk-dex`，不自动清理目录。
 界面证据由真实 widget 测试与最终 APK 的 kernel/DEX 调用共同构成，不等同于设备上的流畅度或完整交互验证。
+
+最终命名 APK 的核查日志：`app/build/build22-delivery-apk-evidence.log`，退出 0：
+
+- kernel 包含真实 PreviewPage/CoverImage/CdnImage，及 `_LimitedCodec`、ThumbnailSlots、
+  fullResolution、getTargetSize、ThumbLoad、失败点击重试文案和各共享缓存消息。
+- `classes19.dex`：真实 SelectPanelView 在 `0257b6` 构造 ScrollView、`0257f0` 添加网格；
+  `027a22` 调用 getGlobalVisibleRect，`028074` 包含 LIVE 标记。
+- 同一 DEX：`02a0ca` 调用 makeBackgroundTaskQueue；`029d6e/029e7a/029dc0` 分别调用缓存读、写、删除；
+  `0299f4` 调用容器完整性检查，`029a1c/029a6c` 调用采样校验的 BitmapFactory.decodeFile。
+- HostService `0139d4` 与 MainActivity `016e2e` 均调用 SharedPreviewBridge.register，两个引擎都注册同一入口。
+- 核查最终输出 `PASS: compiled real preview widgets, native scroll/LIVE, background I/O and shared cache entry points`。
+
+复核命令（仓库根目录）：
+
+```powershell
+rtk proxy python tools/verify_build22_apk.py app/build/app/outputs/flutter-apk/EasySave-1.10.0-build22-debug.apk --dexdump D:/Android/Sdk/build-tools/35.0.1/dexdump.exe
+rtk proxy D:/Android/Sdk/build-tools/35.0.1/aapt.exe dump badging app/build/app/outputs/flutter-apk/EasySave-1.10.0-build22-debug.apk
+```
+
+待用户真机复测：四种顺序的解析/缩略图复用、18/20 图首屏与连续滚动、损坏项点击重试、
+第 16–18 项可见可选及固定按钮、Live 原图、Wi-Fi/Data Saver 条件变化。
+性能日志只提供离线通过后的诊断基础，不作设备耗时结论。
 
 没有请求断点/debug 会话；没有卸载、pm clear、run-as、读取设备私有目录或删除相册文件；没有 push/merge/tag。
