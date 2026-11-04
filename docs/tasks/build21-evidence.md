@@ -79,7 +79,19 @@
 - 扫码脚本：4 项通过。Flutter analyze 使用 `--no-pub --no-fatal-infos --no-fatal-warnings`，退出 0，无 error，81 条 warning/info；日志 `app/build/build21-analyze-final.log`。
 - 本轮定向与最终全量测试均通过，没有在门禁失败状态提交。
 
-commit、APK 路径/版本/SHA-256 与编译后证据在构建完成后补充。
+实现 commit：`930c169bbc42b1339149572f5c3b446bb3a54bb9`。上述门禁通过后提交，再执行 `flutter build apk --debug --no-pub --build-name=1.10.0 --build-number=21`；assembleDebug 85.0 秒，构建成功。Kotlin daemon 首次启动退出后由构建自动恢复，最终没有编译错误。
+
+- APK：`app/build/app/outputs/flutter-apk/EasySave-1.10.0-build21-debug.apk`（173,529,281 bytes）。
+- SHA-256：`76fd3b5a530950ec778ca4c20c43e722e7598d7e28a451a619bfc2e6fede7093`。
+- aapt：`package: name='com.james.easysave' versionCode='21' versionName='1.10.0'`；APK 内置 parserVersion 为 `1.4.3`。
+
+编译后证据（`app/build/build21-apk-evidence.log`，复核脚本退出 0）：
+
+- `kernel_blob.bin` 中真实 HistoryPage 按钮标记 `canonical-platform-filter` 位于 offset **86221121**；`canonicalId` / `sameSite` 均存在。真实菜单 widget 的行为另由上述 SQLite widget 测试覆盖。
+- `lookupParsed` 位于 offset **86768156**；`ParseCache` / `ThumbCache` 位于 **86767780 / 86865453**；稳定身份字段 `cachePostId` / `cacheItemIndex` 位于 **86092514 / 86063720**。
+- `classes19.dex`：HostService 地址 `013330` 与 MainActivity 地址 `01678a` 均调用 `SharedPreviewBridge.register`（后者为 Kotlin default 包装），证明两个引擎均登记同一桥。
+- 同一 DEX 的桥在 `028f42` 调用 `ParsedHandoff.lookup`，`028f66` 调用 `ParsedHandoff.put`；在 `028e2e / 028ec0` 调用 `ThumbnailFiles.read / write`。这核实读取、写入和共享文件通道均进入最终 APK。
+- APK 内站点别名 xhs/rednote、x/twitter 均存在；四个品牌 SVG 与源文件完全一致。校验最终输出 `PASS: actual history menu marker, stable identities, bidirectional native RAM cache and shared thumbnails`。
 
 APK 复核命令（仓库根目录）：
 
