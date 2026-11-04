@@ -74,6 +74,7 @@ class MediaItem {
   final String url;
   final bool? isGif;
   final String? videoUrl;
+
   /// Local history identifiers, never used as network request URLs.
   final String? localFilename;
   final String? localVideoFilename;
@@ -96,6 +97,10 @@ class MediaItem {
   /// v2 request declarations. Deliberately excluded from legacy/history/backup
   /// JSON; step 2 will persist task requirements separately, never Cookie values.
   final List<MediaRequestResource>? requestResources;
+
+  /// Runtime-only stable thumbnail identity. Never part of parser/backup JSON.
+  String? cachePostId;
+  int? cacheItemIndex;
 
   Map<String, Object?> toJson() {
     final map = <String, Object?>{'type': type};
@@ -149,7 +154,12 @@ class ParsedPost {
     this.caption,
     this.publishedAt,
     this.aiLabel,
-  });
+  }) {
+    for (var index = 0; index < items.length; index++) {
+      items[index].cachePostId = id;
+      items[index].cacheItemIndex ??= index;
+    }
+  }
 
   factory ParsedPost.fromJson(Map<String, dynamic> json) => ParsedPost(
     platform: json['platform'] as String,

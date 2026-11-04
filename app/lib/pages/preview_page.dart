@@ -43,7 +43,11 @@ class PreviewItemCover extends StatelessWidget {
     final local = asset;
     return local == null
         ? remote
-        : VerifiedAssetImage(local, fallback: remote, verifyExistence: verifyExistence);
+        : VerifiedAssetImage(
+            local,
+            fallback: remote,
+            verifyExistence: verifyExistence,
+          );
   }
 }
 
@@ -228,7 +232,10 @@ class _PreviewPageState extends State<PreviewPage> {
 
     final assets = await GalleryLocatorService.instance.matchPostItems(_post);
     final motions = _post.items.any((item) => item.type == 'live')
-        ? await GalleryLocatorService.instance.matchPostItems(_post, liveVideoOnly: true)
+        ? await GalleryLocatorService.instance.matchPostItems(
+            _post,
+            liveVideoOnly: true,
+          )
         : <int, AssetEntity>{};
     if (!mounted) return;
     setState(() {
@@ -274,6 +281,8 @@ class _PreviewPageState extends State<PreviewPage> {
             for (var i = 0; i < _post.items.length; i++)
               GalleryBrowserItem(
                 index: i,
+                cachePostId: _post.id,
+                cacheItemIndex: _post.items[i].cacheItemIndex ?? i,
                 type: _post.items[i].type,
                 url: _post.items[i].url,
                 videoUrl: _post.items[i].videoUrl,
@@ -330,9 +339,9 @@ class _PreviewPageState extends State<PreviewPage> {
       }
     } on MediaPolicyException {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('该资源地址不在允许范围内')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('该资源地址不在允许范围内')));
       }
     } catch (e) {
       if (mounted) {

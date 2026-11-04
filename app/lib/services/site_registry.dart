@@ -52,7 +52,8 @@ class SiteDefinition {
 
   String? shortLinkFallback(Uri uri, Map rule) =>
       (rule['fallbackStrategy'] as String?) ??
-      (SiteRegistry.builtinById(id)?.shortLink(uri)?['fallbackStrategy'] as String?);
+      (SiteRegistry.builtinById(id)?.shortLink(uri)?['fallbackStrategy']
+          as String?);
 
   String? sourceId(Uri uri) {
     final source = normalization['sourceId'] as Map;
@@ -97,8 +98,24 @@ class SiteRegistry {
   static void activate(Iterable<Map<String, dynamic>> sites) =>
       current = SiteRegistry(sites);
 
-  SiteDefinition? byId(String id) =>
-      sites.where((s) => s.id == id || s.platform == id).firstOrNull;
+  SiteDefinition? byId(String id) {
+    final value = id.trim().toLowerCase();
+    return sites.where((s) => s.id.toLowerCase() == value).firstOrNull ??
+        sites.where((s) => s.platform.toLowerCase() == value).firstOrNull ??
+        sites
+            .where(
+              (s) => (s.data['aliases'] as List? ?? const [])
+                  .whereType<String>()
+                  .any((alias) => alias.toLowerCase() == value),
+            )
+            .firstOrNull;
+  }
+
+  /// Read-time identity only: historical database values are never rewritten.
+  String canonicalId(String value) =>
+      byId(value)?.id ?? builtinById(value)?.id ?? value;
+  bool sameSite(String left, String right) =>
+      canonicalId(left) == canonicalId(right);
   SiteDefinition? forHost(String host) =>
       sites.where((s) => s.hasHost(host)).firstOrNull;
   String? canonicalUrl(String text) {

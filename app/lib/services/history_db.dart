@@ -423,6 +423,7 @@ class HistoryRecord {
             MediaItem(type: 'video', url: '', localVideoFilename: vid.filename),
           );
         }
+        if (items.isNotEmpty) items.last.cacheItemIndex = idx - 1;
       }
     }
     return ParsedPost(
@@ -1216,7 +1217,10 @@ class HistoryDb {
       final record = await getByPostId(aliases.first['post_id'] as String);
       if (record != null &&
           !record.isDeleted &&
-          record.platform == aliases.first['platform'])
+          SiteRegistry.current.sameSite(
+            record.platform,
+            aliases.first['platform'] as String,
+          ))
         return record;
     }
     final id =

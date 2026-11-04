@@ -163,7 +163,6 @@ Future<void> _handleSubmit(
   }
   await _log(channel, 'submit: mode=$mode urls=${urls.length} source=$source');
   await _invoke(channel, 'keepAlive');
-  await _notify(channel, '正在解析…');
   final settings = await AppSettings.load();
   final toasts = settings.backgroundToast;
   final emptyHint = args['hint']?.toString() ?? '没有可解析的链接';
@@ -175,8 +174,6 @@ Future<void> _handleSubmit(
     return;
   }
   if (toasts) await _toast(channel, '下载准备中…');
-  await _tile(channel, true, '解析中…');
-  await _bubble(channel, true, 0, 0, '解析中…', false);
 
   try {
     await ParserManager.instance.init();
@@ -194,7 +191,15 @@ Future<void> _handleSubmit(
     final started = DateTime.now();
     final sw = Stopwatch()..start();
     try {
-      final outcome = await parsePostOutcome(url, source: 'background');
+      final outcome = await parsePostOutcome(
+        url,
+        source: mode == 'select' ? 'bubble_select' : 'bubble_background',
+        onCacheMiss: () async {
+          await _notify(channel, '正在解析…');
+          await _tile(channel, true, '解析中…');
+          await _bubble(channel, true, 0, 0, '解析中…', false);
+        },
+      );
       final post = outcome.data;
       if (mode == 'caption') {
         final cap = _captionText(post);
@@ -237,11 +242,20 @@ Future<void> _handleSubmit(
         final mediaPolicy = MediaRequestPolicy(site);
         Future<Map<String, Object?>> nativeRequirement(
           MediaRequestResource resource,
+          String identity,
         ) async {
           final uri = mediaPolicy.validate(resource);
-          if (resource.role == MediaResourceRole.image || resource.role == MediaResourceRole.poster ||
-              (resource.role == MediaResourceRole.fallback && resource.fallbackFor != MediaResourceRole.video)) {
-            return {'sharedImageKey': SharedThumbnailCache.instance.registerResource(mediaPolicy, resource)};
+          if (resource.role == MediaResourceRole.image ||
+              resource.role == MediaResourceRole.poster ||
+              (resource.role == MediaResourceRole.fallback &&
+                  resource.fallbackFor != MediaResourceRole.video)) {
+            return {
+              'sharedImageKey': SharedThumbnailCache.instance.registerResource(
+                mediaPolicy,
+                resource,
+                identity: identity,
+              ),
+            };
           }
 
           final requiresCookie = resource.request.cookieDomains.any(
@@ -261,6 +275,12 @@ Future<void> _handleSubmit(
         final panelItems = <Map<String, Object?>>[];
         for (var i = 0; i < post.items.length; i++) {
           final item = post.items[i];
+          final identity = thumbnailIdentity(
+            post.platform,
+            post.id,
+            item.cacheItemIndex ?? i,
+            item.type == 'video' ? 'poster' : 'thumb',
+          );
           final resources = mediaPolicy.resourcesFor(item);
           final thumbUrl = item.type != 'video'
               ? item.url
@@ -277,14 +297,14 @@ Future<void> _handleSubmit(
             if (resource == null) {
               mediaPolicy.rejectResource(url);
             }
-            return nativeRequirement(resource);
+            return nativeRequirement(resource, identity);
           }
 
           Future<List<Map<String, Object?>>> imageFallbacks(String? url) async {
             final candidates = previewImageCandidates(resources, url);
             return [
               for (final resource in candidates.skip(1))
-                await nativeRequirement(resource),
+                await nativeRequirement(resource, identity),
             ];
           }
 

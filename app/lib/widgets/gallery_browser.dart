@@ -36,6 +36,8 @@ class GalleryBrowserItem {
     this.liveVideoAsset,
     this.status = FileStatus.found,
     this.filename,
+    this.cachePostId,
+    this.cacheItemIndex,
   });
 
   final int index;
@@ -54,16 +56,21 @@ class GalleryBrowserItem {
   final AssetEntity? liveVideoAsset;
   final FileStatus status;
   final String? filename;
+  final String? cachePostId;
+  final int? cacheItemIndex;
 
   /// Build the [MediaItem] that drives [CoverImage] with the full URL set.
-  MediaItem toMediaItem() => MediaItem(
-    type: type,
-    url: url,
-    videoUrl: videoUrl,
-    posterUrl: posterUrl,
-    fallbacks: fallbacks,
-    requestResources: requestResources,
-  );
+  MediaItem toMediaItem() =>
+      MediaItem(
+          type: type,
+          url: url,
+          videoUrl: videoUrl,
+          posterUrl: posterUrl,
+          fallbacks: fallbacks,
+          requestResources: requestResources,
+        )
+        ..cachePostId = cachePostId
+        ..cacheItemIndex = cacheItemIndex ?? index;
 }
 
 /// Initial selection of the browser. [selectedIndices] holds original post
@@ -874,9 +881,9 @@ class _BrowserItemViewState extends State<_BrowserItemView> {
       if (mounted) {
         setState(() => _isLiveHolding = false);
         if (error is MediaPolicyException) {
-          ScaffoldMessenger.maybeOf(context)?.showSnackBar(
-            const SnackBar(content: Text('该资源地址不在允许范围内')),
-          );
+          ScaffoldMessenger.maybeOf(
+            context,
+          )?.showSnackBar(const SnackBar(content: Text('该资源地址不在允许范围内')));
         }
       }
     }

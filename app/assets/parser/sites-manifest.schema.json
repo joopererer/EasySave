@@ -57,6 +57,12 @@
           "type": "string",
           "pattern": "^[a-z][a-z0-9_]{0,63}$"
         },
+        "aliases": {
+          "type": "array",
+          "maxItems": 32,
+          "uniqueItems": true,
+          "items": { "type": "string", "pattern": "^[a-z][a-z0-9_]{0,63}$" }
+        },
         "displayName": {
           "type": "string",
           "minLength": 1,

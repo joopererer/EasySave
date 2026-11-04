@@ -20,10 +20,15 @@ List<MediaItem> batchItems(DownloadBatch batch) {
   try {
     final decoded = jsonDecode(raw);
     if (decoded is! List) return const [];
-    return [
+    final items = [
       for (final e in decoded)
         if (e is Map) MediaItem.fromJson(e.cast<String, dynamic>()),
     ];
+    for (var index = 0; index < items.length; index++) {
+      items[index].cachePostId = batch.postId;
+      items[index].cacheItemIndex = index;
+    }
+    return items;
   } catch (_) {
     return const [];
   }

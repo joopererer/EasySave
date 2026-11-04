@@ -4,13 +4,16 @@ import 'package:flutter/services.dart';
 
 import '../core/dev_log.dart';
 import '../metadata/metadata_service.dart';
+import 'site_registry.dart';
 
 typedef SavedMedia = ({String? mediaId, String? title, String? relativePath});
 typedef SaveCollisionOutcome = ({SavedMedia saved, String? reusedAssetId});
 
 bool sameSavedOrigin(XmpProvenance? found, XmpProvenance expected) =>
     found != null &&
-    found.platform == expected.platform &&
+    found.platform != null &&
+    expected.platform != null &&
+    SiteRegistry.current.sameSite(found.platform!, expected.platform!) &&
     found.sourceId == expected.sourceId &&
     found.itemIndex == expected.itemIndex;
 

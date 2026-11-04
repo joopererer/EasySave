@@ -166,7 +166,11 @@ DownloadBatch? previewBatchForPost(
   String postId,
 ) {
   final matching = batches
-      .where((b) => b.platform == platform && b.postId == postId)
+      .where(
+        (b) =>
+            SiteRegistry.current.sameSite(b.platform, platform) &&
+            b.postId == postId,
+      )
       .toList();
   return matching.where((b) => !b.isTerminal).firstOrNull ??
       matching.where((b) => b.failedCount > 0).firstOrNull;
@@ -250,7 +254,8 @@ class DownloadJob {
     'metadataNotice': metadataNotice,
     'relativePath': relativePath,
     if (provenanceItemCount != null) 'provenanceItemCount': provenanceItemCount,
-    if (provenanceCapturedBy != null) 'provenanceCapturedBy': provenanceCapturedBy,
+    if (provenanceCapturedBy != null)
+      'provenanceCapturedBy': provenanceCapturedBy,
   };
 
   static DownloadJob fromJson(Map<String, Object?> map) {
@@ -1871,7 +1876,11 @@ class DownloadManager extends ChangeNotifier {
     // history record once more when it finishes.
     batch.historyWritten = false;
     try {
-      final outcome = await parsePostOutcome(batch.postUrl);
+      final outcome = await parsePostOutcome(
+        batch.postUrl,
+        source: 'download_retry',
+        forceRefresh: true,
+      );
       final postIdx = job.itemIndex > 0 ? job.itemIndex - 1 : job.itemIndex;
       final fresh = planFilesForItem(outcome.data, postIdx);
       if (fresh != null && fresh.isNotEmpty) {
@@ -1979,7 +1988,7 @@ class DownloadManager extends ChangeNotifier {
   /// Synchronous cancellation intent: no plugin or other engine can delay it.
   void markPostDeletion(String platform, String postId) {
     for (final batch in _batches.values) {
-      if (batch.platform == platform &&
+      if (SiteRegistry.current.sameSite(batch.platform, platform) &&
           batch.postId == postId &&
           !batch.isTerminal) {
         batch.cancelledByDeletion = true;

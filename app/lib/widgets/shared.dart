@@ -152,39 +152,24 @@ List<String> urlsFor(MediaItem item) {
 /// fetch; the codec decodes at [cacheWidth]).
 @immutable
 class CdnImage extends ImageProvider<CdnImage> {
-  const CdnImage(this.item, {required this.platform, this.cacheWidth});
+  const CdnImage(
+    this.item, {
+    required this.platform,
+    this.cacheWidth,
+    this.thumbnailCache,
+  });
 
   final MediaItem item;
   final String platform;
   final int? cacheWidth;
+  final SharedThumbnailCache? thumbnailCache;
 
-
-  static final Map<String, Uint8List> _rawByteCache = {};
-  static final List<String> _cacheKeysOrder = [];
-  static const int _maxCachedImages = 100;
-
-  static void cacheBytes(String url, Uint8List bytes) {
-    if (_rawByteCache.containsKey(url)) {
-      _cacheKeysOrder.remove(url);
-      _cacheKeysOrder.add(url);
-      _rawByteCache[url] = bytes;
-      return;
-    }
-    if (_cacheKeysOrder.length >= _maxCachedImages) {
-      final oldest = _cacheKeysOrder.removeAt(0);
-      _rawByteCache.remove(oldest);
-    }
-    _rawByteCache[url] = bytes;
-    _cacheKeysOrder.add(url);
-  }
-
-  static Uint8List? getCachedBytes(List<String> urls) {
-    for (final u in urls) {
-      final b = _rawByteCache[u];
-      if (b != null) return b;
-    }
-    return null;
-  }
+  String get cacheIdentity => thumbnailIdentity(
+    platform,
+    item.cachePostId ?? 'unbound',
+    item.cacheItemIndex ?? identityHashCode(item),
+    item.type == 'video' ? 'poster' : 'thumb',
+  );
 
   /// One [PreviewPoster] line per (reason, host) keeps a grid of identical
   /// failing tiles from filling the log.
@@ -260,23 +245,21 @@ class CdnImage extends ImageProvider<CdnImage> {
             'type=${item.type} poster=${item.posterUrl == null ? 'none' : 'set'}',
       );
     }
-    final cached = getCachedBytes(ordered.map((r) => r.url).toList());
-    if (cached != null) return (bytes: cached, url: ordered.first.url);
-
     for (final resource in ordered) {
       try {
-        final cachedImage = await SharedThumbnailCache.instance.load(
-          policy,
-          resource,
-        );
+        final cachedImage =
+            await (thumbnailCache ?? SharedThumbnailCache.instance).load(
+              policy,
+              resource,
+              identity: cacheIdentity,
+            );
         final bytes = cachedImage.bytes;
         _logPoster(
           'FETCH_OK',
           resource.url,
           extra:
-              'headers=${resource.request.headers.keys.map((k) => k.toLowerCase()).join(',')}',
+              'headers=${resource.request.headers.keys.map((key) => key.toLowerCase()).join(',')}',
         );
-        cacheBytes(resource.url, bytes);
         return (bytes: bytes, url: resource.url);
       } on MediaPolicyException catch (error) {
         _logPoster(
@@ -348,12 +331,11 @@ class CdnImage extends ImageProvider<CdnImage> {
   @override
   bool operator ==(Object other) =>
       other is CdnImage &&
-      identical(other.item, item) &&
-      other.platform == platform &&
+      other.cacheIdentity == cacheIdentity &&
       other.cacheWidth == cacheWidth;
 
   @override
-  int get hashCode => Object.hash(identityHashCode(item), platform, cacheWidth);
+  int get hashCode => Object.hash(cacheIdentity, cacheWidth);
 }
 
 /// Local icon registry: manifest keys never become remote URLs or file paths.
@@ -375,7 +357,10 @@ class PlatformIcon extends StatelessWidget {
   };
   @override
   Widget build(BuildContext context) {
-    final slug = _assets[SiteRegistry.current.byId(platform)?.assetKey];
+    final slug =
+        _assets[SiteRegistry.current
+            .byId(SiteRegistry.current.canonicalId(platform))
+            ?.assetKey];
     if (slug == null) return Icon(Icons.public, size: size, color: color);
     return SvgPicture.asset(
       'assets/brands/$slug.svg',
@@ -397,7 +382,9 @@ class PlatformTag extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final raw = SiteRegistry.current.byId(platform)?.data['tagColor'];
+    final raw = SiteRegistry.current
+        .byId(SiteRegistry.current.canonicalId(platform))
+        ?.data['tagColor'];
     final color = raw is String && RegExp(r'^#[0-9a-fA-F]{6}$').hasMatch(raw)
         ? Color(0xFF000000 | int.parse(raw.substring(1), radix: 16))
         : const Color(0xFF607D8B);

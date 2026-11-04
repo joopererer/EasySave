@@ -30,10 +30,12 @@ Iterable<String> get loginSiteIds => SiteRegistry.current.sites
     .map((site) => site.id);
 
 String platformLabel(String siteId, {String? savedDisplayName}) =>
-    SiteRegistry.current.byId(siteId)?.displayName ??
+    SiteRegistry.current
+        .byId(SiteRegistry.current.canonicalId(siteId))
+        ?.displayName ??
     (savedDisplayName?.trim().isNotEmpty == true ? savedDisplayName! : siteId);
 
-String platformFromKey(String key) => key;
+String platformFromKey(String key) => SiteRegistry.current.canonicalId(key);
 
 /// Login pages use host recognition, including roots without post paths.
 String? platformFromUrl(String url) {

@@ -14,12 +14,27 @@ internal class ParsedHandoff(private val now: () -> Long = System::currentTimeMi
     private val values = ArrayDeque<Pair<Long, Map<*, *>>>()
     @Synchronized fun put(value: Map<*, *>) {
         prune()
+        val canonical = value["canonical"]
+        val previousKeys = values.filter { canonical != null && it.second["canonical"] == canonical }
+            .flatMap { (it.second["keys"] as? List<*>) ?: emptyList<Any>() }
+        if (canonical != null) values.removeAll { it.second["canonical"] == canonical }
         while (values.size >= 8) values.removeFirst()
-        values.addLast(now() + 45_000L to value)
+        val merged = value.entries.associate { it.key to it.value }.toMutableMap()
+        merged["keys"] = (previousKeys + ((value["keys"] as? List<*>) ?: emptyList<Any>())).distinct().takeLast(64)
+        values.addLast(now() + 600_000L to merged)
     }
     @Synchronized fun get(key: String): Map<*, *>? {
         prune()
         return values.lastOrNull { (_, value) -> (value["keys"] as? List<*>)?.contains(key) == true }?.second
+    }
+    @Synchronized fun lookup(key: String): Map<String, Any?> {
+        val record = values.lastOrNull { (_, value) -> (value["keys"] as? List<*>)?.contains(key) == true }
+            ?: return mapOf("status" to "miss")
+        if (record.first <= now()) {
+            values.remove(record)
+            return mapOf("status" to "expired", "value" to record.second)
+        }
+        return mapOf("status" to "hit", "value" to record.second)
     }
     private fun prune() { values.removeAll { it.first <= now() } }
 }
@@ -50,7 +65,7 @@ internal class ThumbnailFiles(private val root: File, private val maxBytes: Long
         temporary.writeBytes(bytes)
         file.delete()
         check(temporary.renameTo(file))
-        file.setLastModified(minOf(expires, now() + 5 * 60_000L))
+        file.setLastModified(minOf(expires, now() + 10 * 60_000L))
         return file
     }
     @Synchronized fun readPath(path: String): ByteArray? {
@@ -92,6 +107,7 @@ internal object SharedPreviewBridge {
                 when (call.method) {
                     "putParsed" -> { posts.put(args); result.success(null) }
                     "getParsed" -> result.success(posts.get(args["key"] as String))
+                    "lookupParsed" -> result.success(posts.lookup(args["key"] as String))
                     "thumbnailRead" -> result.success(files!!.read(args["key"] as String)?.path)
                     "thumbnailWrite" -> result.success(files!!.write(args["key"] as String,
                         args["bytes"] as ByteArray, (args["expires"] as Number).toLong())?.path)

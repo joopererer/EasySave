@@ -5,13 +5,32 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class SharedPreviewCacheTest {
+    @Test fun centralLookupReportsTenMinuteExpiry() {
+        var now = 1000L
+        val handoff = ParsedHandoff { now }
+        handoff.put(mapOf("canonical" to "xhs:123", "keys" to listOf("xhs:123")))
+        now += 540_000
+        assertEquals("hit", handoff.lookup("xhs:123")["status"])
+        now += 60_001
+        assertEquals("expired", handoff.lookup("xhs:123")["status"])
+        assertEquals("miss", handoff.lookup("xhs:123")["status"])
+    }
+    @Test fun everyStoreReplacesTheCanonicalPostAndRetainsKnownAliases() {
+        val handoff = ParsedHandoff { 1L }
+        handoff.put(mapOf("canonical" to "xhs:123", "keys" to listOf("xhs:123", "short"), "revision" to 1))
+        handoff.put(mapOf("canonical" to "xhs:123", "keys" to listOf("xhs:123"), "revision" to 2))
+        val found = handoff.lookup("short")["value"] as Map<*, *>
+        assertEquals(2, found["revision"])
+    }
     @Test fun parsedHandoffExpiresAndRecognizesCanonicalAliases() {
         var now = 1000L
         val handoff = ParsedHandoff { now }
         handoff.put(mapOf("keys" to listOf("xhs:123", "shortAlias"), "post" to "synthetic"))
         assertNotNull(handoff.get("xhs:123"))
         assertNotNull(handoff.get("shortAlias"))
-        now += 45_001
+        now += 540_000
+        assertNotNull(handoff.get("xhs:123"))
+        now += 60_001
         assertNull(handoff.get("xhs:123"))
     }
     @Test fun handoffHasABoundedNumberOfPosts() {

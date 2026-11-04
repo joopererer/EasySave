@@ -359,7 +359,7 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
   List<HistoryRecord> get _filtered {
     final q = _query.trim().toLowerCase();
     return _records.where((r) {
-      if (_platform != 'all' && r.platform != _platform) return false;
+      if (_platform != 'all' && !SiteRegistry.current.sameSite(r.platform, _platform)) return false;
       if (_author != null && (r.authorName ?? '') != _author) return false;
       if (q.isNotEmpty) {
         final title = (r.title ?? '').toLowerCase();
@@ -506,7 +506,7 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
       ),
     );
     try {
-      final outcome = await parsePostOutcome(record.postUrl);
+      final outcome = await parsePostOutcome(record.postUrl, source: 'history_refresh', forceRefresh: true);
       if (!mounted) return;
       ScaffoldMessenger.of(context).hideCurrentSnackBar();
       Navigator.of(context).push(
@@ -520,7 +520,7 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
       ScaffoldMessenger.of(context).hideCurrentSnackBar();
 
       final isLoginRequired =
-          e is ParseFailure && e.code == ParseErrorCode.loginRequired && loginSiteIds.contains(record.platform);
+          e is ParseFailure && e.code == ParseErrorCode.loginRequired && loginSiteIds.contains(platformFromKey(record.platform));
       final cachedPost = record.toPost();
       if (cachedPost.items.isNotEmpty) {
         Navigator.of(context).push(
@@ -638,6 +638,7 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
             items.add(
               GalleryBrowserItem(
                 index: zeroBasedIdx,
+                cachePostId: record.postId,
                 type: 'live',
                 url: postItem?.url.isNotEmpty == true ? postItem!.url : imgFile.filename,
                 videoUrl: postItem?.videoUrl?.isNotEmpty == true ? postItem!.videoUrl : vidFile.filename,
@@ -673,6 +674,7 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
             items.add(
               GalleryBrowserItem(
                 index: zeroBasedIdx,
+                cachePostId: record.postId,
                 type: itemType,
                 url: postItem?.url ?? f.filename,
                 videoUrl: f.isImage ? postItem?.videoUrl : (postItem?.videoUrl ?? f.filename),
@@ -697,6 +699,8 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
           items.add(
             GalleryBrowserItem(
               index: i,
+              cachePostId: record.postId,
+              cacheItemIndex: postItem.cacheItemIndex ?? i,
               type: postItem.type,
               url: postItem.url,
               videoUrl: postItem.videoUrl,
@@ -1554,13 +1558,14 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
 
   Widget _platformMenu() {
     return PopupMenuButton<String>(
+      key: const ValueKey('canonical-platform-filter'),
       tooltip: '平台筛选',
       onSelected: (v) => setState(() => _platform = v),
       itemBuilder: (_) => [
         const PopupMenuItem(value: 'all', child: Text('全部')),
         for (final siteId in {
           ...SiteRegistry.current.sites.where((s) => s.enabled).map((s) => s.id),
-          ..._records.map((r) => r.platform),
+          ..._records.map((r) => SiteRegistry.current.canonicalId(r.platform)),
         })
           PopupMenuItem(value: siteId, child: Text(_platformLabel(siteId))),
       ],
@@ -1607,7 +1612,7 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
   }
 
   String _platformLabel(String key) => key == 'all' ? '全部' : platformLabel(key,
-    savedDisplayName: _records.where((r) => r.platform == key && r.platformDisplayName?.trim().isNotEmpty == true)
+    savedDisplayName: _records.where((r) => SiteRegistry.current.sameSite(r.platform, key) && r.platformDisplayName?.trim().isNotEmpty == true)
       .map((r) => r.platformDisplayName).firstOrNull);
 
   Widget _body() {
@@ -1902,8 +1907,8 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
     for (final r in records) {
       final author = r.authorName ?? '';
       final group = map.putIfAbsent(
-        author,
-        () => _CreatorGroup(authorName: author, platform: r.platform),
+        '${SiteRegistry.current.canonicalId(r.platform)}:$author',
+        () => _CreatorGroup(authorName: author, platform: SiteRegistry.current.canonicalId(r.platform)),
       );
       group.postCount++;
       group.fileCount += r.files.isNotEmpty ? r.files.length : r.fileCount;

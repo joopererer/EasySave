@@ -180,14 +180,6 @@ Future<T> resolveAndEnterParse<T>(
   return enter(resolved, canonical);
 }
 
-final _sharedPosts = SharedParseCache<Map<String, dynamic>>();
-
-String _postCacheKey(String url) {
-  final site = SiteRegistry.current.match(url);
-  final id = site?.sourceId(Uri.parse(url));
-  return id == null ? opaquePreviewKey(url) : '${site!.id}:$id';
-}
-
 ParseOutcome _decodeSharedOutcome(Map value) => ParseOutcome(
   data: ParsedPost.fromJson(Map<String, dynamic>.from(value['post'] as Map)),
   rawImages: [
@@ -205,73 +197,167 @@ ParseOutcome _decodeSharedOutcome(Map value) => ParseOutcome(
   ],
 );
 
-Future<ParseOutcome> parsePostOutcome(
-  String url, {
-  String source = 'app',
-}) async {
-  final site = SiteRegistry.current.match(url);
-  if (site == null || !site.enabled)
-    return _parsePostOutcomeUncached(url, source: source);
-  final key = _postCacheKey(url);
-  Map<String, dynamic>? envelope = _sharedPosts.get(key);
-  if (envelope == null && source != 'background') {
+/// All entry points share this read-through/write-through native RAM store.
+class CachedPostParser {
+  CachedPostParser({
+    required this.parseNetwork,
+    this.resolveIdentityUrl,
+    this.channel = sharedPreviewChannel,
+    DateTime Function()? now,
+  }) : now = now ?? DateTime.now;
+  final Future<ParseOutcome> Function(String url, String entry) parseNetwork;
+  final Future<String> Function(String url)? resolveIdentityUrl;
+  final MethodChannel channel;
+  final DateTime Function() now;
+  final _fallback = SharedParseCache<Map<String, dynamic>>();
+
+  String keyFor(String url) {
+    final site = SiteRegistry.current.match(url);
+    final id = site?.sourceId(Uri.parse(url));
+    return id == null ? opaquePreviewKey(url) : '${site!.id}:$id';
+  }
+
+  Future<Map<String, dynamic>?> lookup(String key) async {
     try {
-      final remote = await sharedPreviewChannel
-          .invokeMapMethod<String, dynamic>('getParsed', {'key': key});
-      if (remote != null &&
-          (remote['expires'] as int) > DateTime.now().millisecondsSinceEpoch) {
-        envelope = remote;
-        // Keep the original deadline; consuming a handoff must not extend its TTL.
-      }
+      return await channel.invokeMapMethod<String, dynamic>('lookupParsed', {
+        'key': key,
+      });
     } on MissingPluginException {
-      /* No native broker on other platforms. */
+      final value = _fallback.get(key);
+      return {'status': value == null ? 'miss' : 'hit', 'value': value};
+    } on PlatformException {
+      return {'status': 'miss'};
     }
   }
-  if (envelope != null &&
-      (envelope['expires'] as int) > DateTime.now().millisecondsSinceEpoch) {
-    try {
-      final cached = _decodeSharedOutcome(envelope);
-      final policy = MediaRequestPolicy(site);
-      for (final item in cached.data.items) {
-        for (final resource in policy.resourcesFor(item)) {
-          policy.validate(resource);
+
+  Future<ParseOutcome> parse(
+    String url, {
+    String entry = 'app_input',
+    bool forceRefresh = false,
+    FutureOr<void> Function()? onCacheMiss,
+  }) async {
+    final site = SiteRegistry.current.match(url);
+    if (site == null || !site.enabled) return parseNetwork(url, entry);
+    final originalKey = keyFor(url);
+    var key = originalKey;
+    var postId = site.sourceId(Uri.parse(url)) ?? '-';
+    Future<void> log(String event) => DevLog.write(
+      'ParseCache',
+      'event=$event entry=${safeCacheLabel(entry)} post=${safeCacheLabel(postId)}',
+    );
+    if (!forceRefresh) {
+      var response = await lookup(key);
+      if (response?['status'] == 'miss' &&
+          site.sourceId(Uri.parse(url)) == null &&
+          resolveIdentityUrl != null) {
+        try {
+          final resolved = await resolveIdentityUrl!(url);
+          if (SiteRegistry.current.match(resolved)?.id == site.id) {
+            key = keyFor(resolved);
+            postId = site.sourceId(Uri.parse(resolved)) ?? postId;
+            if (key != originalKey) response = await lookup(key);
+          }
+        } catch (_) {
+          /* Preserve the existing parser's short-link fallback. */
         }
       }
-      await DevLog.write('SharedParse', 'event=hit source=$source');
-      return cached;
-    } catch (_) {
-      /* Expired resources must be parsed again even within the RAM TTL. */
+      final value = response?['value'];
+      if (value is Map) {
+        try {
+          final cached = _decodeSharedOutcome(value);
+          postId = cached.data.id;
+          if (response?['status'] == 'expired' ||
+              (value['expires'] as int) <= now().millisecondsSinceEpoch)
+            throw StateError('EXPIRED');
+          final policy = MediaRequestPolicy(site);
+          for (final item in cached.data.items) {
+            for (final resource in policy.resourcesFor(item)) {
+              policy.validate(resource);
+              if (resource.request.expiresAt != null &&
+                  !resource.request.expiresAt!.isAfter(now()))
+                throw StateError('EXPIRED');
+              final expiry = mediaUrlExpiry(resource.url);
+              if (expiry != null && !expiry.isAfter(now()))
+                throw StateError('EXPIRED');
+            }
+          }
+          await log('hit');
+          return cached;
+        } catch (_) {
+          await log('expired');
+        }
+      } else if (response?['status'] == 'expired') {
+        await log('expired');
+      }
     }
-  }
-  final outcome = await _parsePostOutcomeUncached(url, source: source);
-  final canonical = '${outcome.data.platform}:${outcome.data.id}';
-  final value = <String, dynamic>{
-    'keys': [canonical, key, opaquePreviewKey(url)],
-    'expires': DateTime.now()
-        .add(const Duration(seconds: 45))
-        .millisecondsSinceEpoch,
-    'post': outcome.data.toJson(),
-    'rawImages': [
-      for (final raw in outcome.rawImages)
+    await log('miss');
+    await onCacheMiss?.call();
+    final outcome = await parseNetwork(url, entry);
+    postId = outcome.data.id;
+    final canonical =
+        '${SiteRegistry.current.canonicalId(outcome.data.platform)}:$postId';
+    final post = outcome.data.toJson();
+    // Legacy parser/backup JSON intentionally omits these fields. RAM must not.
+    post['items'] = [
+      for (final item in outcome.data.items)
         {
-          'keys': raw.keys,
-          'scenes': [
-            for (final scene in raw.scenes)
-              {'scene': scene.scene, 'url': scene.url},
-          ],
+          ...item.toJson(),
+          'fallbacks': item.fallbacks,
+          if (item.requestResources != null)
+            'resources': [
+              for (final resource in item.requestResources!) resource.toJson(),
+            ],
         },
-    ],
-  };
-  _sharedPosts.put(canonical, value, aliases: [key, opaquePreviewKey(url)]);
-  if (source == 'background') {
+    ];
+    final value = <String, dynamic>{
+      'canonical': canonical,
+      'keys': [canonical, key, originalKey, opaquePreviewKey(url)],
+      'expires': now().add(const Duration(minutes: 10)).millisecondsSinceEpoch,
+      'post': post,
+      'rawImages': [
+        for (final raw in outcome.rawImages)
+          {
+            'keys': raw.keys,
+            'scenes': [
+              for (final scene in raw.scenes)
+                {'scene': scene.scene, 'url': scene.url},
+            ],
+          },
+      ],
+    };
+    _fallback.put(canonical, value, aliases: [key, opaquePreviewKey(url)]);
     try {
-      await sharedPreviewChannel.invokeMethod<void>('putParsed', value);
+      await channel.invokeMethod<void>('putParsed', value);
     } on MissingPluginException {
-      /* The local RAM cache still applies. */
+      /* Local RAM fallback on other hosts. */
+    } on PlatformException {
+      /* A cache failure does not discard parsed content. */
     }
+    await log('store');
+    return outcome;
   }
-  return outcome;
 }
+
+final cachedPostParser = CachedPostParser(
+  parseNetwork: (url, entry) => _parsePostOutcomeUncached(url, source: entry),
+  resolveIdentityUrl: (url) async {
+    final site = SiteRegistry.current.match(url);
+    final rule = site?.shortLink(Uri.parse(url));
+    if (rule == null || rule['strategy'] != 'http') return url;
+    return resolveShortLink(url);
+  },
+);
+Future<ParseOutcome> parsePostOutcome(
+  String url, {
+  String source = 'app_input',
+  bool forceRefresh = false,
+  FutureOr<void> Function()? onCacheMiss,
+}) => cachedPostParser.parse(
+  url,
+  entry: source,
+  forceRefresh: forceRefresh,
+  onCacheMiss: onCacheMiss,
+);
 
 Future<ParseOutcome> _parsePostOutcomeUncached(
   String url, {

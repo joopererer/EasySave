@@ -2,6 +2,7 @@
   {
     "id": "xhs",
     "platform": "xiaohongshu",
+    "aliases": ["rednote"],
     "displayName": "小红书",
     "creditName": "小红书",
     "enabled": true,
@@ -260,6 +261,7 @@
   {
     "id": "x",
     "platform": "x",
+    "aliases": ["twitter"],
     "displayName": "X",
     "creditName": "X",
     "enabled": true,

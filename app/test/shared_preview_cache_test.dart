@@ -16,7 +16,9 @@ void main() {
       cache.put('x:1', 'x');
       cache.put('instagram:1', 'ig');
       expect(cache.get('short'), isNull);
-      now = now.add(const Duration(seconds: 46));
+      now = now.add(const Duration(minutes: 5));
+      expect(cache.get('x:1'), 'x');
+      now = now.add(const Duration(minutes: 6));
       expect(cache.get('x:1'), isNull);
     },
   );
@@ -28,25 +30,28 @@ void main() {
           .setMockMethodCallHandler(sharedPreviewChannel, (call) async {
             methods.add(call.method);
             return {
-              'keys': ['xhs:abcdef'],
-              'expires': DateTime.now()
-                  .add(const Duration(seconds: 30))
-                  .millisecondsSinceEpoch,
-              'post': {
-                'platform': 'xhs',
-                'id': 'abcdef',
-                'url': 'https://www.xiaohongshu.com/explore/abcdef',
-                'author': {},
-                'items': [],
+              'status': 'hit',
+              'value': {
+                'keys': ['xhs:abcdef'],
+                'expires': DateTime.now()
+                    .add(const Duration(seconds: 30))
+                    .millisecondsSinceEpoch,
+                'post': {
+                  'platform': 'xhs',
+                  'id': 'abcdef',
+                  'url': 'https://www.xiaohongshu.com/explore/abcdef',
+                  'author': {},
+                  'items': [],
+                },
+                'rawImages': [],
               },
-              'rawImages': [],
             };
           });
       final result = await parsePostOutcome(
         'https://www.xiaohongshu.com/explore/abcdef',
       );
       expect(result.data.id, 'abcdef');
-      expect(methods, ['getParsed']);
+      expect(methods, ['lookupParsed']);
       TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
           .setMockMethodCallHandler(sharedPreviewChannel, null);
     },

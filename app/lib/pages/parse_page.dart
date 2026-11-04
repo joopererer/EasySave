@@ -64,6 +64,8 @@ class ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
   final _linkController = TextEditingController();
   final _inputFocus = FocusNode();
   bool _busy = false;
+  bool _resolving = false;
+  int _resolveEpoch = 0;
   bool _cancelRequested = false;
   String? _errorCode;
   String? _errorMessage;
@@ -656,7 +658,8 @@ class ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
   /// is what the DevLog line reports, so a device log shows which door the
   /// request came through. The dedup rule itself lives in [PreviewOpenGuard].
   Future<void> _resolve(String link, {String entry = 'input'}) async {
-    if (_busy) return;
+    if (_busy || _resolving) return;
+    final resolveToken = ++_resolveEpoch;
 
     final decision = await PreviewOpenGuard.decide(entry: entry, link: link);
     final normalizedLink = decision.normalizedLink;
@@ -703,7 +706,8 @@ class ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
       );
     }
     setState(() {
-      _busy = true;
+      _busy = false;
+      _resolving = true;
       _cancelRequested = false;
       _errorCode = null;
       _errorMessage = null;
@@ -711,7 +715,10 @@ class ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
     // Parsing started from another tab: the inline state below is not on
     // screen, so show it as a snackbar until the preview opens or it fails.
     final offscreen = !(widget.isVisible?.call() ?? true);
-    if (offscreen) {
+    void showMissLoading() {
+      if (!mounted || _cancelRequested) return;
+      setState(() => _busy = true);
+      if (!offscreen) return;
       showParsingSnackBar(
         context,
         onCancel: () {
@@ -723,6 +730,7 @@ class ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
         },
       );
     }
+
     void closeParsingSnackBar() {
       if (offscreen && mounted) {
         ScaffoldMessenger.of(context).hideCurrentSnackBar();
@@ -730,10 +738,18 @@ class ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
     }
 
     try {
-      final outcome = await parsePostOutcome(normalizedLink);
+      final outcome = await parsePostOutcome(
+        normalizedLink,
+        source: entry == 'bubble' ? 'bubble_open_app' : entry,
+        forceRefresh: entry == 'retry' || entry == 'refresh',
+        onCacheMiss: showMissLoading,
+      );
       if (!mounted || _cancelRequested) return;
       closeParsingSnackBar();
-      setState(() => _busy = false);
+      setState(() {
+        _busy = false;
+        _resolving = false;
+      });
 
       // Preview pages are always pushed through PreviewPage.route so the route
       // carries the post id that PreviewRouteObserver reads back.
@@ -775,6 +791,8 @@ class ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
         _errorMessage = null;
       });
       if (offscreen) _showOffscreenError(ParseErrorCode.invalidPage, null);
+    } finally {
+      if (_resolveEpoch == resolveToken) _resolving = false;
     }
   }
 
@@ -1073,7 +1091,11 @@ class ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
       ),
     );
     try {
-      final outcome = await parsePostOutcome(record.postUrl);
+      final outcome = await parsePostOutcome(
+        record.postUrl,
+        source: 'recent_refresh',
+        forceRefresh: true,
+      );
       if (!mounted) return;
       ScaffoldMessenger.of(context).hideCurrentSnackBar();
       Navigator.of(context).push(
@@ -1199,6 +1221,7 @@ class ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
           items.add(
             GalleryBrowserItem(
               index: zeroBasedIdx,
+              cachePostId: record.postId,
               type: postItem?.type ?? (f.isImage ? 'image' : 'video'),
               url: postItem?.url ?? '',
               videoUrl: postItem?.videoUrl,
@@ -1220,6 +1243,8 @@ class ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
           items.add(
             GalleryBrowserItem(
               index: i,
+              cachePostId: record.postId,
+              cacheItemIndex: postItem.cacheItemIndex ?? i,
               type: postItem.type,
               url: postItem.url,
               videoUrl: postItem.videoUrl,
