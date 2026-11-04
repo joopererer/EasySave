@@ -68,7 +68,12 @@ Android 文件操作经 `SharedPreviewBridge` 串行进入同一个 `ThumbnailFi
 - Flutter analyze：`--no-pub --no-fatal-infos --no-fatal-warnings` 退出 0，无 error，78 条 warning/info；日志 `app/build/build20-analyze-final.log`。
 - 早期失败已修复：缓存 flutter_svg 2.0.10 与 xml 7 冲突，改用兼容的 2.3.2；随之修复第一次未解析依赖导致的编译失败。首次设置 widget 测试点击了视口外控件，增加滚动后的布局等待，重新验证了真实确认弹窗。没有在失败状态下提交。
 
-最终静态分析、commit、APK 路径/版本/SHA-256 和编译后证据待构建完成后补充。
+- 既有扫码脚本回归：`rtk proxy node --test tools/xhs_qr_login.test.cjs`，4 项通过。
+- 主实现提交：`e1036e7b9e1e1bacca77ffe06445f0b62b11fc73`；精确 decoder 回退判定提交：`ea863649e20d155d15691ba3ecdbe1ffd60c9963`。最终 APK 从后者构建。
+- 构建：`rtk proxy flutter build apk --debug --no-pub --build-name=1.10.0 --build-number=20`，退出 0；日志 `app/build/build20-apk-final.log`。
+- APK：`app/build/app/outputs/flutter-apk/app-debug.apk`；交付副本 `app/build/app/outputs/flutter-apk/EasySave-1.10.0-build20-debug.apk`。
+- 版本 **1.10.0+20**，包名 **com.james.easysave**，minSdk 24；大小 **201917382 字节**。
+- 两个 APK 的 SHA-256：**`a94755af272a30a20ae7e4a4901495c35bd8de43bfa9293ad03a2adee6eb1a3b`**。
 
 APK 复核命令（仓库根目录）：
 
@@ -77,5 +82,45 @@ $env:PYTHONIOENCODING = 'utf-8'
 rtk proxy python tools/verify_build20_apk.py app/build/app/outputs/flutter-apk/app-debug.apk --dexdump D:/Android/Sdk/build-tools/35.0.1/dexdump.exe
 rtk proxy D:/Android/Sdk/build-tools/35.0.1/aapt.exe dump badging app/build/app/outputs/flutter-apk/app-debug.apk
 ```
+
+上述命令均退出 0。aapt 输出 `package: name='com.james.easysave' versionCode='20' versionName='1.10.0'`。校验脚本第一轮对继承方法的 DEX 所属类名检查过严，已修正为兼容真实匿名子类调用并重新通过；没有修改 APK 内容。完整包内证据保存在 `app/build/build20-apk-evidence.log`。
+
+Flutter **编译后快照**的 UTF-8 搜索结果（不是搜索源码或未引用资源）：
+
+```text
+kernel_blob.bin UTF-8 '清空日志': FOUND offset=5450899
+kernel_blob.bin UTF-8 '确认清空': FOUND offset=5451304
+kernel_blob.bin UTF-8 '清空链接': FOUND offset=5498922
+kernel_blob.bin UTF-8 'clear-link-input': FOUND offset=5498857
+kernel_blob.bin UTF-8 'easysave/shared_preview': FOUND offset=6005892
+kernel_blob.bin UTF-8 'assets/brands/': FOUND offset=6179865
+kernel_blob.bin UTF-8 'SharedParse': FOUND offset=5914615
+builtin parserVersion=1.4.2; brand license bundled
+```
+
+四个 SVG 在 APK 内的 `assets/flutter_assets/assets/brands/` 下均逐字节匹配源文件，分别为 3584、2101、252、707 字节；SHA-256 与同目录 PROVENANCE.md 中的四项一致。许可证也已打包。
+
+**同一 APK 的 classes19.dex 实际指令**摘要（完整类名/签名见原始证据日志）：
+
+```text
+HostService     0131fc: SharedPreviewBridge.register(Context, BinaryMessenger, boolean)
+MainActivity    016656: SharedPreviewBridge.register$default(...)
+SelectPanelView 024bcc: renderers$1.setEnableDecoderFallback(boolean)
+SelectPanelView 024bf8: ExoPlayer$Builder.build()
+SelectPanelView 024e68: PreviewSessions.accepts(long, Object)
+SelectPanelView 02557e: ExoPlayer.clearVideoSurface()
+SelectPanelView 025584: ExoPlayer.release()
+SelectPanelView 026746: Uri.fromFile(File)
+SelectPanelView 02697c: PreviewSessions.close()
+renderers$1     02321e: MediaCodecAdapter$Factory.createAdapter(Configuration)
+renderers$1     023266: DecoderFallbackTrace.initializationFailed(String)
+SharedPreviewBridge 02890a: ThumbnailFiles.write(String, byte[], long)
+HoldProgressView 022ac6: Canvas.drawRoundRect(...)
+HoldProgressView 022b18: PreviewSessionsKt.holdCountdown(float)
+BubbleView$1    00dc5c: PreviewSessionsKt.parsingDotOffsets(long, boolean)
+PASS: compiled UI, four exact brand assets, Media3 fallback/session cleanup, cache bridge, countdown and dots
+```
+
+脚本同时确认 SelectPanelView 内没有任何调用系统 MediaPlayer 的指令。用于解包的 `app/build/build20-apk-dex-*` 目录在提前说明后，由脚本校验其绝对路径仍在 app/build 内，并仅移除本次创建的目录；未清理其他临时目录。
 
 复测建议：安装 build 20 后，用“我的 → 清空日志”确认清空，然后重启 App 保留 NativeLog 启动标记。依次长按不同 Live、切换封面、取消/重开预览；观察 ExoPlayer 错误码、mime、decoder 和回退标记。悬浮球打开 App 应在 45 秒内出现 SharedParse 命中；打开缩略图后再在 App 查看相同内容应复用缓存。检验倒计时、取消、系统减少动画、清空日志确认/取消、输入清空和四个平台 logo。本轮不声称这些设备行为已验证。

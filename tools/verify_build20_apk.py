@@ -36,12 +36,14 @@ with zipfile.ZipFile(args.apk) as apk:
             value = apk.read(name).decode().strip()
             assert value == '1.9.2', (name, value)
             print(f'{name}: {value}')
-    terms = ['DefaultRenderersFactory;.setEnableDecoderFallback:',
+    # DEX may qualify an inherited final method with the anonymous subclass.
+    terms = [';.setEnableDecoderFallback:',
              'ExoPlayer$Builder;.build:', 'PreviewSessions;.accepts:',
              'PreviewSessions;.close:', 'SharedPreviewBridge;.register',
              'ThumbnailFiles;.write:', 'PreviewSessionsKt;.holdCountdown:',
              'PreviewSessionsKt;.parsingDotOffsets:', 'Canvas;.drawRoundRect:',
-             'Uri;.fromFile:', 'Player;.clearVideoSurface:', 'Player;.release:']
+             'Uri;.fromFile:', 'Player;.clearVideoSurface:', 'Player;.release:',
+             'MediaCodecAdapter$Factory;.createAdapter:', 'DecoderFallbackTrace;.initializationFailed:']
     evidence = set()
     temporary_root = Path('app/build').resolve()
     with tempfile.TemporaryDirectory(prefix='build20-apk-dex-', dir=temporary_root) as directory:
