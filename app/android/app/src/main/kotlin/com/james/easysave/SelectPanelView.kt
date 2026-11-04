@@ -17,8 +17,7 @@ import androidx.media3.common.Format
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.analytics.AnalyticsListener
-import androidx.media3.exoplayer.mediacodec.MediaCodecSelector
-import java.util.concurrent.atomic.AtomicReference
+import androidx.media3.exoplayer.mediacodec.MediaCodecAdapter
 import android.net.Uri
 import android.os.Handler
 import android.os.Looper
@@ -1134,17 +1133,24 @@ class SelectPanelView(
                 var decoder = "unknown"
                 var width = 0
                 var height = 0
-                var decoderFailed = false
                 var fallback = false
-                val preferredDecoder = AtomicReference("unknown")
+                val fallbackTrace = DecoderFallbackTrace()
                 val (token, player) = playerSessions.begin {
-                    ExoPlayer.Builder(context, DefaultRenderersFactory(context)
-                        .setEnableDecoderFallback(true)
-                        .setMediaCodecSelector { mimeType, secure, tunneling ->
-                            MediaCodecSelector.DEFAULT.getDecoderInfos(mimeType, secure, tunneling).also {
-                                if (mimeType.startsWith("video/")) preferredDecoder.set(it.firstOrNull()?.name ?: "unknown")
+                    val renderers = object : DefaultRenderersFactory(context) {
+                        override fun getCodecAdapterFactory(): MediaCodecAdapter.Factory {
+                            val delegate = super.getCodecAdapterFactory()
+                            return MediaCodecAdapter.Factory { configuration ->
+                                try { delegate.createAdapter(configuration) }
+                                catch (error: Exception) {
+                                    if (configuration.format.sampleMimeType?.startsWith("video/") == true) {
+                                        fallbackTrace.initializationFailed(configuration.codecInfo.name)
+                                    }
+                                    throw error
+                                }
                             }
-                        }).build()
+                        }
+                    }.setEnableDecoderFallback(true)
+                    ExoPlayer.Builder(context, renderers).build()
                 }
                 mediaPlayer = player
                 fun current() = previewCurrent(generation) && playerSessions.accepts(token, player)
@@ -1173,15 +1179,13 @@ class SelectPanelView(
                     }
                     override fun onVideoCodecError(eventTime: AnalyticsListener.EventTime, videoCodecError: Exception) {
                         if (!current()) return
-                        decoderFailed = true
+                        fallbackTrace.codecFailed()
                         log("decoderError", "VIDEO_CODEC_ERROR")
                     }
                     override fun onVideoDecoderInitialized(eventTime: AnalyticsListener.EventTime,
                         decoderName: String, initializedTimestampMs: Long, initializationDurationMs: Long) {
                         if (!current()) return
-                        fallback = fallback || decoderFailed ||
-                            (preferredDecoder.get() != "unknown" && preferredDecoder.get() != decoderName) ||
-                            (decoder != "unknown" && decoder != decoderName)
+                        fallback = fallbackTrace.initialized(decoderName)
                         decoder = decoderName
                         log("decoderInitialized")
                     }

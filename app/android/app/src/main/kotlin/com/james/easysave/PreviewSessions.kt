@@ -31,3 +31,21 @@ internal fun holdCountdown(progress: Float): Int =
 
 internal fun parsingDotOffsets(timeMs: Long, animate: Boolean): List<Float> =
     (0..2).map { if (animate) kotlin.math.sin(timeMs / 180.0 - it * 0.9).toFloat() else 0f }
+
+/** A different selected codec alone is not proof of fallback. */
+internal class DecoderFallbackTrace {
+    private val failedInitializations = mutableSetOf<String>()
+    private var previous: String? = null
+    private var runtimeFailure = false
+    private var occurred = false
+    @Synchronized fun initializationFailed(name: String) { failedInitializations.add(name) }
+    @Synchronized fun codecFailed() { runtimeFailure = true }
+    @Synchronized fun initialized(name: String): Boolean {
+        occurred = occurred || failedInitializations.any { it != name } ||
+            (runtimeFailure && previous != null && previous != name)
+        previous = name
+        runtimeFailure = false
+        failedInitializations.clear()
+        return occurred
+    }
+}

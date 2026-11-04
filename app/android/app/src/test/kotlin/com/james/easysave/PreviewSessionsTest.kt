@@ -38,4 +38,18 @@ class PreviewSessionsTest {
         assertEquals(listOf(0f, 0f, 0f), parsingDotOffsets(750L, false))
         assertNotEquals(parsingDotOffsets(750L, true), parsingDotOffsets(1000L, true))
     }
+    @Test fun fallbackRequiresAnActualFailureAndADifferentSuccessfulDecoder() {
+        val trace = DecoderFallbackTrace()
+        assertFalse(trace.initialized("selected-by-format"))
+        assertFalse(trace.initialized("another-normal-format"))
+        trace.initializationFailed("hardware")
+        assertTrue(trace.initialized("software"))
+    }
+    @Test fun retryingTheSameDecoderIsNotReportedAsFallback() {
+        val trace = DecoderFallbackTrace()
+        trace.initializationFailed("hardware")
+        assertFalse(trace.initialized("hardware"))
+        trace.codecFailed()
+        assertTrue(trace.initialized("software"))
+    }
 }

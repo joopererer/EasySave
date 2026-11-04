@@ -11,11 +11,11 @@
 - `SelectPanelView` 使用 Media3 ExoPlayer；`DefaultRenderersFactory.setEnableDecoderFallback(true)` 开启初始化阶段的候选解码器回退。保留已有策略校验下载到私有临时 MP4、随后本地播放的路径；ExoPlayer 只接收 `Uri.fromFile`，不负责远程 HTTP，也不读取 cookie。下载仍由 `NativeMediaRequest` 校验 HTTPS、请求头白名单、资源期限及每一跳重定向。
 - `PreviewSessions<ExoPlayer>` 每次创建独立实例。所有格式、尺寸、解码器、首帧和致命错误回调均同时检查预览代次与实例 token。致命 `onPlayerError` 立即使 token 失效、清除 video surface、释放实例；后续操作不能继续使用它。内部可恢复的解码器候选尝试由 Media3 回退处理，不能把启用回退误报为已经发生回退。
 - 每次释放时清除 TextureView listener/矩阵并隐藏旧纹理；只有新实例的首帧事件才显示视频。封面清除旧 bitmap，按它自己的像素尺寸调用 `stillLetterbox`，使用 FIT_CENTER 和居中尺寸；不沿用视频尺寸。普通视频出错回退 poster，Live 出错回退静态图。
-- `[PreviewPlayer]` 增加 `generation`、`mime`、`width`、`height`、`decoder`、`decoderFallback`、`fallbackEnabled`；实际回退通过被选中的解码器与首选候选/内部失败记录比较。致命错误使用 `PlaybackException.errorCodeName`，不记录异常原文。
+- `[PreviewPlayer]` 增加 `generation`、`mime`、`width`、`height`、`decoder`、`decoderFallback`、`fallbackEnabled`；通过包装 Media3 的默认 MediaCodecAdapter factory 记录真实的视频 decoder 初始化失败，只有失败后另一个 decoder 成功，或实际 codec 错误后切换 decoder，才标记回退。正常格式匹配选中另一候选、原 decoder 重试成功不误报。致命错误使用 `PlaybackException.errorCodeName`，不记录异常原文。
 
 依赖版本：`video_player_android 2.9.5/android/build.gradle.kts` 已声明 Media3 **1.9.2**。应用直接依赖相同的 `media3-exoplayer:1.9.2`，没有升级 video_player。`build20-native-test.log` 中的 `dependencyInsight --configuration debugRuntimeClasspath --dependency media3-exoplayer` 显示 ExoPlayer/common/HLS 等均解析为 **1.9.2**。参考 [Media3 DefaultRenderersFactory](https://developer.android.com/reference/androidx/media3/exoplayer/DefaultRenderersFactory)；开启 fallback 不代表设备一定存在可用的软件解码器。
 
-测试：`PreviewSessionsTest.kt` 覆盖错误释放后得到不同实例、替换/关闭后忽略旧 token、封面按自身比例 letterbox、倒计时 3/2/1，以及减少动画时三个点静止。
+测试：`PreviewSessionsTest.kt` 覆盖错误释放后得到不同实例、替换/关闭后忽略旧 token、封面按自身比例 letterbox、倒计时 3/2/1、减少动画时三个点静止，以及真实失败后切换 decoder 才标记回退、正常选择和同 decoder 重试不误报。
 
 新日志字段示例（非设备实测）：
 
@@ -62,7 +62,7 @@ Android 文件操作经 `SharedPreviewBridge` 串行进入同一个 `ThumbnailFi
 
 ## 6. 门禁与 APK
 
-- Android 全量 `:app:testDebugUnitTest`：**81 passed，0 failures/errors**；日志 `app/build/build20-native-test.log`，包含 Media3 dependencyInsight 证据。
+- Android 最终全量 `:app:testDebugUnitTest`：**83 passed，0 failures/errors**；日志 `app/build/build20-native-final.log`。Media3 dependencyInsight 证据保留在 `app/build/build20-native-test.log`。
 - Flutter 全量：**679 passed**；日志 `app/build/build20-flutter-full.log`。相比 build 19 的 671 项，新增缓存/降噪 3、缩略图 2、真实界面 3 项。
 - 扩展：159 项 Vitest + 21 项构建检查、typecheck、生产构建均通过；日志 `app/build/build20-extension-test.log` 与 `build20-extension-build.log`。
 - Flutter analyze：`--no-pub --no-fatal-infos --no-fatal-warnings` 退出 0，无 error，78 条 warning/info；日志 `app/build/build20-analyze-final.log`。
