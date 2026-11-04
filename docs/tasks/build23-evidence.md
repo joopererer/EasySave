@@ -132,7 +132,38 @@ spec fixtures/测试向量、provenance-spec 和 provenance_dart 均未修改。
   85 条 warning/info（包含现有 build 诊断文件），`app/build/build23-analyze-final.log`。
 - `git diff --check` 通过。
 
-实现提交、APK 与 SHA-256 在构建完成后补充。
+实现提交：`d38d4c1d8d2edbd51361cd9a0166e39e1b2f9b7b`。上述门禁通过后先提交，再运行
+`flutter build apk --debug --no-pub --build-name=1.10.0 --build-number=23`，assembleDebug 51.3 秒，退出 0。
+
+- APK：`app/build/app/outputs/flutter-apk/EasySave-1.10.0-build23-debug.apk`，173,574,029 bytes。
+- SHA-256：`27d1c6c888f6b5c57d9ebc72a8fbfc71f276a1e4963c692b27ac20876a95f025`。
+- aapt：`com.james.easysave`，versionName **1.10.0**、versionCode **23**。
+- 交付文件与构建原始 app-debug.apk 的 SHA-256 完全一致。
+- 内置 parserVersion **1.4.4**；APK 内 parser.js SHA-256 与 manifest 一致。
+- 构建/包信息/核查日志分别为 `app/build/build23-apk-build.log`、
+  `app/build/build23-apk-badging.log`、`app/build/build23-apk-evidence.log`。
+
+最终 APK 核查通过，真实 `classes19.dex` 调用证据：
+
+- SelectPanelView：`0297b6` 查询位图 LRU、`02971c` 调用异步 imageAsync、`0284e2` 获取独立解码池、
+  `029590` 写入位图缓存、`02909e` 调用 setImageBitmap；`0277ee` 保留真实 ScrollView。
+- NativeThumbBitmaps：`01d1d2` 读取 memoryClass，`01d21a` 创建有字节上限的 ThumbnailMemory，
+  `01d0ba/01d272` 分别调用缓存 get/put。
+- SharedPreviewBridge：`02d176/02d1b8/02d1da/02d26c` 分别进入预取读取、计时读取、普通读取和写入队列；
+  `02d644/02d64c` 配置非串行 TaskQueue 并创建通道。
+- NativeLog：`01b62c` 通过 ExecutorService 派发任务；APK 日志写入器没有逐行 FileDescriptor.sync 调用。
+- kernel 包含真实 PreviewPage/CoverImage/CdnImage、独立预取/验证槽位、全局可见性消息与 waitMs/ioMs/queue 字段。
+- 最终输出：`PASS: real panel bitmap LRU, asynchronous fetch/decode, independent disk queues, background logging and visible priority`。
+
+复核命令（仓库根目录）：
+
+```powershell
+rtk proxy python tools/verify_build23_apk.py app/build/app/outputs/flutter-apk/EasySave-1.10.0-build23-debug.apk --dexdump D:/Android/Sdk/build-tools/35.0.1/dexdump.exe
+rtk proxy D:/Android/Sdk/build-tools/35.0.1/aapt.exe dump badging app/build/app/outputs/flutter-apk/EasySave-1.10.0-build23-debug.apk
+```
+
+待用户真机复测：四种入口顺序、同帖连续两次选择下载的 memory_hit 与无 shimmer、下载未完成时连续滚动、
+悬浮球打开 App 后的 cache_read/decode waitMs/ioMs，以及有可见请求时预取暂停和稍后恢复。
 APK 核查脚本：`tools/verify_build23_apk.py`，提取的 DEX 保留于 `app/build/build23-apk-dex`，不自动删除目录。
 
 未使用断点/debug 会话；没有卸载、pm clear、run-as、读取设备私有目录或删除相册文件。
