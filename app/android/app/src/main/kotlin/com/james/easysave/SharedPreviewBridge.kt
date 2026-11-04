@@ -50,10 +50,6 @@ internal fun thumbnailValid(file: File): Boolean {
     val options = BitmapFactory.Options().apply { inJustDecodeBounds = true }
     BitmapFactory.decodeFile(file.path, options)
     if (options.outWidth <= 0 || options.outHeight <= 0) return false
-    var sample = 1
-    while (options.outWidth / sample > 16 || options.outHeight / sample > 16) sample *= 2
-    val image = BitmapFactory.decodeFile(file.path, BitmapFactory.Options().apply { inSampleSize = sample }) ?: return false
-    image.recycle()
     return true
 }
 internal fun thumbnailContainerComplete(bytes: ByteArray): Boolean {
@@ -111,6 +107,15 @@ internal class ThumbnailFiles(private val root: File, private val maxBytes: Long
         file.setLastModified(minOf(expires, now() + 10 * 60_000L))
         return file
     }
+    @Synchronized fun trim(current: String) {
+        val committed = root.listFiles()?.filter { it.name.matches(Regex("[a-f0-9]{64}")) } ?: return
+        var size = committed.sumOf { it.length() }
+        for (old in committed.sortedBy { it.lastModified() }) {
+            if (old.name != current && (old.lastModified() <= now() || size > maxBytes)) {
+                size -= old.length(); old.delete()
+            }
+        }
+    }
     fun readPath(path: String): ByteArray? {
         val file = File(path).canonicalFile
         if (file.parentFile != root.canonicalFile) return null
@@ -143,7 +148,7 @@ internal object SharedPreviewBridge {
     fun detach(messenger: BinaryMessenger) { visible.detach(messenger) }
     private fun prefetchIdle(key: String?): Boolean = visible.idle(key)
     fun imageAsync(cacheKey: String?, token: String, label: String, complete: (ByteArray?) -> Unit) {
-        queues.read(label, { cacheKey?.let { files?.read(it)?.let { file -> files?.readPath(file.path) } } }) {
+        queues.read(label, { check(Looper.myLooper() != Looper.getMainLooper()); cacheKey?.let { files?.read(it)?.let { file -> files?.readPath(file.path) } } }) {
             val bytes = it.getOrNull()
             if (bytes != null) complete(bytes) else imageKeyAsync(token, complete)
         }
@@ -157,14 +162,17 @@ internal object SharedPreviewBridge {
                 override fun success(result: Any?) {
                     val path = result as? String
                     if (path == null) complete(null)
-                    else queues.read(key, { files?.readPath(path) }) { complete(it.getOrNull()) }
+                    else queues.read(key, { check(Looper.myLooper() != Looper.getMainLooper()); files?.readPath(path) }) { complete(it.getOrNull()) }
                 }
                 override fun error(code: String, message: String?, details: Any?) { complete(null) }
                 override fun notImplemented() { complete(null) }
             })
         }
     }
-    fun image(path: String) = files?.readPath(path)
+    fun image(path: String): ByteArray? {
+        check(Looper.myLooper() != Looper.getMainLooper())
+        return files?.readPath(path)
+    }
     fun imageKey(key: String): ByteArray? {
         if (!key.matches(Regex("[a-f0-9]{64}"))) return null
         check(Looper.myLooper() != Looper.getMainLooper())
@@ -234,9 +242,21 @@ internal object SharedPreviewBridge {
                             it.fold(result::success) { result.error("PREVIEW_CACHE_IO", "Cache read failed", null) }
                         }
                     }
-                    "thumbnailWrite" -> queues.write(label, { files!!.write(args["key"] as String,
-                        args["bytes"] as ByteArray, (args["expires"] as Number).toLong())?.path }) {
-                        it.fold(result::success) { result.error("PREVIEW_CACHE_IO", "Cache write failed", null) }
+                    "thumbnailDirectory" -> queues.write(label, { File(context.cacheDir, "easysave_thumbnails").path }) {
+                        it.fold(result::success) { result.error("PREVIEW_CACHE_IO", "Cache directory failed", null) }
+                    }
+                    "thumbnailReady" -> queues.write(label, {
+                        check(Looper.myLooper() != Looper.getMainLooper())
+                        val key = args["key"] as String
+                        val file = File(args["path"] as String).canonicalFile
+                        val root = File(context.cacheDir, "easysave_thumbnails").canonicalFile
+                        require(key.matches(Regex("[a-f0-9]{64}")) && file.parentFile == root && file.name == key)
+                        require(file.length() in 1..10L * 1024 * 1024)
+                        check(file.setLastModified(System.currentTimeMillis() + 600_000L))
+                        files!!.trim(key)
+                        null
+                    }) {
+                        it.fold({ result.success(null) }) { result.error("PREVIEW_CACHE_IO", "Cache ready failed", null) }
                     }
                     else -> result.notImplemented()
                 }

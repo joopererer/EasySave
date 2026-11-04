@@ -2,7 +2,9 @@
   {
     "id": "xhs",
     "platform": "xiaohongshu",
-    "aliases": ["rednote"],
+    "aliases": [
+      "rednote"
+    ],
     "displayName": "小红书",
     "creditName": "小红书",
     "enabled": true,
@@ -169,7 +171,11 @@
         "rednote.com"
       ],
       "transport": "background",
-      "resumable": true
+      "resumable": true,
+      "thumbnailScenes": [
+        "WB_PRV",
+        "H5_PRV"
+      ]
     },
     "metadata": {
       "authorIdRule": "opaque"
@@ -248,7 +254,8 @@
       },
       "cookieDomains": [],
       "transport": "background",
-      "resumable": true
+      "resumable": true,
+      "thumbnailVariant": "smallestCandidate"
     },
     "metadata": {
       "authorIdRule": "numeric"
@@ -261,7 +268,9 @@
   {
     "id": "x",
     "platform": "x",
-    "aliases": ["twitter"],
+    "aliases": [
+      "twitter"
+    ],
     "displayName": "X",
     "creditName": "X",
     "enabled": true,

@@ -245,6 +245,9 @@ class MediaRequestPolicy {
     if (item.posterUrl != null) {
       slots.add((MediaResourceRole.poster, item.posterUrl!, null, 'posterUrl'));
     }
+    if (item.thumbnailUrl != null) {
+      slots.add((MediaResourceRole.poster, item.thumbnailUrl!, null, 'thumbnailUrl'));
+    }
     for (var i = 0; i < item.fallbacks.length; i++) {
       slots.add((MediaResourceRole.fallback, item.fallbacks[i], primary, 'fallbacks[$i]'));
     }

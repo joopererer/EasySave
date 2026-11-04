@@ -393,7 +393,7 @@ var EasySaveParser = (() => {
   function num(value) {
     return typeof value === "number" && Number.isFinite(value) ? value : void 0;
   }
-  function parseXhs(html, pageUrl) {
+  function parseXhs(html, pageUrl, thumbnailScenes = []) {
     const idMatch = NOTE_ID_PATTERN.exec(pageUrl);
     const wantedId = idMatch ? idMatch[1].toLowerCase() : void 0;
     const states = [];
@@ -428,7 +428,7 @@ var EasySaveParser = (() => {
         error: { code: "INVALID_PAGE", message: "Could not determine the note id." }
       };
     }
-    return buildNoteFromRecord(note, noteId, pageUrl);
+    return buildNoteFromRecord(note, noteId, pageUrl, thumbnailScenes);
   }
   function canonicalXhsNoteUrl(noteId, pageUrl) {
     const base = `https://www.xiaohongshu.com/explore/${noteId}`;
@@ -468,7 +468,7 @@ var EasySaveParser = (() => {
     }
     return void 0;
   }
-  function buildNoteFromRecord(note, noteId, pageUrl) {
+  function buildNoteFromRecord(note, noteId, pageUrl, thumbnailScenes = []) {
     const user = isRecord(note["user"]) ? note["user"] : isRecord(note["author"]) ? note["author"] : {};
     const author = {};
     const authorName = pickString(user, ["nickname", "nickName", "name", "userName"]);
@@ -490,6 +490,10 @@ var EasySaveParser = (() => {
         const item = { type: "video", url: resolved.url };
         const cover = images.length > 0 ? imageUrlOf(images[0]) : void 0;
         if (cover) item.posterUrl = cover.url;
+        if (images[0]) {
+          const thumbnail = thumbnailOf(images[0], thumbnailScenes);
+          if (thumbnail) item.thumbnailUrl = thumbnail;
+        }
         if (resolved.width !== void 0) item.width = resolved.width;
         if (resolved.height !== void 0) item.height = resolved.height;
         const duration = videoDuration(note["video"]);
@@ -499,6 +503,8 @@ var EasySaveParser = (() => {
         const img = imageUrlOf(images[0]);
         if (img) {
           const item = { type: "image", url: img.url, fallbacks: img.fallbacks };
+          const thumbnail = thumbnailOf(images[0], thumbnailScenes);
+          if (thumbnail) item.thumbnailUrl = thumbnail;
           const w = num(images[0]["width"]);
           const h = num(images[0]["height"]);
           if (w !== void 0) item.width = w;
@@ -521,6 +527,8 @@ var EasySaveParser = (() => {
         const own = entryKeyUrl ? { url: entryKeyUrl, watermarked: false, width: 0, height: 0 } : bestVideo(ownCandidates);
         if (own && img) {
           const item = { type: "live", url: img.url, videoUrl: own.url, fallbacks: img.fallbacks };
+          const thumbnail = thumbnailOf(entry, thumbnailScenes);
+          if (thumbnail) item.thumbnailUrl = thumbnail;
           const w = num(entry["width"]);
           const h = num(entry["height"]);
           if (w !== void 0) item.width = w;
@@ -534,6 +542,8 @@ var EasySaveParser = (() => {
         }
         if (img) {
           const item = { type: "image", url: img.url, fallbacks: img.fallbacks };
+          const thumbnail = thumbnailOf(entry, thumbnailScenes);
+          if (thumbnail) item.thumbnailUrl = thumbnail;
           const w = num(entry["width"]);
           const h = num(entry["height"]);
           if (w !== void 0) item.width = w;
@@ -581,6 +591,15 @@ var EasySaveParser = (() => {
       data.publishedAt = toIsoUtc(note["time"]);
     }
     return { ok: true, data };
+  }
+  function thumbnailOf(entry, scenes) {
+    const info = entry.infoList;
+    if (!Array.isArray(info)) return void 0;
+    for (const scene of scenes) {
+      const candidate = info.find((e) => isRecord(e) && e.imageScene === scene && nonBlank(e.url));
+      if (candidate) return toHttps(candidate.url);
+    }
+    return void 0;
   }
 
   // src/instagram.ts
@@ -669,7 +688,7 @@ var EasySaveParser = (() => {
     }
     return void 0;
   }
-  function mediaItem(media) {
+  function originalMediaItem(media) {
     const image = bestImage(media);
     const video = bestVideoUrl(media);
     if (video) {
@@ -689,7 +708,7 @@ var EasySaveParser = (() => {
     if (image) return { type: "image", url: image.url, width: image.width, height: image.height };
     return void 0;
   }
-  function parseInstagram(html, pageUrl) {
+  function parseInstagram(html, pageUrl, smallThumbnail = false) {
     const shortcodeMatch = SHORTCODE_PATTERN.exec(pageUrl);
     const shortcode = shortcodeMatch ? shortcodeMatch[1] : void 0;
     const mediaId = shortcode ? shortcodeToMediaId(shortcode) : void 0;
@@ -735,9 +754,9 @@ var EasySaveParser = (() => {
         error: { code: "INVALID_PAGE", message: "Not an Instagram post page." }
       };
     }
-    return buildPostFromProduct(product, shortcode);
+    return buildPostFromProduct(product, shortcode, smallThumbnail);
   }
-  function buildPostFromProduct(product, shortcode) {
+  function buildPostFromProduct(product, shortcode, smallThumbnail = false) {
     const user = isRecord2(product["user"]) ? product["user"] : isRecord2(product["owner"]) ? product["owner"] : {};
     const author = {};
     if (nonBlank2(user["username"])) author.name = user["username"];
@@ -766,17 +785,17 @@ var EasySaveParser = (() => {
     if (Array.isArray(carousel) && carousel.length > 0) {
       for (const child of carousel) {
         if (!isRecord2(child)) continue;
-        const item = mediaItem(child);
+        const item = mediaItem(child, smallThumbnail);
         if (item) items.push(item);
       }
     } else if (Array.isArray(sidecar) && sidecar.length > 0) {
       for (const edge of sidecar) {
         if (!isRecord2(edge) || !isRecord2(edge["node"])) continue;
-        const item = mediaItem(edge["node"]);
+        const item = mediaItem(edge["node"], smallThumbnail);
         if (item) items.push(item);
       }
     } else {
-      const item = mediaItem(product);
+      const item = mediaItem(product, smallThumbnail);
       if (item) items.push(item);
     }
     if (items.length === 0) {
@@ -798,6 +817,16 @@ var EasySaveParser = (() => {
     };
     if (publishedAt) data.publishedAt = publishedAt;
     return { ok: true, data };
+  }
+  function mediaItem(media, smallThumbnail) {
+    const item = originalMediaItem(media);
+    const versions = isRecord2(media.image_versions2) ? media.image_versions2.candidates : void 0;
+    if (item && smallThumbnail && Array.isArray(versions)) {
+      const candidates = versions.filter((e) => isRecord2(e) && nonBlank2(e.url) && typeof e.width === "number" && typeof e.height === "number" && e.width > 0 && e.height > 0);
+      candidates.sort((a, b) => a.width * a.height - b.width * b.height);
+      if (candidates[0]) item.thumbnailUrl = candidates[0].url;
+    }
+    return item;
   }
 
   // src/x.ts
@@ -1188,6 +1217,11 @@ var EasySaveParser = (() => {
         url: item.posterUrl,
         request: request("poster", item.posterUrl)
       });
+      if (item.thumbnailUrl) resources.push({
+        role: "poster",
+        url: item.thumbnailUrl,
+        request: request("poster", item.thumbnailUrl)
+      });
       for (const url of item.fallbacks ?? []) resources.push({
         role: "fallback",
         fallbackFor: primary,
@@ -1398,14 +1432,14 @@ var EasySaveParser = (() => {
         return JSON.stringify({ value: true });
       case "parsePage": {
         try {
-          const result = JSON.parse(parsePageForModule(moduleId));
+          const result = JSON.parse(parsePageForModule(moduleId, context.site.download?.thumbnailScenes, context.site.download?.thumbnailVariant === "smallestCandidate"));
           if (result.ok) return output(result);
         } catch (_) {
         }
-        return output(JSON.parse(parse(document.documentElement.outerHTML, context.url, moduleId)));
+        return output(JSON.parse(parse(document.documentElement.outerHTML, context.url, moduleId, context.site.download?.thumbnailScenes, context.site.download?.thumbnailVariant === "smallestCandidate")));
       }
       case "parse":
-        return output(JSON.parse(parse(context.input || "", context.url, moduleId)));
+        return output(JSON.parse(parse(context.input || "", context.url, moduleId, context.site.download?.thumbnailScenes, context.site.download?.thumbnailVariant === "smallestCandidate")));
       case "classify": {
         const error = context.error;
         return JSON.stringify({ value: error?.code === "PRIVATE_OR_UNAVAILABLE" && context.site.auth.mode !== "none" && !context.loggedIn ? failure2("LOGIN_REQUIRED", "\u53EF\u80FD\u9700\u8981\u767B\u5F55" + context.site.displayName) : error });
@@ -1500,7 +1534,7 @@ var EasySaveParser = (() => {
     const moduleId = isTiktokLink(url) ? "tiktok" : isXhsHost(url) ? "xhs" : isInstagramHost(url) ? "instagram" : isXHost(url) ? "x" : "";
     return parsePageForModule(moduleId);
   }
-  function parsePageForModule(moduleId) {
+  function parsePageForModule(moduleId, thumbnailScenes = [], smallThumbnail = false) {
     const url = window.location.href;
     const html = document.documentElement.outerHTML;
     if (moduleId === "tiktok") {
@@ -1521,22 +1555,22 @@ var EasySaveParser = (() => {
           if (note) {
             const noteId = typeof note["noteId"] === "string" && note["noteId"].length > 0 ? note["noteId"] : wantedId ?? "";
             if (noteId) {
-              return JSON.stringify(buildNoteFromRecord(note, noteId, url));
+              return JSON.stringify(buildNoteFromRecord(note, noteId, url, thumbnailScenes));
             }
           }
         } catch (_) {
         }
       }
-      return JSON.stringify(parseXhs(html, url));
+      return JSON.stringify(parseXhs(html, url, thumbnailScenes));
     }
     if (moduleId === "instagram") {
       const shortcode = shortcodeFromUrl(url);
       if (shortcode && window.__easysaveIgProducts?.[shortcode]) {
         return JSON.stringify(
-          buildPostFromProduct(window.__easysaveIgProducts[shortcode], shortcode)
+          buildPostFromProduct(window.__easysaveIgProducts[shortcode], shortcode, smallThumbnail)
         );
       }
-      const res = parseInstagram(html, url);
+      const res = parseInstagram(html, url, smallThumbnail);
       if (res.ok) return JSON.stringify(res);
       const domRes = parseInstagramFromDom(document, url);
       if (domRes && domRes.ok) return JSON.stringify(domRes);
@@ -1550,17 +1584,17 @@ var EasySaveParser = (() => {
     }
     return JSON.stringify({ ok: false, error: { code: "UNSUPPORTED_URL", message: `Unsupported host: ${url}` } });
   }
-  function parse(input, pageUrl, moduleId) {
+  function parse(input, pageUrl, moduleId, thumbnailScenes = [], smallThumbnail = false) {
     if (moduleId ? moduleId === "tiktok" : isTiktokLink(pageUrl)) return JSON.stringify(parseTiktok(input, pageUrl));
     const host = hostnameOf(pageUrl);
     if (!host) {
       return JSON.stringify({ ok: false, error: { code: "UNSUPPORTED_URL", message: `Cannot parse URL: ${pageUrl}` } });
     }
     if (moduleId ? moduleId === "xhs" : isXhsHost(host)) {
-      return JSON.stringify(parseXhs(input, pageUrl));
+      return JSON.stringify(parseXhs(input, pageUrl, thumbnailScenes));
     }
     if (moduleId ? moduleId === "instagram" : isInstagramHost(host)) {
-      return JSON.stringify(parseInstagram(input, pageUrl));
+      return JSON.stringify(parseInstagram(input, pageUrl, smallThumbnail));
     }
     if (moduleId ? moduleId === "x" : isXHost(host)) {
       return JSON.stringify(parseX(input, pageUrl));

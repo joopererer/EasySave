@@ -3,7 +3,6 @@ package com.james.easysave
 import android.animation.ValueAnimator
 import android.content.Context
 import android.graphics.Bitmap
-import android.graphics.BitmapFactory
 import android.graphics.Color
 import android.graphics.Matrix
 import android.graphics.SurfaceTexture
@@ -1469,7 +1468,7 @@ class SelectPanelView(
                 val queued = System.nanoTime()
                 NativeThumbBitmaps.decoders.execute {
                     val start = System.nanoTime()
-                    val bitmap = runCatching { decodeSampled(bytes, pixels) }.getOrNull()
+                    val bitmap = runCatching { decodeSampled(bytes, pixels, request.cacheLabel) }.getOrNull()
                     val end = System.nanoTime()
                     NativeLog.i("ThumbLoad", "event=decode queue=read worker=bitmap waitMs=${(start - queued) / 1_000_000} ioMs=${(end - start) / 1_000_000} ms=${(end - queued) / 1_000_000} key=${request.cacheLabel}")
                     if (bitmap != null) {
@@ -1491,7 +1490,7 @@ class SelectPanelView(
         for (request in requests) {
             if (request.requiresAppPreview) continue
             try {
-                val bitmap = decodeSampled(request.readImage(), target)
+                val bitmap = decodeSampled(request.readImage(), target, request.cacheLabel)
                 if (bitmap != null) return bitmap to false
                 NativeLog.i("PreviewImage", "event=error host=${request.diagnosticHost} errorCode=decode")
             } catch (error: NativeMediaRequest.Rejected) {
@@ -1507,20 +1506,8 @@ class SelectPanelView(
         return null to denied
     }
 
-    private fun decodeSampled(bytes: ByteArray, target: Int): Bitmap? {
-        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-        BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
-        val w = bounds.outWidth
-        val h = bounds.outHeight
-        var sample = 1
-        while (w / (sample * 2) >= target && h / (sample * 2) >= target) {
-            sample *= 2
-        }
-        val opts = BitmapFactory.Options().apply {
-            inSampleSize = sample
-            inPreferredConfig = Bitmap.Config.RGB_565
-        }
-        return BitmapFactory.decodeByteArray(bytes, 0, bytes.size, opts)
+    private fun decodeSampled(bytes: ByteArray, target: Int, label: String): Bitmap? {
+        return OrientedBitmap.decode(bytes, target, label)
     }
 
     private fun finish(result: List<Int>?) {

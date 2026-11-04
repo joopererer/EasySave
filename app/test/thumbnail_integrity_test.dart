@@ -42,6 +42,12 @@ void main() {
     await Directory('build/build22-integrity').create(recursive: true);
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(channel, (call) async {
+          if (call.method == 'thumbnailDirectory')
+            return 'build/build22-integrity';
+          expect(
+            (call.arguments as Map?)?.containsKey('bytes') ?? false,
+            isFalse,
+          );
           if (call.method == 'thumbnailPrefetchAllowed') return prefetchAllowed;
           if (call.method == 'thumbnailPrefetchIdle') return true;
           final args = call.arguments as Map;
@@ -66,11 +72,11 @@ void main() {
               files.remove(key);
               deletes++;
               return null;
-            case 'thumbnailWrite':
+            case 'thumbnailReady':
               writes++;
               final file = File('build/build22-integrity/$key');
-              await file.writeAsBytes((args['bytes'] as List).cast<int>());
-              files[key] = file.path;
+              expect(await File(args['path'] as String).readAsBytes(), png);
+              files[key] = args['path'] as String;
               return file.path;
           }
           return null;

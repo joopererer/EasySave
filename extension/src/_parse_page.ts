@@ -104,7 +104,7 @@ export function parsePage(): string {
 }
 
 // The App selects this entry point using the verified manifest, not host guessing.
-export function parsePageForModule(moduleId: string): string {
+export function parsePageForModule(moduleId: string, thumbnailScenes: string[] = [], smallThumbnail = false): string {
   const url = window.location.href;
   const html = document.documentElement.outerHTML;
   if (moduleId === 'tiktok') {
@@ -128,23 +128,23 @@ export function parsePageForModule(moduleId: string): string {
               ? (note["noteId"] as string)
               : (wantedId ?? "");
           if (noteId) {
-            return JSON.stringify(buildNoteFromRecord(note, noteId, url));
+            return JSON.stringify(buildNoteFromRecord(note, noteId, url, thumbnailScenes));
           }
         }
       } catch (_) {
         // fall through to regular parsing
       }
     }
-    return JSON.stringify(parseXhs(html, url));
+    return JSON.stringify(parseXhs(html, url, thumbnailScenes));
   }
   if (moduleId === 'instagram') {
     const shortcode = shortcodeFromUrl(url);
     if (shortcode && (window as any).__easysaveIgProducts?.[shortcode]) {
       return JSON.stringify(
-        buildPostFromProduct((window as any).__easysaveIgProducts[shortcode], shortcode)
+        buildPostFromProduct((window as any).__easysaveIgProducts[shortcode], shortcode, smallThumbnail)
       );
     }
-    const res = parseInstagram(html, url);
+    const res = parseInstagram(html, url, smallThumbnail);
     if (res.ok) return JSON.stringify(res);
     const domRes = parseInstagramFromDom(document, url);
     if (domRes && domRes.ok) return JSON.stringify(domRes);
@@ -159,17 +159,17 @@ export function parsePageForModule(moduleId: string): string {
   return JSON.stringify({ ok: false, error: { code: 'UNSUPPORTED_URL', message: `Unsupported host: ${url}` } });
 }
 
-export function parse(input: string, pageUrl: string, moduleId?: string): string {
+export function parse(input: string, pageUrl: string, moduleId?: string, thumbnailScenes: string[] = [], smallThumbnail = false): string {
   if (moduleId ? moduleId === 'tiktok' : isTiktokLink(pageUrl)) return JSON.stringify(parseTiktok(input, pageUrl));
   const host = hostnameOf(pageUrl);
   if (!host) {
     return JSON.stringify({ ok: false, error: { code: 'UNSUPPORTED_URL', message: `Cannot parse URL: ${pageUrl}` } });
   }
   if (moduleId ? moduleId === 'xhs' : isXhsHost(host)) {
-    return JSON.stringify(parseXhs(input, pageUrl));
+    return JSON.stringify(parseXhs(input, pageUrl, thumbnailScenes));
   }
   if (moduleId ? moduleId === 'instagram' : isInstagramHost(host)) {
-    return JSON.stringify(parseInstagram(input, pageUrl));
+    return JSON.stringify(parseInstagram(input, pageUrl, smallThumbnail));
   }
   if (moduleId ? moduleId === 'x' : isXHost(host)) {
     return JSON.stringify(parseX(input, pageUrl));

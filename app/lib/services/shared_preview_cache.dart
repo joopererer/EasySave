@@ -2,7 +2,9 @@ import 'dart:convert';
 import 'dart:async';
 import 'dart:io';
 import 'dart:typed_data';
-import 'dart:ui' as ui;
+import 'dart:isolate';
+import 'package:flutter/foundation.dart';
+import 'thumbnail_header.dart';
 
 import 'package:crypto/crypto.dart';
 import 'package:flutter/services.dart';
@@ -170,8 +172,12 @@ class SharedThumbnailCache {
                 )
                 .toList();
             final urls = item.type == 'video'
-                ? [item.posterUrl]
-                : [...item.fallbacks, item.url];
+                ? [item.thumbnailUrl ?? item.posterUrl]
+                : [
+                    if (item.thumbnailUrl != null) item.thumbnailUrl!,
+                    ...item.fallbacks,
+                    item.url,
+                  ];
             for (final url in urls) {
               final resource = resources.where((r) => r.url == url).firstOrNull;
               if (resource == null) continue;
@@ -210,64 +216,12 @@ class SharedThumbnailCache {
   static final _validationSlots = ThumbnailSlots(2);
   static final _prefetchValidationSlots = ThumbnailSlots(1);
 
-  void _checkContainer(Uint8List bytes) {
-    if (bytes.length < 12) throw const FormatException('THUMBNAIL_INVALID');
-    // Some codecs deliberately render partial JPEGs. Reject incomplete
-    // containers before asking the codec for dimensions/pixels.
-    if (bytes.length >= 2 &&
-        bytes[0] == 0xff &&
-        bytes[1] == 0xd8 &&
-        (bytes.length < 4 ||
-            bytes[bytes.length - 2] != 0xff ||
-            bytes.last != 0xd9)) {
-      throw const FormatException('THUMBNAIL_TRUNCATED_JPEG');
-    }
-    if (bytes.length >= 8 &&
-        bytes[0] == 137 &&
-        bytes[1] == 80 &&
-        (bytes.length < 20 ||
-            ascii.decode(
-                  bytes.sublist(bytes.length - 8, bytes.length - 4),
-                  allowInvalid: true,
-                ) !=
-                'IEND')) {
-      throw const FormatException('THUMBNAIL_TRUNCATED_PNG');
-    }
-    if (bytes.length >= 12 &&
-        ascii.decode(bytes.sublist(0, 4), allowInvalid: true) == 'RIFF' &&
-        ByteData.sublistView(bytes).getUint32(4, Endian.little) + 8 !=
-            bytes.length) {
-      throw const FormatException('THUMBNAIL_TRUNCATED_WEBP');
-    }
-  }
-
   Future<void> _validate(
     Uint8List bytes, {
     bool prefetch = false,
     required String label,
   }) => (prefetch ? _prefetchValidationSlots : _validationSlots).run(
-    () async {
-      _checkContainer(bytes);
-      final buffer = await ui.ImmutableBuffer.fromUint8List(bytes);
-      ui.ImageDescriptor? descriptor;
-      ui.Codec? codec;
-      try {
-        descriptor = await ui.ImageDescriptor.encoded(buffer);
-        if (descriptor.width <= 0 || descriptor.height <= 0) {
-          throw const FormatException('THUMBNAIL_DIMENSIONS');
-        }
-        codec = await descriptor.instantiateCodec(
-          targetWidth: 1,
-          targetHeight: 1,
-        );
-        final frame = await codec.getNextFrame();
-        frame.image.dispose();
-      } finally {
-        codec?.dispose();
-        descriptor?.dispose();
-        buffer.dispose();
-      }
-    },
+    () => compute(validateThumbnailHeader, bytes),
     event: 'validate',
     queue: prefetch ? 'prefetch' : 'write',
     key: label,
@@ -440,7 +394,11 @@ class SharedThumbnailCache {
       try {
         // Committed bytes were validated before atomic publication. Do not
         // re-decode hits or put reads behind validation of unrelated downloads.
-        _checkContainer(bytes);
+        await compute(
+          validateThumbnailHeader,
+          bytes,
+          debugLabel: 'thumbnail-header',
+        );
       } catch (_) {
         await _delete(key);
         return null;
@@ -512,15 +470,33 @@ class SharedThumbnailCache {
     );
     await _validate(bytes, prefetch: speculative, label: label);
     policy.validate(resource);
-    final expires = DateTime.now().add(const Duration(minutes: 10));
     String? path;
     try {
-      path = await channel.invokeMethod<String>('thumbnailWrite', {
-        'key': key,
-        'label': safeCacheLabel(label),
-        'bytes': bytes,
-        'expires': expires.millisecondsSinceEpoch,
-      });
+      final root = await channel.invokeMethod<String>('thumbnailDirectory');
+      if (root != null) {
+        final timer = Stopwatch()..start();
+        final written = await compute(writeThumbnailFile, (
+          root: root,
+          key: key,
+          bytes: bytes,
+          origin: Isolate.current.controlPort,
+        ), debugLabel: 'thumbnail-write');
+        path = written.path;
+        final waitMs = (timer.elapsedMilliseconds - written.ioMs).clamp(
+          0,
+          timer.elapsedMilliseconds,
+        );
+        await channel.invokeMethod<void>('thumbnailReady', {
+          'key': key,
+          'path': path,
+        });
+        unawaited(
+          DevLog.write(
+            'ThumbLoad',
+            'event=cache_write layer=dart queue=write waitMs=$waitMs ioMs=${written.ioMs} bytes=${bytes.length} thread=bg key=${safeCacheLabel(label)}',
+          ),
+        );
+      }
     } on MissingPluginException {
       /* Memory-only non-Android host. */
     }
@@ -603,5 +579,30 @@ class ThumbnailSlots {
         _active--;
       }
     }
+  }
+}
+
+/// Worker owns temporary bytes and publication; channel carries only key/path.
+({String path, int ioMs}) writeThumbnailFile(
+  ({String root, String key, Uint8List bytes, SendPort origin}) input,
+) {
+  if (Isolate.current.controlPort == input.origin)
+    throw StateError('THUMBNAIL_WRITE_ON_MAIN_ISOLATE');
+  final timer = Stopwatch()..start();
+  final root = Directory(input.root)..createSync(recursive: true);
+  final destination = File('${root.path}/${input.key}');
+  final temporary = File(
+    '${destination.path}.${DateTime.now().microsecondsSinceEpoch}.tmp',
+  );
+  try {
+    temporary.writeAsBytesSync(input.bytes, flush: true);
+    validateThumbnailHeader(temporary.readAsBytesSync());
+    temporary.setLastModifiedSync(
+      DateTime.now().add(const Duration(minutes: 10)),
+    );
+    temporary.renameSync(destination.path);
+    return (path: destination.path, ioMs: timer.elapsedMilliseconds);
+  } finally {
+    if (temporary.existsSync()) temporary.deleteSync();
   }
 }

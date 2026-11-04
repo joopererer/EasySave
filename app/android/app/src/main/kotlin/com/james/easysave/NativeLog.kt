@@ -25,7 +25,9 @@ internal object NativeLog {
 
     fun register(context: Context, messenger: BinaryMessenger) {
         init(context)
-        MethodChannel(messenger, "easysave/dev_log").setMethodCallHandler { call, result ->
+        MethodChannel(messenger, "easysave/dev_log",
+            io.flutter.plugin.common.StandardMethodCodec.INSTANCE,
+            messenger.makeBackgroundTaskQueue()).setMethodCallHandler { call, result ->
             if (call.method == "append") {
                 val line = call.arguments as String
                 disk.execute { runCatching { NativeLogFileWriter(File(context.filesDir, fileName)).append(line) } }

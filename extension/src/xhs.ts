@@ -31,6 +31,7 @@ export interface XhsItem {
   fallbacks?: string[];
   /** Still-image cover for a video item (XHS `imageList[0]`). */
   posterUrl?: string;
+  thumbnailUrl?: string;
   width?: number;
   height?: number;
   /** Video length in seconds, from `video.capa.duration`. Absent when unknown. */
@@ -505,7 +506,7 @@ function num(value: unknown): number | undefined {
  * @param html Full page HTML source.
  * @param pageUrl The URL the HTML was fetched from (used to find the note id).
  */
-export function parseXhs(html: string, pageUrl: string): XhsResult {
+export function parseXhs(html: string, pageUrl: string, thumbnailScenes: string[] = []): XhsResult {
   const idMatch = NOTE_ID_PATTERN.exec(pageUrl);
   const wantedId = idMatch ? idMatch[1].toLowerCase() : undefined;
 
@@ -553,7 +554,7 @@ export function parseXhs(html: string, pageUrl: string): XhsResult {
       error: { code: "INVALID_PAGE", message: "Could not determine the note id." },
     };
   }
-  return buildNoteFromRecord(note, noteId, pageUrl);
+  return buildNoteFromRecord(note, noteId, pageUrl, thumbnailScenes);
 }
 
 /**
@@ -638,6 +639,7 @@ export function buildNoteFromRecord(
   note: Record<string, unknown>,
   noteId: string,
   pageUrl?: string,
+  thumbnailScenes: string[] = [],
 ): XhsResult {
   const user = isRecord(note["user"])
     ? (note["user"] as Record<string, unknown>)
@@ -684,6 +686,10 @@ export function buildNoteFromRecord(
       const item: XhsItem = { type: "video", url: resolved.url };
       const cover = images.length > 0 ? imageUrlOf(images[0]) : undefined;
       if (cover) item.posterUrl = cover.url;
+      if (images[0]) {
+        const thumbnail = thumbnailOf(images[0], thumbnailScenes);
+        if (thumbnail) item.thumbnailUrl = thumbnail;
+      }
       if (resolved.width !== undefined) item.width = resolved.width;
       if (resolved.height !== undefined) item.height = resolved.height;
       const duration = videoDuration(note["video"]);
@@ -693,6 +699,8 @@ export function buildNoteFromRecord(
       const img = imageUrlOf(images[0]);
       if (img) {
         const item: XhsItem = { type: "image", url: img.url, fallbacks: img.fallbacks };
+        const thumbnail = thumbnailOf(images[0], thumbnailScenes);
+        if (thumbnail) item.thumbnailUrl = thumbnail;
         const w = num(images[0]["width"]);
         const h = num(images[0]["height"]);
         if (w !== undefined) item.width = w;
@@ -725,6 +733,8 @@ export function buildNoteFromRecord(
         : bestVideo(ownCandidates);
       if (own && img) {
         const item: XhsItem = { type: "live", url: img.url, videoUrl: own.url, fallbacks: img.fallbacks };
+        const thumbnail = thumbnailOf(entry, thumbnailScenes);
+        if (thumbnail) item.thumbnailUrl = thumbnail;
         const w = num(entry["width"]);
         const h = num(entry["height"]);
         if (w !== undefined) item.width = w;
@@ -738,6 +748,8 @@ export function buildNoteFromRecord(
       }
       if (img) {
         const item: XhsItem = { type: "image", url: img.url, fallbacks: img.fallbacks };
+        const thumbnail = thumbnailOf(entry, thumbnailScenes);
+        if (thumbnail) item.thumbnailUrl = thumbnail;
         const w = num(entry["width"]);
         const h = num(entry["height"]);
         if (w !== undefined) item.width = w;
@@ -788,4 +800,15 @@ export function buildNoteFromRecord(
     data.publishedAt = toIsoUtc(note["time"] as number);
   }
   return { ok: true, data };
+}
+
+/** Select a declared rendition verbatim; never manufacture CDN styles. */
+function thumbnailOf(entry: Record<string, unknown>, scenes: string[]): string | undefined {
+  const info = entry.infoList;
+  if (!Array.isArray(info)) return undefined;
+  for (const scene of scenes) {
+    const candidate = info.find(e => isRecord(e) && e.imageScene === scene && nonBlank(e.url));
+    if (candidate) return toHttps(candidate.url as string);
+  }
+  return undefined;
 }

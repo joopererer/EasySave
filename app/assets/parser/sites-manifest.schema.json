@@ -61,7 +61,10 @@
           "type": "array",
           "maxItems": 32,
           "uniqueItems": true,
-          "items": { "type": "string", "pattern": "^[a-z][a-z0-9_]{0,63}$" }
+          "items": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_]{0,63}$"
+          }
         },
         "displayName": {
           "type": "string",
@@ -177,7 +180,10 @@
                 ]
               },
               "fallbackStrategy": {
-                "enum": ["webview", "none"]
+                "enum": [
+                  "webview",
+                  "none"
+                ]
               },
               "pathPatterns": {
                 "type": "array",
@@ -294,11 +300,32 @@
                 "type": "object",
                 "additionalProperties": false,
                 "properties": {
-                  "category": { "enum": ["login", "captcha", "404", "home"] },
-                  "code": { "enum": ["LOGIN_REQUIRED", "POST_NOT_FOUND", "UNSUPPORTED_URL"] },
-                  "message": { "type": "string", "minLength": 1, "maxLength": 200 }
+                  "category": {
+                    "enum": [
+                      "login",
+                      "captcha",
+                      "404",
+                      "home"
+                    ]
+                  },
+                  "code": {
+                    "enum": [
+                      "LOGIN_REQUIRED",
+                      "POST_NOT_FOUND",
+                      "UNSUPPORTED_URL"
+                    ]
+                  },
+                  "message": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 200
+                  }
                 },
-                "required": ["category", "code", "message"]
+                "required": [
+                  "category",
+                  "code",
+                  "message"
+                ]
               }
             },
             "prepareHook": {
@@ -482,7 +509,10 @@
               "type": "boolean"
             },
             "urlOrder": {
-              "enum": ["primaryFirst", "fallbackFirst"]
+              "enum": [
+                "primaryFirst",
+                "fallbackFirst"
+              ]
             },
             "resourceDefaults": {
               "type": "object",
@@ -501,6 +531,20 @@
                   "$ref": "#/$defs/resourceRequestDefaults"
                 }
               }
+            },
+            "thumbnailScenes": {
+              "type": "array",
+              "maxItems": 8,
+              "uniqueItems": true,
+              "items": {
+                "type": "string",
+                "pattern": "^[A-Z0-9_]{1,32}$"
+              }
+            },
+            "thumbnailVariant": {
+              "enum": [
+                "smallestCandidate"
+              ]
             }
           },
           "required": [

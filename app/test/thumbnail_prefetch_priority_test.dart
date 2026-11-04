@@ -35,6 +35,12 @@ void main() {
     await Directory('build/build23-prefetch-priority').create(recursive: true);
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(channel, (call) async {
+          if (call.method == 'thumbnailDirectory')
+            return 'build/build23-prefetch-priority';
+          expect(
+            (call.arguments as Map?)?.containsKey('bytes') ?? false,
+            isFalse,
+          );
           final args = (call.arguments as Map?) ?? {};
           final key = args['key'] as String?;
           switch (call.method) {
@@ -60,10 +66,10 @@ void main() {
               return true;
             case 'thumbnailRead':
               return files[key];
-            case 'thumbnailWrite':
+            case 'thumbnailReady':
               final file = File('build/build23-prefetch-priority/$key');
-              await file.writeAsBytes((args['bytes'] as List).cast<int>());
-              files[key!] = file.path;
+              expect(await File(args['path'] as String).readAsBytes(), png);
+              files[key!] = args['path'] as String;
               return file.path;
           }
           return null;

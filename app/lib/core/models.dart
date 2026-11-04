@@ -39,6 +39,7 @@ class MediaItem {
     this.isGif,
     this.videoUrl,
     this.posterUrl,
+    this.thumbnailUrl,
     this.width,
     this.height,
     this.duration,
@@ -63,6 +64,7 @@ class MediaItem {
     isGif: json['isGif'] as bool?,
     videoUrl: json['videoUrl'] as String?,
     posterUrl: json['posterUrl'] as String?,
+    thumbnailUrl: json['thumbnailUrl'] as String?,
     width: json['width'] as num?,
     height: json['height'] as num?,
     duration: json['duration'] as num?,
@@ -82,6 +84,7 @@ class MediaItem {
   /// Still-image cover for a video item (XHS `imageList[0]`). IG video
   /// items already carry the preview in `url`, so this stays null there.
   final String? posterUrl;
+  final String? thumbnailUrl;
   final num? width;
   final num? height;
 
@@ -108,6 +111,7 @@ class MediaItem {
     map['url'] = url;
     if (videoUrl != null) map['videoUrl'] = videoUrl;
     if (posterUrl != null) map['posterUrl'] = posterUrl;
+    if (thumbnailUrl != null) map['thumbnailUrl'] = thumbnailUrl;
     if (width != null) map['width'] = width;
     if (height != null) map['height'] = height;
     if (duration != null) map['duration'] = duration;

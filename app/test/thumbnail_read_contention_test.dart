@@ -29,6 +29,11 @@ void main() {
       final messenger =
           TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
       messenger.setMockMethodCallHandler(channel, (call) async {
+        if (call.method == 'thumbnailDirectory') return directory.path;
+        expect(
+          (call.arguments as Map?)?.containsKey('bytes') ?? false,
+          isFalse,
+        );
         final args = call.arguments as Map;
         final key = args['key'] as String;
         switch (call.method) {
@@ -38,9 +43,9 @@ void main() {
             return true;
           case 'thumbnailRead':
             return files[key];
-          case 'thumbnailWrite':
+          case 'thumbnailReady':
             final path = '${directory.path}/$key';
-            await File(path).writeAsBytes((args['bytes'] as List).cast<int>());
+            expect(await File(args['path'] as String).exists(), isTrue);
             files[key] = path;
             return path;
         }

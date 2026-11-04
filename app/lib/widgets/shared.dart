@@ -194,7 +194,11 @@ class CdnImage extends ImageProvider<CdnImage> {
     platform,
     item.cachePostId ?? 'unbound',
     item.cacheItemIndex ?? identityHashCode(item),
-    item.type == 'video' ? 'poster' : 'thumb',
+    item.type == 'video'
+        ? 'poster'
+        : cacheWidth == null && item.thumbnailUrl != null
+        ? 'image'
+        : 'thumb',
   );
 
   /// One [PreviewPoster] line per (reason, host) keeps a grid of identical
@@ -255,7 +259,10 @@ class CdnImage extends ImageProvider<CdnImage> {
     final policy = MediaRequestPolicy(site);
     final resources = _imageResources(policy);
     final ordered = <MediaRequestResource>[];
-    for (final url in urlsFor(item)) {
+    for (final url in [
+      if (cacheWidth != null && item.thumbnailUrl != null) item.thumbnailUrl!,
+      ...urlsFor(item),
+    ]) {
       final resource = resources.where((r) => r.url == url).firstOrNull;
       if (resource != null && !ordered.contains(resource)) {
         ordered.add(resource);

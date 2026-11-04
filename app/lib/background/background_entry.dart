@@ -287,37 +287,51 @@ Future<void> _handleSubmit(
             item.type == 'video' ? 'poster' : 'thumb',
           );
           final resources = mediaPolicy.resourcesFor(item);
-          final thumbUrl = item.type != 'video'
-              ? item.url
-              : item.posterUrl != null &&
-                    item.posterUrl != item.url &&
-                    item.posterUrl != item.videoUrl
-              ? item.posterUrl
-              : item.videoUrl != null && item.videoUrl != item.url
-              ? item.url
-              : null;
-          Future<Map<String, Object?>> forUrl(String? url) async {
+          final thumbUrl =
+              item.thumbnailUrl ??
+              (item.type != 'video'
+                  ? item.url
+                  : item.posterUrl != null &&
+                        item.posterUrl != item.url &&
+                        item.posterUrl != item.videoUrl
+                  ? item.posterUrl
+                  : item.videoUrl != null && item.videoUrl != item.url
+                  ? item.url
+                  : null);
+          final fullIdentity = item.thumbnailUrl == null
+              ? identity
+              : thumbnailIdentity(post.platform, post.id, i, 'image');
+          Future<Map<String, Object?>> forUrl(
+            String? url, {
+            bool full = false,
+          }) async {
             if (url == null || url.isEmpty) return {'requiresAppPreview': true};
             final resource = resources.where((r) => r.url == url).firstOrNull;
             if (resource == null) {
               mediaPolicy.rejectResource(url);
             }
-            return nativeRequirement(resource, identity);
+            return nativeRequirement(resource, full ? fullIdentity : identity);
           }
 
-          Future<List<Map<String, Object?>>> imageFallbacks(String? url) async {
+          Future<List<Map<String, Object?>>> imageFallbacks(
+            String? url, {
+            bool full = false,
+          }) async {
             final candidates = previewImageCandidates(resources, url);
             return [
               for (final resource in candidates.skip(1))
-                await nativeRequirement(resource, identity),
+                await nativeRequirement(
+                  resource,
+                  full ? fullIdentity : identity,
+                ),
             ];
           }
 
           panelItems.add({
             'thumbRequest': await forUrl(thumbUrl),
-            'imageRequest': await forUrl(item.url),
+            'imageRequest': await forUrl(item.url, full: true),
             'thumbFallbacks': await imageFallbacks(thumbUrl),
-            'imageFallbacks': await imageFallbacks(item.url),
+            'imageFallbacks': await imageFallbacks(item.url, full: true),
             'videoRequest': await forUrl(item.videoUrl ?? item.url),
             'video': item.type == 'video',
             'live':

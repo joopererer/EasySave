@@ -95,14 +95,14 @@ export function moduleCall(moduleId: string, hook: string, context: Context): st
     case 'ready': return JSON.stringify({ value: true });
     case 'parsePage': {
       try {
-        const result = JSON.parse(legacyPage(moduleId));
+        const result = JSON.parse(legacyPage(moduleId, context.site.download?.thumbnailScenes, context.site.download?.thumbnailVariant === 'smallestCandidate'));
         if (result.ok) return output(result);
       } catch (_) {
         // A stale page cache must not prevent the independent HTML fallback.
       }
-      return output(JSON.parse(legacyParse(document.documentElement.outerHTML, context.url, moduleId)));
+      return output(JSON.parse(legacyParse(document.documentElement.outerHTML, context.url, moduleId, context.site.download?.thumbnailScenes, context.site.download?.thumbnailVariant === 'smallestCandidate')));
     }
-    case 'parse': return output(JSON.parse(legacyParse(context.input || '', context.url, moduleId)));
+    case 'parse': return output(JSON.parse(legacyParse(context.input || '', context.url, moduleId, context.site.download?.thumbnailScenes, context.site.download?.thumbnailVariant === 'smallestCandidate')));
     case 'classify': {
       const error = context.error;
       return JSON.stringify({ value: error?.code === 'PRIVATE_OR_UNAVAILABLE' &&

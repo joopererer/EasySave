@@ -189,11 +189,13 @@ class MainActivity : FlutterActivity() {
                 }
             }
 
-        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, MEDIA_CHANNEL)
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, MEDIA_CHANNEL,
+            io.flutter.plugin.common.StandardMethodCodec.INSTANCE,
+            flutterEngine.dartExecutor.binaryMessenger.makeBackgroundTaskQueue())
             .setMethodCallHandler { call, result ->
                 when (call.method) {
-                    "deleteMedia" -> deleteMedia(call, result)
-                    "requestWriteAccess" -> requestWriteAccess(call, result)
+                    "deleteMedia" -> runOnUiThread { deleteMedia(call, result) }
+                    "requestWriteAccess" -> runOnUiThread { requestWriteAccess(call, result) }
                     "readMediaHeader" -> readMediaHeader(call, result)
                     "queryMediaAlbum" -> queryMediaAlbum(call, result)
                     "scanFile" -> scanFile(call, result)
@@ -279,11 +281,13 @@ class MainActivity : FlutterActivity() {
                 }
             }
 
-        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, SAF_CHANNEL)
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, SAF_CHANNEL,
+            io.flutter.plugin.common.StandardMethodCodec.INSTANCE,
+            flutterEngine.dartExecutor.binaryMessenger.makeBackgroundTaskQueue())
             .setMethodCallHandler { call, result ->
                 when (call.method) {
-                    "pickDirectory" -> pickDirectory(result)
-                    "pickBackupFile" -> pickBackupFile(result)
+                    "pickDirectory" -> runOnUiThread { pickDirectory(result) }
+                    "pickBackupFile" -> runOnUiThread { pickBackupFile(result) }
                     "checkDirectoryAccess" -> {
                         val treeUri = call.argument<String>("treeUri")
                         if (treeUri != null) {
@@ -467,18 +471,30 @@ class MainActivity : FlutterActivity() {
         }
 
         try {
-            pendingDeleteSidecars = ProvenancePairWriter.sidecarsFor(this, ids)
-            val pendingIntent = MediaStore.createDeleteRequest(contentResolver, uris)
             pendingDeleteResult = result
-            @Suppress("DEPRECATION")
-            startIntentSenderForResult(
-                pendingIntent.intentSender,
-                DELETE_REQUEST_CODE,
-                null,
-                0,
-                0,
-                0,
-            )
+            Thread {
+                try {
+                    val sidecars = ProvenancePairWriter.sidecarsFor(this, ids)
+                    val pendingIntent = MediaStore.createDeleteRequest(contentResolver, uris)
+                    runOnUiThread {
+                        try {
+                            pendingDeleteSidecars = sidecars
+                            @Suppress("DEPRECATION")
+                            startIntentSenderForResult(pendingIntent.intentSender, DELETE_REQUEST_CODE, null, 0, 0, 0)
+                        } catch (_: Exception) {
+                            pendingDeleteResult = null
+                            pendingDeleteSidecars = emptyList()
+                            result.error("delete_failed", "Delete request failed", null)
+                        }
+                    }
+                } catch (_: Exception) {
+                    runOnUiThread {
+                        pendingDeleteResult = null
+                        pendingDeleteSidecars = emptyList()
+                        result.error("delete_failed", "Delete request failed", null)
+                    }
+                }
+            }.start()
         } catch (e: Exception) {
             pendingDeleteResult = null
             pendingDeleteSidecars = emptyList()
@@ -526,17 +542,26 @@ class MainActivity : FlutterActivity() {
         }
 
         try {
-            val pendingIntent = MediaStore.createWriteRequest(contentResolver, uris)
             pendingWriteResult = result
-            @Suppress("DEPRECATION")
-            startIntentSenderForResult(
-                pendingIntent.intentSender,
-                WRITE_REQUEST_CODE,
-                null,
-                0,
-                0,
-                0,
-            )
+            Thread {
+                try {
+                    val pendingIntent = MediaStore.createWriteRequest(contentResolver, uris)
+                    runOnUiThread {
+                        try {
+                            @Suppress("DEPRECATION")
+                            startIntentSenderForResult(pendingIntent.intentSender, WRITE_REQUEST_CODE, null, 0, 0, 0)
+                        } catch (_: Exception) {
+                            pendingWriteResult = null
+                            result.error("write_request_failed", "Write request failed", null)
+                        }
+                    }
+                } catch (_: Exception) {
+                    runOnUiThread {
+                        pendingWriteResult = null
+                        result.error("write_request_failed", "Write request failed", null)
+                    }
+                }
+            }.start()
         } catch (e: Exception) {
             pendingWriteResult = null
             result.error("write_request_failed", e.message, null)

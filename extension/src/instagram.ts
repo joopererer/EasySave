@@ -26,6 +26,7 @@ export interface InstagramItem {
   type: InstagramItemType;
   url: string;
   videoUrl?: string;
+  thumbnailUrl?: string;
   width?: number;
   height?: number;
   /** Video length in seconds, from `video_duration`. Absent when unknown. */
@@ -166,7 +167,7 @@ function bestVideoUrl(media: Record<string, unknown>): Rendition | undefined {
   return undefined;
 }
 
-function mediaItem(media: Record<string, unknown>): InstagramItem | undefined {
+function originalMediaItem(media: Record<string, unknown>): InstagramItem | undefined {
   const image = bestImage(media);
   const video = bestVideoUrl(media);
   if (video) {
@@ -192,7 +193,7 @@ function mediaItem(media: Record<string, unknown>): InstagramItem | undefined {
  * @param html Full page HTML source.
  * @param pageUrl The URL the HTML was fetched from (used to find the shortcode).
  */
-export function parseInstagram(html: string, pageUrl: string): InstagramResult {
+export function parseInstagram(html: string, pageUrl: string, smallThumbnail = false): InstagramResult {
   const shortcodeMatch = SHORTCODE_PATTERN.exec(pageUrl);
   const shortcode = shortcodeMatch ? shortcodeMatch[1] : undefined;
   const mediaId = shortcode ? shortcodeToMediaId(shortcode) : undefined;
@@ -250,7 +251,7 @@ export function parseInstagram(html: string, pageUrl: string): InstagramResult {
     };
   }
 
-  return buildPostFromProduct(product, shortcode);
+  return buildPostFromProduct(product, shortcode, smallThumbnail);
 }
 
 /**
@@ -260,6 +261,7 @@ export function parseInstagram(html: string, pageUrl: string): InstagramResult {
 export function buildPostFromProduct(
   product: Record<string, unknown>,
   shortcode: string,
+  smallThumbnail = false,
 ): InstagramResult {
   const user = isRecord(product["user"])
     ? (product["user"] as Record<string, unknown>)
@@ -300,17 +302,17 @@ export function buildPostFromProduct(
   if (Array.isArray(carousel) && carousel.length > 0) {
     for (const child of carousel) {
       if (!isRecord(child)) continue;
-      const item = mediaItem(child);
+      const item = mediaItem(child, smallThumbnail);
       if (item) items.push(item);
     }
   } else if (Array.isArray(sidecar) && sidecar.length > 0) {
     for (const edge of sidecar) {
       if (!isRecord(edge) || !isRecord(edge["node"])) continue;
-      const item = mediaItem(edge["node"] as Record<string, unknown>);
+      const item = mediaItem(edge["node"] as Record<string, unknown>, smallThumbnail);
       if (item) items.push(item);
     }
   } else {
-    const item = mediaItem(product);
+    const item = mediaItem(product, smallThumbnail);
     if (item) items.push(item);
   }
 
@@ -334,4 +336,16 @@ export function buildPostFromProduct(
   };
   if (publishedAt) data.publishedAt = publishedAt;
   return { ok: true, data };
+}
+
+function mediaItem(media: Record<string, unknown>, smallThumbnail: boolean): InstagramItem | undefined {
+  const item = originalMediaItem(media);
+  const versions = isRecord(media.image_versions2) ? media.image_versions2.candidates : undefined;
+  if (item && smallThumbnail && Array.isArray(versions)) {
+    const candidates = versions.filter(e => isRecord(e) && nonBlank(e.url) &&
+      typeof e.width === 'number' && typeof e.height === 'number' && e.width > 0 && e.height > 0);
+    candidates.sort((a,b) => a.width * a.height - b.width * b.height);
+    if (candidates[0]) item.thumbnailUrl = candidates[0].url;
+  }
+  return item;
 }

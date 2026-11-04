@@ -34,7 +34,9 @@ object ProvenancePairWriter {
     }
 
     fun register(context: Context, messenger: BinaryMessenger) {
-        MethodChannel(messenger, "easysave/provenance_pair").setMethodCallHandler { call, result ->
+        MethodChannel(messenger, "easysave/provenance_pair",
+            io.flutter.plugin.common.StandardMethodCodec.INSTANCE,
+            messenger.makeBackgroundTaskQueue()).setMethodCallHandler { call, result ->
             if (call.method !in setOf("savePair", "saveMedia", "inspectTarget", "repairLegacyNames", "readSidecar", "readSidecarDetailed", "queryFixedMedia", "deletePair", "setFixedTree", "readFixedHeader")) {
                 result.notImplemented()
                 return@setMethodCallHandler
@@ -80,13 +82,11 @@ object ProvenancePairWriter {
                             save(context, source, call.argument<String>("mime")!!, call.argument<String>("filename") ?: source.name)
                         }
                     }
-                    Handler(Looper.getMainLooper()).post { result.success(value) }
+                    result.success(value)
                 } catch (e: Exception) {
                     val message = if (e is StepFailure) e.message!! else PairSavePolicy.errorMessage(call.method, e)
                     if (e !is StepFailure) NativeLog.w("EasySavePair", message)
-                    Handler(Looper.getMainLooper()).post {
-                        result.error("provenance_pair", message, null)
-                    }
+                    result.error("provenance_pair", message, null)
                 }
             }.start()
         }

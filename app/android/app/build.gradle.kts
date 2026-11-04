@@ -19,16 +19,20 @@ android {
 
     dependencies {
         coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")
+        implementation("androidx.exifinterface:exifinterface:1.4.1")
         implementation("androidx.documentfile:documentfile:1.0.1")
         // Match video_player_android 2.9.5; never ship a second Media3 version.
         implementation("androidx.media3:media3-exoplayer:1.9.2")
         testImplementation("junit:junit:4.13.2")
         testImplementation("org.json:json:20240303")
+        testImplementation("org.robolectric:robolectric:4.14.1")
     }
 
     kotlinOptions {
         jvmTarget = JavaVersion.VERSION_17.toString()
     }
+
+    testOptions { unitTests.isIncludeAndroidResources = true }
 
     defaultConfig {
         // TODO: Specify your own unique Application ID (https://developer.android.com/studio/build/application-id.html).

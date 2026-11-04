@@ -6,7 +6,7 @@ import java.util.concurrent.ExecutorService
 /** No download or decoder may run on these disk executors. */
 internal class ThumbnailQueues(
     private val timing: (String, Long, Long, String) -> Unit = { queue, wait, io, key ->
-        NativeLog.i("ThumbLoad", "event=cache_${if (queue == "write") "write" else "read"} layer=native queue=$queue waitMs=$wait ioMs=$io ms=${wait + io} key=$key")
+        NativeLog.i("ThumbLoad", "event=cache_${if (queue == "write") "control" else "read"} layer=native queue=$queue waitMs=$wait ioMs=$io ms=${wait + io} thread=bg key=$key")
     }
 ) : AutoCloseable {
     private val reads = Executors.newFixedThreadPool(4)

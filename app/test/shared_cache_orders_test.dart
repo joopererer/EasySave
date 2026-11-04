@@ -24,6 +24,9 @@ class _Harness {
     final messenger =
         TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
     messenger.setMockMethodCallHandler(channel, (call) async {
+      if (call.method == 'thumbnailDirectory')
+        return 'build/build21-synthetic-cache/$id';
+      expect((call.arguments as Map?)?.containsKey('bytes') ?? false, isFalse);
       final args = Map<String, dynamic>.from(call.arguments as Map);
       switch (call.method) {
         case 'lookupParsed':
@@ -44,11 +47,11 @@ class _Harness {
           final path = files[args['key']];
           if (path != null) thumbnailHits++;
           return path;
-        case 'thumbnailWrite':
+        case 'thumbnailReady':
           final root = Directory('build/build21-synthetic-cache/$id')
             ..createSync(recursive: true);
           final path = '${root.path}/${args['key']}';
-          await File(path).writeAsBytes((args['bytes'] as List).cast<int>());
+          expect(await File(args['path'] as String).exists(), isTrue);
           files[args['key'] as String] = path;
           return path;
       }
@@ -153,12 +156,17 @@ class _Harness {
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
-  test('cache diagnostics hash unsafe labels rather than leaking URL query values', () {
-    final label = safeCacheLabel('https://example.test/private?token=PRIVATE_VALUE');
-    expect(label, matches(r'^[a-f0-9]{16}$'));
-    expect(label, isNot(contains('PRIVATE_VALUE')));
-    expect(safeCacheLabel('xhs:abc123:0:thumb'), 'xhs:abc123:0:thumb');
-  });
+  test(
+    'cache diagnostics hash unsafe labels rather than leaking URL query values',
+    () {
+      final label = safeCacheLabel(
+        'https://example.test/private?token=PRIVATE_VALUE',
+      );
+      expect(label, matches(r'^[a-f0-9]{16}$'));
+      expect(label, isNot(contains('PRIVATE_VALUE')));
+      expect(safeCacheLabel('xhs:abc123:0:thumb'), 'xhs:abc123:0:thumb');
+    },
+  );
   test(
     'fullscreen gallery preserves stable identity and ignores rotating media URLs',
     () {

@@ -41,16 +41,21 @@ void main() {
         ..createSync(recursive: true);
       TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
           .setMockMethodCallHandler(channel, (call) async {
+            if (call.method == 'thumbnailDirectory') return root.path;
+            expect(
+              (call.arguments as Map?)?.containsKey('bytes') ?? false,
+              isFalse,
+            );
             final args = call.arguments as Map;
             final key = args['key'] as String;
             expect(key, matches(r'^[a-f0-9]{64}$'));
             if (call.method == 'thumbnailRead') return files[key];
-            if (call.method != 'thumbnailWrite') return null;
+            if (call.method != 'thumbnailReady') return null;
             if (call.method == 'thumbnailAcquire' ||
                 call.method == 'thumbnailRelease')
               return null;
             final path = '${root.path}/$key';
-            await File(path).writeAsBytes((args['bytes'] as List).cast<int>());
+            expect(await File(args['path'] as String).exists(), isTrue);
             files[key] = path;
             return path;
           });

@@ -27,6 +27,9 @@ export function withMediaResources(
     if (item.posterUrl) resources.push({
       role: 'poster', url: item.posterUrl, request: request('poster', item.posterUrl),
     });
+    if (item.thumbnailUrl) resources.push({
+      role: 'poster', url: item.thumbnailUrl, request: request('poster', item.thumbnailUrl),
+    });
     for (const url of item.fallbacks ?? []) resources.push({
       role: 'fallback', fallbackFor: primary, url, request: request(primary, url),
     });
