@@ -1,6 +1,9 @@
 package com.james.easysave
 
 import android.content.Context
+import android.graphics.BitmapFactory
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import io.flutter.plugin.common.BinaryMessenger
 import io.flutter.plugin.common.MethodChannel
 import java.io.File
@@ -40,12 +43,52 @@ internal class ParsedHandoff(private val now: () -> Long = System::currentTimeMi
 }
 
 /** One process-wide cache writer for all Dart engines; filenames contain only SHA-256. */
+internal fun thumbnailValid(file: File): Boolean {
+    if (file.length() !in 1..10L * 1024 * 1024) return false
+    val bytes = file.readBytes()
+    if (!thumbnailContainerComplete(bytes)) return false
+    val options = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+    BitmapFactory.decodeFile(file.path, options)
+    if (options.outWidth <= 0 || options.outHeight <= 0) return false
+    var sample = 1
+    while (options.outWidth / sample > 16 || options.outHeight / sample > 16) sample *= 2
+    val image = BitmapFactory.decodeFile(file.path, BitmapFactory.Options().apply { inSampleSize = sample }) ?: return false
+    image.recycle()
+    return true
+}
+internal fun thumbnailContainerComplete(bytes: ByteArray): Boolean {
+    fun at(index: Int) = bytes[index].toInt() and 255
+    if (bytes.size < 12) return false
+    if (at(0) == 255 && at(1) == 216) return at(bytes.size - 2) == 255 && at(bytes.size - 1) == 217
+    if (at(0) == 137 && at(1) == 80) return bytes.copyOfRange(bytes.size - 8, bytes.size - 4).toString(Charsets.US_ASCII) == "IEND"
+    if (bytes.copyOfRange(0, 4).toString(Charsets.US_ASCII) == "RIFF") {
+        val size = (4..7).fold(0L) { value, i -> value or (at(i).toLong() shl ((i - 4) * 8)) }
+        return size + 8 == bytes.size.toLong()
+    }
+    return true
+}
 internal class ThumbnailFiles(private val root: File, private val maxBytes: Long = 64L * 1024 * 1024,
+    private val validateImage: (File) -> Boolean = ::thumbnailValid,
     private val now: () -> Long = System::currentTimeMillis) {
+    private var cleaned = false
+    private fun valid(file: File): Boolean {
+        return runCatching { validateImage(file) }.getOrDefault(false)
+    }
+    @Synchronized fun remove(key: String) {
+        if (key.matches(Regex("[a-f0-9]{64}"))) File(root, key).delete()
+    }
+    @Synchronized fun clean() {
+        if (cleaned) return
+        root.listFiles()?.filter { it.isFile }?.forEach {
+            if (it.name.endsWith(".tmp") || it.lastModified() <= now() || !valid(it)) it.delete()
+        }
+        cleaned = true
+    }
     @Synchronized fun read(key: String): File? {
+        clean()
         if (!key.matches(Regex("[a-f0-9]{64}"))) return null
         val file = File(root, key)
-        if (!file.exists() || file.lastModified() <= now()) { file.delete(); return null }
+        if (!file.exists() || file.lastModified() <= now() || !valid(file)) { file.delete(); return null }
         return file
     }
     @Synchronized fun write(key: String, bytes: ByteArray, expires: Long): File? {
@@ -53,8 +96,7 @@ internal class ThumbnailFiles(private val root: File, private val maxBytes: Long
         if (bytes.isEmpty() || bytes.size > 10 * 1024 * 1024 || bytes.size > maxBytes || expires <= now()) return null
         root.mkdirs()
         val file = File(root, key)
-        file.delete()
-        val files = root.listFiles()?.filter { it.isFile }?.sortedBy { it.lastModified() } ?: emptyList()
+        val files = root.listFiles()?.filter { it.isFile && it.name != key }?.sortedBy { it.lastModified() } ?: emptyList()
         var size = files.sumOf { it.length() }
         for (old in files) {
             if (old.lastModified() <= now() || size + bytes.size > maxBytes) {
@@ -62,9 +104,11 @@ internal class ThumbnailFiles(private val root: File, private val maxBytes: Long
             }
         }
         val temporary = File(root, "$key.tmp")
-        temporary.writeBytes(bytes)
-        file.delete()
-        check(temporary.renameTo(file))
+        try {
+            temporary.writeBytes(bytes)
+            if (!valid(temporary)) return null
+            check(temporary.renameTo(file))
+        } finally { temporary.delete() }
         file.setLastModified(minOf(expires, now() + 10 * 60_000L))
         return file
     }
@@ -75,10 +119,25 @@ internal class ThumbnailFiles(private val root: File, private val maxBytes: Long
     }
 }
 
+/** A waiter never owns a download: it re-reads the atomic commit, or acquires again. */
+internal class ThumbnailFlights {
+    private val pending = mutableMapOf<String, MutableList<(Boolean) -> Unit>>()
+    @Synchronized fun acquire(key: String, answer: (Boolean) -> Unit) {
+        val waiters = pending[key]
+        if (waiters == null) { pending[key] = mutableListOf(); answer(true) }
+        else waiters.add(answer)
+    }
+    fun release(key: String) {
+        val waiters = synchronized(this) { pending.remove(key) }
+        waiters?.forEach { it(false) }
+    }
+}
+
 internal object SharedPreviewBridge {
     private val posts = ParsedHandoff()
     private var files: ThumbnailFiles? = null
     private var thumbnailChannel: MethodChannel? = null
+    private val flights = ThumbnailFlights()
     fun image(path: String) = files?.readPath(path)
     fun imageKey(key: String): ByteArray? {
         if (!key.matches(Regex("[a-f0-9]{64}"))) return null
@@ -99,7 +158,8 @@ internal object SharedPreviewBridge {
     }
     fun register(context: Context, messenger: BinaryMessenger, background: Boolean = false) {
         if (files == null) files = ThumbnailFiles(File(context.cacheDir, "easysave_thumbnails"))
-        val channel = MethodChannel(messenger, "easysave/shared_preview")
+        val channel = MethodChannel(messenger, "easysave/shared_preview",
+            io.flutter.plugin.common.StandardMethodCodec.INSTANCE, messenger.makeBackgroundTaskQueue())
         if (background) thumbnailChannel = channel
         channel.setMethodCallHandler { call, result ->
             try {
@@ -108,6 +168,18 @@ internal object SharedPreviewBridge {
                     "putParsed" -> { posts.put(args); result.success(null) }
                     "getParsed" -> result.success(posts.get(args["key"] as String))
                     "lookupParsed" -> result.success(posts.lookup(args["key"] as String))
+                    "thumbnailPrefetchAllowed" -> {
+                        val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+                        val caps = cm.getNetworkCapabilities(cm.activeNetwork)
+                        result.success(caps != null && (caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) ||
+                            cm.restrictBackgroundStatus != ConnectivityManager.RESTRICT_BACKGROUND_STATUS_ENABLED))
+                    }
+                    "thumbnailAcquire" -> flights.acquire(args["key"] as String) { result.success(it) }
+                    "thumbnailRelease" -> {
+                        flights.release(args["key"] as String)
+                        result.success(null)
+                    }
+                    "thumbnailDelete" -> { files!!.remove(args["key"] as String); result.success(null) }
                     "thumbnailRead" -> result.success(files!!.read(args["key"] as String)?.path)
                     "thumbnailWrite" -> result.success(files!!.write(args["key"] as String,
                         args["bytes"] as ByteArray, (args["expires"] as Number).toLong())?.path)

@@ -5,6 +5,50 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class SharedPreviewCacheTest {
+    @Test fun processFlightAdmitsOneEngineAndReleasesOtherEngineToReread() {
+        val flights = ThumbnailFlights()
+        val answers = mutableListOf<Pair<String, Boolean>>()
+        flights.acquire("same") { answers.add("foreground" to it) }
+        flights.acquire("same") { answers.add("background" to it) }
+        assertEquals(listOf("foreground" to true), answers)
+        flights.release("same")
+        assertEquals(listOf("foreground" to true, "background" to false), answers)
+        flights.acquire("same") { answers.add("retry" to it) }
+        assertEquals("retry" to true, answers.last())
+        flights.release("same")
+    }
+    @Test fun invalidWriteLeavesNoCommittedOrTemporaryFile() {
+        val root = Files.createTempDirectory("easysave-invalid-thumb-").toFile()
+        val cache = ThumbnailFiles(root, validateImage = { false }) { 1L }
+        assertNull(cache.write("c".repeat(64), byteArrayOf(1, 2, 3), 2000L))
+        assertTrue(root.listFiles()!!.isEmpty())
+    }
+    @Test fun failedReplacementKeepsPreviouslyCommittedImage() {
+        val root = Files.createTempDirectory("easysave-atomic-thumb-").toFile()
+        val cache = ThumbnailFiles(root, validateImage = { it.readBytes().first() == 1.toByte() }) { 1L }
+        val key = "d".repeat(64)
+        assertNotNull(cache.write(key, byteArrayOf(1, 2), 2000L))
+        assertNull(cache.write(key, byteArrayOf(9, 9), 2000L))
+        assertArrayEquals(byteArrayOf(1, 2), cache.read(key)!!.readBytes())
+        assertFalse(root.resolve("$key.tmp").exists())
+    }
+    @Test fun firstReadCleansOnlyItsOwnCorruptFiles() {
+        val root = Files.createTempDirectory("easysave-clean-thumb-").toFile()
+        val key = "e".repeat(64)
+        root.resolve(key).apply { writeBytes(byteArrayOf(9)); setLastModified(2000L) }
+        root.resolve("interrupted.tmp").writeBytes(byteArrayOf(9))
+        val unrelated = root.parentFile.resolve("unrelated-${root.name}").apply { writeBytes(byteArrayOf(9)) }
+        val cache = ThumbnailFiles(root, validateImage = { false }) { 1L }
+        assertNull(cache.read(key))
+        assertTrue(root.listFiles()!!.isEmpty())
+        assertTrue(unrelated.exists())
+    }
+    @Test fun partialJpegPngAndWebpContainersAreRejected() {
+        assertFalse(thumbnailContainerComplete(byteArrayOf(0xff.toByte(), 0xd8.toByte()) + ByteArray(20)))
+        assertFalse(thumbnailContainerComplete(byteArrayOf(137.toByte(), 80) + ByteArray(20)))
+        assertFalse(thumbnailContainerComplete("RIFF".toByteArray() + byteArrayOf(30, 0, 0, 0) + "WEBP".toByteArray()))
+        assertTrue(thumbnailContainerComplete(byteArrayOf(0xff.toByte(), 0xd8.toByte()) + ByteArray(20) + byteArrayOf(0xff.toByte(), 0xd9.toByte())))
+    }
     @Test fun centralLookupReportsTenMinuteExpiry() {
         var now = 1000L
         val handoff = ParsedHandoff { now }
@@ -42,7 +86,7 @@ class SharedPreviewCacheTest {
     @Test fun thumbnailsEvictExpireAndRejectPathsOutsideTheCache() {
         val root = Files.createTempDirectory("easysave-synthetic-cache-").toFile()
         var now = 1000L
-        val cache = ThumbnailFiles(root, 10) { now }
+        val cache = ThumbnailFiles(root, 10, validateImage = { true }) { now }
         val first = "a".repeat(64)
         val second = "b".repeat(64)
         assertNotNull(cache.write(first, byteArrayOf(1,2,3,4,5,6), 2000L))

@@ -33,6 +33,7 @@ import android.view.inputmethod.EditorInfo
 import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.GridLayout
+import android.widget.ScrollView
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ProgressBar
@@ -207,7 +208,7 @@ class SelectPanelView(
     )
 
     private val main = Handler(Looper.getMainLooper())
-    private val pool = Executors.newFixedThreadPool(6)
+    private val pool = Executors.newFixedThreadPool(2)
     private val cells = ArrayList<Cell>()
     private val selected = LinkedHashSet<Int>()
     private val shimmers = ArrayList<View>()
@@ -277,7 +278,7 @@ class SelectPanelView(
         setOnClickListener { finish(null) }
         addView(
             buildSheet(),
-            LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT, Gravity.BOTTOM)
+            LayoutParams(LayoutParams.MATCH_PARENT, (resources.displayMetrics.heightPixels * 0.72).toInt(), Gravity.BOTTOM)
         )
         addView(
             buildPreviewOverlay(),
@@ -495,8 +496,12 @@ class SelectPanelView(
         sheet.addView(subRow)
 
         grid = GridLayout(context).apply { columnCount = COLS }
+        val scroll = ScrollView(context).apply {
+            isFillViewport = false
+            addView(grid, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT))
+        }
         sheet.addView(
-            grid,
+            scroll,
             LinearLayout.LayoutParams(LayoutParams.MATCH_PARENT, 0).apply { weight = 1f }
         )
 
@@ -830,7 +835,20 @@ class SelectPanelView(
                 }
             )
 
-            if (cells[i].video) {
+            if (cells[i].live) {
+                box.addView(TextView(context).apply {
+                    text = "LIVE"
+                    includeFontPadding = false
+                    setTextColor(Color.WHITE)
+                    textSize = 11f
+                    setPadding(dp(6), dp(2), dp(6), dp(2))
+                    background = GradientDrawable().apply {
+                        cornerRadius = dp(6).toFloat()
+                        setColor(0x8A000000.toInt())
+                    }
+                }, LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT,
+                    Gravity.BOTTOM or Gravity.START).apply { setMargins(dp(6), 0, 0, dp(6)) })
+            } else if (cells[i].video) {
                 box.addView(
                     TextView(context).apply {
                         text = "▶"
@@ -935,7 +953,27 @@ class SelectPanelView(
 
             grid.addView(box)
             if (showThumbs && !cells[i].thumbRequest.requiresAppPreview) {
-                loadThumb(listOf(cells[i].thumbRequest) + cells[i].thumbFallbacks, iv, shimmer)
+                // Start only visible cells. ScrollView layout creates all number
+                // selectors, but offscreen selectors do not fetch or decode.
+                var started = false
+                var onScroll: android.view.ViewTreeObserver.OnScrollChangedListener? = null
+                fun stopWatching() {
+                    onScroll?.let { if (iv.viewTreeObserver.isAlive) iv.viewTreeObserver.removeOnScrollChangedListener(it) }
+                }
+                fun loadVisible() {
+                    if (!started && iv.getGlobalVisibleRect(android.graphics.Rect())) {
+                        started = true
+                        stopWatching()
+                        loadThumb(listOf(cells[i].thumbRequest) + cells[i].thumbFallbacks, iv, shimmer)
+                    }
+                }
+                iv.post { loadVisible() }
+                onScroll = android.view.ViewTreeObserver.OnScrollChangedListener { loadVisible() }
+                iv.viewTreeObserver.addOnScrollChangedListener(onScroll)
+                iv.addOnAttachStateChangeListener(object : View.OnAttachStateChangeListener {
+                    override fun onViewAttachedToWindow(view: View) {}
+                    override fun onViewDetachedFromWindow(view: View) { stopWatching() }
+                })
             }
         }
         updateFooter()
@@ -1382,6 +1420,21 @@ class SelectPanelView(
             main.post {
                 if (target.isAttachedToWindow) {
                     if (bmp != null) target.setImageBitmap(bmp)
+                    if (bmp == null && !denied) {
+                        val box = target.parent as? FrameLayout
+                        val retry = TextView(context).apply {
+                            text = "加载失败，点击重试"
+                            setTextColor(Color.WHITE)
+                            textSize = 11f
+                            gravity = Gravity.CENTER
+                            setOnClickListener {
+                                box?.removeView(this)
+                                shimmer.visibility = View.VISIBLE
+                                loadThumb(requests, target, shimmer)
+                            }
+                        }
+                        box?.addView(retry, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT))
+                    }
                     if (denied) {
                         target.setImageResource(android.R.drawable.ic_delete)
                         android.widget.Toast.makeText(context,

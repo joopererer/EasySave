@@ -1,7 +1,7 @@
 // Shared widgets: platform tag, error card with actions.
 
 import 'dart:async';
-import 'dart:ui' as ui show ImmutableBuffer, Codec;
+import 'dart:ui' as ui show ImmutableBuffer, Codec, TargetImageSize, FrameInfo;
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -81,6 +81,7 @@ class CoverImage extends StatefulWidget {
     this.width,
     this.height,
     this.placeholder,
+    this.fullResolution = false,
   });
 
   final MediaItem item;
@@ -90,12 +91,14 @@ class CoverImage extends StatefulWidget {
   final double? width;
   final double? height;
   final Widget? placeholder;
+  final bool fullResolution;
 
   @override
   State<CoverImage> createState() => _CoverImageState();
 }
 
 class _CoverImageState extends State<CoverImage> {
+  int _retry = 0;
   @override
   Widget build(BuildContext context) {
     if (widget.item.url.isEmpty && (widget.item.posterUrl?.isEmpty ?? true)) {
@@ -104,27 +107,50 @@ class _CoverImageState extends State<CoverImage> {
         child: Center(child: Icon(Icons.broken_image)),
       );
     }
-    return Image(
-      image: CdnImage(
-        widget.item,
-        platform: widget.platform,
-        cacheWidth: widget.cacheWidth,
-      ),
-      fit: widget.fit,
-      width: widget.width,
-      height: widget.height,
-      gaplessPlayback: true,
-      errorBuilder: (context, error, _) => ColoredBox(
-        color: Colors.black12,
-        child: Center(
-          child: Text(
-            error is MediaPolicyException ? '该资源地址不在允许范围内' : '图片加载失败',
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final width = widget.fullResolution
+            ? null
+            : widget.cacheWidth ??
+                  ((constraints.maxWidth.isFinite
+                              ? constraints.maxWidth
+                              : MediaQuery.sizeOf(context).width) *
+                          MediaQuery.devicePixelRatioOf(context))
+                      .ceil();
+        return Image(
+          key: ValueKey(_retry),
+          image: CdnImage(
+            widget.item,
+            platform: widget.platform,
+            cacheWidth: width,
           ),
-        ),
-      ),
-      loadingBuilder: (context, child, progress) => progress == null
-          ? child
-          : (widget.placeholder ?? const ColoredBox(color: Colors.black12)),
+          fit: widget.fit,
+          width: widget.width,
+          height: widget.height,
+          gaplessPlayback: true,
+          errorBuilder: (context, error, _) => ColoredBox(
+            color: Colors.black12,
+            child: InkWell(
+              onTap: () async {
+                await CdnImage(
+                  widget.item,
+                  platform: widget.platform,
+                  cacheWidth: width,
+                ).evict();
+                if (mounted) setState(() => _retry++);
+              },
+              child: Center(
+                child: Text(
+                  error is MediaPolicyException ? '该资源地址不在允许范围内' : '加载失败，点击重试',
+                ),
+              ),
+            ),
+          ),
+          loadingBuilder: (context, child, progress) => progress == null
+              ? child
+              : (widget.placeholder ?? const ColoredBox(color: Colors.black12)),
+        );
+      },
     );
   }
 }
@@ -306,25 +332,55 @@ class CdnImage extends ImageProvider<CdnImage> {
 
   Future<ui.Codec> _loadAsync(CdnImage key, ImageDecoderCallback decode) async {
     assert(key == this);
-    final fetched = await _fetchBytes();
-    final buffer = await ui.ImmutableBuffer.fromUint8List(fetched.bytes);
-    try {
-      // Bypass the injected decoder on purpose: the stock callback in this
-      // Flutter revision has no resize hook, and decoding multi-MB originals
-      // at full size is what froze large posts.
-      // ignore: deprecated_member_use
-      return await PaintingBinding.instance.instantiateImageCodecFromBuffer(
-        buffer,
-        cacheWidth: cacheWidth,
-      );
-    } catch (error) {
-      // Non-image bytes (an mp4 poster fallback) fail here, not at the request.
-      _logPoster(
-        'DECODE_FAILED',
-        fetched.url,
-        extra: 'error=${error.runtimeType} bytes=${fetched.bytes.length}',
-      );
-      rethrow;
+    for (var attempt = 0; ; attempt++) {
+      final fetched = await _fetchBytes();
+      final buffer = await ui.ImmutableBuffer.fromUint8List(fetched.bytes);
+      final timer = Stopwatch()..start();
+      try {
+        final codec = await SharedThumbnailCache.decodeSlots.run(() async {
+          final codec = await decode(
+            buffer,
+            getTargetSize: cacheWidth == null
+                ? null
+                : (width, height) {
+                    final target = cacheWidth!.clamp(1, width);
+                    return ui.TargetImageSize(
+                      width: target,
+                      height: (height * target / width).round().clamp(
+                        1,
+                        height,
+                      ),
+                    );
+                  },
+          );
+          try {
+            final frame = await codec.getNextFrame();
+            return _LimitedCodec(codec, cacheIdentity, frame);
+          } catch (_) {
+            codec.dispose();
+            rethrow;
+          }
+        });
+        return codec;
+      } catch (error) {
+        // Non-image bytes (an mp4 poster fallback) fail here, not at the request.
+        _logPoster(
+          'DECODE_FAILED',
+          fetched.url,
+          extra: 'error=${error.runtimeType} bytes=${fetched.bytes.length}',
+        );
+        await (thumbnailCache ?? SharedThumbnailCache.instance).invalidate(
+          cacheIdentity,
+        );
+        if (attempt >= 1) rethrow;
+      } finally {
+        unawaited(
+          DevLog.write(
+            'ThumbLoad',
+            'event=decode ms=${timer.elapsedMilliseconds} key=${safeCacheLabel(cacheIdentity)}',
+          ),
+        );
+      }
     }
   }
 
@@ -336,6 +392,47 @@ class CdnImage extends ImageProvider<CdnImage> {
 
   @override
   int get hashCode => Object.hash(cacheIdentity, cacheWidth);
+}
+
+/// Codec creation is cheap; getNextFrame is where pixel decoding happens.
+/// Keep the slot until that frame completes, including animated image frames.
+class _LimitedCodec implements ui.Codec {
+  _LimitedCodec(this.codec, this.identity, this._first);
+  final ui.Codec codec;
+  final String identity;
+  ui.FrameInfo? _first;
+  @override
+  int get frameCount => codec.frameCount;
+  @override
+  int get repetitionCount => codec.repetitionCount;
+  @override
+  void dispose() {
+    _first?.image.dispose();
+    _first = null;
+    codec.dispose();
+  }
+
+  @override
+  Future<ui.FrameInfo> getNextFrame() {
+    final first = _first;
+    if (first != null) {
+      _first = null;
+      return Future.value(first);
+    }
+    return SharedThumbnailCache.decodeSlots.run(() async {
+      final timer = Stopwatch()..start();
+      try {
+        return await codec.getNextFrame();
+      } finally {
+        unawaited(
+          DevLog.write(
+            'ThumbLoad',
+            'event=decode ms=${timer.elapsedMilliseconds} key=${safeCacheLabel(identity)}',
+          ),
+        );
+      }
+    });
+  }
 }
 
 /// Local icon registry: manifest keys never become remote URLs or file paths.

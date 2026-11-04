@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:convert';
 import 'package:easysave/core/models.dart';
 import 'package:easysave/services/shared_preview_cache.dart';
 import 'package:easysave/services/site_registry.dart';
@@ -9,6 +10,9 @@ import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 
 void main() {
+  final png = base64Decode(
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==',
+  );
   TestWidgetsFlutterBinding.ensureInitialized();
   test(
     'Dart downloads with policy headers and both consumers reuse the same cache file',
@@ -29,7 +33,7 @@ void main() {
         requests++;
         expect(request.headers['Referer'], 'https://www.instagram.com/');
         expect(request.headers.containsKey('Cookie'), isFalse);
-        return http.Response.bytes([1, 2, 3], 200);
+        return http.Response.bytes(png, 200);
       });
       const channel = MethodChannel('test/shared-thumbnails');
       final files = <String, String>{};
@@ -41,6 +45,9 @@ void main() {
             final key = args['key'] as String;
             expect(key, matches(r'^[a-f0-9]{64}$'));
             if (call.method == 'thumbnailRead') return files[key];
+            if (call.method == 'thumbnailAcquire' ||
+                call.method == 'thumbnailRelease')
+              return null;
             final path = '${root.path}/$key';
             await File(path).writeAsBytes((args['bytes'] as List).cast<int>());
             files[key] = path;
@@ -51,7 +58,7 @@ void main() {
       final first = await background.load(policy, resource);
       final second = await foreground.load(policy, resource);
       expect(first.path, second.path);
-      expect(second.bytes, [1, 2, 3]);
+      expect(second.bytes, png);
       expect(requests, 1);
       TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
           .setMockMethodCallHandler(channel, null);

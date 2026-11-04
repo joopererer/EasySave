@@ -352,12 +352,16 @@ Future<ParseOutcome> parsePostOutcome(
   String source = 'app_input',
   bool forceRefresh = false,
   FutureOr<void> Function()? onCacheMiss,
-}) => cachedPostParser.parse(
-  url,
-  entry: source,
-  forceRefresh: forceRefresh,
-  onCacheMiss: onCacheMiss,
-);
+}) async {
+  final outcome = await cachedPostParser.parse(
+    url,
+    entry: source,
+    forceRefresh: forceRefresh,
+    onCacheMiss: onCacheMiss,
+  );
+  unawaited(SharedThumbnailCache.instance.prefetch(outcome.data));
+  return outcome;
+}
 
 Future<ParseOutcome> _parsePostOutcomeUncached(
   String url, {

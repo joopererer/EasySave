@@ -39,7 +39,7 @@ class PreviewItemCover extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final remote = CoverImage(item: item, platform: platform, cacheWidth: 400);
+    final remote = CoverImage(item: item, platform: platform);
     final local = asset;
     return local == null
         ? remote
@@ -515,6 +515,7 @@ class _PreviewPageState extends State<PreviewPage> {
             ),
           Expanded(
             child: GridView.builder(
+              cacheExtent: 100,
               padding: const EdgeInsets.all(16),
               gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
                 crossAxisCount: 2,
