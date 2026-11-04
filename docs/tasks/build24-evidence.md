@@ -99,6 +99,32 @@ ExifInterface 依赖版本和能力参考 [Android 官方发布记录](https://d
 | Flutter analyze | 退出 0，无 error；91 条 warning/info，含已有 build 诊断文件 | `app/build/build24-analyze-gate.log` |
 | 差异检查 | `git diff --check` 通过 | 提交前终端检查 |
 
-APK 信息在提交后构建并追加。测试使用 D 盘 `app/build/build24-temp`；C 盘 ENOSPC 曾造成 Flutter 编译和 Vitest 临时文件失败，均改用 D 盘重跑，不把失败轮次计为通过。新增主机保存测试首次因测试文件名不符合既有导出命名规则失败，已修正测试输入，生产导出规则不变。
+实现提交：`2069945`。上述门禁通过并提交后，执行 `flutter build apk --debug --no-pub --build-name=1.10.0 --build-number=24`，assembleDebug 28.0s，退出 0；随后完成 APK 检查，退出 0。
+
+- APK：`D:\workspace\IdeaProjects\EasySave\app\build\app\outputs\flutter-apk\EasySave-1.10.0-build24-debug.apk`
+- App **1.10.0+24**；aapt 确认 `com.james.easysave`、versionName `1.10.0`、versionCode `24`。
+- 文件大小：**173,581,637 bytes**。
+- SHA-256：`f99a17ec3a119f5df231c7f3b567f436247e40a5938c98e079eb4f6f8aa8305b`。
+- 交付副本与本轮生成的 `app-debug.apk` 哈希完全一致。
+- APK 内 parser **1.4.5**，`parser.js` SHA-256 与内置 manifest 一致。
+- 构建、包信息和实际代码证据：`app/build/build24-apk-build.log`、`build24-apk-badging.log`、`build24-apk-evidence.log`。
+
+`tools/verify_build24_apk.py` 检查交付 APK，而非源码替身：
+
+- kernel 中有真实 `PreviewPage` / `CoverImage` / `CdnImage`、`thumbnailDirectory` / `thumbnailReady`、header 校验和写入 worker、主 isolate 拒绝消息、bytes/thread/waitMs/ioMs 字段；没有旧 `thumbnailWrite` 方法字符串。
+- 实际 `classes19.dex`：`SelectPanelView` 在 `0277d8` 调用 `OrientedBitmap.decode`；`OrientedBitmap` 在 `01e0f2/01e0fe/01e1ce/01e1ec` 调用 EXIF 构造/读取、Matrix.setValues、Bitmap.createBitmap，`01e0b4` 检查 Looper。
+- 真实面板仍调用 `imageAsync`、独立 decoder executor、Bitmap LRU、ScrollView 和 `setImageBitmap`；保留真实渲染链。
+- `MainActivity`、`ProvenancePairWriter`、`NativeLog`、`DownloadControl` 均有实际 `makeBackgroundTaskQueue` 调用；共享通道保留非串行 TaskQueue，磁盘队列实际调用独立 executor。
+- 最终输出：`PASS: real CoverImage and panel, file-only thumbnail channel, header workers, EXIF-aware native decode and background bulk-data channels`。
+- 提取 DEX 保留于 `app/build/build24-apk-dex`，没有自动清理目录。
+
+复核：
+
+```powershell
+rtk proxy python tools/verify_build24_apk.py app/build/app/outputs/flutter-apk/EasySave-1.10.0-build24-debug.apk --dexdump D:/Android/Sdk/build-tools/35.0.1/dexdump.exe
+rtk proxy D:/Android/Sdk/build-tools/35.0.1/aapt.exe dump badging app/build/app/outputs/flutter-apk/EasySave-1.10.0-build24-debug.apk
+```
+
+测试使用 D 盘 `app/build/build24-temp`；C 盘 ENOSPC 曾造成 Flutter 编译和 Vitest 临时文件失败，均改用 D 盘重跑，不把失败轮次计为通过。新增主机保存测试首次因测试文件名不符合既有导出命名规则失败，已修正测试输入，生产导出规则不变。
 
 无断点/IDE debug 会话，无卸载/pm clear/run-as/读取设备私有目录/删除相册文件。仅中断了本轮自己启动、等待或受磁盘空间影响的命令。未删除临时目录；主机测试图、构建日志、APK/DEX 证据保留于 build 路径。未 push/merge/tag。
