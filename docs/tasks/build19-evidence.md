@@ -99,4 +99,46 @@ The build 18 handoff copied build 17's `661` total incorrectly. Build 18 added t
 - QR DOM regressions: **4 passed**, `rtk proxy node --test tools/xhs_qr_login.test.cjs`.
 - The first guest-session regression run failed during test cleanup because the platform interface rejects assigning null; cleanup was corrected, the focused tests passed, and the final full suite above passed. No implementation commit was made with a failing gate.
 - `rtk proxy flutter analyze --no-pub --no-fatal-infos --no-fatal-warnings`: exit **0**, no errors, 75 warning/info diagnostics; raw output `app/build/build19-analyze.log`.
-- Final APK inspection and implementation/artifact commit identities follow after the build.
+- Implementation commit: `521c82fbc54c12318703a325333f3ba64843f3d9`.
+- Build command: `rtk proxy flutter build apk --debug --no-pub --build-name=1.10.0 --build-number=19`; exit **0**. Raw output `app/build/build19-apk-build.log`.
+- APK: `app/build/app/outputs/flutter-apk/app-debug.apk`; delivery copy `app/build/app/outputs/flutter-apk/EasySave-1.10.0-build19-debug.apk`. Both are **200144008 bytes**, SHA-256 **`56712a35defd57c9f7f17c98c1d2552f47f1ccb140245543459c11037d97767f`**. This supersedes the earlier, incomplete build 19 APK hash recorded in v1.10.md.
+- Manifest check: `rtk proxy D:/Android/Sdk/build-tools/35.0.1/aapt.exe dump badging app/build/app/outputs/flutter-apk/app-debug.apk` returned `package: name='com.james.easysave' versionCode='19' versionName='1.10.0'`.
+- No device session, QR-scan flow or IG/X video playback was exercised. The unconfirmed device redirect condition described in A1 remains open; a successful APK build does not close that investigation.
+
+The APK verifier command in A2 exited **0**. Exact relevant output (raw file `app/build/build19-apk-evidence.log`):
+
+```text
+apk=app\build\app\outputs\flutter-apk\app-debug.apk bytes=200144008
+sha256=56712a35defd57c9f7f17c98c1d2552f47f1ccb140245543459c11037d97767f
+kernel_blob.bin UTF-8 '中国大陆账号': FOUND offset=83786823
+kernel_blob.bin UTF-8 '扫一扫 → 从相册选择': FOUND offset=83786909
+kernel_blob.bin UTF-8 'easysave/dev_log': FOUND offset=83761100
+APK builtin XHS: desktop login UA == parsing UA; login path=/login
+PASS: compiled UI copy, both engine registrations, shared file sink and cached playback
+```
+
+DEX invocation evidence from the **same APK** (all in `classes19.dex`; addresses retained for reproducibility):
+
+```text
+HostService     012442 / 0065: invoke-virtual {v4, v6, v7}, Lcom/james/easysave/NativeLog;.register:(Landroid/content/Context;Lio/flutter/plugin/common/BinaryMessenger;)V
+MainActivity    01586e / 0017: invoke-virtual {v0, v1, v2}, Lcom/james/easysave/NativeLog;.register:(Landroid/content/Context;Lio/flutter/plugin/common/BinaryMessenger;)V
+NativeLog       0186dc / 0012: invoke-virtual {v6}, Landroid/content/Context;.getFilesDir:()Ljava/io/File;
+NativeLog       01878e / 006b: invoke-virtual {v2, v0}, Lcom/james/easysave/NativeLogFileWriter;.append:(Ljava/lang/String;)V
+NativeLog       018812 / 000f: const-string v1, "easysave/dev_log"
+NativeLog       018826 / 0019: invoke-virtual {v0, v1}, Lio/flutter/plugin/common/MethodChannel;.setMethodCallHandler:(Lio/flutter/plugin/common/MethodChannel$MethodCallHandler;)V
+NativeLog       018830 / 001e: const-string v1, "event=ready sink=files/v16dl.log transport=easysave/dev_log"
+NativeLog       018916 / 0029: invoke-virtual {v1}, Landroid/content/Context;.getFilesDir:()Ljava/io/File;
+NativeLog       0189be / 007d: invoke-virtual {v5, v6}, Lcom/james/easysave/NativeLogFileWriter;.append:(Ljava/lang/String;)V
+SelectPanelView 024ac0 / 0034: invoke-virtual {v8, v0}, Landroid/media/MediaPlayer;.setDataSource:(Ljava/lang/String;)V
+```
+
+Retest sequence: install this APK over the prior build without clearing app data; close/restart the app, use 我的 → 小红书 → 小红书（中国大陆账号）, complete QR login if offered, then retry the previously working short link. Use 我的 → 导出日志 after testing overlay IG/X and Live previews. Inspect records following the new NativeLog ready marker above; old fragments preceding that marker are historical and cannot be reconstructed.
+
+There is no clear-log button in the current MinePage. If a completely fresh log is desired and adb is available, stop the app and remove **only these diagnostic files** before restarting it:
+
+```powershell
+rtk proxy adb shell am force-stop com.james.easysave
+rtk proxy adb shell run-as com.james.easysave rm -f files/v16dl.log files/v16dl.log.1
+```
+
+These optional retest commands were not executed on a device here. Do not clear app data or CookieManager. Expect the NativeLog ready marker and subsequent PreviewPlayer events in the new export. If mainland still lands on rednote/login, record the already-sanitized target/landed/path/loggedIn diagnostics and the device's network/proxy exit region; that is still a platform navigation failure, not evidence of authenticated state from a visitor cookie.
