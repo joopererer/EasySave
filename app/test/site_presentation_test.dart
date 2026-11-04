@@ -9,6 +9,7 @@ import 'package:easysave/services/site_registry.dart';
 import 'package:easysave/widgets/shared.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:flutter_svg/flutter_svg.dart';
 
 void main() {
   tearDown(SiteRegistry.useBuiltin);
@@ -125,7 +126,8 @@ void main() {
         ),
       );
       expect(find.text('新站点'), findsOneWidget);
-      expect(find.byIcon(Icons.photo_camera), findsOneWidget);
+      expect(find.byType(PlatformIcon), findsOneWidget);
+      expect(find.byType(SvgPicture), findsOneWidget);
       final container = tester
           .widgetList<Container>(
             find.descendant(

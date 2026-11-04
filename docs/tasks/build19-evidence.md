@@ -134,11 +134,4 @@ SelectPanelView 024ac0 / 0034: invoke-virtual {v8, v0}, Landroid/media/MediaPlay
 
 Retest sequence: install this APK over the prior build without clearing app data; close/restart the app, use 我的 → 小红书 → 小红书（中国大陆账号）, complete QR login if offered, then retry the previously working short link. Use 我的 → 导出日志 after testing overlay IG/X and Live previews. Inspect records following the new NativeLog ready marker above; old fragments preceding that marker are historical and cannot be reconstructed.
 
-There is no clear-log button in the current MinePage. If a completely fresh log is desired and adb is available, stop the app and remove **only these diagnostic files** before restarting it:
-
-```powershell
-rtk proxy adb shell am force-stop com.james.easysave
-rtk proxy adb shell run-as com.james.easysave rm -f files/v16dl.log files/v16dl.log.1
-```
-
-These optional retest commands were not executed on a device here. Do not clear app data or CookieManager. Expect the NativeLog ready marker and subsequent PreviewPlayer events in the new export. If mainland still lands on rednote/login, record the already-sanitized target/landed/path/loggedIn diagnostics and the device's network/proxy exit region; that is still a platform navigation failure, not evidence of authenticated state from a visitor cookie.
+The historical private-directory cleanup instructions are withdrawn under the build 20 workflow constraints. Use build 20's confirmed 我的 → 清空日志 control, then restart the app. Do not clear app data or CookieManager or use device private-directory access. Expect the NativeLog ready marker and subsequent PreviewPlayer events in the new export. If mainland still lands on rednote/login, record only the already-sanitized target/landed/path/loggedIn diagnostics and network/proxy exit region; that is not authentication proof from a visitor cookie.

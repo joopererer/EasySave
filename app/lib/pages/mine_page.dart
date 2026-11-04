@@ -663,6 +663,32 @@ class _MinePageState extends State<MinePage> with WidgetsBindingObserver {
     );
   }
 
+  Future<void> _clearLog() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('清空日志'),
+        content: const Text('确定清空运行日志？此操作不会退出账号或删除下载记录。'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('确认清空'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+    await DevLog.clear();
+    if (mounted)
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('日志已清空')));
+  }
+
   /// Subtitle for a platform row: "已登录" / "未登录", plus a hint when a
   /// parse recently proved the stored session is dead.
   Widget _loginSubtitle(String platform) {
@@ -922,6 +948,7 @@ class _MinePageState extends State<MinePage> with WidgetsBindingObserver {
                   subtitle: const Text('调试用：把脱敏后的运行日志复制到可读取目录'),
                   onTap: _exportLog,
                 ),
+                ListTile(title: const Text('清空日志'), onTap: _clearLog),
                 ListTile(title: const Text('版本号'), subtitle: Text(_version)),
                 ListTile(
                   title: const Text('解析器版本'),

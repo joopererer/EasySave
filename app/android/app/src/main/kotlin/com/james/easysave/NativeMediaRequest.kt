@@ -15,7 +15,9 @@ internal class NativeMediaRequest(
     private val field: String,
     private val rejected: (String, String, String, String) -> Unit,
 ) {
-    val requiresAppPreview: Boolean = raw == null || raw["requiresAppPreview"] == true
+    private val localImagePath = raw?.get("localImagePath") as? String
+    private val sharedImageKey = raw?.get("sharedImageKey") as? String
+    val requiresAppPreview: Boolean = sharedImageKey == null && localImagePath == null && (raw == null || raw["requiresAppPreview"] == true)
     val url: String = raw?.get("url") as? String ?: ""
     private val headers = raw?.get("headers") as? Map<*, *> ?: emptyMap<Any, Any>()
     private val hosts = raw?.get("mediaHosts") as? List<*> ?: emptyList<Any>()
@@ -115,7 +117,12 @@ internal class NativeMediaRequest(
         deny("REQUEST_REDIRECT_REJECTED", "")
     }
 
-    fun readImage(maxBytes: Int = 25 * 1024 * 1024): ByteArray = execute { connection ->
+    fun readImage(maxBytes: Int = 25 * 1024 * 1024): ByteArray {
+        if (sharedImageKey != null) return SharedPreviewBridge.imageKey(sharedImageKey)
+            ?: throw IOException("CACHE_MISS")
+        if (localImagePath != null) return SharedPreviewBridge.image(localImagePath)
+            ?: throw IOException("CACHE_MISS")
+        return execute { connection ->
         connection.inputStream.use { stream ->
             val output = ByteArrayOutputStream()
             val buffer = ByteArray(8192)
@@ -128,6 +135,8 @@ internal class NativeMediaRequest(
 
             output.toByteArray()
         }
+    }
+
     }
 
     fun readRange(offset: Long, length: Int): ByteArray {

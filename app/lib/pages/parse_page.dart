@@ -36,7 +36,15 @@ import 'login_page.dart';
 import 'preview_page.dart';
 
 class ParsePage extends StatefulWidget {
-  const ParsePage({super.key, this.onSeeAll, this.isVisible, this.onShowSelf});
+  const ParsePage({
+    super.key,
+    this.onSeeAll,
+    this.isVisible,
+    this.onShowSelf,
+    this.initializeServices = true,
+  });
+
+  final bool initializeServices;
 
   final VoidCallback? onSeeAll;
 
@@ -77,6 +85,10 @@ class ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
   @override
   void initState() {
     super.initState();
+    if (!widget.initializeServices) {
+      _recentLoaded = true;
+      return;
+    }
     WidgetsBinding.instance.addObserver(this);
     // Kick off history DB load and preloading immediately so records are
     // ready at or before the very first frame.
@@ -755,7 +767,7 @@ class ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
       DevLog.write(
         'ParseMismatch', // i18n:ignore 日志
         'check=UNCAUGHT site=${platformFromUrl(link) ?? "-"} post=- '
-        'expected=ParseFailure actual=type=${e.runtimeType}',
+            'expected=ParseFailure actual=type=${e.runtimeType}',
       );
       setState(() {
         _busy = false;
@@ -885,17 +897,32 @@ class ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
                           borderRadius: BorderRadius.all(Radius.circular(16)),
                           borderSide: BorderSide.none,
                         ),
-                        suffixIcon: IconButton(
-                          icon: const Icon(Icons.paste),
-                          tooltip: '粘贴',
-                          onPressed: () async {
-                            final data = await Clipboard.getData(
-                              Clipboard.kTextPlain,
-                            );
-                            if (data?.text != null) {
-                              _linkController.text = data!.text!;
-                            }
-                          },
+                        suffixIcon: ValueListenableBuilder<TextEditingValue>(
+                          valueListenable: _linkController,
+                          builder: (context, value, _) => Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              if (value.text.isNotEmpty)
+                                IconButton(
+                                  key: const ValueKey('clear-link-input'),
+                                  tooltip: '清空链接',
+                                  icon: const Icon(Icons.clear),
+                                  onPressed: _linkController.clear,
+                                ),
+                              IconButton(
+                                icon: const Icon(Icons.paste),
+                                tooltip: '粘贴',
+                                onPressed: () async {
+                                  final data = await Clipboard.getData(
+                                    Clipboard.kTextPlain,
+                                  );
+                                  if (data?.text != null) {
+                                    _linkController.text = data!.text!;
+                                  }
+                                },
+                              ),
+                            ],
+                          ),
                         ),
                       ),
                     ),

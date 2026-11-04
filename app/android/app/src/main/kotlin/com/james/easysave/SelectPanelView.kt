@@ -9,7 +9,16 @@ import android.graphics.Matrix
 import android.graphics.SurfaceTexture
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
-import android.media.MediaPlayer
+import androidx.media3.common.MediaItem
+import androidx.media3.common.PlaybackException
+import androidx.media3.common.Player
+import androidx.media3.common.VideoSize
+import androidx.media3.common.Format
+import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.DefaultRenderersFactory
+import androidx.media3.exoplayer.analytics.AnalyticsListener
+import androidx.media3.exoplayer.mediacodec.MediaCodecSelector
+import java.util.concurrent.atomic.AtomicReference
 import android.net.Uri
 import android.os.Handler
 import android.os.Looper
@@ -170,7 +179,15 @@ class SelectPanelView(
         }
         override fun onDraw(canvas: Canvas) {
             super.onDraw(canvas)
-            val inset = paint.strokeWidth / 2f
+            val backgroundPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xB3222222.toInt() }
+            canvas.drawRoundRect(0f, 0f, width.toFloat(), height.toFloat(), 12f, 12f, backgroundPaint)
+            val numeral = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                color = Color.WHITE; textAlign = Paint.Align.CENTER
+                textSize = height * 0.44f; typeface = Typeface.DEFAULT_BOLD
+            }
+            canvas.drawText(holdCountdown(progress).toString(), width / 2f,
+                height / 2f - (numeral.ascent() + numeral.descent()) / 2f, numeral)
+            val inset = paint.strokeWidth / 2f + width * 0.08f
             paint.color = 0x66FFFFFF
             canvas.drawArc(inset, inset, width - inset, height - inset, 0f, 360f, false, paint)
             paint.color = Color.WHITE
@@ -218,7 +235,11 @@ class SelectPanelView(
     private var previewProgress: ProgressBar? = null
     private var previewTitle: TextView? = null
     private var previewCloseBtn: TextView? = null
-    private var mediaPlayer: MediaPlayer? = null
+    private var mediaPlayer: ExoPlayer? = null
+    private val playerSessions = PreviewSessions<ExoPlayer> {
+        it.clearVideoSurface()
+        it.release()
+    }
     private var previewIndex = -1
     private var previewGeneration = 0
     private var previewFrameTimeout: Runnable? = null
@@ -227,6 +248,7 @@ class SelectPanelView(
     private var holdAnimator: ValueAnimator? = null
     private var holdIndicator: HoldProgressView? = null
     private var holdTrigger: Runnable? = null
+    private var holdTick: Runnable? = null
     private var holdPreview = false
 
     // Navigation and video control components
@@ -535,7 +557,7 @@ class SelectPanelView(
             visibility = View.GONE
             addOnLayoutChangeListener { view, _, _, _, _, _, _, _, _ ->
                 val mp = mediaPlayer ?: return@addOnLayoutChangeListener
-                fitVideoToView(mp.videoWidth, mp.videoHeight, view.width, view.height)
+                fitVideoToView(mp.videoSize.width, mp.videoSize.height, view.width, view.height)
             }
         }
         contentContainer.addView(
@@ -685,7 +707,7 @@ class SelectPanelView(
                 override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
                     if (fromUser) {
                         val mp = mediaPlayer
-                        val total = mp?.duration ?: 0
+                        val total = mp?.duration?.toInt() ?: 0
                         if (total > 0) {
                             val targetMs = (progress.toLong() * total / 1000L).toInt()
                             videoTimeText?.text = "${formatTime(targetMs)} / ${formatTime(total)}"
@@ -697,10 +719,10 @@ class SelectPanelView(
                 }
                 override fun onStopTrackingTouch(seekBar: SeekBar?) {
                     val mp = mediaPlayer
-                    val total = mp?.duration ?: 0
+                    val total = mp?.duration?.toInt() ?: 0
                     if (mp != null && total > 0 && seekBar != null) {
                         val targetMs = (seekBar.progress.toLong() * total / 1000L).toInt()
-                        try { mp.seekTo(targetMs) } catch (_: Exception) {}
+                        try { mp.seekTo(targetMs.toLong()) } catch (_: Exception) {}
                     }
                     isTrackingTouch = false
                 }
@@ -925,8 +947,8 @@ class SelectPanelView(
             val mp = mediaPlayer
             if (mp != null && !isTrackingTouch) {
                 try {
-                    val current = mp.currentPosition
-                    val total = mp.duration
+                    val current = mp.currentPosition.toInt()
+                    val total = mp.duration.toInt()
                     if (total > 0) {
                         videoSeekBar?.progress = ((current.toLong() * 1000L) / total).toInt()
                         videoTimeText?.text = "${formatTime(current)} / ${formatTime(total)}"
@@ -953,7 +975,7 @@ class SelectPanelView(
                 mp.pause()
                 playPauseBtn?.isPlaying = false
             } else {
-                mp.start()
+                mp.play()
                 playPauseBtn?.isPlaying = true
             }
         } catch (_: Exception) {}
@@ -1008,13 +1030,15 @@ class SelectPanelView(
                 }
                 holdTrigger = trigger
                 main.postDelayed(trigger, 3000L)
-                holdAnimator = ValueAnimator.ofInt(0, 1000).apply {
-                    duration = 3000L
-                    addUpdateListener {
-                        indicator?.progress = (it.animatedValue as Int) / 1000f
+                val tick = object : Runnable {
+                    override fun run() {
+                        if (!previewCurrent(generation) || !holdPreview) return
+                        indicator?.progress = holdToOpen.progress(SystemClock.uptimeMillis())
+                        main.postDelayed(this, 50L)
                     }
-                    start()
                 }
+                holdTick = tick
+                main.post(tick)
                 return
         }
         if (request.requiresAppPreview) {
@@ -1042,7 +1066,7 @@ class SelectPanelView(
             previewImage?.visibility = View.VISIBLE
             previewImage?.setImageBitmap(null)
             previewTexture?.visibility = View.VISIBLE
-            previewTexture?.alpha = 1f
+            previewTexture?.alpha = 0f
             previewImage?.bringToFront()
             val poster = if (cell.live) listOf(cell.imageRequest) + cell.imageFallbacks
                 else listOf(cell.thumbRequest) + cell.thumbFallbacks
@@ -1065,11 +1089,15 @@ class SelectPanelView(
     private fun showLiveStill(cell: Cell, generation: Int, failed: Boolean = false) {
         if (!previewCurrent(generation)) return
         releasePlayer()
+        previewImage?.setImageBitmap(null)
+        previewTexture?.setTransform(Matrix())
+        previewImage?.scaleType = ImageView.ScaleType.FIT_CENTER
         if (failed) previewTitle?.text = "视频加载失败，显示静态图"
         videoControlBar?.visibility = View.GONE
         previewTexture?.visibility = View.GONE
         previewImage?.visibility = View.VISIBLE
-        val stills = listOf(cell.imageRequest) + cell.imageFallbacks
+        val stills = if (cell.video && !cell.live) listOf(cell.thumbRequest) + cell.thumbFallbacks
+            else listOf(cell.imageRequest) + cell.imageFallbacks
         if (stills.all { it.requiresAppPreview }) {
             previewProgress?.visibility = View.GONE
             previewTitle?.text = "请在 App 内预览（点击打开 App）"
@@ -1084,125 +1112,110 @@ class SelectPanelView(
     }
 
     private fun playVideo(cell: Cell, generation: Int) {
-        var stopped = false
-        val frameGate = PreviewFrameGate()
-        fun logPlayer(event: String, errorCode: String = "none") {
-            NativeLog.i("PreviewPlayer", "event=$event host=${cell.videoRequest.diagnosticHost} " +
-                "errorCode=$errorCode headers=${cell.videoRequest.diagnosticHeaderNames}")
-        }
-        fun firstFrame() {
-            if (stopped || !previewCurrent(generation) || !frameGate.firstFrame()) return
-            logPlayer("firstFrame")
-            previewFrameTimeout?.let { main.removeCallbacks(it) }
-            previewFrameTimeout = null
-            previewProgress?.visibility = View.GONE
-            previewTexture?.alpha = 1f
-            previewImage?.visibility = View.GONE
-        }
-        fun failed(rejected: Boolean = false) {
-            if (stopped || !previewCurrent(generation)) return
-            stopped = true
-            if (cell.live) showLiveStill(cell, generation, failed = true)
-            else {
-                releasePlayer()
-                previewTexture?.visibility = View.GONE
-                previewImage?.visibility = View.VISIBLE
-                previewProgress?.visibility = View.GONE
-                previewTitle?.text = if (rejected) "该资源地址不在允许范围内" else "视频加载失败，请重试"
-            }
-        }
         pool.execute {
             val file = java.io.File(context.cacheDir, "policy_preview_${System.nanoTime()}.mp4")
             try {
+                // All HTTPS headers and every redirect remain policy checked here.
+                // ExoPlayer receives only a private local file, never cookies.
                 cell.videoRequest.writeVideo(file)
-            } catch (e: NativeMediaRequest.Rejected) {
-                logPlayer("error", e.code)
+            } catch (error: Exception) {
                 file.delete()
-                main.post { failed(true) }
-                return@execute
-            } catch (e: Exception) {
-                val code = e.message?.takeIf { it.matches(Regex("HTTP_[0-9]{3}")) }
-                    ?: e.javaClass.simpleName.takeIf { it.matches(Regex("[A-Za-z0-9_]{1,80}")) }
-                    ?: "download"
-                logPlayer("error", code)
-                file.delete()
-                main.post { failed() }
+                main.post {
+                    if (!previewCurrent(generation)) return@post
+                    NativeLog.i("PreviewPlayer", "event=error errorCode=SOURCE_DOWNLOAD_FAILED")
+                    showLiveStill(cell, generation, failed = true)
+                }
                 return@execute
             }
             main.post {
-                if (!previewCurrent(generation)) {
-                    file.delete()
-                    return@post
-                }
+                if (!previewCurrent(generation)) { file.delete(); return@post }
                 previewVideoFile = file
-                val texture = previewTexture ?: run { failed(); return@post }
-                val timeout = Runnable { logPlayer("timeout"); failed() }
-                previewFrameTimeout = timeout
-                main.postDelayed(timeout, 15000L)
-                fun startMp(surfaceTexture: SurfaceTexture) {
-                    if (stopped || !previewCurrent(generation)) return
-                    try {
-                        val player = MediaPlayer()
-                        mediaPlayer = player
-                        player.apply {
-                            val surface = android.view.Surface(surfaceTexture)
-                            try { setSurface(surface) } finally { surface.release() }
-                            setVolume(0f, 0f)
-                            isLooping = true
-                            setDataSource(file.absolutePath)
-                            setOnVideoSizeChangedListener { _, width, height ->
-                                fitVideoToView(width, height)
+                var mime = "unknown"
+                var decoder = "unknown"
+                var width = 0
+                var height = 0
+                var decoderFailed = false
+                var fallback = false
+                val preferredDecoder = AtomicReference("unknown")
+                val (token, player) = playerSessions.begin {
+                    ExoPlayer.Builder(context, DefaultRenderersFactory(context)
+                        .setEnableDecoderFallback(true)
+                        .setMediaCodecSelector { mimeType, secure, tunneling ->
+                            MediaCodecSelector.DEFAULT.getDecoderInfos(mimeType, secure, tunneling).also {
+                                if (mimeType.startsWith("video/")) preferredDecoder.set(it.firstOrNull()?.name ?: "unknown")
                             }
-                            setOnPreparedListener { player ->
-                                fitVideoToView(player.videoWidth, player.videoHeight)
-                                if (!stopped && previewCurrent(generation) && mediaPlayer === player) {
-                                    try {
-                                        player.start()
-                                        frameGate.started()
-                                    } catch (e: Exception) {
-                                        logPlayer("error", e.javaClass.simpleName.takeIf {
-                                            it.matches(Regex("[A-Za-z0-9_]{1,80}"))
-                                        } ?: "start")
-                                        failed()
-                                    }
-                                }
-                            }
-                            setOnInfoListener { player, what, _ ->
-                                if (!stopped && previewCurrent(generation) && mediaPlayer === player &&
-                                    previewFirstFrame(what)) {
-                                    firstFrame()
-                                }
-                                false
-                            }
-                            setOnErrorListener { _, what, extra ->
-                                logPlayer("error", "media_${what}_$extra")
-                                failed()
-                                true
-                            }
-                            logPlayer("prepare")
-                            prepareAsync()
-                        }
-                    } catch (e: Exception) {
-                        logPlayer("error", e.javaClass.simpleName.takeIf {
-                            it.matches(Regex("[A-Za-z0-9_]{1,80}"))
-                        } ?: "player")
-                        failed()
-                    }
+                        }).build()
                 }
-                texture.surfaceTextureListener = object : TextureView.SurfaceTextureListener {
-                    override fun onSurfaceTextureAvailable(st: SurfaceTexture, width: Int, height: Int) {
-                        startMp(st)
-                    }
-                    override fun onSurfaceTextureSizeChanged(st: SurfaceTexture, width: Int, height: Int) {}
-                    override fun onSurfaceTextureDestroyed(st: SurfaceTexture): Boolean {
-                        if (previewCurrent(generation)) releasePlayer()
-                        return true
-                    }
-                    override fun onSurfaceTextureUpdated(st: SurfaceTexture) {
-                        firstFrame()
-                    }
+                mediaPlayer = player
+                fun current() = previewCurrent(generation) && playerSessions.accepts(token, player)
+                fun log(event: String, code: String = "none") {
+                    if (!current()) return
+                    fun safe(value: String) = value.take(120).replace(Regex("[^A-Za-z0-9_./-]"), "_")
+                    NativeLog.i("PreviewPlayer", "event=$event generation=$token host=${cell.videoRequest.diagnosticHost} " +
+                        "mime=${safe(mime)} width=$width height=$height decoder=${safe(decoder)} " +
+                        "decoderFallback=$fallback fallbackEnabled=true errorCode=${safe(code)}")
                 }
-                if (texture.isAvailable) startMp(texture.surfaceTexture!!)
+                fun failed(code: String) {
+                    if (!current()) return
+                    log("error", code)
+                    // Invalidate first, unbind and release before displaying a still.
+                    releasePlayer()
+                    showLiveStill(cell, generation, failed = true)
+                }
+                player.addAnalyticsListener(object : AnalyticsListener {
+                    override fun onVideoInputFormatChanged(eventTime: AnalyticsListener.EventTime,
+                        format: Format, decoderReuseEvaluation: androidx.media3.exoplayer.DecoderReuseEvaluation?) {
+                        if (!current()) return
+                        mime = format.sampleMimeType ?: "unknown"
+                        width = format.width.coerceAtLeast(0)
+                        height = format.height.coerceAtLeast(0)
+                        log("format")
+                    }
+                    override fun onVideoCodecError(eventTime: AnalyticsListener.EventTime, videoCodecError: Exception) {
+                        if (!current()) return
+                        decoderFailed = true
+                        log("decoderError", "VIDEO_CODEC_ERROR")
+                    }
+                    override fun onVideoDecoderInitialized(eventTime: AnalyticsListener.EventTime,
+                        decoderName: String, initializedTimestampMs: Long, initializationDurationMs: Long) {
+                        if (!current()) return
+                        fallback = fallback || decoderFailed ||
+                            (preferredDecoder.get() != "unknown" && preferredDecoder.get() != decoderName) ||
+                            (decoder != "unknown" && decoder != decoderName)
+                        decoder = decoderName
+                        log("decoderInitialized")
+                    }
+                })
+                player.addListener(object : Player.Listener {
+                    override fun onVideoSizeChanged(videoSize: VideoSize) {
+                        if (!current()) return
+                        width = videoSize.width
+                        height = videoSize.height
+                        fitVideoToView(width, height)
+                    }
+                    override fun onRenderedFirstFrame() {
+                        if (!current()) return
+                        log("firstFrame")
+                        previewTexture?.alpha = 1f
+                        previewFrameTimeout?.let { main.removeCallbacks(it) }
+                        previewFrameTimeout = null
+                        previewProgress?.visibility = View.GONE
+                        previewImage?.visibility = View.GONE
+                    }
+                    override fun onPlayerError(error: PlaybackException) { failed(error.errorCodeName) }
+                })
+                try {
+                    player.repeatMode = Player.REPEAT_MODE_ONE
+                    player.volume = 0f
+                    player.setVideoTextureView(previewTexture)
+                    player.setMediaItem(MediaItem.fromUri(Uri.fromFile(file)))
+                    val timeout = Runnable { failed("ERROR_CODE_TIMEOUT") }
+                    previewFrameTimeout = timeout
+                    main.postDelayed(timeout, 15000L)
+                    log("prepare")
+                    player.prepare()
+                    player.play()
+                } catch (_: Exception) { failed("ERROR_CODE_UNSPECIFIED") }
             }
         }
     }
@@ -1218,7 +1231,14 @@ class SelectPanelView(
                 if (previewCurrent(generation)) {
                     if (!keepProgress) previewProgress?.visibility = View.GONE
                     if (denied && !keepProgress) previewTitle?.text = "该资源地址不在允许范围内"
-                    if (result != null) target.setImageBitmap(result)
+                    if (result != null) {
+                        val parent = target.parent as? View
+                        val fit = stillLetterbox(result.width, result.height,
+                            parent?.width ?: target.width, parent?.height ?: target.height)
+                        target.scaleType = ImageView.ScaleType.FIT_CENTER
+                        if (fit != null) target.layoutParams = LayoutParams(fit.width, fit.height, Gravity.CENTER)
+                        target.setImageBitmap(result)
+                    }
                 }
             }
         }
@@ -1228,6 +1248,8 @@ class SelectPanelView(
         holdToOpen.cancel()
         holdTrigger?.let { main.removeCallbacks(it) }
         holdTrigger = null
+        holdTick?.let { main.removeCallbacks(it) }
+        holdTick = null
         holdAnimator?.cancel()
         holdAnimator = null
         holdIndicator?.visibility = View.GONE
@@ -1277,11 +1299,14 @@ class SelectPanelView(
         main.removeCallbacks(updateProgressRunnable)
         previewFrameTimeout?.let { main.removeCallbacks(it) }
         previewFrameTimeout = null
-        try {
-            mediaPlayer?.stop()
-        } catch (_: Exception) {}
-        mediaPlayer?.release()
+        playerSessions.close()
         mediaPlayer = null
+        previewTexture?.surfaceTextureListener = null
+        previewTexture?.setTransform(Matrix())
+        previewTexture?.alpha = 0f
+        previewImage?.scaleType = ImageView.ScaleType.FIT_CENTER
+        previewImage?.imageMatrix = Matrix()
+        previewImage?.layoutParams = LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT, Gravity.CENTER)
         previewVideoFile?.delete()
         previewVideoFile = null
     }
@@ -1428,7 +1453,7 @@ internal data class VideoFit(val scaleX: Float, val scaleY: Float)
 
 internal fun previewUsesVideo(video: Boolean, live: Boolean) = video || live
 
-internal fun previewFirstFrame(info: Int) = info == MediaPlayer.MEDIA_INFO_VIDEO_RENDERING_START
+internal fun previewFirstFrame(info: Int) = info == 3
 
 internal fun videoFitScale(
     videoWidth: Int,

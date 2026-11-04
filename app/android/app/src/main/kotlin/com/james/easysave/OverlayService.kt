@@ -799,8 +799,19 @@ private class BubbleView(context: Context) : FrameLayout(context) {
                         val frac = if (total > 0) done.toFloat() / total else 0f
                         arc.set(cx - r + 3, cy - r + 3, cx + r - 3, cy + r - 3)
                         canvas.drawArc(arc, -90f, 360f * frac.coerceIn(0f, 1f), false, fg)
-                        val s = if (total > 0) "$done/$total" else "…"
-                        canvas.drawText(s, cx, cy + text.textSize / 3f, text)
+                        if (total > 0) canvas.drawText("$done/$total", cx, cy + text.textSize / 3f, text)
+                        else {
+                            val moving = if (Build.VERSION.SDK_INT >= 26) android.animation.ValueAnimator.areAnimatorsEnabled()
+                                else android.provider.Settings.Global.getFloat(context.contentResolver,
+                                    android.provider.Settings.Global.ANIMATOR_DURATION_SCALE, 1f) > 0f
+                            val offsets = parsingDotOffsets(android.os.SystemClock.uptimeMillis(), moving)
+                            val dot = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.WHITE }
+                            for (index in 0..2) {
+                                val offset = offsets[index] * r * 0.16f
+                                canvas.drawCircle(cx + (index - 1) * r * 0.4f, cy - offset, r * 0.09f, dot)
+                            }
+                            if (moving) postInvalidateOnAnimation()
+                        }
                     }
                     BubbleState.DONE -> {
                         val p = Path().apply {

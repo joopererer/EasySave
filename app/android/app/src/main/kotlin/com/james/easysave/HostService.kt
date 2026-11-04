@@ -141,6 +141,7 @@ class HostService : Service() {
 
             val e = FlutterEngine(applicationContext, null, true)
             NativeLog.register(applicationContext, e.dartExecutor.binaryMessenger)
+            SharedPreviewBridge.register(applicationContext, e.dartExecutor.binaryMessenger, background = true)
             ProvenancePairWriter.register(applicationContext, e.dartExecutor.binaryMessenger)
             DownloadControl.register(e.dartExecutor.binaryMessenger)
             engine = e

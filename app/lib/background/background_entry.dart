@@ -19,6 +19,7 @@ import '../services/gallery_locator_service.dart';
 import '../services/links.dart';
 import '../services/parse_service.dart';
 import '../services/preview_resources.dart';
+import '../services/shared_preview_cache.dart';
 import '../services/settings.dart';
 import '../services/update_service.dart';
 
@@ -238,6 +239,11 @@ Future<void> _handleSubmit(
           MediaRequestResource resource,
         ) async {
           final uri = mediaPolicy.validate(resource);
+          if (resource.role == MediaResourceRole.image || resource.role == MediaResourceRole.poster ||
+              (resource.role == MediaResourceRole.fallback && resource.fallbackFor != MediaResourceRole.video)) {
+            return {'sharedImageKey': SharedThumbnailCache.instance.registerResource(mediaPolicy, resource)};
+          }
+
           final requiresCookie = resource.request.cookieDomains.any(
             (domain) => uri.host == domain || uri.host.endsWith('.$domain'),
           );

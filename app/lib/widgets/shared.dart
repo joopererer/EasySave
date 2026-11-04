@@ -5,8 +5,8 @@ import 'dart:ui' as ui show ImmutableBuffer, Codec;
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_svg/flutter_svg.dart';
 import 'package:flutter/services.dart';
-import 'package:http/http.dart' as http;
 
 import '../../core/error_copy.dart';
 import '../core/dev_log.dart';
@@ -15,7 +15,7 @@ import '../../theme/app_theme.dart';
 import '../services/auth.dart';
 import '../services/site_registry.dart';
 import '../services/media_request_policy.dart';
-import '../services/authorized_media_http.dart';
+import '../services/shared_preview_cache.dart';
 import '../../core/media_request.dart';
 
 /// Primary capsule button: red-orange gradient with white text.
@@ -158,8 +158,6 @@ class CdnImage extends ImageProvider<CdnImage> {
   final String platform;
   final int? cacheWidth;
 
-  static final _client = http.Client();
-  static const _timeout = Duration(seconds: 8);
 
   static final Map<String, Uint8List> _rawByteCache = {};
   static final List<String> _cacheKeysOrder = [];
@@ -199,7 +197,8 @@ class CdnImage extends ImageProvider<CdnImage> {
     String? host,
   }) {
     final uri = Uri.tryParse(url);
-    final name = host ??
+    final name =
+        host ??
         (uri == null || uri.host.isEmpty ? '-' : uri.host.toLowerCase());
     if (!_posterLogged.add('$reason|$name')) return;
     unawaited(
@@ -257,7 +256,8 @@ class CdnImage extends ImageProvider<CdnImage> {
       _logPoster(
         'NO_COVER_DECLARED',
         item.url,
-        extra: 'type=${item.type} poster=${item.posterUrl == null ? 'none' : 'set'}',
+        extra:
+            'type=${item.type} poster=${item.posterUrl == null ? 'none' : 'set'}',
       );
     }
     final cached = getCachedBytes(ordered.map((r) => r.url).toList());
@@ -265,28 +265,19 @@ class CdnImage extends ImageProvider<CdnImage> {
 
     for (final resource in ordered) {
       try {
-        final response = await sendAuthorizedMediaGet(
-          _client,
+        final cachedImage = await SharedThumbnailCache.instance.load(
           policy,
           resource,
-          timeout: _timeout,
         );
-        final bytes = await response.stream.toBytes().timeout(_timeout);
-        if (response.statusCode == 200 && bytes.isNotEmpty) {
-          _logPoster(
-            'FETCH_OK',
-            resource.url,
-            extra:
-                'headers=${resource.request.headers.keys.map((k) => k.toLowerCase()).join(',')}',
-          );
-          cacheBytes(resource.url, bytes);
-          return (bytes: bytes, url: resource.url);
-        }
+        final bytes = cachedImage.bytes;
         _logPoster(
-          'HTTP_STATUS',
+          'FETCH_OK',
           resource.url,
-          extra: 'status=${response.statusCode} bytes=${bytes.length}',
+          extra:
+              'headers=${resource.request.headers.keys.map((k) => k.toLowerCase()).join(',')}',
         );
+        cacheBytes(resource.url, bytes);
+        return (bytes: bytes, url: resource.url);
       } on MediaPolicyException catch (error) {
         _logPoster(
           'POLICY',
@@ -376,18 +367,27 @@ class PlatformIcon extends StatelessWidget {
   final String platform;
   final double size;
   final Color? color;
-  static const _assets = <String, IconData>{
-    'xhs': Icons.menu_book,
-    'instagram': Icons.photo_camera,
-    'x': Icons.alternate_email,
-    'tiktok': Icons.music_note,
+  static const _assets = <String, String>{
+    'xhs': 'xiaohongshu',
+    'instagram': 'instagram',
+    'x': 'x',
+    'tiktok': 'tiktok',
   };
   @override
-  Widget build(BuildContext context) => Icon(
-    _assets[SiteRegistry.current.byId(platform)?.assetKey] ?? Icons.public,
-    size: size,
-    color: color,
-  );
+  Widget build(BuildContext context) {
+    final slug = _assets[SiteRegistry.current.byId(platform)?.assetKey];
+    if (slug == null) return Icon(Icons.public, size: size, color: color);
+    return SvgPicture.asset(
+      'assets/brands/$slug.svg',
+      width: size,
+      height: size,
+      semanticsLabel: platformLabel(platform),
+      colorFilter: ColorFilter.mode(
+        color ?? IconTheme.of(context).color ?? Colors.black,
+        BlendMode.srcIn,
+      ),
+    );
+  }
 }
 
 class PlatformTag extends StatelessWidget {

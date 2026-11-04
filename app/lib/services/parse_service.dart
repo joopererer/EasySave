@@ -3,6 +3,9 @@ import 'dart:async';
 import 'dart:collection';
 import 'dart:convert';
 import 'dart:io';
+import 'package:flutter/services.dart';
+import 'shared_preview_cache.dart';
+import 'media_request_policy.dart';
 
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 import 'package:http/http.dart' as http;
@@ -177,7 +180,100 @@ Future<T> resolveAndEnterParse<T>(
   return enter(resolved, canonical);
 }
 
+final _sharedPosts = SharedParseCache<Map<String, dynamic>>();
+
+String _postCacheKey(String url) {
+  final site = SiteRegistry.current.match(url);
+  final id = site?.sourceId(Uri.parse(url));
+  return id == null ? opaquePreviewKey(url) : '${site!.id}:$id';
+}
+
+ParseOutcome _decodeSharedOutcome(Map value) => ParseOutcome(
+  data: ParsedPost.fromJson(Map<String, dynamic>.from(value['post'] as Map)),
+  rawImages: [
+    for (final raw in value['rawImages'] as List? ?? const [])
+      RawImageEntry(
+        keys: (raw['keys'] as List).cast<String>(),
+        scenes: [
+          for (final scene in raw['scenes'] as List)
+            RawScene(
+              scene: scene['scene'] as String,
+              url: scene['url'] as String,
+            ),
+        ],
+      ),
+  ],
+);
+
 Future<ParseOutcome> parsePostOutcome(
+  String url, {
+  String source = 'app',
+}) async {
+  final site = SiteRegistry.current.match(url);
+  if (site == null || !site.enabled)
+    return _parsePostOutcomeUncached(url, source: source);
+  final key = _postCacheKey(url);
+  Map<String, dynamic>? envelope = _sharedPosts.get(key);
+  if (envelope == null && source != 'background') {
+    try {
+      final remote = await sharedPreviewChannel
+          .invokeMapMethod<String, dynamic>('getParsed', {'key': key});
+      if (remote != null &&
+          (remote['expires'] as int) > DateTime.now().millisecondsSinceEpoch) {
+        envelope = remote;
+        // Keep the original deadline; consuming a handoff must not extend its TTL.
+      }
+    } on MissingPluginException {
+      /* No native broker on other platforms. */
+    }
+  }
+  if (envelope != null &&
+      (envelope['expires'] as int) > DateTime.now().millisecondsSinceEpoch) {
+    try {
+      final cached = _decodeSharedOutcome(envelope);
+      final policy = MediaRequestPolicy(site);
+      for (final item in cached.data.items) {
+        for (final resource in policy.resourcesFor(item)) {
+          policy.validate(resource);
+        }
+      }
+      await DevLog.write('SharedParse', 'event=hit source=$source');
+      return cached;
+    } catch (_) {
+      /* Expired resources must be parsed again even within the RAM TTL. */
+    }
+  }
+  final outcome = await _parsePostOutcomeUncached(url, source: source);
+  final canonical = '${outcome.data.platform}:${outcome.data.id}';
+  final value = <String, dynamic>{
+    'keys': [canonical, key, opaquePreviewKey(url)],
+    'expires': DateTime.now()
+        .add(const Duration(seconds: 45))
+        .millisecondsSinceEpoch,
+    'post': outcome.data.toJson(),
+    'rawImages': [
+      for (final raw in outcome.rawImages)
+        {
+          'keys': raw.keys,
+          'scenes': [
+            for (final scene in raw.scenes)
+              {'scene': scene.scene, 'url': scene.url},
+          ],
+        },
+    ],
+  };
+  _sharedPosts.put(canonical, value, aliases: [key, opaquePreviewKey(url)]);
+  if (source == 'background') {
+    try {
+      await sharedPreviewChannel.invokeMethod<void>('putParsed', value);
+    } on MissingPluginException {
+      /* The local RAM cache still applies. */
+    }
+  }
+  return outcome;
+}
+
+Future<ParseOutcome> _parsePostOutcomeUncached(
   String url, {
   String source = 'app',
 }) async {

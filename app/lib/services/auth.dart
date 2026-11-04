@@ -213,16 +213,26 @@ Future<String> _xhsCookiePresence(String url) async {
 }
 
 /// Record only configured cookie names and presence, never cookie values.
+final _lastXhsCookiePresence = <String, String>{};
+
 Future<void> logXhsWebViewCookies(Uri? uri) async {
   final domain = xhsDomain(uri?.host);
   if (domain == null || uri == null) return;
   final presence = await _xhsCookiePresence(
     uri.replace(query: null, fragment: null).toString(),
   );
+  if (!xhsCookiePresenceChanged(domain, presence)) return;
   await DevLog.write(
     'XhsLogin',
     'event=webview domain=$domain presence=$presence',
   );
+}
+
+/// Domain-scoped change detection; stores only presence categories, never values.
+bool xhsCookiePresenceChanged(String domain, String presence) {
+  if (_lastXhsCookiePresence[domain] == presence) return false;
+  _lastXhsCookiePresence[domain] = presence;
+  return true;
 }
 
 Future<void> _logXhsCheck({
