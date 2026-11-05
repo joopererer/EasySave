@@ -97,7 +97,30 @@ fromMediaItem/toMediaItem、播放器、缓存与共享 AI badge 符号；APK �
 不以单独新增但未挂载的 widget 代替实际页面。检查结果保留 `app/build/v149/apk-evidence.log`。
 全量门槛、构建、证书与 badging 日志同目录保留；没有清理临时目录或结束其他进程。
 
-CI 与发布后的独立验签/公开回读结果将在发布完成后补充。
+发布源提交：`b11bad35dfe03c7b8a83aa70186e82225b3c919f`。
+仅推送 `feature/v1.10` 与全新 `parser-v1.4.9`，没有 merge、force push、手动改 master 或移动旧 tag。
+
+- [发布 CI 42106362767](https://github.com/joopererer/EasySave/actions/runs/42106362767)：
+  **success，19/19 步通过，2m22s**。含 198 项 Vitest、28 项 Node 发布检查、5 项配置契约及
+  29 项本轮 App 回归测试，签名、上传、回读、通道更新全部成功。
+- [Parser 1.4.9 Release](https://github.com/joopererer/EasySave/releases/tag/parser-v1.4.9)：
+  正式发布，非 draft / prerelease，仅 `parser.js`（68,372 bytes）与 `manifest.json`（12,734 bytes）。
+- 用固定 App 公钥独立校验 Release 和 master envelope 的原始 UTF-8 payload Ed25519 签名，
+  parser SHA-256、下载地址、版本均通过；两份 envelope 逐字节相同。
+  manifest 资产 SHA-256：`d64d0981668f6f86f46c47cd59e5153c13e8a2739c378bc9e9a657d292f437be`。
+- 无认证公开地址下载 parser 与 raw master 通道，分别与 Release 资产逐字节相同；
+  Release 的完整 payload 与 APK 内置 manifest 相同，parser 与 APK 内置 parser 字节相同。
+  未读取、导出或在本地使用 CI 签名私钥。
+- 用实际已发布资产执行 App 的 SignedParserManifest、配置契约、ParserReleaseStore 和 ParserManager
+  生产路径：激活后及全新管理器重载均为 `1.4.9 / remote / manifestVersion=5`，水位 5。
+  配置摘要 `048f826bd057e301e9c042d6b8afc8ce6f356b40dd0c6e97a6c5aafad7e7e631` 与内置一致。
+  这是宿主机生产路径测试，不是设备验证。
+- CI 自动更新 master 为 `00f1d189c0aed954f3203a2ea80a6d44a55304c9`，相对发布前
+  `094c17349ee79d4c98c18e72b7f32785ef3b23f7` 仅修改 `spec/v2/manifest.json`。
+  本地只 fetch 核对，没有手动写入或推送 master。
+
+发布校验日志：`app/build/v149/release-readback.log`、`release-activation.log`；签名资产、公开下载和通道副本同目录保留。
+CI 只有托管 actions Node 运行时/ubuntu 镜像迁移提示，没有失败步骤。用户原有未提交文档和脚本修改保留。
 
 ## 用户设备复测
 
