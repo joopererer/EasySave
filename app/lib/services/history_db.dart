@@ -374,6 +374,7 @@ class HistoryRecord {
               localFilename: remote(url) == null && url.isNotEmpty ? url : null,
               localVideoFilename: remote(videoUrl) == null ? videoUrl : null,
               posterUrl: remote(map['posterUrl'] as String?),
+              thumbnailUrl: remote(map['thumbnailUrl'] as String?),
               width: map['width'] as num?,
               height: map['height'] as num?,
               duration: map['duration'] as num?,

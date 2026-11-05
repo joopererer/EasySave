@@ -279,17 +279,10 @@ class _PreviewPageState extends State<PreviewPage> {
         builder: (_) => GalleryBrowserPage(
           items: [
             for (var i = 0; i < _post.items.length; i++)
-              GalleryBrowserItem(
+              GalleryBrowserItem.fromMediaItem(
+                _post.items[i],
                 index: i,
                 cachePostId: _post.id,
-                cacheItemIndex: _post.items[i].cacheItemIndex ?? i,
-                type: _post.items[i].type,
-                url: _post.items[i].url,
-                videoUrl: _post.items[i].videoUrl,
-                posterUrl: _post.items[i].posterUrl,
-                fallbacks: _post.items[i].fallbacks,
-                requestResources: _post.items[i].requestResources,
-                isGif: _post.items[i].isGif ?? false,
                 asset: _localAssets[i],
                 liveVideoAsset: _localMotions[i],
                 filename: _post.items[i].localFilename,

@@ -563,7 +563,8 @@ List<PlannedFile> planFiles(
       planned.add(
         PlannedFile(
           label: label,
-          urls: item.videoUrl != null ? [url, ...imageUrls] : imageUrls,
+          // With a separate videoUrl, url/fallbacks describe the still poster.
+          urls: item.videoUrl != null ? [url] : imageUrls,
           filename: '${nameFor(label, seq, 'mp4')}.mp4',
           isImage: false,
           itemIndex: index + 1, // 1-based position in original post
@@ -2411,7 +2412,7 @@ List<String>? planFilesForItem(ParsedPost post, int itemIndex) {
   }
   if (item.type == 'video') {
     final url = item.videoUrl ?? item.url;
-    return item.videoUrl != null ? [url, ...imageUrls] : imageUrls;
+    return item.videoUrl != null ? [url] : imageUrls;
   }
   return imageUrls;
 }

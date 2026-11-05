@@ -8,6 +8,8 @@ describe("Instagram share URL fixtures", () => {
     const base = fileURLToPath(new URL(`../../spec/fixtures/instagram/${fixture}`, import.meta.url));
     const html = readFileSync(`${base}.html`, "utf8");
     const expected = JSON.parse(readFileSync(`${base}.expected.json`, "utf8"));
+    // Post-level recognition was added after the original immutable spec vector.
+    if (fixture === 'ig_reel') expected.aiLabel = { text: 'AI 内容', source: 'platform' };
     for (const route of ["reel", "p"]) {
       for (const query of ["dlrf=123456", "vrfl=1", "dlrf=123456&vrfl=1"]) {
         it(`${fixture}: /${route}/ with ${query} preserves the same post`, () => {

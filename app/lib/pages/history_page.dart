@@ -640,10 +640,12 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
                 index: zeroBasedIdx,
                 cachePostId: record.postId,
                 type: 'live',
-                url: postItem?.url.isNotEmpty == true ? postItem!.url : imgFile.filename,
-                videoUrl: postItem?.videoUrl?.isNotEmpty == true ? postItem!.videoUrl : vidFile.filename,
+                url: postItem?.url ?? '',
+                videoUrl: postItem?.videoUrl,
                 posterUrl: postItem?.posterUrl,
+                thumbnailUrl: postItem?.thumbnailUrl,
                 fallbacks: postItem?.fallbacks ?? const [],
+                requestResources: postItem?.requestResources,
                 isGif: postItem?.isGif ?? false,
                 asset: imgAsset,
                 liveVideoAsset: vidAsset,
@@ -676,10 +678,12 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
                 index: zeroBasedIdx,
                 cachePostId: record.postId,
                 type: itemType,
-                url: postItem?.url ?? f.filename,
-                videoUrl: f.isImage ? postItem?.videoUrl : (postItem?.videoUrl ?? f.filename),
+                url: postItem?.url ?? '',
+                videoUrl: postItem?.videoUrl,
                 posterUrl: postItem?.posterUrl,
+                thumbnailUrl: postItem?.thumbnailUrl,
                 fallbacks: postItem?.fallbacks ?? const [],
+                requestResources: postItem?.requestResources,
                 isGif: postItem?.isGif ?? false,
                 asset: asset,
                 status: status,
@@ -697,16 +701,10 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
             initial = items.length;
           }
           items.add(
-            GalleryBrowserItem(
+            GalleryBrowserItem.fromMediaItem(
+              postItem,
               index: i,
               cachePostId: record.postId,
-              cacheItemIndex: postItem.cacheItemIndex ?? i,
-              type: postItem.type,
-              url: postItem.url,
-              videoUrl: postItem.videoUrl,
-              posterUrl: postItem.posterUrl,
-              fallbacks: postItem.fallbacks,
-              isGif: postItem.isGif ?? false,
               status: FileStatus.unknown,
             ),
           );

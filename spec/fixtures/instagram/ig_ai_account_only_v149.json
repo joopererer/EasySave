@@ -1,0 +1,11 @@
+{
+  "code": "AIAccount149",
+  "media_type": 1,
+  "user": {
+    "username": "fixture_author",
+    "pk": "149",
+    "aigm_account_label_info": { "attribution_label_text": "AI creator account" }
+  },
+  "caption": { "text": "Ordinary post from a labelled account" },
+  "image_versions2": { "candidates": [{ "url": "https://scontent.cdninstagram.com/account-post.jpg", "width": 1080, "height": 1080 }] }
+}

@@ -55,6 +55,16 @@ jobs:
         working-directory: app
         run: flutter test --no-pub test/parser_config_contract_test.dart
 
+      - name: Verify App preview and Instagram AI regressions
+        working-directory: app
+        run: >-
+          flutter test --no-pub
+          test/preview_media_roundtrip_test.dart
+          test/preview_media_consumers_test.dart
+          test/history_preview_media_source_test.dart
+          test/instagram_ai_v149_test.dart
+          test/media_policy_diagnostics_v149_test.dart
+
       - name: Require signing key
         env:
           PARSER_SIGNING_KEY: ${{ secrets.PARSER_SIGNING_KEY }}

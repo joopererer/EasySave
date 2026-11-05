@@ -34,6 +34,11 @@ var EasySaveParser = (() => {
   });
 
   // src/ai-label.ts
+  function instagramAiLabel(info) {
+    if (!info || typeof info !== "object" || Array.isArray(info)) return;
+    const text2 = info.attribution_label_text;
+    if (typeof text2 === "string" && text2.trim()) return { text: text2, source: "platform" };
+  }
   function unknownAiLabel(id, value) {
     console.info("EasySaveAiLabel:" + JSON.stringify({ id, value }));
   }
@@ -817,6 +822,8 @@ var EasySaveParser = (() => {
       items
     };
     if (publishedAt) data.publishedAt = publishedAt;
+    const aiLabel = instagramAiLabel(product.ai_label_info);
+    if (aiLabel) data.aiLabel = aiLabel;
     return { ok: true, data };
   }
   function probeInstagramAiFields(product) {
@@ -834,10 +841,13 @@ var EasySaveParser = (() => {
         if (!/^[A-Za-z_][A-Za-z0-9_]{0,79}$/.test(name)) continue;
         const next = path + "." + name;
         const sensitive = privateTree || /user|owner|author|caption|text|url|email|phone|account|cookie|token|session|password|secret|authorization/i.test(name);
-        if (/ai|gen_ai|genai|label|disclosure|c2pa/i.test(name) && lines.length < 256) {
+        if ((next.startsWith("$.ai_label_info.") || /ai|gen_ai|genai|label|disclosure|c2pa/i.test(name)) && lines.length < 256) {
           const type = value === null ? "null" : Array.isArray(value) ? "array" : typeof value;
           const record2 = { path: next, name, type };
-          if (!sensitive && (typeof value === "boolean" || typeof value === "number" && Number.isFinite(value) || typeof value === "string" && /^[A-Za-z0-9_]{1,40}$/.test(value))) record2.value = value;
+          if (next === "$.ai_label_info.attribution_label_text" && typeof value === "string") {
+            const text2 = value.replace(/[\u0000-\u001f\u007f-\u009f]/g, "");
+            if (!/https?:\/\/|[?&][^\s=]+=/i.test(text2)) record2.value = Array.from(text2).slice(0, 60).join("");
+          } else if (!sensitive && (typeof value === "boolean" || typeof value === "number" && Number.isFinite(value) || typeof value === "string" && /^[A-Za-z0-9_]{1,40}$/.test(value))) record2.value = value;
           lines.push(JSON.stringify(record2));
         }
         visit(value, next, sensitive, depth + 1);

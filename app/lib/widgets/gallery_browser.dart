@@ -29,6 +29,7 @@ class GalleryBrowserItem {
     required this.url,
     this.videoUrl,
     this.posterUrl,
+    this.thumbnailUrl,
     this.fallbacks = const [],
     this.requestResources,
     this.isGif = false,
@@ -40,11 +41,38 @@ class GalleryBrowserItem {
     this.cacheItemIndex,
   });
 
+  factory GalleryBrowserItem.fromMediaItem(
+    MediaItem item, {
+    required int index,
+    String? cachePostId,
+    AssetEntity? asset,
+    AssetEntity? liveVideoAsset,
+    FileStatus status = FileStatus.found,
+    String? filename,
+  }) => GalleryBrowserItem(
+    index: index,
+    type: item.type,
+    url: item.url,
+    videoUrl: item.videoUrl,
+    posterUrl: item.posterUrl,
+    thumbnailUrl: item.thumbnailUrl,
+    fallbacks: item.fallbacks,
+    requestResources: item.requestResources,
+    isGif: item.isGif ?? false,
+    cachePostId: cachePostId ?? item.cachePostId,
+    cacheItemIndex: item.cacheItemIndex ?? index,
+    asset: asset,
+    liveVideoAsset: liveVideoAsset,
+    status: status,
+    filename: filename ?? item.localFilename,
+  );
+
   final int index;
   final String type; // 'image', 'video', 'live'
   final String url;
   final String? videoUrl;
   final String? posterUrl;
+  final String? thumbnailUrl;
 
   /// Alternative image URLs (mirrors [MediaItem.fallbacks]); without these the
   /// fullscreen viewer and bottom strip fall back to a single URL and show a
@@ -66,6 +94,8 @@ class GalleryBrowserItem {
           url: url,
           videoUrl: videoUrl,
           posterUrl: posterUrl,
+          thumbnailUrl: thumbnailUrl,
+          isGif: isGif,
           fallbacks: fallbacks,
           requestResources: requestResources,
         )
@@ -805,6 +835,7 @@ class _BrowserItemViewState extends State<_BrowserItemView> {
           controller = await networkPreviewController(
             targetUrl,
             widget.platform,
+            item: it.toMediaItem(),
           );
         }
       } else {
@@ -1338,14 +1369,15 @@ class _ZoomableImageViewState extends State<_ZoomableImageView>
   late final TransformationController _transformationController =
       TransformationController();
   TapDownDetails? _doubleTapDetails;
-  late final AnimationController _animController = AnimationController(
-    vsync: this,
-    duration: const Duration(milliseconds: 250),
-  );
+  late final AnimationController _animController;
 
   @override
   void initState() {
     super.initState();
+    _animController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 250),
+    );
     _transformationController.addListener(_handleTransform);
   }
 

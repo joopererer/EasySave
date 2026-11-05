@@ -97,13 +97,17 @@ class MediaRequestPolicy {
 
   Never _reject(String code, String raw, {String field = 'unknown', String? itemType}) {
     final host = _host(raw);
+    final download = site.data['download'] as Map;
+    final hostClass = host.isEmpty ? 'none' :
+        (download['mediaHosts'] as List).cast<Map>().any((h) => matchesHost(host, h))
+        ? 'media' : site.hasHost(host) ? 'site' : 'other';
     final logger = _logRejection;
     if (logger != null) {
       logger(code, host);
     } else {
       unawaited(DevLog.write(
         'RequestPolicy',
-        '$code host=$host${code == 'REQUEST_URL_REJECTED' ? ' field=$field shape=${_shape(raw)}${itemType == null ? '' : ' itemType=$itemType'}' : ''}',
+        '$code host=$host field=$field shape=${_shape(raw)} hostClass=$hostClass${itemType == null ? '' : ' itemType=$itemType'}',
       ));
     }
     throw MediaPolicyException(code, host);
@@ -260,7 +264,9 @@ class MediaRequestPolicy {
                   explicit[i].url != slots[i].$2 ||
                   explicit[i].fallbackFor != slots[i].$3,
             ))) {
-      _reject('REQUEST_RESOURCE_MISMATCH', item.url);
+      _reject('REQUEST_RESOURCE_MISMATCH', item.url,
+          field: explicit.length != slots.length ? 'resources.count' : 'resources.slot',
+          itemType: const {'image', 'video', 'live'}.contains(item.type) ? item.type : 'other');
     }
     final result =
         explicit ??

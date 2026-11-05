@@ -38,6 +38,8 @@ describe("instagram fixtures", () => {
       const expected = JSON.parse(readFileSync(join(fixtureDir, `${name}.expected.json`), "utf-8")) as
         | { error: { code: string; message: string } }
         | Record<string, unknown>;
+      // Keep the original spec vector; explicitly assert the newly recognised field.
+      if (name === 'ig_reel') (expected as Record<string, unknown>).aiLabel = { text: 'AI 内容', source: 'platform' };
       const id =
         typeof (expected as Record<string, unknown>)["id"] === "string"
           ? ((expected as Record<string, unknown>)["id"] as string)
@@ -62,6 +64,7 @@ describe("shortcodeToMediaId", () => {
     const expected = JSON.parse(
       readFileSync(join(fixtureDir, "ig_reel.expected.json"), "utf-8"),
     ) as Record<string, unknown>;
+    expected.aiLabel = { text: 'AI 内容', source: 'platform' };
     const result = parseInstagram(html, "https://www.instagram.com/reels/DeTOj5WRMIh/");
     expect(result).toEqual({ ok: true, data: expected });
   });

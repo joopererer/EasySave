@@ -73,6 +73,10 @@ describe('Parser bundle verification', () => {
         const jsonPath = join(platformDir, file.replace(ext, '.expected.json'));
         const input = readFileSync(inputPath, 'utf-8');
         const expected = JSON.parse(readFileSync(jsonPath, 'utf-8'));
+        // Keep the original spec vector; assert the new post-level field too.
+        if (platform === 'instagram' && file === 'ig_reel.html') {
+          expected.aiLabel = { text: 'AI 内容', source: 'platform' };
+        }
         // Get pageUrl from sources.json
         const basename = file.replace(ext, '');
         const url = platformSources[basename] || `https://${platform}.com/test/${basename}`;

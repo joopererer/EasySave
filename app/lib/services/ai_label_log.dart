@@ -39,10 +39,10 @@ void logIgAiProbe(String text) {
           r'^\$(?:\.[A-Za-z_][A-Za-z0-9_]{0,79}|\[[0-9]+\])+$',
         ).hasMatch(path) ||
         !RegExp(r'^[A-Za-z_][A-Za-z0-9_]{0,79}$').hasMatch(name) ||
-        !RegExp(
+        !(path.startsWith(r'$.ai_label_info.') || RegExp(
           r'ai|gen_ai|genai|label|disclosure|c2pa',
           caseSensitive: false,
-        ).hasMatch(name) ||
+        ).hasMatch(name)) ||
         !{
           'null',
           'array',
@@ -55,7 +55,17 @@ void logIgAiProbe(String text) {
       return;
     }
     final value = data['value'];
-    if (data.containsKey('value') &&
+    final platformText = path == r'$.ai_label_info.attribution_label_text' &&
+        name == 'attribution_label_text' && type == 'string' && value is String;
+    if (platformText) {
+      // Only Instagram's root label wording is authorised as bounded prose.
+      final clean = value.replaceAll(RegExp(r'[\x00-\x1f\x7f-\x9f]'), '');
+      if (RegExp(r'https?://|[?&][^\s=]+=', caseSensitive: false).hasMatch(clean)) {
+        data.remove('value');
+      } else {
+        data['value'] = String.fromCharCodes(clean.runes.take(60));
+      }
+    } else if (data.containsKey('value') &&
         (RegExp(
               r'user|owner|author|caption|text|url|email|phone|account|cookie|token|session|password|secret|authorization',
               caseSensitive: false,

@@ -1226,6 +1226,7 @@ class ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
               url: postItem?.url ?? '',
               videoUrl: postItem?.videoUrl,
               posterUrl: postItem?.posterUrl,
+              thumbnailUrl: postItem?.thumbnailUrl,
               fallbacks: postItem?.fallbacks ?? const [],
               requestResources: postItem?.requestResources,
               isGif: postItem?.isGif ?? false,
@@ -1241,17 +1242,10 @@ class ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
         for (var i = 0; i < post.items.length; i++) {
           final postItem = post.items[i];
           items.add(
-            GalleryBrowserItem(
+            GalleryBrowserItem.fromMediaItem(
+              postItem,
               index: i,
               cachePostId: record.postId,
-              cacheItemIndex: postItem.cacheItemIndex ?? i,
-              type: postItem.type,
-              url: postItem.url,
-              videoUrl: postItem.videoUrl,
-              posterUrl: postItem.posterUrl,
-              fallbacks: postItem.fallbacks,
-              requestResources: postItem.requestResources,
-              isGif: postItem.isGif ?? false,
               status: FileStatus.unknown,
             ),
           );
