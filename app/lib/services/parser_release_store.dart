@@ -20,12 +20,14 @@ class ParserReleaseStore {
     this.appVersion,
     this.schema, {
     this.builtinManifest,
+    this.onReadRejected,
   });
   final Directory directory;
   final String publicKeyHex;
   final String appVersion;
   final Map<String, dynamic> schema;
   final SignedParserManifest? builtinManifest;
+  final void Function(Object)? onReadRejected;
   File get _stateFile => File('${directory.path}/state.json');
 
   Map<String, dynamic>? readState() {
@@ -136,7 +138,8 @@ class ParserReleaseStore {
           continue;
         }
         return release;
-      } catch (_) {
+      } catch (error) {
+        onReadRejected?.call(error);
         // A corrupt current version must not erase the previous usable version.
       }
     }
@@ -220,7 +223,10 @@ class ParserReleaseStore {
     _atomicWrite(
       target,
       utf8.encode(
-        jsonEncode({...manifest.recognitionView(appVersion), 'activated': true}),
+        jsonEncode({
+          ...manifest.recognitionView(appVersion),
+          'activated': true,
+        }),
       ),
     );
   }

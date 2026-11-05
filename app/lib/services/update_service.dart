@@ -16,6 +16,8 @@ import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../generated/parser_version.dart';
+import '../core/dev_log.dart';
+import 'parser_config_contract.dart';
 import 'signed_parser_manifest.dart';
 import 'parser_release_store.dart';
 import 'https_parser_download.dart';
@@ -235,6 +237,8 @@ class ParserManager {
   SharedPreferences? _prefs;
   String? _appVersion;
   Map<String, dynamic>? _schema;
+  SignedParserManifest? _builtin;
+  String? _lastActivation;
   bool _canUpdate = false;
   Future<bool>? _updating;
 
@@ -283,12 +287,14 @@ class ParserManager {
       (await rootBundle.load('assets/parser/parser.js')).buffer.asUint8List(),
       _schema!,
     );
+    _builtin = builtin;
     return ParserReleaseStore(
       base,
       _publicKeyHex,
       _appVersion!,
       _schema!,
       builtinManifest: builtin,
+      onReadRejected: _logMissingConfig,
     );
   }
 
@@ -304,10 +310,49 @@ class ParserManager {
     _activeSource = ParserSource.builtin;
     _activeManifest = null;
     _signedManifest = null;
+    _logActivation(_builtin, 'builtin');
+  }
+
+  void _logActivation(SignedParserManifest? manifest, String source) {
+    if (manifest == null) return;
+    final hash = crypto.sha256
+        .convert(
+          utf8.encode(
+            jsonEncode({
+              for (final e in manifest.payload.entries)
+                if (!{
+                  'manifestVersion',
+                  'parserVersion',
+                  'parserUrl',
+                  'sha256',
+                }.contains(e.key))
+                  e.key: e.value,
+            }),
+          ),
+        )
+        .toString();
+    final line =
+        'event=activated version=${manifest.parserVersion} source=$source manifestVersion=${manifest.version} configHash=$hash';
+    if (_lastActivation == line) return;
+    _lastActivation = line;
+    unawaited(DevLog.write('ParserUpdate', line));
+  }
+
+  void _validateConfig(SignedParserManifest manifest) {
+    try {
+      validateAppParserConfig(manifest.payload);
+    } on FormatException catch (e) {
+      unawaited(
+        DevLog.write('ParserUpdate', 'event=rejected reason=${e.message}'),
+      );
+      _useBuiltin();
+      rethrow;
+    }
   }
 
   void _useRemote(ParserRelease release) {
     final manifest = release.manifest;
+    _validateConfig(manifest);
     _signedManifest = manifest;
     SiteRegistry.activate(manifest.sitesFor(_appVersion!));
     _activeVersion = manifest.parserVersion;
@@ -331,6 +376,7 @@ class ParserManager {
     }
     json['platforms'] = platforms;
     _activeManifest = ParserManifest.fromJson(json);
+    _logActivation(manifest, 'remote');
   }
 
   Future<ParserRelease?> _selectVerified() async {
@@ -342,7 +388,8 @@ class ParserManager {
         _useRemote(release);
         return release;
       }
-    } catch (_) {
+    } catch (error) {
+      _logMissingConfig(error);
       debugPrint('ParserManager: local v2 bundle unavailable');
     }
     _useBuiltin();
@@ -416,6 +463,7 @@ class ParserManager {
         schema: _schema!,
       );
       if (!manifest.supportsApp(_appVersion!)) return false;
+      _validateConfig(manifest);
       store.checkWatermark(manifest, store.readState());
       final current = await store.load();
       if (current != null &&
@@ -441,12 +489,25 @@ class ParserManager {
         await prefs.remove('parser_v2_etag');
       }
       return true;
-    } catch (_) {
+    } catch (error) {
+      _logMissingConfig(error);
       debugPrint(
         'ParserManager: v2 update rejected; retaining current release',
       );
       return false;
     }
+  }
+
+  void _logMissingConfig(Object error) {
+    if (error is! FormatException ||
+        !error.message.startsWith('missing_config:')) {
+      return;
+    }
+    final field = error.message.substring('missing_config:'.length);
+    // Required names come from the trusted APK schema, never payload contents.
+    if (!RegExp(r'^[A-Za-z0-9_.\[\]]{1,256}$').hasMatch(field)) return;
+    unawaited(DevLog.write('ParserUpdate', 'event=rejected reason=$field'));
+    _useBuiltin();
   }
 
   bool isPlatformEnabled(String platform) {

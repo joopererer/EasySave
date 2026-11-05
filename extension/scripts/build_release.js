@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 import crypto from 'node:crypto';
 import { validatePayload } from './sites_config.js';
 import { validateCanonicalTemplates } from './validate_canonical.js';
+import { assertBuiltinParity } from './config_parity.js';
 
 const repository = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const json = (path) => JSON.parse(readFileSync(path, 'utf8'));
@@ -45,6 +46,7 @@ export function buildRelease({ root = repository, candidate = false, seed = proc
   const parser = readFileSync(resolve(root, 'app/assets/parser/parser.js'));
   validatePayload(payloadObject, json(resolve(root, 'spec/sites-manifest.schema.json')));
   validateCanonicalTemplates(payloadObject.sites);
+  assertBuiltinParity(root, payloadObject);
   const payload = JSON.stringify(payloadObject);
   const envelope = { schemaVersion: 2, payload };
   // Candidates deliberately have no signature field and are never accepted by the App.

@@ -47,6 +47,14 @@ jobs:
         working-directory: extension
         run: npm test
 
+      - name: Verify effective release and APK configuration parity
+        working-directory: extension
+        run: npm run build:candidate
+
+      - name: Verify current App required configuration contract
+        working-directory: app
+        run: flutter test --no-pub test/parser_config_contract_test.dart
+
       - name: Require signing key
         env:
           PARSER_SIGNING_KEY: ${{ secrets.PARSER_SIGNING_KEY }}

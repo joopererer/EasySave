@@ -125,7 +125,12 @@ int compareAppVersions(String first, String second) {
 
 /// Same restricted schema vocabulary as scripts/sites_config.js.
 /// The schema is trusted App data, not fetched from the network.
-void validateManifestSchema(Object? value, Map rule, Map schema) {
+void validateManifestSchema(
+  Object? value,
+  Map rule,
+  Map schema, [
+  String path = 'payload',
+]) {
   const annotations = {
     r'$schema',
     r'$id',
@@ -165,7 +170,7 @@ void validateManifestSchema(Object? value, Map rule, Map schema) {
     for (final key in (rule[r'$ref'] as String).split('/').skip(1)) {
       target = (target as Map)[key];
     }
-    validateManifestSchema(value, target as Map, schema);
+    validateManifestSchema(value, target as Map, schema, path);
     return;
   }
   if (rule.containsKey('const') && value != rule['const']) fail();
@@ -174,13 +179,22 @@ void validateManifestSchema(Object? value, Map rule, Map schema) {
     case 'object':
       if (value is! Map) fail();
       for (final key in rule['required'] as List? ?? []) {
-        if (!value.containsKey(key)) fail();
+        if (!value.containsKey(key)) {
+          throw FormatException('missing_config:$path.$key');
+        }
       }
       final properties = rule['properties'] as Map? ?? {};
       for (final entry in value.entries) {
         final child = properties[entry.key] ?? rule['additionalProperties'];
         if (child == false) fail();
-        if (child is Map) validateManifestSchema(entry.value, child, schema);
+        if (child is Map) {
+          validateManifestSchema(
+            entry.value,
+            child,
+            schema,
+            '$path.${entry.key}',
+          );
+        }
       }
     case 'array':
       if (value is! List) fail();
@@ -193,7 +207,7 @@ void validateManifestSchema(Object? value, Map rule, Map schema) {
         fail();
       }
       for (final item in value) {
-        validateManifestSchema(item, rule['items'] as Map, schema);
+        validateManifestSchema(item, rule['items'] as Map, schema, '$path[]');
       }
     case 'string':
       if (value is! String) fail();

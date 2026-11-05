@@ -4,8 +4,11 @@ import 'package:easysave/services/links.dart';
 import 'package:easysave/services/parse_service.dart';
 import 'package:easysave/services/site_registry.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
+  TestWidgetsFlutterBinding.ensureInitialized();
+  setUp(() => SharedPreferences.setMockInitialValues({}));
   test('reported XHS /o/ short link is recognized and expanded offline', () async {
     SiteRegistry.useBuiltin();
     const input = 'https://xhslink.cn/o/3REdoqhbg6s';
@@ -18,7 +21,7 @@ void main() {
       expect(load, target);
       expect(canonical, 'https://www.xiaohongshu.com/explore/6adb3258000000002c00da14');
     }, readRedirect: (_) async => reads++ == 0 ? target : null);
-    expect(reads, 2);
+    expect(reads, 1);
   });
   // v1.9.0 parity per site: xhslink/t.co expand over HTTP, TikTok short links
   // are followed by the WebView, and a full post URL is entered unchanged.

@@ -263,6 +263,7 @@ export function buildPostFromProduct(
   shortcode: string,
   smallThumbnail = false,
 ): InstagramResult {
+  for (const line of probeInstagramAiFields(product)) console.info?.('EasySaveIgAiProbe:' + line);
   const user = isRecord(product["user"])
     ? (product["user"] as Record<string, unknown>)
     : isRecord(product["owner"])
@@ -336,6 +337,37 @@ export function buildPostFromProduct(
   };
   if (publishedAt) data.publishedAt = publishedAt;
   return { ok: true, data };
+}
+
+/** Diagnostic only. Never emit media, prose, dynamic keys or account values. */
+export function probeInstagramAiFields(product: unknown): string[] {
+  const lines: string[] = [];
+  const seen = new Set<object>();
+  let visited = 0;
+  const visit = (node: unknown, path: string, privateTree = false, depth = 0): void => {
+    if (!node || typeof node !== 'object' || seen.has(node) || depth > 24 || visited++ > 10000) return;
+    seen.add(node);
+    if (Array.isArray(node)) {
+      node.forEach((value, i) => visit(value, `${path}[${i}]`, privateTree, depth + 1));
+      return;
+    }
+    for (const [name, value] of Object.entries(node)) {
+      if (!/^[A-Za-z_][A-Za-z0-9_]{0,79}$/.test(name)) continue;
+      const next = path + '.' + name;
+      const sensitive = privateTree || /user|owner|author|caption|text|url|email|phone|account|cookie|token|session|password|secret|authorization/i.test(name);
+      if (/ai|gen_ai|genai|label|disclosure|c2pa/i.test(name) && lines.length < 256) {
+        const type = value === null ? 'null' : Array.isArray(value) ? 'array' : typeof value;
+        const record: Record<string, unknown> = { path: next, name, type };
+        if (!sensitive && (typeof value === 'boolean' ||
+            typeof value === 'number' && Number.isFinite(value) ||
+            typeof value === 'string' && /^[A-Za-z0-9_]{1,40}$/.test(value))) record.value = value;
+        lines.push(JSON.stringify(record));
+      }
+      visit(value, next, sensitive, depth + 1);
+    }
+  };
+  visit(product, '$');
+  return lines;
 }
 
 function mediaItem(media: Record<string, unknown>, smallThumbnail: boolean): InstagramItem | undefined {

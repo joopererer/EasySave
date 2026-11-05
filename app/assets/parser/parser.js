@@ -757,6 +757,7 @@ var EasySaveParser = (() => {
     return buildPostFromProduct(product, shortcode, smallThumbnail);
   }
   function buildPostFromProduct(product, shortcode, smallThumbnail = false) {
+    for (const line of probeInstagramAiFields(product)) console.info?.("EasySaveIgAiProbe:" + line);
     const user = isRecord2(product["user"]) ? product["user"] : isRecord2(product["owner"]) ? product["owner"] : {};
     const author = {};
     if (nonBlank2(user["username"])) author.name = user["username"];
@@ -817,6 +818,33 @@ var EasySaveParser = (() => {
     };
     if (publishedAt) data.publishedAt = publishedAt;
     return { ok: true, data };
+  }
+  function probeInstagramAiFields(product) {
+    const lines = [];
+    const seen = /* @__PURE__ */ new Set();
+    let visited = 0;
+    const visit = (node, path, privateTree = false, depth = 0) => {
+      if (!node || typeof node !== "object" || seen.has(node) || depth > 24 || visited++ > 1e4) return;
+      seen.add(node);
+      if (Array.isArray(node)) {
+        node.forEach((value, i) => visit(value, `${path}[${i}]`, privateTree, depth + 1));
+        return;
+      }
+      for (const [name, value] of Object.entries(node)) {
+        if (!/^[A-Za-z_][A-Za-z0-9_]{0,79}$/.test(name)) continue;
+        const next = path + "." + name;
+        const sensitive = privateTree || /user|owner|author|caption|text|url|email|phone|account|cookie|token|session|password|secret|authorization/i.test(name);
+        if (/ai|gen_ai|genai|label|disclosure|c2pa/i.test(name) && lines.length < 256) {
+          const type = value === null ? "null" : Array.isArray(value) ? "array" : typeof value;
+          const record2 = { path: next, name, type };
+          if (!sensitive && (typeof value === "boolean" || typeof value === "number" && Number.isFinite(value) || typeof value === "string" && /^[A-Za-z0-9_]{1,40}$/.test(value))) record2.value = value;
+          lines.push(JSON.stringify(record2));
+        }
+        visit(value, next, sensitive, depth + 1);
+      }
+    };
+    visit(product, "$");
+    return lines;
   }
   function mediaItem(media, smallThumbnail) {
     const item = originalMediaItem(media);

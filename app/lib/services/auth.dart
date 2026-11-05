@@ -135,7 +135,11 @@ String? xhsValidAlternate(String origin, Map<String, SessionStatus> statuses) {
   return null;
 }
 
-Future<String> selectXhsPostUrl(String url, String postId) async {
+Future<String> selectXhsPostUrl(
+  String url,
+  String postId, {
+  String entry = 'app_input',
+}) async {
   final uri = Uri.tryParse(url);
   if (uri == null) return url;
   final origin = xhsDomain(uri.host);
@@ -144,6 +148,20 @@ Future<String> selectXhsPostUrl(String url, String postId) async {
   final targetDomain = statuses[origin] == SessionStatus.valid
       ? origin
       : xhsValidAlternate(origin, statuses);
+  final reason = statuses[origin] == SessionStatus.valid
+      ? 'original_valid'
+      : targetDomain != null
+      ? 'alias_valid'
+      : 'none_valid';
+  final safeEntry = RegExp(r'^[a-zA-Z0-9_]{1,64}$').hasMatch(entry)
+      ? entry
+      : 'other';
+  unawaited(
+    DevLog.write(
+      'XhsDomain',
+      'event=choose from=$origin to=${targetDomain ?? origin} reason=$reason entry=$safeEntry',
+    ),
+  );
   if (targetDomain == null || targetDomain == origin) return url;
   final site = SiteRegistry.current.byId('xhs');
   final mappings = site?.auth['openDomains'];

@@ -87,6 +87,18 @@ void _logParseCheck(
 /// must keep that split, so only `http` is expanded here.
 String _shortLinkStrategy(Map rule) => rule['strategy'] as String? ?? 'http';
 
+/// Apply account-domain policy at every boundary that can load a post page.
+Future<String> chooseFinalParseUrl(
+  String url,
+  SiteDefinition site, {
+  String entry = 'app_input',
+}) async {
+  final uri = Uri.tryParse(url);
+  if (site.id != 'xhs' || uri == null || !site.hasHost(uri.host)) return url;
+  final id = site.sourceId(uri);
+  return id == null ? url : selectXhsPostUrl(url, id, entry: entry);
+}
+
 ParseFailure? terminalPageFailure(SiteDefinition site, Uri? uri) {
   if (uri == null || !site.hasHost(uri.host)) return null;
   final category = terminalPathCategory(uri);
@@ -107,6 +119,7 @@ Future<T> resolveAndEnterParse<T>(
   Future<T> Function(String loadUrl, String? canonicalUrl) enter, {
   Future<String?> Function(Uri)? readRedirect,
   Duration? timeout,
+  String entry = 'app_input',
 }) async {
   final uri = Uri.parse(url);
   final rule = site.shortLink(uri);
@@ -177,7 +190,8 @@ Future<T> resolveAndEnterParse<T>(
     );
     throw ParseFailure(ParseErrorCode.invalidPage, '短链跳转目标不是作品页面');
   }
-  return enter(resolved, canonical);
+  final selected = await chooseFinalParseUrl(resolved, site, entry: entry);
+  return enter(selected, canonical);
 }
 
 ParseOutcome _decodeSharedOutcome(Map value) => ParseOutcome(
@@ -402,17 +416,13 @@ Future<ParseOutcome> _parsePostOutcomeUncached(
   }
   final hooks = ParserHooks(script, site);
   try {
-    final loadOrigin = site.id == 'xhs'
-        ? site.sourceId(Uri.parse(url)) == null
-              ? url
-              : await selectXhsPostUrl(url, site.sourceId(Uri.parse(url))!)
-        : url;
     return await (() async {
       final result = await resolveAndEnterParse(
-        loadOrigin,
+        url,
         site,
         (loadUrl, _) => _run(hooks, loadUrl, source: source),
         timeout: remaining(),
+        entry: source,
       );
       // Diagnostics only: retweets and quote tweets may answer with a payload
       // id that differs from the one in the link (v1.9.0 kept parsing).
@@ -686,6 +696,7 @@ Future<ParseOutcome> _run(
   String targetUrl, {
   required String source,
 }) async {
+  targetUrl = await chooseFinalParseUrl(targetUrl, hooks.site, entry: source);
   final jsonMode = hooks.site.load['mode'] == 'json';
   final target = Uri.tryParse(targetUrl);
   DevLog.write(
@@ -738,6 +749,19 @@ Future<ParseOutcome> _run(
         if (uri == null || isLoopbackHost(uri.host)) {
           return NavigationActionPolicy.CANCEL;
         }
+        if (action.isForMainFrame == true) {
+          final selected = await chooseFinalParseUrl(
+            uri.toString(),
+            hooks.site,
+            entry: source,
+          );
+          if (selected != uri.toString()) {
+            await controller.loadUrl(
+              urlRequest: URLRequest(url: WebUri(selected)),
+            );
+            return NavigationActionPolicy.CANCEL;
+          }
+        }
         if (uri.scheme == 'http' && action.isForMainFrame == true) {
           await controller.loadUrl(
             urlRequest: URLRequest(
@@ -761,6 +785,18 @@ Future<ParseOutcome> _run(
           if (!jsonMode) {
             stage = 'navigate';
             final current = uri?.toString() ?? targetUrl;
+            // Android may omit shouldOverrideUrlLoading for redirect navigations.
+            final selected = await chooseFinalParseUrl(
+              current,
+              hooks.site,
+              entry: source,
+            );
+            if (selected != current) {
+              await controller.loadUrl(
+                urlRequest: URLRequest(url: WebUri(selected)),
+              );
+              return;
+            }
             final step = await navigateStep(
               site: hooks.site,
               currentUrl: current,
@@ -777,8 +813,13 @@ Future<ParseOutcome> _run(
                 return;
               case NavigateKind.load:
                 navigated = true;
+                final next = await chooseFinalParseUrl(
+                  step.url!,
+                  hooks.site,
+                  entry: source,
+                );
                 await controller.loadUrl(
-                  urlRequest: URLRequest(url: WebUri(step.url!)),
+                  urlRequest: URLRequest(url: WebUri(next)),
                 );
                 stage = 'load_wait';
                 return;

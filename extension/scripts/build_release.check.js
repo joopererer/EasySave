@@ -28,6 +28,16 @@ function fixture(t) {
     mkdirSync(dirname(resolve(root, name)), { recursive: true });
     writeFileSync(resolve(root, name), value);
   }
+  const payload = createPayload(root);
+  for (const [name, value] of Object.entries({
+    'app/assets/parser/builtin-manifest.json': JSON.stringify(payload),
+    'app/assets/parser/sites-manifest.schema.json': readFileSync(resolve(root, 'spec/sites-manifest.schema.json')),
+    'app/lib/generated/builtin_sites.dart': 'const builtinSitesJson = ' + JSON.stringify(JSON.stringify(payload.sites)) + ';',
+    'app/android/app/src/main/assets/link-recognition.json': JSON.stringify({sites:payload.sites.filter(s=>s.enabled).map(s=>({id:s.id,routes:s.match.routes}))}),
+  })) {
+    mkdirSync(dirname(resolve(root, name)), { recursive: true });
+    writeFileSync(resolve(root, name), value);
+  }
   return { root, seed, publicKey };
 }
 
@@ -66,6 +76,25 @@ test('candidate is unsigned and separate from release', (t) => {
   assert.equal(Object.hasOwn(envelope, 'signature'), false);
   assert.equal(directory, resolve(root, 'extension/dist/candidate'));
   assert.equal(existsSync(resolve(root, 'extension/dist/release')), false);
+});
+
+for (const name of ['app/assets/parser/builtin-manifest.json',
+  'app/android/app/src/main/assets/link-recognition.json',
+  'app/assets/parser/sites-manifest.schema.json', 'app/lib/generated/builtin_sites.dart']) {
+  test('release refuses divergent APK configuration: ' + name, (t) => {
+    const { root } = fixture(t);
+    writeFileSync(resolve(root, name), name.endsWith('.dart') ? 'const builtinSitesJson = "[]";' : '{}');
+    assert.throws(() => buildRelease({ root, candidate: true }));
+    assert.equal(existsSync(resolve(root, 'extension/dist')), false);
+  });
+}
+test('only manifest/parser version metadata may differ from builtin configuration', (t) => {
+  const { root } = fixture(t);
+  const file = resolve(root, 'app/assets/parser/builtin-manifest.json');
+  const builtin = JSON.parse(readFileSync(file));
+  builtin.parserVersion = '0.0.1'; builtin.manifestVersion = 1;
+  writeFileSync(file, JSON.stringify(builtin));
+  assert.doesNotThrow(() => buildRelease({ root, candidate: true }));
 });
 test('configuration errors cannot create signed artifacts', (t) => {
   const { root, seed } = fixture(t);
@@ -128,7 +157,7 @@ test('readback verification accepts matching signed artifacts and rejects change
   const downloaded = resolve(root, 'downloaded');
   mkdirSync(downloaded);
   for (const name of ['manifest.json', 'parser.js']) writeFileSync(resolve(downloaded, name), readFileSync(resolve(directory, name)));
-  assert.equal(verifyRelease({ root, downloadDirectory: downloaded }).manifestVersion, 3);
+  assert.equal(verifyRelease({ root, downloadDirectory: downloaded }).manifestVersion, 4);
   writeFileSync(resolve(downloaded, 'parser.js'), 'unexpected parser bytes');
   assert.throws(() => verifyRelease({ root, downloadDirectory: downloaded }), /differs/);
   writeFileSync(resolve(downloaded, 'parser.js'), readFileSync(resolve(directory, 'parser.js')));

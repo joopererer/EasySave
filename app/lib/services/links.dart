@@ -11,7 +11,9 @@ import 'site_registry.dart';
 String parsePathCategory(Uri? uri) {
   final path = uri?.path.toLowerCase() ?? '';
   if (RegExp(r'^/explore(?:/|$)').hasMatch(path)) return 'explore';
-  if (RegExp(r'^/discovery/item(?:/|$)').hasMatch(path)) return 'discovery/item';
+  if (RegExp(r'^/discovery/item(?:/|$)').hasMatch(path)) {
+    return 'discovery/item';
+  }
   if (path.contains('404')) return '404';
   if (path.contains('login')) return 'login';
   if (path.contains('captcha') || path.contains('verify')) return 'captcha';
@@ -19,7 +21,8 @@ String parsePathCategory(Uri? uri) {
 }
 
 String terminalPathCategory(Uri uri) {
-  if (uri.path.isEmpty || uri.path == '/' ||
+  if (uri.path.isEmpty ||
+      uri.path == '/' ||
       RegExp(r'^/explore/?$', caseSensitive: false).hasMatch(uri.path)) {
     return 'home';
   }
@@ -28,9 +31,21 @@ String terminalPathCategory(Uri uri) {
 
 String shortLinkHtmlKind(String contentType, String body) {
   if (!contentType.toLowerCase().contains('html')) return 'not_html';
-  final meta = RegExp(r'<meta\b[^>]*http-equiv\s*=\s*["\x27]?refresh\b', caseSensitive: false).hasMatch(body);
-  final js = RegExp(r'(?:window\.)?location(?:\.href|\.replace|\.assign)?\s*[=(]', caseSensitive: false).hasMatch(body);
-  return meta && js ? 'both' : meta ? 'meta' : js ? 'js' : 'none';
+  final meta = RegExp(
+    r'<meta\b[^>]*http-equiv\s*=\s*["\x27]?refresh\b',
+    caseSensitive: false,
+  ).hasMatch(body);
+  final js = RegExp(
+    r'(?:window\.)?location(?:\.href|\.replace|\.assign)?\s*[=(]',
+    caseSensitive: false,
+  ).hasMatch(body);
+  return meta && js
+      ? 'both'
+      : meta
+      ? 'meta'
+      : js
+      ? 'js'
+      : 'none';
 }
 
 final _candidatePattern = RegExp(
@@ -170,8 +185,9 @@ Future<String> resolveShortLink(
               ?.id !=
           site?.id) {
         final category = terminalPathCategory(current);
-        final terminal = (site?.terminalPages ?? const [])
-            .whereType<Map>().any((rule) => rule['category'] == category);
+        final terminal = (site?.terminalPages ?? const []).whereType<Map>().any(
+          (rule) => rule['category'] == category,
+        );
         if (site != null && site.hasHost(current.host) && terminal) {
           return current.toString();
         }
@@ -200,18 +216,29 @@ Future<String> resolveShortLink(
         }());
         final next = location == null ? null : current.resolve(location);
         final host = next?.host.toLowerCase() ?? '';
-        final safeHost = RegExp(r'^[a-z0-9.:-]{1,253}$').hasMatch(host) ? host : '-';
+        final safeHost = RegExp(r'^[a-z0-9.:-]{1,253}$').hasMatch(host)
+            ? host
+            : '-';
         final kind = shortLinkHtmlKind(
           response.headers.contentType?.mimeType ?? '',
           utf8.decode(bytes, allowMalformed: true),
         );
-        unawaited(DevLog.write('ShortLink',
-          'status=${response.statusCode} location=${location == null ? 0 : 1} host=$safeHost path=${parsePathCategory(next)} hop=${i + 1} html=$kind'));
+        unawaited(
+          DevLog.write(
+            'ShortLink',
+            'status=${response.statusCode} location=${location == null ? 0 : 1} host=$safeHost path=${parsePathCategory(next)} hop=${i + 1} html=$kind',
+          ),
+        );
       }
       if (location == null) return current.toString();
       current = current.resolve(location);
       if (current.scheme != 'http' && current.scheme != 'https') {
         throw const FormatException('短链跳转目标不受支持');
+      }
+      if (rule['stopAtPost'] == true &&
+          SiteRegistry.current.match(current.toString())?.id == site?.id &&
+          site?.sourceId(current) != null) {
+        return current.toString();
       }
     }
     return current.toString();

@@ -6,6 +6,7 @@ import 'package:easysave/generated/parser_version.dart';
 import 'package:easysave/services/update_service.dart';
 import 'package:easysave/services/signed_parser_manifest.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -26,11 +27,10 @@ void main() {
   Map<String, dynamic> payload(int version) {
     final example =
         jsonDecode(
-              File('$repo/spec/sites-manifest.example.json').readAsStringSync(),
+              File('assets/parser/builtin-manifest.json').readAsStringSync(),
             )
             as Map;
-    final data =
-        jsonDecode(example['payload'] as String) as Map<String, dynamic>;
+    final data = Map<String, dynamic>.from(example);
     data['manifestVersion'] = version;
     data['parserVersion'] = '1.5.0';
     data['parserUrl'] =
@@ -40,6 +40,11 @@ void main() {
     for (final site in (data['sites'] as List).cast<Map>()) {
       site['minAppVersion'] = '1.0.0';
       site['requiredCapabilities'] = [];
+      if (site['id'] == 'xhs') {
+        for (final rule in (site['shortLinks'] as List).cast<Map>()) {
+          rule['stopAtPost'] = true;
+        }
+      }
     }
     return data;
   }
@@ -93,6 +98,35 @@ void main() {
     remote = await sign(payload(version));
     expect(await manager.checkForUpdates(force: true), isTrue);
   }
+
+  test(
+    'signed bundle missing App navigation configuration never activates',
+    () async {
+      final lines = <String>[];
+      final previous = debugPrint;
+      debugPrint = (message, {wrapWidth}) {
+        if (message != null) lines.add(message);
+      };
+      addTearDown(() => debugPrint = previous);
+      final value = payload(50);
+      final xhs = (value['sites'] as List).cast<Map>().firstWhere(
+        (s) => s['id'] == 'xhs',
+      );
+      (xhs['shortLinks'] as List).cast<Map>().first.remove('stopAtPost');
+      remote = await sign(value);
+      await prepare();
+      expect(await manager.checkForUpdates(force: true), isFalse);
+      expect(manager.activeSource, ParserSource.builtin);
+      expect(manager.activeVersion, ParserVersion.version);
+      expect(await manager.getActiveScript(), contains('EasySaveParser'));
+      expect(
+        lines.join('\n'),
+        contains(
+          '[ParserUpdate] event=rejected reason=sites.xhs.shortLinks.stopAtPost',
+        ),
+      );
+    },
+  );
 
   setUp(() async {
     SharedPreferences.setMockInitialValues({});
