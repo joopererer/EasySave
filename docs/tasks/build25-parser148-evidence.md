@@ -45,6 +45,7 @@ direct rednote、token/source 保留及 app/share/bubble/history/cache/WebView �
 | sites（等价 sites.json） | 所有字段相同 |
 | platforms / headers / parserAbi / minAppVersion | 全部相同 |
 | link-recognition.json | APK 表与云端 sites 投影完全相同 |
+| APK 中编译的 builtinSitesJson | build 24 的 kernel 内配置与其 manifest 及 1.4.7 sites 完全相同；build 25 的编译配置也与其 manifest 相同 |
 | schema | Release 不单发 schema；发布 tag 的 schema 与 APK schema 一致 |
 | parserVersion | 1.4.5 → 1.4.7 |
 | manifestVersion | 1 → 3 |
@@ -129,7 +130,53 @@ Android 首轮和单 worker 复测均在既有缩略图读队列性能断言失�
 下载和解码阻塞断言不变。14 项缓存/头完整性专项通过（`contention-warmup.log`），
 随后标准参数全量 737 项通过；未以隔离单项通过代替最终全量门禁。
 
-CI 与发布后校验结果在发布完成后追加。
+## 发布与发布后校验
+
+发布提交：`75657381b972b738c2528eebef788cc042c26560`。
+先推送 `feature/v1.10`，再创建并推送新 tag `parser-v1.4.8`。
+[CI 42072354945](https://github.com/joopererer/EasySave/actions/runs/42072354945)
+最终 **success**，18 个步骤全部成功（包括 setup/post 步骤），`gh run watch --exit-status` 成功。
+
+| 发布门禁/步骤 | 结果 |
+| --- | --- |
+| Node 依赖、Flutter、App 依赖准备 | success |
+| 全部解析/构建脚本测试 | success |
+| Release / APK 生效配置一致性 | success |
+| 当前 App 必需配置契约测试 | success |
+| CI Secret 签名、上传 Release、资产读回验签 | success |
+| CI 自动更新 master 的 v2 通道 | success |
+
+资产：[Parser 1.4.8 Release](https://github.com/joopererer/EasySave/releases/tag/parser-v1.4.8)。
+签名只在 CI 执行；本地只使用 App 固定公钥验证。
+
+发布后独立检查全部通过：
+
+- 实际 Release 和 GitHub API 的 master envelope 原始字节相同。
+- Release 和 App 实际使用的公开 raw 通道，均按原始 payload UTF-8 字节通过 Ed25519 验签；
+  parserVersion **1.4.8**、manifestVersion **4**、parserUrl 正确，SHA-256 与 APK 一致。
+- 无 GitHub 登录凭据的公开 parser URL 可下载，字节与 Release / APK 完全相同；
+  无凭据访问 raw 通道也得到同一签名清单。
+- Release 的完整 payload 与 build 25 内置 manifest 严格相等（包括版本元数据），
+  parser.js 逐字节相同，配置没有合并或丢失。
+- 实际发布资产调用生产 `SignedParserManifest`、App 字段契约、`ParserReleaseStore`、
+  `ParserManager` 激活，并重新创建 manager 重载：**1 passed**；两次均为 **1.4.8 / remote**，
+  防回滚水位 **4**。这是主机生产代码验证，不是真机重启验证。
+- 两次激活日志的 configHash 相同：
+  `048f826bd057e301e9c042d6b8afc8ce6f356b40dd0c6e97a6c5aafad7e7e631`。
+
+主机激活日志：`app/build/v148/published-activation.log`；本地复核命令：
+
+```powershell
+rtk proxy node tools/verify_v2_channel.mjs app/build/v148/release148 app/build/v148/public-master148-manifest.json 1.4.8 4
+# 从 app 目录执行（使用本轮保留的已下载资产及测试文件）
+rtk proxy flutter test --no-pub build/v148/verify_activation_test.dart
+```
+
+master 从 `6218dd2ee2a4351d62ed58a40d0734e0926af1aa` 到
+`094c17349ee79d4c98c18e72b7f32785ef3b23f7`，差异只有 `spec/v2/manifest.json`
+（2 insertions / 2 deletions），由 CI 完成。本地仅 fetch 和只读核对；没有手动修改/推送 master、
+没有 merge 或 force push，没有推送其他分支/tag，旧 tag 均保留。后续仅在 `feature/v1.10`
+提交本交接的最终发布证据，不移动已发布 tag。
 首轮失败保留在 `app/build/v148/flutter-tests.log`；旧测试数据契约及缺省 console.info 问题已修复，
 定向重测 45 项通过。Android 首次因机器 JAVA_HOME 错误未启动，后续命令内指定现有 JDK。
 既有用户工作区修改（v1.11 的 Gradle 修复记录、未跟踪构建脚本和 .claude）保留，不混入本次代码提交。
