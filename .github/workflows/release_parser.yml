@@ -92,10 +92,12 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git fetch origin master
-          git checkout -B master origin/master
+          export PARSER_BUILT_MANIFEST="$GITHUB_WORKSPACE/extension/dist/release/manifest.json"
+          git worktree add --detach "$RUNNER_TEMP/parser-channel-master" origin/master
+          cd "$RUNNER_TEMP/parser-channel-master"
           node --input-type=module <<'NODE'
           import { readFileSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
-          const bytes = readFileSync('extension/dist/release/manifest.json');
+          const bytes = readFileSync(process.env.PARSER_BUILT_MANIFEST);
           const candidate = JSON.parse(JSON.parse(bytes).payload);
           const target = 'spec/v2/manifest.json';
           if (existsSync(target)) {

@@ -1,4 +1,4 @@
 // GENERATED FILE - DO NOT EDIT
 class ParserVersion {
-  static const String version = '1.4.6';
+  static const String version = '1.4.7';
 }

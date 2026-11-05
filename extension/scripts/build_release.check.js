@@ -128,7 +128,7 @@ test('readback verification accepts matching signed artifacts and rejects change
   const downloaded = resolve(root, 'downloaded');
   mkdirSync(downloaded);
   for (const name of ['manifest.json', 'parser.js']) writeFileSync(resolve(downloaded, name), readFileSync(resolve(directory, name)));
-  assert.equal(verifyRelease({ root, downloadDirectory: downloaded }).manifestVersion, 2);
+  assert.equal(verifyRelease({ root, downloadDirectory: downloaded }).manifestVersion, 3);
   writeFileSync(resolve(downloaded, 'parser.js'), 'unexpected parser bytes');
   assert.throws(() => verifyRelease({ root, downloadDirectory: downloaded }), /differs/);
   writeFileSync(resolve(downloaded, 'parser.js'), readFileSync(resolve(directory, 'parser.js')));
@@ -165,6 +165,9 @@ test('workflow publishes channel only after upload and readback; release jobs ne
   assert.match(workflow, /cancel-in-progress: false/);
   assert.match(workflow, /overwrite_files: false/);
   assert.match(workflow, /git add spec\/v2\/manifest\.json/);
+  assert.match(workflow, /git worktree add --detach/);
+  assert.match(workflow, /readFileSync\(process\.env\.PARSER_BUILT_MANIFEST\)/);
+  assert.doesNotMatch(workflow, /git checkout -B master/);
   assert.doesNotMatch(workflow, /git add spec\/manifest\.json|always\(\)|continue-on-error/);
 });
 
@@ -181,4 +184,34 @@ test('resource defaults cannot widen cookies or inject headers', async () => {
     payload.sites.find(s => s.id === 'tiktok').download.resourceDefaults.image = invalid;
     assert.throws(() => validatePayload(payload, schema));
   }
+});
+
+test('channel worktree stays clean when dependency resolution changes the tagged checkout lockfile', () => {
+  // Retained in the test temp root for diagnostics; no real remote or branch is touched.
+  const root = mkdtempSync(resolve(tmpdir(), 'easysave-v2-channel-worktree-'));
+  const source = resolve(root, 'source');
+  const channel = resolve(root, 'channel');
+  mkdirSync(source);
+  const git = (cwd, ...args) => {
+    const result = spawnSync('git', args, {cwd,encoding:'utf8'});
+    assert.equal(result.status,0,result.stderr);
+    return result.stdout.trim();
+  };
+  git(source,'init','--initial-branch=channel-base');
+  git(source,'config','user.name','Release Test');
+  git(source,'config','user.email','release-test@example.invalid');
+  mkdirSync(resolve(source,'app'));
+  writeFileSync(resolve(source,'app/pubspec.lock'),'locked baseline\n');
+  git(source,'add','app/pubspec.lock');
+  git(source,'commit','-m','fixture baseline');
+  const baseline = git(source,'rev-parse','HEAD');
+  writeFileSync(resolve(source,'app/pubspec.lock'),'changed by dependency resolution\n');
+  git(source,'worktree','add','--detach',channel,'channel-base');
+  assert.equal(git(channel,'status','--porcelain'),'');
+  mkdirSync(resolve(channel,'spec/v2'),{recursive:true});
+  writeFileSync(resolve(channel,'spec/v2/manifest.json'),'signed-envelope-fixture\n');
+  git(channel,'add','spec/v2/manifest.json');
+  git(channel,'commit','-m','fixture channel manifest');
+  assert.equal(git(channel,'diff','--name-only',baseline,'HEAD'),'spec/v2/manifest.json');
+  assert.equal(readFileSync(resolve(source,'app/pubspec.lock'),'utf8'),'changed by dependency resolution\n');
 });
