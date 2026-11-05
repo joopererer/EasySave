@@ -128,7 +128,7 @@ test('readback verification accepts matching signed artifacts and rejects change
   const downloaded = resolve(root, 'downloaded');
   mkdirSync(downloaded);
   for (const name of ['manifest.json', 'parser.js']) writeFileSync(resolve(downloaded, name), readFileSync(resolve(directory, name)));
-  assert.equal(verifyRelease({ root, downloadDirectory: downloaded }).manifestVersion, 1);
+  assert.equal(verifyRelease({ root, downloadDirectory: downloaded }).manifestVersion, 2);
   writeFileSync(resolve(downloaded, 'parser.js'), 'unexpected parser bytes');
   assert.throws(() => verifyRelease({ root, downloadDirectory: downloaded }), /differs/);
   writeFileSync(resolve(downloaded, 'parser.js'), readFileSync(resolve(directory, 'parser.js')));
