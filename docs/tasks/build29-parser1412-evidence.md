@@ -156,3 +156,87 @@ transcoded streams; stream lists also vary between page loads, which matches
 `xhs_video` fixture output is unchanged. Unit tests cover audio states, ranking,
 probe output, MP4 files with and without `soun`, moov at the end, and the retry
 decision.
+
+## Validation
+
+Local gates on source commit **1ce1a44d7f950679279654cdc2269b335c92d564**:
+
+- Flutter **861/861** (`app/build/build29-flutter-final.log`). An earlier full run
+  (`build29-flutter-full.log`, 860/861) failed only because `node.exe` was not on
+  PATH for `media_request_policy_test.dart`; it was not counted. With Node on
+  PATH that test passes alone and in the final full run.
+- Android unit tests **101/101**, 26 JUnit classes, 0 skipped
+  (`build29-android-final.log`; `:app:testDebugUnitTest` executed).
+- Extension: TypeScript check, Vitest **258/258**, Node release checks **28/28**
+  (`build29-extension-test.log`); candidate release build and extension
+  production build pass (`build29-extension-build.log`).
+- `flutter analyze lib`: 0 errors, 61 warning/info diagnostics, the same count as
+  build 28, none in new code; `dart analyze --no-fatal-warnings lib` exits 0.
+  No suppression, skip or threshold change was added.
+
+Machine-local environment notes (no project or system setting changed): the
+shell `JAVA_HOME` points to a non-existent path, so Gradle runs set it per
+process to Flutter's Android Studio JBR; the JDK's AF_UNIX pipe failed under the
+8.3 short `%TEMP%` path, so `-Djdk.net.unixdomain.tmpdir` points to the existing
+`app/build/jvm-temp` for the Gradle process only.
+
+## Release
+
+- [CI 42299021840](https://github.com/joopererer/EasySave/actions/runs/42299021840)
+  succeeds, **19/19 steps**, on tag `parser-v1.4.12` = `1ce1a44`.
+- [Parser 1.4.12 Release](https://github.com/joopererer/EasySave/releases/tag/parser-v1.4.12):
+  not draft or prerelease; parser.js **85,567 bytes**
+  (SHA-256 `5f48008ba735d931d97714b1fdac3be5934e1277ac58a0db022e5a7367a1fd98`),
+  manifest.json **12,881 bytes**
+  (SHA-256 `97bb1cd7fcda9ab1c1ab0e47275f21e14674f4a4346eeabcdd7f49a570f985c9`).
+- `tools/verify_v2_channel.mjs` with the App's fixed public key: Release and
+  master envelopes are byte-identical; Ed25519 over the payload, schema,
+  parser hash, release URL and **1.4.12 / 8** pass. Anonymous public downloads of
+  both assets and the raw master channel equal the authenticated readback.
+- The published payload equals the APK builtin manifest and the published
+  parser equals the APK parser. The published files pass production
+  SignedParserManifest verification, ParserReleaseStore activation and two fresh
+  ParserManager starts (remote / 1.4.12, watermark 8).
+- CI advanced master to **512db52**; its only change is `spec/v2/manifest.json`.
+  No manual master push, merge or rebase; the signing key stayed in CI.
+- Evidence: `app/build/v1412/` (release1412/, master-manifest.json,
+  public-*.json/js, activation test). The user's uncommitted v1.11.md notes and
+  the untracked build script were kept out of the commit.
+
+## APK
+
+`app/build/app/outputs/flutter-apk/EasySave-1.10.0-build29-debug.apk`,
+**173,637,021 bytes**, `com.james.easysave` **1.10.0 (29)**.
+SHA-256 `2e73f4e7dda054a26f16a7e3802c76251d8996399ecad9cf117fc083a8e38687`.
+`apksigner verify` passes; certificate SHA-256
+`7ec6c14f1c8c9fff6de9a31fda73150c12db7c81c98ee8017960d838aecb3484` matches
+builds 27 and 28. `tools/verify_build29_apk.py` passes: parser 1.4.12 / 8 bytes
+and digest match the APK assets and the published release; the X entry
+template is present; 10 changed Dart sources (including `history_page.dart`,
+`history_masonry.dart`, `background_entry.dart` and
+`gallery_locator_service.dart`) are embedded byte-for-byte
+(`app/build/v1412/apk-verification.json`).
+
+## Device retest steps
+
+1. Cover-install build 29 without clearing data. Confirm 1.10.0 (29) and parser
+   1.4.12 / 8 in Mine; check cloud update and restart persistence.
+2. 本地已有: in the App, download 3 items of `xhslink.cn/o/2UN2COpb1Ov`; then open
+   the overlay "选择下载" for the same link. The same 3 thumbnails must show
+   本地已有 in both. Delete one of them from the album (only if acceptable) or
+   save one more, reopen the panel and check it changes. Export logs and look
+   for `[SavedLookup] engine=background permission=authorized refreshed=1`.
+3. History layout: stay on the history waterfall, add a new image to an already
+   downloaded post; when it moves to the top, the next post must sit beside it.
+   Repeat with a delete and a new post. Pull to refresh must not be needed.
+4. X: logged in, open `x.com/KPKP996/status/2118566677374022101` from overlay,
+   App and share. Expect either the post, or AGE_NOT_SET / AGE_RESTRICTED /
+   PROTECTED copy. Export `[XLogin]` (status, basis, decision) and `[XProbe]`
+   (source, shape, typename, reason, tombstone). If AGE_RESTRICTED persists while
+   logged in, enable “显示可能包含敏感内容的媒体” in X and retry. Log out and
+   retry: guest copy only, no session page.
+5. XHS audio: preview and download `xhslink.cn/o/8gozhWQhnq6` and
+   `xhslink.cn/o/41z2yt2CvFw`; both previews and files must have sound. Export
+   `[XhsStreamProbe]` lines and any `[V16DL] event=retry reason=no_audio_track`.
+6. Regress IG/X/TikTok public downloads and the build 28 items (partial counts,
+   processing state, history reads, thumbnails before originals).
