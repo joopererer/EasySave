@@ -9,7 +9,6 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:flutter_staggered_grid_view/flutter_staggered_grid_view.dart';
 import 'package:photo_manager/photo_manager.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -32,6 +31,7 @@ import '../widgets/delete_records_sheet.dart';
 import '../widgets/download_sheet.dart';
 import '../widgets/gallery_browser.dart';
 import '../widgets/history_cards.dart';
+import '../widgets/history_masonry.dart';
 import 'download_queue_page.dart';
 import 'login_page.dart';
 import 'preview_page.dart';
@@ -1695,24 +1695,16 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
   /// A masonry block for one group: a shrink-wrapped grid inside a
   /// SliverToBoxAdapter so the sliver reports an exact height (avoids the
   /// sliver-masonry extent estimate that caused the scroll to jump back and
-  /// stop short of the bottom).
+  /// stop short of the bottom). [itemKeys] identify the ordered items so the
+  /// grid lays out again whenever order or membership changes.
   Widget _groupGrid({
-    required int count,
+    required List<String> itemKeys,
     required Widget Function(BuildContext, int) itemBuilder,
   }) {
     return SliverToBoxAdapter(
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 16),
-        child: MasonryGridView.count(
-          crossAxisCount: 2,
-          mainAxisSpacing: 12,
-          crossAxisSpacing: 8,
-          shrinkWrap: true,
-          physics: const NeverScrollableScrollPhysics(),
-          padding: EdgeInsets.zero,
-          itemCount: count,
-          itemBuilder: itemBuilder,
-        ),
+        child: HistoryMasonryGrid(itemKeys: itemKeys, itemBuilder: itemBuilder),
       ),
     );
   }
@@ -1728,7 +1720,7 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
               title: group.title,
               background: Theme.of(context).scaffoldBackgroundColor,
               content: _groupGrid(
-              count: group.posts.length,
+              itemKeys: [for (final record in group.posts) 'wf-${record.id}'],
               itemBuilder: (context, index) {
                 final record = group.posts[index];
                 final key = _postKey(record);
@@ -1844,7 +1836,9 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
               title: group.title,
               background: Theme.of(context).scaffoldBackgroundColor,
               content: _groupGrid(
-              count: group.media.length,
+              itemKeys: [
+                for (final ref in group.media) 'all-${ref.record.id}-${ref.itemIndex}',
+              ],
               itemBuilder: (context, index) {
                 final ref = group.media[index];
                 final key = _mediaKey(ref.record, ref.itemIndex);

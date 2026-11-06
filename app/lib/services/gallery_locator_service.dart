@@ -3,6 +3,7 @@ import 'verified_media.dart';
 // builds in-memory filename/postId index once per session, and locates
 // saved files for history records without repeated disk queries.
 
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
@@ -24,7 +25,16 @@ class GalleryLocatorService extends ChangeNotifier {
     evictMediaIds([id]);
     notifyListeners();
   }
-  Future<bool> isPresent(String id) async => !_unreadableIds.contains(id) && await mediaExists(id);
+  Future<bool> isPresent(String id) async => !_unreadableIds.contains(id) &&
+      await (presenceProbeForTesting ?? mediaExists)(id);
+
+  /// Test seams for the platform calls; production leaves them null.
+  @visibleForTesting
+  Future<PermissionState> Function()? permissionReaderForTesting;
+  @visibleForTesting
+  Future<List<AssetEntity>> Function()? albumReaderForTesting;
+  @visibleForTesting
+  Future<bool> Function(String id)? presenceProbeForTesting;
 
   GalleryLocatorService._();
 
@@ -133,7 +143,8 @@ class GalleryLocatorService extends ChangeNotifier {
   /// Check current permission state without prompting the user.
   Future<PermissionState> checkPermission() async {
     try {
-      final permission = await PhotoManager.getPermissionState(requestOption: _defaultOption);
+      final permission = await (permissionReaderForTesting?.call() ??
+          PhotoManager.getPermissionState(requestOption: _defaultOption));
       final changed = permission != _permission;
       _permission = permission;
       if (changed) notifyListeners();
@@ -202,6 +213,15 @@ class GalleryLocatorService extends ChangeNotifier {
     notifyListeners();
 
     try {
+      final testAlbum = albumReaderForTesting;
+      if (testAlbum != null) {
+        setScannedForTesting(
+          scanned: true,
+          permission: _permission,
+          assets: await testAlbum(),
+        );
+        return;
+      }
       final settings = await AppSettings.load();
       final albumName = settings.albumName.trim().toLowerCase();
       // Every album the app has used, not just the current one: renaming the
@@ -337,6 +357,9 @@ class GalleryLocatorService extends ChangeNotifier {
   /// Testing hook to reset locator state.
   @visibleForTesting
   void resetForTesting() {
+    permissionReaderForTesting = null;
+    albumReaderForTesting = null;
+    presenceProbeForTesting = null;
     _scanned = false;
     _isScanning = false;
     _permission = PermissionState.notDetermined;
@@ -777,14 +800,39 @@ class GalleryLocatorService extends ChangeNotifier {
   }
 
   /// Return the set of item indices for [post] that are already saved locally.
-  Future<Set<int>> findDownloadedIndices(ParsedPost post) async =>
-      (await matchPostItems(post)).keys.toSet();
+  ///
+  /// [refreshAlbum] re-reads permission and rescans the used albums first. The
+  /// overlay's background engine passes it: that engine never ran the
+  /// foreground start-up permission check, and its album index can predate
+  /// files the foreground saved since. The result is never cached; every
+  /// caller decides again from the current history rows and album.
+  Future<Set<int>> findDownloadedIndices(
+    ParsedPost post, {
+    bool refreshAlbum = false,
+  }) async {
+    if (refreshAlbum) {
+      await checkPermission();
+      if (hasAccess) await scanAlbum(force: true);
+    }
+    final indices = (await matchPostItems(post)).keys.toSet();
+    unawaited(DevLog.write(
+      'SavedLookup',
+      'engine=${HistoryDb.engine} permission=${_permission.name} '
+          'scanned=${_scanned ? 1 : 0} refreshed=${refreshAlbum ? 1 : 0} '
+          'albumAssets=${_allAssets.length} items=${post.items.length} '
+          'saved=${indices.length}',
+    ));
+    return indices;
+  }
 
   /// Locate the album asset behind each item of [post] (index -> asset) using
   /// the persisted history record first, then a postId + sequence scan.
   Future<Map<int, AssetEntity>> matchPostItems(ParsedPost post, {bool liveVideoOnly = false}) async {
     final result = <int, AssetEntity>{};
     try {
+      // A secondary engine starts with an unknown permission state; without
+      // this read every lookup below would silently report nothing saved.
+      if (!hasAccess) await checkPermission();
       if (hasAccess && !_scanned) {
         await scanAlbum();
       }

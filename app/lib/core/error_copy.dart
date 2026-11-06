@@ -37,6 +37,21 @@ ErrorCopy errorCopyFor(String code) {
         message: names.isEmpty ? '需要先登录' : '需要先登录$names',
         action: ErrorAction.goLogin,
       );
+    case ParseErrorCode.ageNotSet:
+      return const ErrorCopy(
+        message: '该内容需要你的 X 账号先设置出生日期（年龄）后才能查看',
+        action: ErrorAction.backHome,
+      );
+    case ParseErrorCode.ageRestricted:
+      return const ErrorCopy(
+        message: '该帖子有年龄限制，需要登录已完成年龄验证的 X 账号才能查看',
+        action: ErrorAction.goLogin,
+      );
+    case ParseErrorCode.protectedAccount:
+      return const ErrorCopy(
+        message: '该帖子来自受保护的账号，只有获准的关注者可以查看',
+        action: ErrorAction.backHome,
+      );
     case ParseErrorCode.privateOrUnavailable:
       return const ErrorCopy(
         message: '该帖子不存在、私密或已删除',

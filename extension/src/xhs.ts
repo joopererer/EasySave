@@ -58,13 +58,38 @@ export interface ResolvedVideo {
   url: string;
   width?: number;
   height?: number;
+  /** Other clean renditions not known to lack audio, best first. */
+  alternates?: string[];
 }
+
+/** Whether a rendition declares an audio track: yes, no, or no audio fields. */
+export type AudioState = "yes" | "no" | "unknown";
 
 interface VideoCandidate {
   url: string;
   watermarked: boolean;
   width: number;
   height: number;
+  audio: AudioState;
+  bitrate: number;
+  origin?: boolean;
+}
+
+/** Short, content-free description of one candidate stream. */
+export interface XhsStreamProbeEntry {
+  bucket: string;
+  streamType?: number;
+  codec?: string;
+  width: number;
+  height: number;
+  bitrate: number;
+  audio: AudioState;
+  audioCodec?: string;
+  audioChannels?: number;
+  audioBitrate?: number;
+  audioFields: string[];
+  watermarked: boolean;
+  selected: boolean;
 }
 
 const NOTE_ID_PATTERN = /\/(?:explore|discovery\/item|user\/profile\/[^/]+)\/([a-f0-9]{24})/i;
@@ -304,16 +329,35 @@ function deepFindNote(root: unknown, wantedId: string | undefined): Record<strin
 }
 
 function streamEntries(stream: unknown): Array<Record<string, unknown>> {
+  return bucketedStreamEntries(stream).map(([, entry]) => entry);
+}
+
+function bucketedStreamEntries(stream: unknown): Array<[string, Record<string, unknown>]> {
   if (!isRecord(stream)) return [];
-  const out: Array<Record<string, unknown>> = [];
-  for (const arr of Object.values(stream)) {
+  const out: Array<[string, Record<string, unknown>]> = [];
+  for (const [bucket, arr] of Object.entries(stream)) {
     if (Array.isArray(arr)) {
       for (const entry of arr) {
-        if (isRecord(entry)) out.push(entry);
+        if (isRecord(entry)) out.push([bucket, entry]);
       }
     }
   }
   return out;
+}
+
+/**
+ * Audio declared by a stream entry. Any positive audio field means a track;
+ * audio fields that are all empty or zero mean none; no audio field at all
+ * leaves it unknown (the downloader then checks the file).
+ */
+export function audioStateOf(entry: Record<string, unknown>): AudioState {
+  const codec = entry["audioCodec"] ?? entry["audio_codec"];
+  const channels = num(entry["audioChannels"] ?? entry["audio_channels"]);
+  const bitrate = num(entry["audioBitrate"] ?? entry["audio_bitrate"]);
+  if (codec === undefined && channels === undefined && bitrate === undefined) return "unknown";
+  const namedCodec = typeof codec === "string" && codec.trim() !== "" &&
+    !/^(?:none|null|unknown|0)$/i.test(codec.trim());
+  return namedCodec || (channels ?? 0) > 0 || (bitrate ?? 0) > 0 ? "yes" : "no";
 }
 
 function candidateFromEntry(entry: Record<string, unknown>): VideoCandidate | undefined {
@@ -336,7 +380,8 @@ function candidateFromEntry(entry: Record<string, unknown>): VideoCandidate | un
   if (urls.length === 0) return undefined;
   const width = typeof entry["width"] === "number" ? (entry["width"] as number) : 0;
   const height = typeof entry["height"] === "number" ? (entry["height"] as number) : 0;
-  return { url: toHttps(urls[0]), watermarked, width, height };
+  const bitrate = num(entry["avgBitrate"]) ?? num(entry["videoBitrate"]) ?? 0;
+  return { url: toHttps(urls[0]), watermarked, width, height, audio: audioStateOf(entry), bitrate };
 }
 
 function collectStreamCandidates(container: unknown): VideoCandidate[] {
@@ -354,44 +399,126 @@ function collectStreamCandidates(container: unknown): VideoCandidate[] {
  * best non-watermarked stream rendition is used.
  */
 export function resolveVideoUrl(video: unknown): ResolvedVideo | undefined {
-  if (!isRecord(video)) return undefined;
-  const key =
-    (isRecord(video["consumer"]) ? pickString(video["consumer"] as Record<string, unknown>, ["originVideoKey"]) : undefined) ??
-    pickString(video, ["originVideoKey"]);
-  if (key) {
-    if (/^https?:\/\//i.test(key)) return { url: toHttps(key) };
-    return { url: `https://sns-video-bd.xhscdn.com/${key.replace(/^\/+/, "")}` };
-  }
-  const candidates: VideoCandidate[] = [];
-  if (isRecord(video["media"])) {
-    const media = video["media"] as Record<string, unknown>;
-    if (media["stream"] !== undefined) candidates.push(...collectStreamCandidates(media["stream"]));
-  }
-  if (video["stream"] !== undefined) candidates.push(...collectStreamCandidates(video["stream"]));
-  if (typeof video["mediaV2"] === "string") {
-    try {
-      const parsed = JSON.parse(video["mediaV2"] as string) as Record<string, unknown>;
-      if (isRecord(parsed) && parsed["stream"] !== undefined) {
-        candidates.push(...collectStreamCandidates(parsed["stream"]));
-      }
-    } catch {
-      // Ignore unparseable app-media payloads; other buckets may still apply.
-    }
-  }
-  const best = bestVideo(candidates);
+  const ranked = rankVideoCandidates(videoCandidates(video));
+  const best = ranked[0];
   if (!best) return undefined;
   const resolved: ResolvedVideo = { url: best.url };
   if (best.width > 0) resolved.width = best.width;
   if (best.height > 0) resolved.height = best.height;
+  const alternates = [...new Set(ranked.slice(1)
+    .filter((c) => !c.watermarked && c.audio !== "no")
+    .map((c) => c.url))].filter((url) => url !== best.url);
+  if (alternates.length > 0) resolved.alternates = alternates;
   return resolved;
 }
 
-/** Highest resolution wins; watermarked renditions lose to clean ones. */
-function bestVideo(candidates: VideoCandidate[]): VideoCandidate | undefined {
+function originVideoUrl(video: Record<string, unknown>): string | undefined {
+  const key =
+    (isRecord(video["consumer"]) ? pickString(video["consumer"] as Record<string, unknown>, ["originVideoKey"]) : undefined) ??
+    pickString(video, ["originVideoKey"]);
+  if (!key) return undefined;
+  if (/^https?:\/\//i.test(key)) return toHttps(key);
+  return `https://sns-video-bd.xhscdn.com/${key.replace(/^\/+/, "")}`;
+}
+
+/** Stream entries of every bucket a video object may carry, with their bucket. */
+function videoStreamEntries(video: Record<string, unknown>): Array<[string, Record<string, unknown>]> {
+  const out: Array<[string, Record<string, unknown>]> = [];
+  const add = (prefix: string, container: unknown) => {
+    if (!isRecord(container)) return;
+    const stream = container["stream"] !== undefined ? container["stream"] : container;
+    for (const [bucket, entry] of bucketedStreamEntries(stream)) out.push([`${prefix}.${bucket}`, entry]);
+  };
+  if (isRecord(video["media"]) && (video["media"] as Record<string, unknown>)["stream"] !== undefined) {
+    add("media", (video["media"] as Record<string, unknown>)["stream"]);
+  }
+  if (video["stream"] !== undefined) add("video", video["stream"]);
+  if (typeof video["mediaV2"] === "string") {
+    try {
+      const parsed = JSON.parse(video["mediaV2"] as string) as Record<string, unknown>;
+      if (isRecord(parsed) && parsed["stream"] !== undefined) add("mediaV2", parsed["stream"]);
+    } catch {
+      // Ignore unparseable app-media payloads; other buckets may still apply.
+    }
+  }
+  return out;
+}
+
+/**
+ * The original upload (originVideoKey) declares no audio fields; transcoded
+ * streams do. An editor soundtrack can exist only in the transcoded streams,
+ * so a stream that declares audio outranks the original upload.
+ */
+function videoCandidates(video: unknown): VideoCandidate[] {
+  if (!isRecord(video)) return [];
+  const candidates: VideoCandidate[] = [];
+  const origin = originVideoUrl(video);
+  if (origin) {
+    candidates.push({ url: origin, watermarked: false, width: 0, height: 0, audio: "unknown", bitrate: 0, origin: true });
+  }
+  for (const [, entry] of videoStreamEntries(video)) {
+    const candidate = candidateFromEntry(entry);
+    if (candidate) candidates.push(candidate);
+  }
+  return candidates;
+}
+
+const AUDIO_RANK: Record<AudioState, number> = { yes: 0, unknown: 1, no: 2 };
+
+/**
+ * Clean before watermarked, declared audio before unknown before none, the
+ * original upload before an equally unknown stream, then resolution, then bitrate.
+ */
+function rankVideoCandidates(candidates: VideoCandidate[]): VideoCandidate[] {
   return [...candidates].sort((a, b) => {
     if (a.watermarked !== b.watermarked) return a.watermarked ? 1 : -1;
-    return b.width * b.height - a.width * a.height;
-  })[0];
+    if (a.audio !== b.audio) return AUDIO_RANK[a.audio] - AUDIO_RANK[b.audio];
+    if (!!a.origin !== !!b.origin) return a.origin ? -1 : 1;
+    const area = b.width * b.height - a.width * a.height;
+    return area !== 0 ? area : b.bitrate - a.bitrate;
+  });
+}
+
+function bestVideo(candidates: VideoCandidate[]): VideoCandidate | undefined {
+  return rankVideoCandidates(candidates)[0];
+}
+
+/** Field names and short values of every candidate stream, for diagnostics. */
+export function xhsStreamProbe(video: unknown): XhsStreamProbeEntry[] {
+  if (!isRecord(video)) return [];
+  const selected = resolveVideoUrl(video)?.url;
+  const out: XhsStreamProbeEntry[] = [];
+  const origin = originVideoUrl(video);
+  if (origin) {
+    out.push({ bucket: "origin", width: 0, height: 0, bitrate: 0, audio: "unknown",
+      audioFields: [], watermarked: false, selected: origin === selected });
+  }
+  for (const [bucket, entry] of videoStreamEntries(video)) {
+    const candidate = candidateFromEntry(entry);
+    if (!candidate) continue;
+    const codec = entry["videoCodec"] ?? entry["video_codec"];
+    const audioCodec = entry["audioCodec"] ?? entry["audio_codec"];
+    const probe: XhsStreamProbeEntry = {
+      bucket,
+      width: candidate.width,
+      height: candidate.height,
+      bitrate: candidate.bitrate,
+      audio: candidate.audio,
+      audioFields: Object.keys(entry).filter((key) => /audio/i.test(key)).sort(),
+      watermarked: candidate.watermarked,
+      selected: candidate.url === selected,
+    };
+    const streamType = num(entry["streamType"] ?? entry["stream_type"]);
+    if (streamType !== undefined) probe.streamType = streamType;
+    if (typeof codec === "string") probe.codec = codec;
+    if (typeof audioCodec === "string") probe.audioCodec = audioCodec;
+    const channels = num(entry["audioChannels"] ?? entry["audio_channels"]);
+    if (channels !== undefined) probe.audioChannels = channels;
+    const audioBitrate = num(entry["audioBitrate"] ?? entry["audio_bitrate"]);
+    if (audioBitrate !== undefined) probe.audioBitrate = audioBitrate;
+    out.push(probe);
+  }
+  return out;
 }
 
 function imageUrlOf(entry: Record<string, unknown>): { url: string; fallbacks: string[] } | undefined {
@@ -684,6 +811,7 @@ export function buildNoteFromRecord(
     const resolved = resolveVideoUrl(note["video"]);
     if (resolved) {
       const item: XhsItem = { type: "video", url: resolved.url };
+      if (resolved.alternates) item.fallbacks = resolved.alternates;
       const cover = images.length > 0 ? imageUrlOf(images[0]) : undefined;
       if (cover) item.posterUrl = cover.url;
       if (images[0]) {
@@ -729,7 +857,7 @@ export function buildNoteFromRecord(
           : []),
       ];
       const own = entryKeyUrl
-        ? { url: entryKeyUrl, watermarked: false, width: 0, height: 0 }
+        ? { url: entryKeyUrl }
         : bestVideo(ownCandidates);
       if (own && img) {
         const item: XhsItem = { type: "live", url: img.url, videoUrl: own.url, fallbacks: img.fallbacks };
@@ -760,6 +888,7 @@ export function buildNoteFromRecord(
     if (noteVideo && !noteVideoEmitted && images.length !== 1) {
       noteVideoEmitted = true;
       const item: XhsItem = { type: "video", url: noteVideo.url };
+      if (noteVideo.alternates) item.fallbacks = noteVideo.alternates;
       if (noteVideo.width !== undefined) item.width = noteVideo.width;
       if (noteVideo.height !== undefined) item.height = noteVideo.height;
       const duration = videoDuration(note["video"]);

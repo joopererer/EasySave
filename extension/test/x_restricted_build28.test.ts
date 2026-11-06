@@ -5,7 +5,6 @@ import { readFileSync } from 'node:fs';
 for (const input of [
   { errors: [{ message: 'You must be logged in to view this content', code: 32 }] },
   { __typename: 'TweetUnavailable', reason: 'NsfwLoggedOut' },
-  { __typename: 'TweetTombstone', tombstone: { text: { text: 'Age-restricted content' } } },
 ]) {
   it(`distinguishes explicit restriction ${JSON.stringify(input)}`, () => {
     const result = parseX(input, 'https://x.com/test/status/123');
@@ -14,6 +13,12 @@ for (const input of [
     } });
   });
 }
+it('classifies an age-restricted tombstone as AGE_RESTRICTED (build 29)', () => {
+  expect(parseX({ __typename: 'TweetTombstone', tombstone: { text: { text: 'Age-restricted content' } } },
+    'https://x.com/test/status/123')).toEqual({ ok: false, error: {
+    code: 'AGE_RESTRICTED', message: '该帖子有年龄限制，需要登录已完成年龄验证的 X 账号才能查看',
+  } });
+});
 it('does not invent a login restriction for an empty public response', () => {
   expect(parseX('', 'https://x.com/test/status/123')).toMatchObject({
     ok: false, error: { code: 'PRIVATE_OR_UNAVAILABLE' },

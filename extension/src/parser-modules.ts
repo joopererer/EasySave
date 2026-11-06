@@ -1,17 +1,43 @@
 import { withMediaResources } from './media-resources';
-import { parseX, calculateToken, extractTweetId } from './x';
+import { parseX, parseXGraphql, xProbe, calculateToken, extractTweetId, X_SENSITIVE_MEDIA_HINT, X_SESSION_EXPIRED } from './x';
+import { findNoteInStates, xhsStreamProbe } from './xhs';
 import { parseTiktok, extractTiktokPostId, tiktokExpiresAt } from './tiktok';
 import { parsePageForModule as legacyPage, parse as legacyParse } from './_parse_page';
-import { installIgSniff, readXhsAccount, tiktokReady } from './page-hooks';
+import { installIgSniff, installXGraphqlSniff, readXhsAccount, tiktokReady } from './page-hooks';
 
 type Context = { url: string; input?: string; site: any; error?: any; loggedIn?: boolean; statusCode?: number; location?: string };
-type Hooks = Partial<Record<'install' | 'request' | 'ready' | 'navigate' | 'prepare' | 'parsePage' | 'parse' | 'classify' | 'account' | 'probeSession' | 'expiresAt', (c: Context) => any>>;
+type Hooks = Partial<Record<'install' | 'request' | 'ready' | 'navigate' | 'prepare' | 'parsePage' | 'parse' | 'classify' | 'account' | 'probeSession' | 'expiresAt' | 'probe', (c: Context) => any>>;
 const page = () => window as any;
 const failure = (code: string, message: string) => ({ code, message });
+const onXPage = () => {
+  try { return /(?:^|\.)(?:x|twitter)\.com$/i.test(location.hostname); } catch (_) { return false; }
+};
+const xCaptured = (): any[] => (page().__easysaveXGraphql || []).flatMap((entry: any) => {
+  try { return [JSON.parse(entry.text)]; } catch (_) { return []; }
+});
 
 const modules: Record<string, Hooks> = {
   x: {
-    classify: (c) => c.error,
+    // The logged-in entry page (load.entryTemplate) is read from the page's own
+    // GraphQL responses; the guest JSON endpoint path never runs these hooks.
+    install: () => { if (onXPage()) installXGraphqlSniff(); },
+    ready: (c) => {
+      const id = extractTweetId(c.url);
+      return !onXPage() || (page().__easysaveXGraphql || []).some((entry: any) =>
+        entry.op === 'TweetResultByRestId' || (!!id && typeof entry.text === 'string' && entry.text.includes(`"tweet-${id}"`)));
+    },
+    parsePage: (c) => parseXGraphql(xCaptured(), c.url),
+    probe: (c) => onXPage()
+      ? { tag: 'XProbe', ...xProbe(xCaptured(), 'graphql', c.url) }
+      : { tag: 'XProbe', ...xProbe(c.input ?? '', 'syndication', c.url) },
+    classify: (c) => {
+      if (!c.loggedIn) return c.error;
+      // Only the logged-in page's own answer proves the session still sees a restriction.
+      if (!onXPage()) return c.error;
+      if (c.error?.code === 'AGE_RESTRICTED') return failure('AGE_RESTRICTED', X_SENSITIVE_MEDIA_HINT.zh);
+      if (c.error?.code === 'LOGIN_REQUIRED') return failure('LOGIN_REQUIRED', X_SESSION_EXPIRED.zh);
+      return c.error;
+    },
     request: (c) => {
       const id = extractTweetId(c.url);
       if (!id) throw new Error('UNSUPPORTED_URL');
@@ -34,6 +60,11 @@ const modules: Record<string, Hooks> = {
       return !!note && (!wanted || !(note.noteId || note.id) || (note.noteId || note.id) === wanted);
     },
     account: () => readXhsAccount(),
+    probe: (c) => {
+      const id = /\/(?:explore|discovery\/item|user\/profile\/[^/]+)\/([a-zA-Z0-9]+)/.exec(c.url)?.[1];
+      const note = findNoteInStates([page().__INITIAL_STATE__], id);
+      return { tag: 'XhsStreamProbe', streams: xhsStreamProbe(note?.['video']) };
+    },
     probeSession: (c) => {
       if ((c.statusCode || 0) >= 300 && (c.statusCode || 0) < 400) return !(c.location || '').includes('/login');
       if (c.statusCode !== 200) return true;

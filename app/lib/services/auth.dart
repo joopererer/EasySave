@@ -338,6 +338,50 @@ Future<bool> isLoggedIn(String platform) async {
   }
 }
 
+/// Test seam for the cookie store's names at a URL; production leaves it null.
+@visibleForTesting
+Future<List<String>> Function(String url)? cookieNamesReaderForTesting;
+
+/// Login state of [site] in the shared WebView cookie store, the one the login
+/// page and every parse WebView use: valid when a configured session cookie
+/// name is present, invalid when none is, unknown when the store fails. Only
+/// cookie names are inspected; values are never read, copied or logged.
+Future<SessionStatus> sessionCookieState(
+  SiteDefinition site, {
+  required String entry,
+}) async {
+  final names = (site.auth['sessionCookieNames'] as List? ?? const [])
+      .cast<String>();
+  final loginUrl = site.auth['loginUrl'];
+  final tag = site.id == 'x' ? 'XLogin' : 'SessionCookie';
+  if (loginUrl is! String || names.isEmpty) {
+    unawaited(DevLog.write(tag,
+        'event=state entry=$entry status=unknown basis=no_session_config'));
+    return SessionStatus.unknown;
+  }
+  try {
+    final present = (await (cookieNamesReaderForTesting?.call(loginUrl) ??
+            CookieManager.instance()
+                .getCookies(url: WebUri(loginUrl))
+                .then((cookies) => [for (final c in cookies) c.name])))
+        .toSet();
+    final found = names.where(present.contains).toList();
+    final status =
+        found.isNotEmpty ? SessionStatus.valid : SessionStatus.invalid;
+    unawaited(DevLog.write(tag,
+        'event=state entry=$entry status=${status.name} '
+        'basis=${found.isNotEmpty ? 'session_cookie_name_present' : 'session_cookie_name_absent'} '
+        'store=shared_webview_cookie_manager '
+        'cookies=${names.map((n) => '$n:${present.contains(n) ? 1 : 0}').join(',')}'));
+    return status;
+  } catch (e) {
+    unawaited(DevLog.write(tag,
+        'event=state entry=$entry status=unknown basis=cookie_store_error '
+        'type=${e.runtimeType}'));
+    return SessionStatus.unknown;
+  }
+}
+
 /// Cookie presence, or (for XHS) the page state when a logged-in WebView is
 /// available, falling back to a cheap network probe.
 Future<bool> checkLogin(

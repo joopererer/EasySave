@@ -25,6 +25,7 @@ import 'backup/saf_service.dart';
 import 'gallery_locator_service.dart';
 import 'history_db.dart';
 import 'history_io.dart';
+import 'mp4_audio_probe.dart';
 import 'parse_service.dart';
 import 'saver.dart';
 import 'download_provenance.dart';
@@ -68,6 +69,22 @@ bool recoverSessionJob(DownloadBatch batch, DownloadJob job) {
   job.currentTaskId = null;
   job.error = interruptedMediaMessage;
   return true;
+}
+
+/// Whether a downloaded video at [path] lacks a sound track while a later
+/// candidate URL of [job] is still untried. Images, Live Photo motion clips,
+/// the last candidate and files that cannot be read as MP4 are kept.
+Future<bool> shouldRetryForMissingAudio(
+  DownloadJob job,
+  String path, {
+  Future<bool?> Function(String path)? probe,
+}) async {
+  if (job.isImage || job.isLivePhoto || job.attempts >= job.urls.length) {
+    return false;
+  }
+  final hasAudio =
+      await (probe ?? (path) => mp4HasAudioTrack(File(path)))(path);
+  return hasAudio == false;
 }
 
 List<String> orderedMediaUrls(ParsedPost post, MediaItem item) =>
@@ -564,7 +581,9 @@ List<PlannedFile> planFiles(
         PlannedFile(
           label: label,
           // With a separate videoUrl, url/fallbacks describe the still poster.
-          urls: item.videoUrl != null ? [url] : imageUrls,
+          // Otherwise the parser ranks the video first and its fallbacks are
+          // the next renditions to try (e.g. when a file has no audio track).
+          urls: item.videoUrl != null ? [url] : [item.url, ...item.fallbacks],
           filename: '${nameFor(label, seq, 'mp4')}.mp4',
           isImage: false,
           itemIndex: index + 1, // 1-based position in original post
@@ -1629,6 +1648,19 @@ class DownloadManager extends ChangeNotifier {
       itemIndex = meta['itemIndex'] as int?;
       isImage = meta['isImage'] as bool? ?? true;
     } catch (_) {}
+
+    if (await shouldRetryForMissingAudio(job, path)) {
+      unawaited(DevLog.write(
+        'V16DL', // i18n:ignore 日志
+        'event=retry reason=no_audio_track index=${job.itemIndex} '
+            'candidate=${job.attempts}/${job.urls.length}',
+      ));
+      try {
+        await File(path).delete();
+      } catch (_) {}
+      await _enqueueAttempt(batch, job);
+      return;
+    }
 
     await _importFile(
       batch,

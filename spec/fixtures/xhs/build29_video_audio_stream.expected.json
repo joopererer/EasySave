@@ -1,0 +1,25 @@
+{
+  "platform": "xhs",
+  "id": "6720aa0b000000001b0299a1",
+  "url": "https://www.xiaohongshu.com/explore/6720aa0b000000001b0299a1",
+  "author": {
+    "name": "Fixture",
+    "id": "5f0000000000000001000001"
+  },
+  "title": "Build 29 audio fixture",
+  "caption": "Synthetic fixture: highest stream declares no audio",
+  "publishedAt": "2025-10-09T08:53:20Z",
+  "items": [
+    {
+      "type": "video",
+      "url": "https://sns-video-bd.xhscdn.com/stream/79/110/114/0fixture720aac_114.mp4",
+      "fallbacks": [
+        "https://sns-video-bd.xhscdn.com/pre_post/1040g2t031fixtureorigin00"
+      ],
+      "posterUrl": "https://sns-img-bd.xhscdn.com/202510/1040g2sg31fixturecover00",
+      "width": 720,
+      "height": 1280,
+      "duration": 12
+    }
+  ]
+}

@@ -229,7 +229,10 @@ Future<void> _handleSubmit(
         final savedIdx = <int>{};
         try {
           savedIdx.addAll(
-            await GalleryLocatorService.instance.findDownloadedIndices(post),
+            await GalleryLocatorService.instance.findDownloadedIndices(
+              post,
+              refreshAlbum: true,
+            ),
           );
         } catch (e) {
           await _log(

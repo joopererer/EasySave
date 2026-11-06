@@ -7,6 +7,9 @@ import 'media_request.dart';
 /// Error codes from the spec error model.
 abstract final class ParseErrorCode {
   static const loginRequired = 'LOGIN_REQUIRED';
+  static const ageNotSet = 'AGE_NOT_SET';
+  static const ageRestricted = 'AGE_RESTRICTED';
+  static const protectedAccount = 'PROTECTED';
   static const privateOrUnavailable = 'PRIVATE_OR_UNAVAILABLE';
   static const blocked = 'BLOCKED';
   static const invalidPage = 'INVALID_PAGE';

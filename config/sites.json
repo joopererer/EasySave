@@ -330,6 +330,8 @@
       "mode": "json",
       "timeoutMs": 30000,
       "endpointTemplate": "https://cdn.syndication.twimg.com/tweet-result?id={id}&lang=en&token={token}",
+      "entryTemplate": "https://x.com/i/status/{id}",
+      "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
       "prepareHook": "x_build_request",
       "headers": {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"

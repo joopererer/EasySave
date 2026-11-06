@@ -7,6 +7,9 @@
 
 export type XErrorCode =
   | "LOGIN_REQUIRED"
+  | "AGE_NOT_SET"
+  | "AGE_RESTRICTED"
+  | "PROTECTED"
   | "PRIVATE_OR_UNAVAILABLE"
   | "BLOCKED"
   | "INVALID_PAGE"
@@ -51,6 +54,82 @@ export type XResult =
   | { ok: false; error: XError };
 
 const TWEET_ID_PATTERN = /(?:x|twitter)\.com\/(?:[^/]+)\/status\/(\d+)/i;
+
+/** User-facing copy for each X access outcome; the App shows `zh`. */
+export const X_ERROR_COPY: Record<
+  "LOGIN_REQUIRED" | "AGE_NOT_SET" | "AGE_RESTRICTED" | "PROTECTED" | "PRIVATE_OR_UNAVAILABLE",
+  { zh: string; en: string }
+> = {
+  LOGIN_REQUIRED: {
+    zh: "该内容需要登录 X 才能查看",
+    en: "Log in to X to view this post.",
+  },
+  AGE_NOT_SET: {
+    zh: "该内容需要你的 X 账号先设置出生日期（年龄）后才能查看",
+    en: "Add your date of birth to your X account to view this post.",
+  },
+  AGE_RESTRICTED: {
+    zh: "该帖子有年龄限制，需要登录已完成年龄验证的 X 账号才能查看",
+    en: "This post is age-restricted. Log in with an age-verified X account to view it.",
+  },
+  PROTECTED: {
+    zh: "该帖子来自受保护的账号，只有获准的关注者可以查看",
+    en: "This post is from a protected account; only approved followers can view it.",
+  },
+  PRIVATE_OR_UNAVAILABLE: {
+    zh: "帖子不可用：可能已删除、设为私密，或需要登录 X 才能查看",
+    en: "Post unavailable: it may be deleted, private, or require logging in to X.",
+  },
+};
+
+/** Shown when a logged-in session still receives an age restriction. */
+export const X_SENSITIVE_MEDIA_HINT = {
+  zh: "该帖子有年龄限制。已登录 X 仍无法查看时，请在 X 的“设置 → 隐私和安全 → 你看到的内容”中开启“显示可能包含敏感内容的媒体”，并确认账号已完成年龄验证",
+  en: "This post is age-restricted. If it stays unavailable while logged in, turn on \"Display media that may contain sensitive content\" under X Settings → Privacy and safety → Content you see, and confirm your account's age.",
+};
+
+/** Shown when X answers as logged out although EasySave holds an X session. */
+export const X_SESSION_EXPIRED = {
+  zh: "X 登录状态已失效，请在 EasySave 中重新登录 X 后重试",
+  en: "Your X session has expired. Log in to X again in EasySave and retry.",
+};
+
+function xFailure(code: keyof typeof X_ERROR_COPY): XResult {
+  return { ok: false, error: { code, message: X_ERROR_COPY[code].zh } };
+}
+
+/**
+ * Classify an unavailable tweet result (syndication or GraphQL). Returns
+ * undefined when the object is not an unavailable result.
+ */
+export function classifyXUnavailable(result: Record<string, unknown>): XResult | undefined {
+  const typename = result["__typename"];
+  const reason = typeof result["reason"] === "string" ? result["reason"] : "";
+  if (typename === "TweetUnavailable" || (typename === undefined && reason)) {
+    switch (reason) {
+      case "NsfwLoggedOut": return xFailure("LOGIN_REQUIRED");
+      case "NsfwViewerHasNoStatedAge": return xFailure("AGE_NOT_SET");
+      case "NsfwViewerIsUnderage": return xFailure("AGE_RESTRICTED");
+      case "Protected": return xFailure("PROTECTED");
+    }
+    if (/log.?in|sign.?in|authentication/i.test(reason)) return xFailure("LOGIN_REQUIRED");
+    if (/age/i.test(reason)) return xFailure("AGE_RESTRICTED");
+    return typename === "TweetUnavailable" ? xFailure("PRIVATE_OR_UNAVAILABLE") : undefined;
+  }
+  if (typename === "TweetTombstone") {
+    const text = tombstoneText(result);
+    if (/^age.restricted/i.test(text.trim())) return xFailure("AGE_RESTRICTED");
+    if (/(?:log|sign)\s*in\b/i.test(text)) return xFailure("LOGIN_REQUIRED");
+    return xFailure("PRIVATE_OR_UNAVAILABLE");
+  }
+  return undefined;
+}
+
+function tombstoneText(result: Record<string, unknown>): string {
+  const tombstone = result["tombstone"];
+  const textObj = isRecord(tombstone) ? tombstone["text"] : undefined;
+  return isRecord(textObj) && typeof textObj["text"] === "string" ? textObj["text"] as string : "";
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -102,96 +181,40 @@ export function parseX(
       const visible = trimmed.replace(/<(script|style)\b[^>]*>[\s\S]*?<\/\1>/gi, '')
         .replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
       if (/(?:sign|log)\s*in\s+to\s+(?:view|see|access)\s+(?:this\s+)?(?:post|content)|(?:age.restricted|verify\s+your\s+age)|登录.{0,8}(?:查看|浏览)(?:此|该)|年龄验证/i.test(visible)) {
-        return { ok: false, error: { code: 'LOGIN_REQUIRED', message: '该内容需要登录 X 才能查看' } };
+        return xFailure("LOGIN_REQUIRED");
       }
     }
-    if (trimmed.length === 0) {
-      return {
-        ok: false,
-        error: {
-          code: "PRIVATE_OR_UNAVAILABLE",
-          message: "This post is private, deleted, or unavailable.",
-        },
-      };
-    }
+    if (trimmed.length === 0) return xFailure("PRIVATE_OR_UNAVAILABLE");
     try {
       root = JSON.parse(trimmed);
     } catch {
-      return {
-        ok: false,
-        error: {
-          code: "PRIVATE_OR_UNAVAILABLE",
-          message: "This post is private, deleted, or unavailable.",
-        },
-      };
+      return xFailure("PRIVATE_OR_UNAVAILABLE");
     }
   } else {
     root = input;
   }
 
   if (!isRecord(root) || Object.keys(root).length === 0) {
-    return {
-      ok: false,
-      error: {
-        code: "PRIVATE_OR_UNAVAILABLE",
-        message: "This post is private, deleted, or unavailable.",
-      },
-    };
+    return xFailure("PRIVATE_OR_UNAVAILABLE");
   }
 
   // Only explicit access-gate evidence is classified as requiring login.
   // A blank syndication response cannot distinguish deletion from restriction.
   const errors = Array.isArray(root['errors']) ? root['errors'] : [];
-  const reason = typeof root['reason'] === 'string' ? root['reason'] : '';
   const restricted = /nsfwloggedout|age.?restrict|age.?verif|log.?in|sign.?in|authentication/i;
-  if (restricted.test(reason) || errors.some((error) => isRecord(error) &&
+  if (errors.some((error) => isRecord(error) &&
       ([32, 215, 239].includes(Number(error['code'])) ||
        restricted.test(typeof error['message'] === 'string' ? error['message'] : '')))) {
-    return { ok: false, error: { code: 'LOGIN_REQUIRED', message: '该内容需要登录 X 才能查看' } };
+    return xFailure("LOGIN_REQUIRED");
   }
 
-  // Tombstone handling (deleted, sensitive, or age-gated/viewer-restricted)
-  if (root["__typename"] === "TweetTombstone") {
-    const tombstone = root["tombstone"];
-    const textObj = isRecord(tombstone) ? tombstone["text"] : undefined;
-    const tombstoneText = isRecord(textObj) && typeof textObj["text"] === "string"
-      ? (textObj["text"] as string).toLowerCase()
-      : "";
-
-    if (
-      tombstoneText.includes("limit") ||
-      tombstoneText.includes("view") ||
-      tombstoneText.includes("age") ||
-      tombstoneText.includes("sensitive") ||
-      tombstoneText.includes("login")
-    ) {
-      return {
-        ok: false,
-        error: {
-          code: "LOGIN_REQUIRED",
-          message: "该内容需要登录 X 才能查看",
-        },
-      };
-    }
-
-    return {
-      ok: false,
-      error: {
-        code: "PRIVATE_OR_UNAVAILABLE",
-        message: "This post is private, deleted, or unavailable.",
-      },
-    };
-  }
+  // Unavailable results: TweetUnavailable reasons and tombstones.
+  const unavailable = classifyXUnavailable(root);
+  if (unavailable) return unavailable;
 
   // Error responses from syndication endpoint
   if (Array.isArray(root["errors"]) && (root["errors"] as unknown[]).length > 0) {
-    return {
-      ok: false,
-      error: {
-        code: "PRIVATE_OR_UNAVAILABLE",
-        message: "This post is private, deleted, or unavailable.",
-      },
-    };
+    return xFailure("PRIVATE_OR_UNAVAILABLE");
   }
 
   // Identify tweet ID
@@ -296,4 +319,143 @@ export function parseX(
   };
 
   return { ok: true, data: post };
+}
+
+/** The focal tweet result in captured TweetResultByRestId / TweetDetail responses. */
+function graphqlTweetResult(responses: unknown[], id: string): Record<string, unknown> | undefined {
+  for (const response of responses) {
+    if (!isRecord(response) || !isRecord(response["data"])) continue;
+    const data = response["data"] as Record<string, unknown>;
+    const byRestId = isRecord(data["tweetResult"]) ? (data["tweetResult"] as Record<string, unknown>)["result"] : undefined;
+    if (isRecord(byRestId)) return byRestId;
+    const thread = data["threaded_conversation_with_injections_v2"];
+    const instructions = isRecord(thread) && Array.isArray(thread["instructions"]) ? thread["instructions"] as unknown[] : [];
+    for (const instruction of instructions) {
+      const entries = isRecord(instruction) && Array.isArray(instruction["entries"]) ? instruction["entries"] as unknown[] : [];
+      for (const entry of entries) {
+        if (!isRecord(entry) || entry["entryId"] !== `tweet-${id}`) continue;
+        const content = entry["content"];
+        const itemContent = isRecord(content) ? content["itemContent"] : undefined;
+        const results = isRecord(itemContent) ? itemContent["tweet_results"] : undefined;
+        const result = isRecord(results) ? results["result"] : undefined;
+        if (isRecord(result)) return result;
+      }
+    }
+  }
+  return undefined;
+}
+
+function unwrapVisibility(result: Record<string, unknown>): Record<string, unknown> {
+  return result["__typename"] === "TweetWithVisibilityResults" && isRecord(result["tweet"])
+    ? result["tweet"] as Record<string, unknown>
+    : result;
+}
+
+/**
+ * Parse the focal post from X web GraphQL responses captured in a logged-in
+ * page. The tweet's legacy media carries the same fields as syndication
+ * mediaDetails, so it is mapped onto that shape and parsed by [parseX].
+ */
+export function parseXGraphql(responses: unknown[], pageUrl: string): XResult {
+  const id = extractTweetId(pageUrl);
+  if (!id) return { ok: false, error: { code: "UNSUPPORTED_URL", message: "Unable to extract tweet ID." } };
+  const found = graphqlTweetResult(responses, id);
+  if (!found) {
+    return { ok: false, error: { code: "INVALID_PAGE", message: "X page returned no post data." } };
+  }
+  const result = unwrapVisibility(found);
+  const unavailable = classifyXUnavailable(result);
+  if (unavailable) return unavailable;
+  const legacy = isRecord(result["legacy"]) ? result["legacy"] as Record<string, unknown> : undefined;
+  if (!legacy) return xFailure("PRIVATE_OR_UNAVAILABLE");
+  const core = isRecord(result["core"]) ? result["core"] as Record<string, unknown> : undefined;
+  const userResults = core && isRecord(core["user_results"]) ? core["user_results"] as Record<string, unknown> : undefined;
+  const user = userResults && isRecord(userResults["result"]) ? userResults["result"] as Record<string, unknown> : undefined;
+  const userLegacy = user && isRecord(user["legacy"]) ? user["legacy"] as Record<string, unknown> : {};
+  const userCore = user && isRecord(user["core"]) ? user["core"] as Record<string, unknown> : {};
+  const pick = (key: string) => typeof userLegacy[key] === "string" ? userLegacy[key] as string
+    : typeof userCore[key] === "string" ? userCore[key] as string : undefined;
+  const entities = isRecord(legacy["extended_entities"]) ? legacy["extended_entities"] as Record<string, unknown>
+    : isRecord(legacy["entities"]) ? legacy["entities"] as Record<string, unknown> : {};
+  const media = Array.isArray(entities["media"]) ? entities["media"] as unknown[] : [];
+  const noteTweet = isRecord(result["note_tweet"]) ? result["note_tweet"] as Record<string, unknown> : undefined;
+  const noteResults = noteTweet && isRecord(noteTweet["note_tweet_results"]) ? noteTweet["note_tweet_results"] as Record<string, unknown> : undefined;
+  const noteResult = noteResults && isRecord(noteResults["result"]) ? noteResults["result"] as Record<string, unknown> : undefined;
+  let text = typeof noteResult?.["text"] === "string" ? noteResult["text"] as string
+    : typeof legacy["full_text"] === "string" ? legacy["full_text"] as string : "";
+  // The trailing t.co link of attached media is not part of the caption.
+  for (const item of media) {
+    const link = isRecord(item) && typeof item["url"] === "string" ? item["url"] as string : "";
+    if (link && text.endsWith(link)) text = text.slice(0, -link.length).trimEnd();
+  }
+  const restId = typeof result["rest_id"] === "string" ? result["rest_id"] as string : id;
+  return parseX({
+    id_str: restId,
+    user: { screen_name: pick("screen_name"), name: pick("name") },
+    text,
+    created_at: legacy["created_at"],
+    mediaDetails: media,
+  }, pageUrl);
+}
+
+export interface XProbe {
+  source: "syndication" | "graphql";
+  shape: "tweet" | "tombstone" | "unavailable" | "errors" | "empty" | "none" | "unknown";
+  typename?: string;
+  wrapped?: boolean;
+  reason?: string;
+  tombstone?: string;
+  fields: string[];
+  mediaCount?: number;
+}
+
+const SHORT_TOKEN = /^[A-Za-z0-9_]{1,48}$/;
+
+function shortToken(value: unknown): string | undefined {
+  return typeof value === "string" && SHORT_TOKEN.test(value) ? value : undefined;
+}
+
+/** Data shape of an X response: category, type names and field names only. */
+export function xProbe(input: unknown, source: XProbe["source"], pageUrl: string): XProbe {
+  let root: unknown = input;
+  if (source === "syndication") {
+    if (typeof input !== "string" || input.trim() === "") return { source, shape: "empty", fields: [] };
+    try { root = JSON.parse(input); } catch { return { source, shape: "unknown", fields: [] }; }
+  }
+  let result: Record<string, unknown> | undefined;
+  let fields: string[] = [];
+  if (source === "graphql") {
+    const responses = Array.isArray(root) ? root : [];
+    const id = extractTweetId(pageUrl) ?? "";
+    result = graphqlTweetResult(responses, id);
+    if (!result) return { source, shape: "none", fields: [] };
+  } else {
+    if (!isRecord(root)) return { source, shape: "unknown", fields: [] };
+    if (Object.keys(root).length === 0) return { source, shape: "empty", fields: [] };
+    result = root;
+  }
+  fields = Object.keys(result).filter((key) => SHORT_TOKEN.test(key)).sort().slice(0, 24);
+  const wrapped = result["__typename"] === "TweetWithVisibilityResults";
+  const inner = unwrapVisibility(result);
+  const typename = shortToken(inner["__typename"]);
+  const probe: XProbe = { source, shape: "unknown", fields };
+  if (typename) probe.typename = typename;
+  if (wrapped) probe.wrapped = true;
+  const reason = shortToken(inner["reason"]);
+  if (reason) probe.reason = reason;
+  if (typename === "TweetTombstone") {
+    probe.shape = "tombstone";
+    probe.tombstone = tombstoneText(inner).slice(0, 40);
+  } else if (typename === "TweetUnavailable" || (!typename && reason)) {
+    probe.shape = "unavailable";
+  } else if (Array.isArray(inner["errors"]) && !isRecord(inner["legacy"]) && !inner["id_str"]) {
+    probe.shape = "errors";
+  } else if (isRecord(inner["legacy"]) || inner["id_str"] !== undefined) {
+    probe.shape = "tweet";
+    const legacy = isRecord(inner["legacy"]) ? inner["legacy"] as Record<string, unknown> : undefined;
+    const entities = legacy && isRecord(legacy["extended_entities"]) ? legacy["extended_entities"] as Record<string, unknown> : undefined;
+    const media = entities ? entities["media"] : inner["mediaDetails"];
+    probe.mediaCount = Array.isArray(media) ? media.length : 0;
+  }
+  return probe;
 }

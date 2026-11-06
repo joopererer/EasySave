@@ -66,6 +66,13 @@ export function validatePayload(payload, schema) {
       if ((defaults.cookieDomains || []).some(d => !site.download.cookieDomains.includes(d))) throw new Error('Unauthorized resource cookie domain');
     }
 
+    if (site.load.entryTemplate !== undefined) {
+      // The logged-in entry page must stay on the site's own hosts.
+      const entry = new URL(site.load.entryTemplate.replaceAll('{id}', '0'));
+      if (entry.protocol !== 'https:' || entry.username || entry.password || !site.load.entryTemplate.includes('{id}') ||
+          !site.match.routes.some(r => r.hosts.some(h => entry.hostname === h.domain ||
+            h.includeSubdomains && entry.hostname.endsWith('.' + h.domain)))) throw new Error('Invalid entry URL');
+    }
     if (site.auth.mode !== 'none' && !site.auth.loginUrl) throw new Error('Missing login URL');
     for (const raw of [site.auth.loginUrl, ...(site.auth.cookieUrls || []), ...(site.auth.probeUrls || [])].filter(Boolean)) {
       const u = new URL(raw);

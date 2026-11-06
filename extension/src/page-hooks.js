@@ -103,3 +103,53 @@ export function tiktokReady() { return (() => {
     }));
   } catch (_) { return false; }
 })(); }
+// Keep the logged-in X page's own TweetResultByRestId / TweetDetail responses.
+// Requests are the page's own; nothing here reads or forwards cookies.
+export function installXGraphqlSniff() {
+(() => {
+  if (window.__easysaveXSniffInstalled) return;
+  window.__easysaveXSniffInstalled = true;
+  window.__easysaveXGraphql = window.__easysaveXGraphql || [];
+  const pattern = /\/graphql\/[^/?#]+\/(TweetResultByRestId|TweetDetail)(?:[?#]|$)/;
+  function keep(url, text) {
+    const match = pattern.exec(String(url || ''));
+    if (!match || typeof text !== 'string' || text.length > 4000000) return;
+    const list = window.__easysaveXGraphql;
+    list.push({ op: match[1], text });
+    while (list.length > 8) list.shift();
+  }
+  try {
+    const originalFetch = window.fetch;
+    if (originalFetch) {
+      window.fetch = async function(...args) {
+        const response = await originalFetch.apply(this, args);
+        try {
+          const input = args[0];
+          const url = typeof input === 'string' ? input : (input && input.url) || '';
+          if (pattern.test(String(url))) response.clone().text().then((text) => keep(url, text)).catch(() => {});
+        } catch (_) {}
+        return response;
+      };
+    }
+  } catch (_) {}
+  try {
+    const originalOpen = XMLHttpRequest.prototype.open;
+    const originalSend = XMLHttpRequest.prototype.send;
+    XMLHttpRequest.prototype.open = function(method, url, ...rest) {
+      this.__easysaveXUrl = url;
+      return originalOpen.apply(this, [method, url, ...rest]);
+    };
+    XMLHttpRequest.prototype.send = function(...args) {
+      if (pattern.test(String(this.__easysaveXUrl || ''))) {
+        this.addEventListener('load', function() {
+          try {
+            if (this.responseType === '' || this.responseType === 'text') keep(this.__easysaveXUrl, this.responseText);
+            else if (this.responseType === 'json') keep(this.__easysaveXUrl, JSON.stringify(this.response));
+          } catch (_) {}
+        });
+      }
+      return originalSend.apply(this, args);
+    };
+  } catch (_) {}
+})();
+}

@@ -3,6 +3,7 @@ import 'dart:async';
 import 'dart:collection';
 import 'dart:convert';
 import 'dart:io';
+import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'package:flutter/services.dart';
 import 'shared_preview_cache.dart';
 import 'media_request_policy.dart';
@@ -12,7 +13,13 @@ import 'package:http/http.dart' as http;
 
 import '../core/dev_log.dart';
 import '../core/models.dart';
-import 'auth.dart' show isLoopbackHost, logXhsWebViewCookies, selectXhsPostUrl;
+import 'auth.dart'
+    show
+        SessionStatus,
+        isLoopbackHost,
+        logXhsWebViewCookies,
+        selectXhsPostUrl,
+        sessionCookieState;
 import 'ai_label_log.dart';
 import 'history_db.dart';
 import 'links.dart';
@@ -720,17 +727,162 @@ Future<NavigateStep> navigateStep({
   return const NavigateStep(NavigateKind.parse);
 }
 
+/// Guest answers that a logged-in session may resolve.
+const _sessionRetryCodes = {
+  ParseErrorCode.loginRequired,
+  ParseErrorCode.ageRestricted,
+  ParseErrorCode.protectedAccount,
+  ParseErrorCode.privateOrUnavailable,
+};
+
+/// Session answers that settle the outcome; anything else keeps the guest one.
+const _sessionDefinitiveCodes = {
+  ParseErrorCode.loginRequired,
+  ParseErrorCode.ageNotSet,
+  ParseErrorCode.ageRestricted,
+  ParseErrorCode.protectedAccount,
+  ParseErrorCode.privateOrUnavailable,
+};
+
+/// The logged-in entry page for [targetUrl] when a guest JSON answer failed
+/// with a code a session may resolve. A site opts in with `load.entryTemplate`;
+/// the page runs in the shared cookie store, so the App never handles cookies.
+@visibleForTesting
+String? sessionEntryUrl(SiteDefinition site, String targetUrl, dynamic guest) {
+  final template = site.load['entryTemplate'];
+  if (template is! String || guest is! Map || guest['ok'] == true) return null;
+  final error = guest['error'];
+  if (error is! Map || !_sessionRetryCodes.contains(error['code'])) return null;
+  final uri = Uri.tryParse(targetUrl);
+  final id = uri == null ? null : site.sourceId(uri);
+  if (id == null || !RegExp(r'^[A-Za-z0-9_-]{1,64}$').hasMatch(id)) return null;
+  final entry = Uri.tryParse(template.replaceAll('{id}', id));
+  if (entry == null ||
+      entry.scheme != 'https' ||
+      entry.userInfo.isNotEmpty ||
+      !site.hasHost(entry.host)) {
+    return null;
+  }
+  return entry.toString();
+}
+
+/// Retry a restricted guest answer through the logged-in entry page. Returns
+/// the session outcome, rethrows a definitive session failure, or null to keep
+/// the guest answer (not logged in, page gave no post data, timeout).
+Future<ParseOutcome?> _sessionEntryRetry(
+  ParserHooks hooks,
+  String targetUrl,
+  dynamic guest, {
+  required String source,
+}) async {
+  final entryUrl = sessionEntryUrl(hooks.site, targetUrl, guest);
+  if (entryUrl == null) return null;
+  final login = await sessionCookieState(hooks.site, entry: source);
+  if (login != SessionStatus.valid) {
+    unawaited(DevLog.write('XLogin',
+        'event=decision site=${hooks.site.id} source=guest_only status=${login.name}'));
+    return null;
+  }
+  unawaited(DevLog.write('XLogin',
+      'event=decision site=${hooks.site.id} source=session_page '
+      'guestRequestCookies=none sessionRequestCookies=webview_managed'));
+  try {
+    return await _run(hooks, entryUrl, source: source, entryPage: true);
+  } on ParseFailure catch (e) {
+    if (_sessionDefinitiveCodes.contains(e.code)) rethrow;
+    return null;
+  } catch (_) {
+    return null;
+  }
+}
+
+const _probeTags = {'XProbe', 'XhsStreamProbe'};
+
+String _probeValue(Object? value) {
+  if (value == null) return '-';
+  if (value is bool) return value ? '1' : '0';
+  if (value is num) return value.isFinite ? value.round().toString() : '-';
+  if (value is List) return value.map(_probeValue).join('|');
+  final text = value.toString();
+  return RegExp(r'^[A-Za-z0-9_.:-]{0,48}$').hasMatch(text) ? text : 'x';
+}
+
+/// Log lines for a parser `probe` hook value: whitelisted tags, short tokens
+/// and field names only, plus at most 40 sanitized tombstone characters.
+@visibleForTesting
+List<(String, String)> formatParserProbe(dynamic probe) {
+  if (probe is! Map || !_probeTags.contains(probe['tag'])) return const [];
+  final tag = probe['tag'] as String;
+  if (tag == 'XhsStreamProbe') {
+    final streams = probe['streams'];
+    if (streams is! List || streams.isEmpty) return const [];
+    return [
+      for (final (index, stream) in streams.indexed)
+        if (stream is Map)
+          (
+            tag,
+            'candidate=${index + 1}/${streams.length} '
+                'bucket=${_probeValue(stream['bucket'])} '
+                'streamType=${_probeValue(stream['streamType'])} '
+                'codec=${_probeValue(stream['codec'])} '
+                'size=${_probeValue(stream['width'])}x${_probeValue(stream['height'])} '
+                'bitrate=${_probeValue(stream['bitrate'])} '
+                'audio=${_probeValue(stream['audio'])} '
+                'audioCodec=${_probeValue(stream['audioCodec'])} '
+                'audioChannels=${_probeValue(stream['audioChannels'])} '
+                'audioBitrate=${_probeValue(stream['audioBitrate'])} '
+                'audioFields=${_probeValue(stream['audioFields'])} '
+                'watermarked=${_probeValue(stream['watermarked'])} '
+                'selected=${_probeValue(stream['selected'])}',
+          ),
+    ];
+  }
+  final tombstone = probe['tombstone'];
+  final text = tombstone is String
+      ? '"${tombstone.replaceAll(RegExp(r"[^A-Za-z0-9 .,'!?()-]"), '_').substring(0, tombstone.length < 40 ? tombstone.length : 40)}"'
+      : '-';
+  return [
+    (
+      tag,
+      'source=${_probeValue(probe['source'])} shape=${_probeValue(probe['shape'])} '
+          'typename=${_probeValue(probe['typename'])} '
+          'wrapped=${_probeValue(probe['wrapped'] ?? false)} '
+          'reason=${_probeValue(probe['reason'])} tombstone=$text '
+          'fields=${_probeValue(probe['fields'])} '
+          'mediaCount=${_probeValue(probe['mediaCount'])}',
+    ),
+  ];
+}
+
+Future<void> _logParserProbe(
+  ParserHooks hooks,
+  InAppWebViewController controller,
+  String url, [
+  Map<String, Object?> extra = const {},
+]) async {
+  try {
+    final probe = await hooks.call(controller, 'probe', url, extra);
+    for (final (tag, line) in formatParserProbe(probe)) {
+      unawaited(DevLog.write(tag, 'site=${hooks.site.id} $line'));
+    }
+  } catch (_) {
+    // Parser modules without a probe hook have nothing to report.
+  }
+}
+
 Future<ParseOutcome> _run(
   ParserHooks hooks,
   String targetUrl, {
   required String source,
+  bool entryPage = false,
 }) async {
   targetUrl = await chooseFinalParseUrl(targetUrl, hooks.site, entry: source);
-  final jsonMode = hooks.site.load['mode'] == 'json';
+  // A logged-in entry page is a WebView page load even for a JSON site.
+  final jsonMode = hooks.site.load['mode'] == 'json' && !entryPage;
   final target = Uri.tryParse(targetUrl);
   DevLog.write(
     'ParseWebView',
-    'event=start source=$source site=${hooks.site.id} hasQuery=${target?.hasQuery == true ? 1 : 0}',
+    'event=start source=$source site=${hooks.site.id} hasQuery=${target?.hasQuery == true ? 1 : 0}${entryPage ? ' entry=session_page' : ''}',
   );
   final loaded = Completer<InAppWebViewController>();
   var navigated = false;
@@ -960,21 +1112,41 @@ Future<ParseOutcome> _run(
         );
         throw ParseFailure(ParseErrorCode.invalidPage, '解析模块请求头超出许可范围');
       }
+      // The guest request carries no cookies: only the declared headers.
       final response = await http
           .get(uri, headers: headers)
           .timeout(const Duration(seconds: 15));
+      final body = utf8.decode(response.bodyBytes);
       result = await hooks.call(controller, 'parse', targetUrl, {
-        'input': utf8.decode(response.bodyBytes),
+        'input': body,
       });
+      await _logParserProbe(hooks, controller, targetUrl, {'input': body});
+      stage = 'session';
+      final session = await _sessionEntryRetry(
+        hooks,
+        targetUrl,
+        result,
+        source: source,
+      );
+      if (session != null) {
+        DevLog.write(
+          'ParseWebView',
+          'event=success source=$source site=${hooks.site.id} path=$path loads=$loads navigations=$mainNavigations entry=session_page',
+        );
+        return session;
+      }
     } else {
       stage = 'prepare';
       await hooks.call(controller, 'prepare', currentUrl);
       stage = 'ready';
       await waitForParserState(
         () async => await hooks.call(controller, 'ready', currentUrl) == true,
+        // A logged-in entry page fetches its post data after the document.
+        timeout: Duration(seconds: entryPage ? 15 : 6),
       );
       stage = 'parse';
       result = await hooks.call(controller, 'parsePage', currentUrl);
+      await _logParserProbe(hooks, controller, currentUrl);
     }
     if (result is Map && result['ok'] != true && result['error'] is Map) {
       try {
