@@ -3,6 +3,29 @@ import '../core/dev_log.dart';
 
 class HistoryRefreshCancelled implements Exception {}
 
+/// Retry transient native reads with bounded backoff. Reuses an in-flight
+/// attempt after a deadline instead of queueing duplicate SQLite requests.
+Future<T> retryHistoryRead<T>(Future<T> Function() read, {HistoryDeadline? deadline}) async {
+  Future<T>? pending;
+  var settled = false;
+  for (var attempt = 0; ; attempt++) {
+    try {
+      if (pending == null) {
+        settled = false;
+        pending = read().whenComplete(() => settled = true);
+      }
+      return await historyStep('refresh-db', () => pending!,
+          timeout: const Duration(seconds: 6), deadline: deadline);
+    } on HistoryRefreshCancelled {
+      rethrow;
+    } catch (error) {
+      if (attempt >= 2) rethrow;
+      if (settled || error is! TimeoutException) pending = null;
+      await Future<void>.delayed(Duration(milliseconds: 200 * (attempt + 1)));
+    }
+  }
+}
+
 /// Page-owned deadlines are cancelled on disposal, even if native I/O hangs.
 class HistoryDeadline {
   final _cancel = <void Function()>{};
@@ -109,7 +132,8 @@ class HistoryRefreshController {
   ) {
     return _load ??= (() async {
       try {
-        await historyStep('refresh-records', load, deadline: deadline);
+        await historyStep('refresh-records', load,
+            timeout: const Duration(seconds: 22), deadline: deadline);
         if (_media == null) {
           final work = historyBackground(
             'refresh-media',

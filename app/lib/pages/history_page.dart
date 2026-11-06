@@ -342,9 +342,9 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
       });
     }
     try {
-      final records = await historyStep('refresh-db',
+      final records = await retryHistoryRead(
           () => HistoryDb.instance().then((db) => db.recent(limit: 10000)),
-          timeout: const Duration(seconds: 4), deadline: _historyRefresh.deadline);
+          deadline: _historyRefresh.deadline);
       if (!mounted) return;
       setState(() {
         _records = records;
@@ -355,7 +355,7 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
       if (!mounted) return;
       setState(() {
         _loading = false;
-        _dbError = '$e';
+        _dbError = _records.isEmpty ? '$e' : null;
       });
       if (e is TimeoutException) HistoryDb.retryPendingOpen();
     }
@@ -429,7 +429,7 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
     if (_view == HistoryView.all) {
       final keys = <String>{};
       for (final r in _filtered) {
-        for (final f in r.files) {
+        for (final f in r.savedFiles) {
           keys.add(_mediaKey(r, f.itemIndex));
         }
       }
@@ -584,7 +584,7 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
   /// Build the fullscreen browser items for a record and open it.
   Future<void> _openRecord(HistoryRecord record, {int? highlightItemIndex}) async {
     if (_opening) return;
-    if (record.fileCount == 0 && record.files.isEmpty &&
+    if (record.fileCount == 0 && record.savedFiles.isEmpty &&
         _downloadBatches.containsKey(record.postId)) {
       _opening = true;
       try {
@@ -600,7 +600,7 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
     try {
       final post = record.toPost();
       final locator = GalleryLocatorService.instance;
-      final files = [...record.files]..sort((a, b) => a.itemIndex.compareTo(b.itemIndex));
+      final files = [...record.savedFiles]..sort((a, b) => a.itemIndex.compareTo(b.itemIndex));
       final items = <GalleryBrowserItem>[];
       var initial = 0;
 
@@ -708,23 +708,6 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
         }
       }
 
-      if (items.isEmpty && post.items.isNotEmpty) {
-        for (var i = 0; i < post.items.length; i++) {
-          final postItem = post.items[i];
-          if (highlightItemIndex != null && i == highlightItemIndex) {
-            initial = items.length;
-          }
-          items.add(
-            GalleryBrowserItem.fromMediaItem(
-              postItem,
-              index: i,
-              cachePostId: record.postId,
-              status: FileStatus.unknown,
-            ),
-          );
-        }
-      }
-
       if (items.isEmpty) {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
@@ -771,7 +754,7 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
     final files = <XFile>[];
     final locator = GalleryLocatorService.instance;
     for (final r in records) {
-      for (final f in r.files) {
+      for (final f in r.savedFiles) {
         final asset =
             locator.getAssetById(f.mediaId) ?? locator.locateAsset(f, r.postId);
         if (asset == null) continue;
@@ -801,7 +784,7 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
       final r = ref.record;
       urls.add(r.postUrl);
       HistoryFile? matched;
-      for (final f in r.files) {
+      for (final f in r.savedFiles) {
         if (f.itemIndex == ref.itemIndex) {
           matched = f;
           break;
@@ -952,8 +935,8 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
       case HistorySort.mostFiles:
         final sorted = [...posts]
           ..sort(
-            (a, b) => (b.files.isNotEmpty ? b.files.length : b.fileCount)
-                .compareTo(a.files.isNotEmpty ? a.files.length : a.fileCount),
+            (a, b) => (b.savedFiles.length)
+                .compareTo(a.savedFiles.length),
           );
         return [_PostGroup('', sorted)];
       case HistorySort.author:
@@ -974,7 +957,7 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
     final all = <HistThumbRef>[];
     for (final r in records) {
       final seenIndices = <int>{};
-      for (final f in r.files) {
+      for (final f in r.savedFiles) {
         if (seenIndices.add(f.itemIndex)) {
           all.add(HistThumbRef(r, f.itemIndex));
         }
@@ -1004,7 +987,7 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
         final byKind = <String, List<HistThumbRef>>{};
         for (final ref in all) {
           final post = ref.record.toPost();
-          final is1Based = ref.record.files.isNotEmpty && ref.record.files.every((f) => f.itemIndex > 0);
+          final is1Based = ref.record.savedFiles.isNotEmpty && ref.record.savedFiles.every((f) => f.itemIndex > 0);
           final zeroBased = is1Based ? ref.itemIndex - 1 : ref.itemIndex;
           final item = (zeroBased >= 0 && zeroBased < post.items.length)
               ? post.items[zeroBased]
@@ -1021,8 +1004,8 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
         ];
       case HistorySort.mostFiles:
         all.sort((a, b) {
-          final av = a.record.files.length;
-          final bv = b.record.files.length;
+          final av = a.record.savedFiles.length;
+          final bv = b.record.savedFiles.length;
           return bv.compareTo(av);
         });
         return [_MediaGroup('', all)];
@@ -1042,7 +1025,7 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
   }
 
   DateTime _fileSavedAt(HistThumbRef ref) {
-    for (final f in ref.record.files) {
+    for (final f in ref.record.savedFiles) {
       if (f.itemIndex == ref.itemIndex) {
         return DateTime.fromMillisecondsSinceEpoch(f.savedAt);
       }
@@ -1117,7 +1100,7 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
     final filtered = _filtered;
     final fileCount = filtered.fold<int>(
       0,
-      (sum, r) => sum + (r.files.isNotEmpty ? r.files.length : r.fileCount),
+      (sum, r) => sum + (r.savedFiles.length),
     );
     return AppBar(
       title: Column(
@@ -1925,9 +1908,9 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
         () => _CreatorGroup(authorName: author, platform: SiteRegistry.current.canonicalId(r.platform)),
       );
       group.postCount++;
-      group.fileCount += r.files.isNotEmpty ? r.files.length : r.fileCount;
+      group.fileCount += r.savedFiles.length;
       if (group.thumbs.length < 4) {
-        for (final f in r.files) {
+        for (final f in r.savedFiles) {
           if (group.thumbs.length >= 4) break;
           group.thumbs.add(HistThumbRef(r, f.itemIndex));
         }
@@ -2043,7 +2026,7 @@ class VideoBackfillHintBanner extends StatelessWidget {
       return const SizedBox.shrink();
     }
     final hasVideoWithoutAssetId = records.any(
-      (r) => r.files.any((f) => !f.isImage && (f.assetId == null || f.assetId!.isEmpty)),
+      (r) => r.savedFiles.any((f) => !f.isImage && (f.assetId == null || f.assetId!.isEmpty)),
     );
     if (!hasVideoWithoutAssetId) {
       return const SizedBox.shrink();

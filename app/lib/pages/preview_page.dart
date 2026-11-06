@@ -142,9 +142,13 @@ class _PreviewPageState extends State<PreviewPage> {
 
   Widget _downloadStrip() {
     if (_saving) {
-      return const Padding(
-        padding: EdgeInsets.all(12),
-        child: Column(children: [Text('处理中…'), LinearProgressIndicator()]),
+      return Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(children: [
+          for (final index in _order)
+            Text('第 ${index + 1} 项 · 正在准备保存'),
+          const LinearProgressIndicator(),
+        ]),
       );
     }
     final batch = _activeBatch;
@@ -235,7 +239,10 @@ class _PreviewPageState extends State<PreviewPage> {
 
   Timer? _imageReadyTimer;
 
-  Future<void> _checkDownloaded() async {
+  Future<void>? _localCheck;
+  Future<void> _checkDownloaded() => _localCheck ??= _readDownloaded().whenComplete(() => _localCheck = null);
+
+  Future<void> _readDownloaded() async {
     try {
       final db = await HistoryDb.instance();
       final merged = await db.mergeParsedPost(_post);
@@ -364,12 +371,14 @@ class _PreviewPageState extends State<PreviewPage> {
   }
 
   Future<void> _saveSelection() async {
+    final watch = Stopwatch()..start();
     final locator = GalleryLocatorService.instance;
     // Re-check which selected items are already in the album right before
     // saving: those are associated with the history record instead of being
     // downloaded again. The album scan happens once and the result is reused
     // for the association write, so the two steps cannot disagree.
     final matches = await locator.matchPostItems(_post);
+    unawaited(DevLog.write('V16DL', 'event=prepare stage=local-match ms=${watch.elapsedMilliseconds}'));
     final downloaded = matches.keys.toSet();
     final toAssociate = _order.where(downloaded.contains).toList();
     final toDownload = _order.where((i) => !downloaded.contains(i)).toList();
@@ -391,6 +400,7 @@ class _PreviewPageState extends State<PreviewPage> {
         restoreDeleted: true,
         matches: matches,
       );
+      unawaited(DevLog.write('V16DL', 'event=prepare stage=associate-db ms=${watch.elapsedMilliseconds}'));
     }
     if (!mounted) return;
 

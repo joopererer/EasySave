@@ -33,20 +33,22 @@ class DownloadSheet extends StatefulWidget {
     final settings = await AppSettings.load();
     final author = post.author.name ?? '';
     final manager = DownloadManager.instance;
+    Future<void>? panel;
     final batch = await manager.startBatch(
       post,
       selected,
       album: settings.albumName,
       nameFor: (label, seq, ext) =>
           settings.fileName(postId: post.id, seq: seq, author: author),
+      onBatchReady: (ready) {
+        if (!context.mounted) return;
+        panel = showModalBottomSheet<void>(context: context, isScrollControlled: true,
+            builder: (_) => DownloadSheet(batchId: ready.batchId));
+      },
     );
     if (!context.mounted) return batch;
     ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('已加入下载队列')));
-    await showModalBottomSheet<void>(
-      context: context,
-      isScrollControlled: true,
-      builder: (_) => DownloadSheet(batchId: batch.batchId),
-    );
+    await panel;
     return batch;
   }
 

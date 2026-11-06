@@ -70,6 +70,8 @@ void main() {
         files: [
           HistoryFile(
             filename: 'old.jpg',
+            status: FileStatus.found,
+            mediaId: 'earlier-p2',
             savedAt: DateTime.now().millisecondsSinceEpoch,
             itemIndex: 1,
           ),
@@ -102,6 +104,8 @@ void main() {
         files: [
           HistoryFile(
             filename: 'old.jpg',
+            status: FileStatus.found,
+            mediaId: 'earlier-p4',
             savedAt: DateTime.now().millisecondsSinceEpoch,
             itemIndex: 1,
           ),

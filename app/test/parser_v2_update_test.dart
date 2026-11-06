@@ -435,7 +435,7 @@ void main() {
         state()['highestAcceptedManifestVersion'],
         greaterThanOrEqualTo(1),
       );
-      remote = await sign(payload(7));
+      remote = await sign(payload(builtinVersion + 1));
       expect(await manager.checkForUpdates(force: true), isTrue);
     },
   );

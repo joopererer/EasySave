@@ -842,7 +842,27 @@ class DownloadManager extends ChangeNotifier {
     } catch (_) {
       // Fall back to the in-memory batches below.
     }
-    return mergeBatchViews(_batches.values, snapshots);
+    final merged = mergeBatchViews(_batches.values, snapshots);
+    final saved = <String, DownloadJob>{
+      for (final b in merged)
+        for (final j in b.jobs)
+          if (j.state == JobState.done && j.saved)
+            downloadIdentity(b.platform, b.postId, j.itemIndex, j.isImage): j,
+    };
+    for (final b in merged) {
+      var changed = false;
+      for (final j in b.jobs.where((j) => j.state == JobState.failed)) {
+        final success = saved[downloadIdentity(b.platform, b.postId, j.itemIndex, j.isImage)];
+        final local = HistoryDb.knownSavedFiles(b.platform, b.postId).where((f) =>
+            f.itemIndex == j.itemIndex && f.isImage == j.isImage &&
+            f.status == FileStatus.found && f.mediaId?.isNotEmpty == true).firstOrNull;
+        if (success == null && local == null) continue;
+        j..state = JobState.done..saved = true..mediaId = success?.mediaId ?? local?.mediaId..error = null;
+        changed = true;
+      }
+      if (changed) unawaited(_persist(b));
+    }
+    return merged;
   }
 
   /// Batch of [postId] that is still unfinished, from [liveBatches].
@@ -1115,6 +1135,7 @@ class DownloadManager extends ChangeNotifier {
     required String album,
     required String Function(String label, int seq, String ext) nameFor,
     bool requestGalleryAccess = true,
+    void Function(DownloadBatch)? onBatchReady,
   }) async {
     // The batch id carries the owner so ownership is visible in the shared
     // snapshot store (SharedPreferences) and in the plugin's task groups.
@@ -1210,6 +1231,7 @@ class DownloadManager extends ChangeNotifier {
     }
     _batches[batchId] = batch;
     notifyListeners();
+    onBatchReady?.call(batch);
     _log('batch start id=$batchId source=${batch.source} post=${batch.postId}');
     unawaited(_refreshNotification(batch));
     await _persist(batch);
@@ -2397,6 +2419,15 @@ class DownloadManager extends ChangeNotifier {
   }
 
   Future<void> _persist(DownloadBatch batch) async {
+    for (final job in batch.jobs.where((j) => j.state == JobState.failed)) {
+      final error = job.error ?? '';
+      final reason = error.contains('403') ? 'HTTP_403' : error.contains('404') ? 'HTTP_404'
+          : error.contains('超时') || error.contains('Timeout') ? 'TIMEOUT'
+          : error.contains('REQUEST_') ? 'POLICY'
+          : error.contains('保存') || error.contains('import') ? 'IMPORT'
+          : 'TRANSFER';
+      unawaited(DevLog.write('V16DL', 'item failed index=${job.itemIndex} reason=$reason'));
+    }
     try {
       batch.updatedAt = DateTime.now().millisecondsSinceEpoch;
       final prefs = await SharedPreferences.getInstance();

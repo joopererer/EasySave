@@ -98,6 +98,13 @@ export function parseX(
   let root: unknown;
   if (typeof input === "string") {
     const trimmed = input.trim();
+    if (trimmed.startsWith('<')) {
+      const visible = trimmed.replace(/<(script|style)\b[^>]*>[\s\S]*?<\/\1>/gi, '')
+        .replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
+      if (/(?:sign|log)\s*in\s+to\s+(?:view|see|access)\s+(?:this\s+)?(?:post|content)|(?:age.restricted|verify\s+your\s+age)|登录.{0,8}(?:查看|浏览)(?:此|该)|年龄验证/i.test(visible)) {
+        return { ok: false, error: { code: 'LOGIN_REQUIRED', message: '该内容需要登录 X 才能查看' } };
+      }
+    }
     if (trimmed.length === 0) {
       return {
         ok: false,
@@ -132,6 +139,17 @@ export function parseX(
     };
   }
 
+  // Only explicit access-gate evidence is classified as requiring login.
+  // A blank syndication response cannot distinguish deletion from restriction.
+  const errors = Array.isArray(root['errors']) ? root['errors'] : [];
+  const reason = typeof root['reason'] === 'string' ? root['reason'] : '';
+  const restricted = /nsfwloggedout|age.?restrict|age.?verif|log.?in|sign.?in|authentication/i;
+  if (restricted.test(reason) || errors.some((error) => isRecord(error) &&
+      ([32, 215, 239].includes(Number(error['code'])) ||
+       restricted.test(typeof error['message'] === 'string' ? error['message'] : '')))) {
+    return { ok: false, error: { code: 'LOGIN_REQUIRED', message: '该内容需要登录 X 才能查看' } };
+  }
+
   // Tombstone handling (deleted, sensitive, or age-gated/viewer-restricted)
   if (root["__typename"] === "TweetTombstone") {
     const tombstone = root["tombstone"];
@@ -151,7 +169,7 @@ export function parseX(
         ok: false,
         error: {
           code: "LOGIN_REQUIRED",
-          message: "This post requires authentication or has viewer restrictions.",
+          message: "该内容需要登录 X 才能查看",
         },
       };
     }

@@ -98,6 +98,8 @@ void main() {
                 savedAt: 0,
                 itemIndex: 1,
                 isImage: media.type == 'live',
+                status: FileStatus.found,
+                mediaId: '$platform-saved-original',
               ),
               if (media.type == 'live')
                 HistoryFile(
@@ -105,6 +107,8 @@ void main() {
                   savedAt: 0,
                   itemIndex: 1,
                   isImage: false,
+                  status: FileStatus.found,
+                  mediaId: '$platform-saved-motion',
                 ),
             ],
           ),

@@ -76,6 +76,13 @@ class _VerifiedAssetImageState extends State<VerifiedAssetImage> with WidgetsBin
         thumbnailSize: widget.thumbnailSize, fit: widget.fit,
         gaplessPlayback: true,
         width: widget.width, height: widget.height,
+        frameBuilder: widget.isOriginal ? (context, child, frame, synchronous) => frame != null || synchronous
+            ? child : Stack(alignment: Alignment.center, children: [
+                AssetEntityImage(widget.asset, isOriginal: false,
+                    thumbnailSize: widget.thumbnailSize, fit: widget.fit,
+                    width: widget.width, height: widget.height),
+                const CircularProgressIndicator(),
+              ]) : null,
         errorBuilder: (_, __, ___) { _invalidate(); return widget.fallback; });
     },
   );

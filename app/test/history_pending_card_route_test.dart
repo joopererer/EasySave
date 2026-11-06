@@ -68,7 +68,7 @@ void main() {
           title: batch.title, itemsJson: batch.itemsJson,
           fileCount: 1, createdAt: DateTime(2026),
           files: [HistoryFile(filename: 'earlier-3.jpg', savedAt: 1,
-            itemIndex: 3, status: FileStatus.notFound)],
+            itemIndex: 3, status: FileStatus.found, mediaId: 'earlier-saved-3')],
         ));
       }
       await writePlaceholderHistory(db, batch);

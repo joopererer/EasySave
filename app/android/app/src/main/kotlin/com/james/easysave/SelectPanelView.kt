@@ -720,10 +720,16 @@ class SelectPanelView(
 
         previewProgress = ProgressBar(context).apply {
             visibility = View.GONE
+            indeterminateTintList = ColorStateList.valueOf(0xFFFFFFFF.toInt())
+            background = GradientDrawable().apply {
+                shape = GradientDrawable.OVAL
+                setColor(0x99000000.toInt())
+            }
+            setPadding(dp(6), dp(6), dp(6), dp(6))
         }
         overlay.addView(
             previewProgress,
-            LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT, Gravity.CENTER)
+            LayoutParams(dp(48), dp(48), Gravity.CENTER)
         )
         holdIndicator = HoldProgressView(context).apply {
             visibility = View.GONE
@@ -1350,7 +1356,12 @@ class SelectPanelView(
 
     private fun loadImage(requests: List<NativeMediaRequest>, generation: Int, keepProgress: Boolean = false) {
         val target = previewImage ?: return
-        target.setImageBitmap(null)
+        val cell = cells.getOrNull(previewIndex)
+        val thumb = cell?.thumbRequest
+        val pixels = (resources.displayMetrics.widthPixels - dp(28) - dp(8) * (COLS - 1)) / COLS
+        val memory = if (thumb?.canUseMemory() == true) NativeThumbBitmaps.get(thumb.bitmapKey(pixels)) else null
+        target.scaleType = ImageView.ScaleType.FIT_CENTER
+        target.setImageBitmap(memory)
         val maxDim = resources.displayMetrics.widthPixels.coerceAtLeast(resources.displayMetrics.heightPixels)
         pool.execute {
             val (bmp, denied) = decodeFirstImage(requests, maxDim)

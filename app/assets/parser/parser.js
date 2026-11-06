@@ -904,6 +904,12 @@ var EasySaveParser = (() => {
     let root;
     if (typeof input === "string") {
       const trimmed = input.trim();
+      if (trimmed.startsWith("<")) {
+        const visible = trimmed.replace(/<(script|style)\b[^>]*>[\s\S]*?<\/\1>/gi, "").replace(/<[^>]+>/g, " ").replace(/\s+/g, " ");
+        if (/(?:sign|log)\s*in\s+to\s+(?:view|see|access)\s+(?:this\s+)?(?:post|content)|(?:age.restricted|verify\s+your\s+age)|登录.{0,8}(?:查看|浏览)(?:此|该)|年龄验证/i.test(visible)) {
+          return { ok: false, error: { code: "LOGIN_REQUIRED", message: "\u8BE5\u5185\u5BB9\u9700\u8981\u767B\u5F55 X \u624D\u80FD\u67E5\u770B" } };
+        }
+      }
       if (trimmed.length === 0) {
         return {
           ok: false,
@@ -936,6 +942,12 @@ var EasySaveParser = (() => {
         }
       };
     }
+    const errors = Array.isArray(root["errors"]) ? root["errors"] : [];
+    const reason = typeof root["reason"] === "string" ? root["reason"] : "";
+    const restricted = /nsfwloggedout|age.?restrict|age.?verif|log.?in|sign.?in|authentication/i;
+    if (restricted.test(reason) || errors.some((error) => isRecord3(error) && ([32, 215, 239].includes(Number(error["code"])) || restricted.test(typeof error["message"] === "string" ? error["message"] : "")))) {
+      return { ok: false, error: { code: "LOGIN_REQUIRED", message: "\u8BE5\u5185\u5BB9\u9700\u8981\u767B\u5F55 X \u624D\u80FD\u67E5\u770B" } };
+    }
     if (root["__typename"] === "TweetTombstone") {
       const tombstone = root["tombstone"];
       const textObj = isRecord3(tombstone) ? tombstone["text"] : void 0;
@@ -945,7 +957,7 @@ var EasySaveParser = (() => {
           ok: false,
           error: {
             code: "LOGIN_REQUIRED",
-            message: "This post requires authentication or has viewer restrictions."
+            message: "\u8BE5\u5185\u5BB9\u9700\u8981\u767B\u5F55 X \u624D\u80FD\u67E5\u770B"
           }
         };
       }

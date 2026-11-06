@@ -13,6 +13,15 @@ import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
   setUpAll(sqfliteFfiInit);
+  Future<void> exhaustReadRetries(WidgetTester tester) async {
+    await tester.pump();
+    await tester.pump(const Duration(seconds: 6));
+    await tester.pump(const Duration(milliseconds: 200));
+    await tester.pump(const Duration(seconds: 6));
+    await tester.pump(const Duration(milliseconds: 400));
+    await tester.pump(const Duration(seconds: 6));
+    await tester.pump();
+  }
   testWidgets('HistoryPage retry starts a fresh database read after timed-out open', (tester) async {
     SharedPreferences.setMockInitialValues({});
     HistoryDb.resetInstanceForTesting();
@@ -32,8 +41,7 @@ void main() {
     try {
       await tester.pumpWidget(const MaterialApp(home: HistoryPage()));
       await tester.pump();
-      await tester.pump(const Duration(seconds: 6));
-      await tester.pump();
+      await exhaustReadRetries(tester);
       expect(find.text('重试'), findsOneWidget);
       expect(opening.isCompleted, isFalse);
       // Storage becomes available. The pending first native operation never
@@ -59,7 +67,7 @@ void main() {
     }
   });
 
-  testWidgets('HistoryPage clears an old refresh error after retry reads existing records', (tester) async {
+  testWidgets('HistoryPage retains saved content across timeout and refreshes after recovery', (tester) async {
     SharedPreferences.setMockInitialValues({});
     databaseFactory = databaseFactoryFfi;
     HistoryDb.resetInstanceForTesting();
@@ -92,14 +100,15 @@ void main() {
       final hung = Completer<HistoryDb>();
       HistoryDb.setOpeningForTesting(hung.future);
       final refresh = tester.state<HistoryPageState>(find.byType(HistoryPage)).reload();
-      await tester.pump(const Duration(seconds: 6));
-      await tester.pump();
+      await exhaustReadRetries(tester);
       await refresh;
-      expect(find.textContaining('记录读取失败'), findsOneWidget);
-      // Retry has a healthy data source. Existing records mean this refresh is
-      // silent; success must still clear the prior error rendered by the page.
+      expect(find.textContaining('记录读取失败'), findsNothing);
+      expect(find.text('Saved after retry'), findsOneWidget,
+          reason: 'Exhausted transient retries must retain the last successful content.');
+      // A subsequent refresh has a healthy data source and reloads the saved
+      // content without leaving the failed native read attached to the page.
       HistoryDb.setInstanceForTesting(ready);
-      await tester.tap(find.text('重试'));
+      final retry = tester.state<HistoryPageState>(find.byType(HistoryPage)).reload();
       for (var i = 0; i < 10; i++) {
         await tester.pump();
         await tester.runAsync(() async {
@@ -107,6 +116,7 @@ void main() {
         });
       }
       await tester.pump();
+      await retry;
       expect(find.textContaining('记录读取失败'), findsNothing);
       expect(find.text('Saved after retry'), findsOneWidget);
       expect(hung.isCompleted, isFalse);

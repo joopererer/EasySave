@@ -339,6 +339,7 @@ void main() {
       final records = await db.recent();
       final record = records.firstWhere((r) => r.postId == _postId);
       expect(record.files, hasLength(4));
+      await db.settleRepairs();
       expect(await storedFilesJson(), hasLength(4));
     });
   });

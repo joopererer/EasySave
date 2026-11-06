@@ -109,6 +109,11 @@ class HistoryFile {
   );
 }
 
+bool isSavedHistoryFile(HistoryFile file) =>
+    file.status != FileStatus.notFound &&
+    (file.status == FileStatus.found || file.mediaId?.trim().isNotEmpty == true ||
+        file.assetId?.trim().isNotEmpty == true);
+
 /// Whether a stored file row is a *winner* when two rows describe the same
 /// album file: a real 1-based index with written provenance is preferred.
 int _keeperRank(HistoryFile file) =>
@@ -141,7 +146,9 @@ List<HistoryFile>? repairHistoryFiles(List<HistoryFile> files) {
     if (group.length < 2) continue;
     var keeper = group.first;
     for (final i in group.skip(1)) {
-      if (_keeperRank(working[i]) > _keeperRank(working[keeper])) keeper = i;
+      if (_keeperRank(working[i]) > _keeperRank(working[keeper]) ||
+          (_keeperRank(working[i]) == _keeperRank(working[keeper]) &&
+              working[i].savedAt > working[keeper].savedAt)) keeper = i;
     }
     for (final i in group) {
       if (i != keeper) keep[i] = false;
@@ -327,6 +334,10 @@ class HistoryRecord {
   final String? itemsJson;
 
   final List<HistoryFile> files;
+
+  /// Saved-content UI requires a located file or recorded physical identity.
+  /// Unbound legacy filename guesses remain available only to the album scan.
+  List<HistoryFile> get savedFiles => files.where(isSavedHistoryFile).toList();
 
   /// Soft delete flag. When true, record is hidden from UI but files remain in gallery
   /// and can be restored on rebuild. See spec/metadata.md §7.1.
@@ -532,7 +543,40 @@ class HistoryDb {
   HistoryDb._(this._db);
 
   final Database _db;
+  final _knownRecords = <String, HistoryRecord>{};
+  static String _postKey(String platform, String postId) =>
+      '${SiteRegistry.current.canonicalId(platform)}:$postId';
+  void _remember(HistoryRecord record) =>
+      _knownRecords[_postKey(record.platform, record.postId)] = record;
+  static List<HistoryFile> knownSavedFiles(String platform, String postId) {
+    final record = _readyInstances[_defaultKey]?._knownRecords[_postKey(platform, postId)];
+    return record == null || record.isDeleted ? const [] : record.savedFiles;
+  }
+  static String engine = 'main';
+  Future<T> _writeTransaction<T>(Future<T> Function(Transaction) action) async {
+    final watch = Stopwatch()..start();
+    var waitMs = 0;
+    var acquired = false;
+    var busy = false;
+    try {
+      return await _db.transaction((txn) async {
+        waitMs = watch.elapsedMilliseconds;
+        acquired = true;
+        return action(txn);
+      });
+    } catch (error) {
+      busy = error is DatabaseException &&
+          (error.toString().contains('locked') || error.toString().contains('SQLITE_BUSY'));
+      rethrow;
+    } finally {
+      unawaited(DevLog.write('HistoryDb', 'event=write engine=$engine '
+          'waitMs=${acquired ? waitMs : watch.elapsedMilliseconds} '
+          'ioMs=${acquired ? watch.elapsedMilliseconds - waitMs : 0} busy=${busy ? 1 : 0}'));
+    }
+  }
   Future<void>? _activeFileRepair;
+  Future<void> _scheduledRepairs = Future.value();
+  Future<void> settleRepairs() => _scheduledRepairs;
 
   /// Listeners are notified by the write methods themselves (never by their
   /// callers), so a new caller — a new delete gesture, a rebuild, the
@@ -828,7 +872,8 @@ class HistoryDb {
       'history write post=${record.postId} files=${record.files.length} '
           'restoreDeleted=$restoreDeleted',
     );
-    final writtenCount = await _db.transaction<int?>((txn) async {
+    HistoryRecord? committedRecord;
+    final writtenCount = await _writeTransaction<int?>((txn) async {
       if (downloadStartedAt != null) {
         final barriers = await txn.query(
           'download_delete_barriers',
@@ -841,7 +886,7 @@ class HistoryDb {
       }
       final existing =
           await _getByPostUrl(txn, record.postUrl, includeDeleted: true) ??
-          await _getByPostId(txn, record.postId, includeDeleted: true);
+          await _getByPostId(txn, record.postId, includeDeleted: true, platform: record.platform);
       if (existing != null) {
         final recordByMediaId = <String, HistoryFile>{
           for (final f in record.files)
@@ -869,8 +914,11 @@ class HistoryDb {
         final mergedFiles = repairHistoryFiles(sortedFiles) ?? sortedFiles;
         validateHistoryFiles(mergedFiles);
 
+        final hasNewFiles = record.files.any((file) => !existing.files.any(
+          (old) => old.itemIndex == file.itemIndex && old.isImage == file.isImage &&
+              old.status != FileStatus.notFound));
         final resolvedCreatedAt =
-            restoreDeleted && userSave && existing.isDeleted
+            userSave && (hasNewFiles || (restoreDeleted && existing.isDeleted))
             ? record.createdAt
             : record.createdAt.isBefore(existing.createdAt)
             ? record.createdAt
@@ -899,7 +947,7 @@ class HistoryDb {
               : existing.aiLabelSource,
           thumbnailUrl: record.thumbnailUrl ?? existing.thumbnailUrl,
           postUrl: record.postUrl,
-          fileCount: mergedFiles.length,
+          fileCount: mergedFiles.where(isSavedHistoryFile).length,
           createdAt: resolvedCreatedAt,
           itemsJson: record.itemsJson ?? existing.itemsJson,
           files: mergedFiles,
@@ -912,17 +960,20 @@ class HistoryDb {
           where: 'id = ?',
           whereArgs: [existing.id],
         );
+        committedRecord = mergedRecord;
         return mergedFiles.length;
       }
 
-      await txn.insert(
+      final insertedId = await txn.insert(
         'history_records',
-        record.toMap(),
+        {...record.toMap(), 'file_count': record.savedFiles.length},
         conflictAlgorithm: ConflictAlgorithm.replace,
       );
+      committedRecord = HistoryRecord.fromMap({...record.toMap(), 'id': insertedId});
       return record.files.length;
     });
     if (writtenCount != null) {
+      if (committedRecord != null) _remember(committedRecord!);
       DevLog.write(
         'HIST',
         'file rows written source=$source post=${record.postId} count=$writtenCount',
@@ -955,6 +1006,11 @@ class HistoryDb {
           ? fresh.aiLabel
           : oldPost.aiLabel,
     );
+    final itemsJson = fresh.items.isNotEmpty
+        ? jsonEncode([for (final item in fresh.items) item.toJson()]) : old.itemsJson;
+    if (old.authorName == merged.author.name && old.title == merged.title &&
+        old.caption == merged.caption && old.aiLabel == merged.aiLabel?.text &&
+        old.aiLabelSource == merged.aiLabel?.source && old.itemsJson == itemsJson) return merged;
     await _db.update(
       'history_records',
       {
@@ -993,6 +1049,7 @@ class HistoryDb {
       'history_records',
       {
         'files_json': jsonEncode([for (final f in normalized) f.toMap()]),
+        'file_count': normalized.where(isSavedHistoryFile).length,
       },
       where: 'id = ?',
       whereArgs: [id],
@@ -1004,6 +1061,7 @@ class HistoryDb {
       );
     }
     notifyChanged('updateFiles id=$id rows=$rows');
+    _knownRecords.removeWhere((_, record) => record.id == id);
   }
 
   /// Apply scan results to the current database rows, not the snapshot that
@@ -1016,7 +1074,7 @@ class HistoryDb {
     if (before.length != scanned.length) {
       throw ArgumentError('Scan results must match the input file list');
     }
-    final result = await _db.transaction((txn) async {
+    final result = await _writeTransaction((txn) async {
       final rows = await txn.query(
         'history_records',
         where: 'id = ?',
@@ -1055,6 +1113,8 @@ class HistoryDb {
         } else {
           if (proposedId != null && proposedId.isNotEmpty)
             claimedMediaIds.add(proposedId);
+          if (change.$2.status == FileStatus.notFound &&
+              current.status == FileStatus.unknown && current.mediaId == null && current.assetId == null) continue;
           merged.add(
             current.copyWith(
               mediaId: change.$2.mediaId,
@@ -1071,17 +1131,19 @@ class HistoryDb {
       if (changed) {
         await txn.update(
           'history_records',
-          {'files_json': encoded},
+          {'files_json': encoded, 'file_count': repaired.where(isSavedHistoryFile).length},
           where: 'id = ?',
           whereArgs: [id],
         );
       }
-      return (files: repaired, postId: record.postId, changed: changed);
+      return (files: repaired, postId: record.postId, changed: changed,
+          removed: record.files.length - repaired.length);
     });
     if (result.changed) {
+      _knownRecords.removeWhere((_, record) => record.id == id);
       DevLog.write(
         'HIST',
-        'file rows written source=gallery-scan post=${result.postId} count=${result.files.length}',
+        'file rows written source=gallery-scan post=${result.postId} count=${result.files.length} removedPlaceholders=${result.removed}',
       );
       notifyChanged('gallery scan post=${result.postId}');
     }
@@ -1100,7 +1162,7 @@ class HistoryDb {
     final finished = Completer<void>();
     _activeFileRepair = finished.future;
     try {
-      final result = await _db.transaction((txn) async {
+      final result = await _writeTransaction((txn) async {
         final rows = await txn.query(
           'history_records',
           where: 'id = ?',
@@ -1144,6 +1206,7 @@ class HistoryDb {
           'history_records',
           {
             'files_json': jsonEncode([for (final f in repaired) f.toMap()]),
+            'file_count': repaired.where(isSavedHistoryFile).length,
           },
           where: 'id = ?',
           whereArgs: [id],
@@ -1202,11 +1265,14 @@ class HistoryDb {
         ? _persistFileRepair(record) : record;
   }
 
-  Future<HistoryRecord?> getByPostId(String postId) async {
-    final rows = await _db.query('history_records', where: 'LOWER(post_id) = LOWER(?)',
-        whereArgs: [postId], limit: 1);
+  Future<HistoryRecord?> getByPostId(String postId, {String? platform}) async {
+    final site = platform == null ? null : SiteRegistry.current.byId(platform);
+    final rows = await _db.query('history_records',
+        where: 'LOWER(post_id) = LOWER(?)${platform == null ? '' : ' AND (platform = ? OR platform = ?)'}',
+        whereArgs: [postId, if (platform != null) ...[site?.id ?? platform, site?.platform ?? platform]], limit: 1);
     if (rows.isEmpty) return null;
     final record = HistoryRecord.fromMap(rows.first);
+    _remember(record);
     return historyFilesNeedRepair(rows.first['files_json'] as String?)
         ? _persistFileRepair(record) : record;
   }
@@ -1230,11 +1296,14 @@ class HistoryDb {
     DatabaseExecutor db,
     String postId, {
     bool includeDeleted = false,
+    String? platform,
   }) async {
     final rows = await db.query(
       'history_records',
-      where: 'LOWER(post_id) = LOWER(?)',
-      whereArgs: [postId],
+      where: 'LOWER(post_id) = LOWER(?)${platform == null ? '' : ' AND (platform = ? OR platform = ?)'}',
+      whereArgs: [postId, if (platform != null) ...[
+        SiteRegistry.current.byId(platform)?.id ?? platform,
+        SiteRegistry.current.byId(platform)?.platform ?? platform]],
       limit: 1,
     );
     if (rows.isEmpty) return null;
@@ -1314,10 +1383,19 @@ class HistoryDb {
         ? await compute(_decodeHistoryRows, snapshot)
         : _decodeHistoryRows(snapshot);
     final records = decoded.records;
+    for (final record in records) { _remember(record); }
     final repairWatch = Stopwatch()..start();
-    for (final index in decoded.repairs) {
-      records[index] = await _persistFileRepair(records[index]);
-    }
+    // The decoded snapshot is already repaired. Persist separately so a read
+    // never waits for a writer lock just to render history.
+    final previousRepairs = _scheduledRepairs;
+    _scheduledRepairs = () async {
+      await previousRepairs;
+      for (final index in decoded.repairs) {
+        try { await _persistFileRepair(records[index]); } catch (_) { /* Retry next read. */ }
+      }
+    }();
+    unawaited(DevLog.write('HistoryDb', 'event=read engine=$engine waitMs=0 '
+        'ioMs=$queryMs busy=0'));
     unawaited(DevLog.write('HistoryTiming', 'step=recent rows=${rows.length} '
         'decodeMode=${rows.length > 100 ? 'background' : 'inline'} '
         'queryMs=$queryMs decodeMs=${decoded.decodeMs} repairCount=${decoded.repairs.length} '
@@ -1329,7 +1407,7 @@ class HistoryDb {
     // Soft delete: mark as deleted instead of removing. The row count is logged
     // because a caller passing an id that does not exist silently changes
     // nothing — that used to look like "the list did not refresh".
-    final rows = await _db.transaction((txn) async {
+    final rows = await _writeTransaction((txn) async {
       final records = await txn.query(
         'history_records',
         columns: ['platform', 'post_id'],
@@ -1350,6 +1428,7 @@ class HistoryDb {
       );
     });
     notifyChanged('delete id=$id rows=$rows');
+    _knownRecords.removeWhere((_, record) => record.id == id);
   }
 
   Future<void> permanentlyDelete(int id) async {
@@ -1360,10 +1439,12 @@ class HistoryDb {
       whereArgs: [id],
     );
     notifyChanged('permanentlyDelete id=$id rows=$rows');
+    _knownRecords.removeWhere((_, record) => record.id == id);
   }
 
   Future<void> clear() async {
     final rows = await _db.delete('history_records');
+    _knownRecords.clear();
     notifyChanged('clear rows=$rows');
   }
 

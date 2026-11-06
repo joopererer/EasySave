@@ -98,11 +98,13 @@ class GalleryLocatorService extends ChangeNotifier {
       }
     }
     if (idsToFetch.isEmpty) return;
+    var changed = false;
     final futures = idsToFetch.map((id) async {
       try {
         final asset = await AssetEntity.fromId(id);
         if (asset != null) {
           _idMap[id] = asset;
+          changed = true;
           if (asset.title != null && asset.title!.isNotEmpty) {
             _exactMap[asset.title!.toLowerCase()] = asset;
           }
@@ -110,7 +112,7 @@ class GalleryLocatorService extends ChangeNotifier {
       } catch (_) {}
     });
     await Future.wait(futures);
-    notifyListeners();
+    if (changed) notifyListeners();
   }
 
   /// Evict deleted media IDs from in-memory caches.
@@ -131,8 +133,10 @@ class GalleryLocatorService extends ChangeNotifier {
   /// Check current permission state without prompting the user.
   Future<PermissionState> checkPermission() async {
     try {
-      _permission = await PhotoManager.getPermissionState(requestOption: _defaultOption);
-      notifyListeners();
+      final permission = await PhotoManager.getPermissionState(requestOption: _defaultOption);
+      final changed = permission != _permission;
+      _permission = permission;
+      if (changed) notifyListeners();
     } catch (e) {
       debugPrint('GalleryLocatorService.checkPermission error: $e');
     }
@@ -400,6 +404,7 @@ class GalleryLocatorService extends ChangeNotifier {
     String? expectedAssetId,
     String? expectedPlatform,
     required String expectedPostId,
+    int? expectedItemIndex,
   }) async {
     try {
       XmpProvenance? prov = _xmpCache[asset.id];
@@ -415,6 +420,10 @@ class GalleryLocatorService extends ChangeNotifier {
       if (prov == null) {
         return true;
       }
+      if ((prov.itemIndex != null && expectedItemIndex != null && prov.itemIndex != expectedItemIndex) ||
+          (prov.sourceId != null && prov.sourceId != expectedPostId) ||
+          (prov.platform != null && expectedPlatform != null &&
+              toSpecPlatform(prov.platform!) != toSpecPlatform(expectedPlatform))) return false;
 
       // 文件含 XMP，必须用 MediaHeaderReader 读出的 assetId 或 platform+sourceId 核对一致，才能关联；
       // XMP 不一致的文件不得关联（常见文件名会重名）。
@@ -427,7 +436,8 @@ class GalleryLocatorService extends ChangeNotifier {
 
       if (prov.platform != null &&
           prov.sourceId != null &&
-          prov.sourceId == expectedPostId) {
+          prov.sourceId == expectedPostId &&
+          (expectedItemIndex == null || prov.itemIndex == expectedItemIndex)) {
         if (expectedPlatform != null && expectedPlatform.isNotEmpty) {
           if (toSpecPlatform(prov.platform!) == toSpecPlatform(expectedPlatform)) {
             return true;
@@ -441,7 +451,7 @@ class GalleryLocatorService extends ChangeNotifier {
       return false;
     } catch (e) {
       DevLog.write('GalleryLocator', 'Error checking XMP: $e');
-      return true;
+      return false;
     }
   }
 
@@ -478,7 +488,9 @@ class GalleryLocatorService extends ChangeNotifier {
               title == targetName ||
               baseName == targetName ||
               _matchesDoubleExtension(baseName, targetName)) {
-            return cached;
+            if (await _verifyXmpConsistency(cached, expectedAssetId: file.assetId,
+                expectedPlatform: platform, expectedPostId: postId,
+                expectedItemIndex: file.itemIndex)) return cached;
           }
         } else {
           evictMediaIds([cached.id]);
@@ -499,6 +511,9 @@ class GalleryLocatorService extends ChangeNotifier {
             _matchesDoubleExtension(baseName, targetName)) {
           final rel = await getRelativePath(asset);
           if (rel != null && normalizePath(rel) == targetRel) {
+            if (!await _verifyXmpConsistency(asset, expectedAssetId: file.assetId,
+                expectedPlatform: platform, expectedPostId: postId,
+                expectedItemIndex: file.itemIndex)) continue;
             _idMap[asset.id] = asset;
             return asset;
           }
@@ -526,6 +541,7 @@ class GalleryLocatorService extends ChangeNotifier {
           expectedAssetId: file.assetId,
           expectedPlatform: platform,
           expectedPostId: postId,
+          expectedItemIndex: file.itemIndex,
         );
         if (isConsistent) {
           _idMap[candidate.id] = candidate;
@@ -561,7 +577,7 @@ class GalleryLocatorService extends ChangeNotifier {
 
         // Sequence ordering
         final seqMatch = RegExp(r'[_ -](\d+)\.').firstMatch(fn);
-        List<AssetEntity> orderedCandidates = pool;
+        List<AssetEntity> orderedCandidates = const [];
         if (seqMatch != null) {
           final seq = seqMatch.group(1)!;
           final withSeq = pool.where((a) {
@@ -571,10 +587,7 @@ class GalleryLocatorService extends ChangeNotifier {
                 t.contains(' $seq.');
           }).toList();
           if (withSeq.isNotEmpty) {
-            orderedCandidates = [
-              ...withSeq,
-              ...pool.where((a) => !withSeq.contains(a)),
-            ];
+            orderedCandidates = withSeq;
           }
         }
 
@@ -584,6 +597,7 @@ class GalleryLocatorService extends ChangeNotifier {
             expectedAssetId: file.assetId,
             expectedPlatform: platform,
             expectedPostId: postId,
+            expectedItemIndex: file.itemIndex,
           );
           if (isConsistent) {
             _idMap[candidate.id] = candidate;
@@ -599,7 +613,12 @@ class GalleryLocatorService extends ChangeNotifier {
   /// Locate asset for a HistoryFile synchronously using cached assets.
   AssetEntity? locateAsset(HistoryFile file, String postId) {
     if (file.mediaId != null && _idMap.containsKey(file.mediaId)) {
-      return _idMap[file.mediaId];
+      final asset = _idMap[file.mediaId]!;
+      final name = (asset.title ?? '').trim().toLowerCase().split('/').last.split('\\').last;
+      final target = file.filename.trim().toLowerCase();
+      final prov = _xmpCache[asset.id];
+      if ((target.isEmpty || name == target || _matchesDoubleExtension(name, target)) &&
+          (prov?.itemIndex == null || prov?.itemIndex == file.itemIndex)) return asset;
     }
 
     // Priority 1: cached relativePath + filename
@@ -628,7 +647,7 @@ class GalleryLocatorService extends ChangeNotifier {
         final prov = _xmpCache[candidate.id];
         if (prov == null ||
             (file.assetId != null && prov.assetId == file.assetId) ||
-            prov.sourceId == postId) {
+            (prov.sourceId == postId && prov.itemIndex == file.itemIndex)) {
           return candidate;
         }
       }
@@ -685,7 +704,7 @@ class GalleryLocatorService extends ChangeNotifier {
           if (withSeq.isNotEmpty) return withSeq.first;
         }
 
-        return pool.first;
+        return null;
       }
     }
 
@@ -770,7 +789,7 @@ class GalleryLocatorService extends ChangeNotifier {
         await scanAlbum();
       }
       final db = await HistoryDb.instance();
-      final record = await db.getByPostId(post.id);
+      final record = await db.getByPostId(post.id, platform: post.platform);
       if (record != null && !record.isDeleted && record.files.isNotEmpty) {
         final is1Based = record.files.every((f) => f.itemIndex > 0);
         for (final file in record.files) {
@@ -823,12 +842,17 @@ class GalleryLocatorService extends ChangeNotifier {
                   t.contains(' $seq.');
             }).toList();
             if (matched.isNotEmpty) {
-              final candidate = matched.first;
-              final exists = await isPresent(candidate.id);
-              if (exists) {
-                result[i] = candidate;
-              } else {
-                evictMediaIds([candidate.id]);
+              for (final candidate in matched) {
+                if (result.values.any((a) => a.id == candidate.id)) continue;
+                if (!await _verifyXmpConsistency(candidate, expectedPlatform: post.platform,
+                    expectedPostId: post.id, expectedItemIndex: i + 1)) continue;
+                final exists = await isPresent(candidate.id);
+                if (exists) {
+                  result[i] = candidate;
+                  break;
+                } else {
+                  evictMediaIds([candidate.id]);
+                }
               }
             }
           }

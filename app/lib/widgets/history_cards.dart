@@ -36,14 +36,14 @@ String formatSavedAt(DateTime time) {
 MediaItem? coverItemFor(HistoryRecord record) {
   final post = record.toPost();
   if (post.items.isEmpty) return null;
-  if (record.files.isNotEmpty) {
-    final idx = record.files.first.itemIndex;
-    final is1Based = record.files.every((f) => f.itemIndex > 0);
+  if (record.savedFiles.isNotEmpty) {
+    final idx = record.savedFiles.first.itemIndex;
+    final is1Based = record.savedFiles.every((f) => f.itemIndex > 0);
     final zeroBased = is1Based ? idx - 1 : idx;
     if (zeroBased >= 0 && zeroBased < post.items.length) {
       return post.items[zeroBased];
     }
-    if (idx >= 0 && idx < post.items.length) return post.items[idx];
+    return post.items.where((item) => item.cacheItemIndex == zeroBased).firstOrNull;
   }
   return post.items.first;
 }
@@ -96,15 +96,15 @@ class HistoryThumb extends StatelessWidget {
     final items = record.toPost().items;
     final index = itemIndex == null
         ? 0
-        : (record.files.every((f) => f.itemIndex > 0)
+        : (record.savedFiles.every((f) => f.itemIndex > 0)
               ? itemIndex! - 1
               : itemIndex!);
-    final remote = index >= 0 && index < items.length
-        ? items[index]
-        : coverItemFor(record);
+    final remote = itemIndex == null ? coverItemFor(record)
+        : items.where((item) => item.cacheItemIndex == index).firstOrNull ??
+            (index >= 0 && index < items.length ? items[index] : null);
 
     AssetEntity? asset;
-    for (final f in record.files) {
+    for (final f in record.savedFiles) {
       if (itemIndex != null && f.itemIndex != itemIndex) continue;
       asset =
           locator.getAssetById(f.mediaId) ??
@@ -140,7 +140,7 @@ class HistoryThumb extends StatelessWidget {
       );
     }
 
-    final isUnlocated = record.files.any(
+    final isUnlocated = record.savedFiles.any(
       (f) =>
           f.status == FileStatus.unknown &&
           (f.mediaId == null || f.mediaId!.isEmpty),
@@ -182,6 +182,7 @@ class DownloadingOverlay extends StatelessWidget {
     this.paused = false,
     this.stalled = false,
     this.failed = false,
+    this.partial = false,
     this.onTogglePause,
     this.onCancel,
   });
@@ -195,6 +196,7 @@ class DownloadingOverlay extends StatelessWidget {
   /// No sign of life for a while: the toggle becomes "retry".
   final bool stalled;
   final bool failed;
+  final bool partial;
 
   /// Pause / resume (retry when [stalled]); null hides the control.
   final VoidCallback? onTogglePause;
@@ -206,7 +208,7 @@ class DownloadingOverlay extends StatelessWidget {
   Widget build(BuildContext context) {
     final pct = (progress.clamp(0.0, 1.0) * 100).round();
     final size = compact ? 28.0 : 44.0;
-    final label = failed ? '下载失败，点击重试' : paused ? '已暂停 $pct%' : (stalled ? '已停滞 $pct%' : '下载中 $pct%');
+    final label = failed ? (partial ? '部分保存成功，点击重试' : '下载失败，点击重试') : paused ? '已暂停 $pct%' : (stalled ? '已停滞 $pct%' : '下载中 $pct%');
     final toggleIcon = paused
         ? Icons.play_arrow_rounded
         : (stalled || failed ? Icons.refresh : Icons.pause_rounded);
@@ -462,9 +464,7 @@ class WaterfallPostCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final cover = coverItemFor(record);
-    final fileCount = record.files.isNotEmpty
-        ? record.files.length
-        : record.fileCount;
+    final fileCount = record.savedFiles.length;
     final title = (record.title?.isNotEmpty == true) ? record.title! : '无标题';
     final radius = BorderRadius.circular(20);
 
@@ -555,6 +555,7 @@ class WaterfallPostCard extends StatelessWidget {
                           paused: downloadPaused,
                           stalled: downloadStalled,
                           failed: downloadFailed,
+                          partial: record.savedFiles.isNotEmpty,
                           // Hidden in multi-select so taps keep selecting.
                           onTogglePause: selectionMode
                               ? null
@@ -691,9 +692,7 @@ class ListPostRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final cover = coverItemFor(record);
-    final fileCount = record.files.isNotEmpty
-        ? record.files.length
-        : record.fileCount;
+    final fileCount = record.savedFiles.length;
     final title = (record.title?.isNotEmpty == true) ? record.title! : '无标题';
     final badge = listTypeBadge(cover);
 
@@ -728,6 +727,7 @@ class ListPostRow extends StatelessWidget {
                             paused: downloadPaused,
                             stalled: downloadStalled,
                           failed: downloadFailed,
+                          partial: record.savedFiles.isNotEmpty,
                             onTogglePause: selectionMode
                                 ? null
                                 : onToggleDownload,
@@ -903,7 +903,7 @@ class AllMediaCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final post = record.toPost();
     final is1Based =
-        record.files.isNotEmpty && record.files.every((f) => f.itemIndex > 0);
+        record.savedFiles.isNotEmpty && record.savedFiles.every((f) => f.itemIndex > 0);
     final zeroBased = is1Based ? itemIndex - 1 : itemIndex;
     final item = (zeroBased >= 0 && zeroBased < post.items.length)
         ? post.items[zeroBased]

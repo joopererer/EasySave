@@ -759,7 +759,16 @@ class _MinePageState extends State<MinePage> with WidgetsBindingObserver {
                       title: Text(platformLabel(platform)),
                       subtitle: _loginSubtitle(platform),
                       trailing:
-                          platform == 'xhs' && (_loggedIn[platform] ?? false)
+                          platform == 'xhs' && _xhsStatus == SessionStatus.unknown
+                          ? TextButton(
+                              onPressed: () async {
+                                setState(() => _checkingLogin = true);
+                                try { await _refreshPlatform(platform); }
+                                finally { if (mounted) setState(() => _checkingLogin = false); }
+                              },
+                              child: const Text('重新检查'),
+                            )
+                          : platform == 'xhs' && (_loggedIn[platform] ?? false)
                           ? Wrap(
                               children: [
                                 TextButton(

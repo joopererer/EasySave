@@ -96,7 +96,11 @@ Future<String> chooseFinalParseUrl(
   final uri = Uri.tryParse(url);
   if (site.id != 'xhs' || uri == null || !site.hasHost(uri.host)) return url;
   final id = site.sourceId(uri);
-  return id == null ? url : selectXhsPostUrl(url, id, entry: entry);
+  if (id == null) return url;
+  final selected = await selectXhsPostUrl(url, id, entry: entry);
+  unawaited(DevLog.write('ParseWebView', 'event=domain source=${safeCacheLabel(entry)} '
+      'site=xhs selected=${Uri.parse(selected).host} result=${selected == url ? 'original' : 'alternate'}'));
+  return selected;
 }
 
 ParseFailure? terminalPageFailure(SiteDefinition site, Uri? uri) {
@@ -464,9 +468,8 @@ Future<ParseOutcome> _parsePostOutcomeUncached(
       }
       if (site.shortLink(Uri.parse(url)) != null) {
         try {
-          await (await HistoryDb.instance())
-              .rememberParsedLink(url, result.data)
-              .timeout(const Duration(seconds: 2));
+          unawaited(HistoryDb.instance().then((db) => db.rememberParsedLink(url, result.data))
+              .catchError((Object _) {}));
         } catch (_) {}
       }
       return result;
@@ -735,6 +738,7 @@ Future<ParseOutcome> _run(
   var mainNavigations = 0;
   var path = parsePathCategory(target);
   var stage = 'load_wait';
+  var checkingReady = false;
   HeadlessInAppWebView? view;
   try {
     view = HeadlessInAppWebView(
@@ -765,9 +769,24 @@ Future<ParseOutcome> _run(
         useShouldOverrideUrlLoading: true,
       ),
       onLoadStart: (_, uri) {
+        path = parsePathCategory(uri);
         if (hooks.site.id == 'xhs') {
           unawaited(logXhsWebViewCookies(uri));
         }
+      },
+      onProgressChanged: (controller, progress) async {
+        if (hooks.site.id != 'xhs' || progress < 40 || loaded.isCompleted || checkingReady) return;
+        checkingReady = true;
+        try {
+          final current = (await controller.getUrl())?.toString();
+          if (current != null && current == await chooseFinalParseUrl(current, hooks.site, entry: source) &&
+              hooks.site.sourceId(Uri.parse(current)) != null &&
+              await hooks.call(controller, 'ready', current) == true && !loaded.isCompleted) {
+            stage = 'document_ready';
+            loaded.complete(controller);
+          }
+        } catch (_) { /* Full load callback remains available. */ }
+        finally { checkingReady = false; }
       },
       shouldOverrideUrlLoading: (controller, action) async {
         final uri = action.request.url;
@@ -983,7 +1002,7 @@ Future<ParseOutcome> _run(
     final safeCode = RegExp(r'^[A-Z_]{1,40}$').hasMatch(code) ? code : 'OTHER';
     DevLog.write(
       'ParseWebView',
-      'event=failure source=$source site=${hooks.site.id} path=$path loads=$loads navigations=$mainNavigations condition=$stage code=$safeCode',
+      'event=failure source=$source site=${hooks.site.id} path=$path domain=${target?.host ?? 'none'} loads=$loads navigations=$mainNavigations condition=$stage code=$safeCode',
     );
     rethrow;
   } finally {

@@ -168,10 +168,13 @@ class ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
   /// Light refresh of the "最近保存" list: only the database is read. Safe to
   /// call from a listener — the heavy [_reloadRecent] touches the album
   /// service, which notifies its own listeners and would loop back here.
-  Future<void> _refreshRecentList() async {
+  Future<void>? _recentRead;
+  Future<void> _refreshRecentList() => _recentRead ??= _readRecentList().whenComplete(() => _recentRead = null);
+
+  Future<void> _readRecentList() async {
     final db = await HistoryDb.instance();
-    final records = await db.recent(limit: 3);
     final all = await db.recent(limit: 30);
+    final records = all.take(3).toList();
     final locator = GalleryLocatorService.instance;
     if (locator.hasAccess && records.isNotEmpty) {
       await locator.preloadMediaIds(records);
@@ -701,14 +704,14 @@ class ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
       if (!mounted || _cancelRequested || resolveToken != _resolveEpoch) return;
       if (decision.action == PreviewOpenAction.skipAlreadyOnPreview) return;
       ParseOutcome outcome;
-      if (decision.cachedRecord != null && entry != 'retry' && entry != 'refresh') {
+      if (decision.cachedRecord != null && entry != 'refresh') {
         log('cacheHit');
         outcome = ParseOutcome(data: PreviewPage.postFromRecord(decision.cachedRecord!),
             rawImages: const []);
       } else {
         outcome = await parsePostOutcome(normalized,
             source: entry == 'bubble' ? 'bubble_open_app' : entry,
-            forceRefresh: entry == 'retry' || entry == 'refresh',
+            forceRefresh: entry == 'refresh',
             onCacheHit: () => log('cacheHit'));
       }
       if (!mounted || _cancelRequested || resolveToken != _resolveEpoch) return;
@@ -990,7 +993,7 @@ class ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
                       overflow: TextOverflow.ellipsis,
                     ),
                     subtitle: Text(
-                      '${record.authorName ?? ''} · ${record.fileCount} 个文件',
+                      '${record.authorName ?? ''} · ${record.savedFiles.length} 个文件',
                     ),
                     trailing: _openingRecordId == (record.id ?? -1)
                         ? const SizedBox(

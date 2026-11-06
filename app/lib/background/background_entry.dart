@@ -16,6 +16,7 @@ import '../services/site_registry.dart';
 import '../services/download_manager.dart';
 import '../services/download_claims.dart';
 import '../services/gallery_locator_service.dart';
+import '../services/history_db.dart';
 import '../services/links.dart';
 import '../services/parse_service.dart';
 import '../services/preview_resources.dart';
@@ -36,6 +37,7 @@ void backgroundEntry() {
   // save them to the album and write their history record (the main isolate
   // reads the same SharedPreferences snapshots and must ignore them).
   DownloadManager.owner = DownloadBatch.sourceBackground;
+  HistoryDb.engine = 'background';
   final channel = MethodChannel(_channelName);
   channel.setMethodCallHandler((call) async {
     switch (call.method) {
