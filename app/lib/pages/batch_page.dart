@@ -103,9 +103,7 @@ class _BatchPageState extends State<BatchPage> {
     // preview (e.g. tapped twice before the push finished).
     if (PreviewOpenGuard.isTopPreview(post.id)) return;
     _opening = true;
-    await Navigator.of(
-      context,
-    ).push(PreviewPage.route(post: post, rawImages: item.rawImages));
+    await PreviewPage.open(context, post: post, rawImages: item.rawImages);
     _opening = false;
   }
 

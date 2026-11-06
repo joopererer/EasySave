@@ -39,10 +39,11 @@ void logIgAiProbe(String text) {
           r'^\$(?:\.[A-Za-z_][A-Za-z0-9_]{0,79}|\[[0-9]+\])+$',
         ).hasMatch(path) ||
         !RegExp(r'^[A-Za-z_][A-Za-z0-9_]{0,79}$').hasMatch(name) ||
-        !(path.startsWith(r'$.ai_label_info.') || RegExp(
-          r'ai|gen_ai|genai|label|disclosure|c2pa',
-          caseSensitive: false,
-        ).hasMatch(name)) ||
+        !(path.startsWith(r'$.ai_label_info.') ||
+            RegExp(
+              r'ai|gen_ai|genai|label|disclosure|c2pa',
+              caseSensitive: false,
+            ).hasMatch(name)) ||
         !{
           'null',
           'array',
@@ -55,15 +56,25 @@ void logIgAiProbe(String text) {
       return;
     }
     final value = data['value'];
-    final platformText = path == r'$.ai_label_info.attribution_label_text' &&
-        name == 'attribution_label_text' && type == 'string' && value is String;
+    final platformText =
+        ((path == r'$.ai_label_info.attribution_label_text' &&
+                name == 'attribution_label_text') ||
+            (path == r'$.ai_label_info.subtitle_text' &&
+                name == 'subtitle_text')) &&
+        type == 'string' &&
+        value is String;
     if (platformText) {
-      // Only Instagram's root label wording is authorised as bounded prose.
+      // Only Instagram's root label and subtitle are authorised as bounded prose.
       final clean = value.replaceAll(RegExp(r'[\x00-\x1f\x7f-\x9f]'), '');
-      if (RegExp(r'https?://|[?&][^\s=]+=', caseSensitive: false).hasMatch(clean)) {
+      if (RegExp(
+        r'https?://|[?&][^\s=]+=',
+        caseSensitive: false,
+      ).hasMatch(clean)) {
         data.remove('value');
       } else {
-        data['value'] = String.fromCharCodes(clean.runes.take(60));
+        data['value'] = String.fromCharCodes(
+          clean.runes.take(name == 'subtitle_text' ? 120 : 60),
+        );
       }
     } else if (data.containsKey('value') &&
         (RegExp(

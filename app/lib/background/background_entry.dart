@@ -345,6 +345,8 @@ Future<void> _handleSubmit(
         await _invoke(channel, 'showSelectPanel', {
           'stickyPreview': settings.bubblePreviewSticky,
           'postUrl': url,
+          'postTitle': post.title,
+          'aiLabel': post.aiLabel?.toJson(),
           'items': panelItems,
         });
         // Keep the engine alive while the user picks.

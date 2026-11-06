@@ -344,7 +344,7 @@ export function buildPostFromProduct(
   return { ok: true, data };
 }
 
-/** Only the root platform-generated label has a bounded prose exception. */
+/** Only root platform-generated label and subtitle have bounded prose exceptions. */
 export function probeInstagramAiFields(product: unknown): string[] {
   const lines: string[] = [];
   const seen = new Set<object>();
@@ -363,9 +363,9 @@ export function probeInstagramAiFields(product: unknown): string[] {
       if ((next.startsWith('$.ai_label_info.') || /ai|gen_ai|genai|label|disclosure|c2pa/i.test(name)) && lines.length < 256) {
         const type = value === null ? 'null' : Array.isArray(value) ? 'array' : typeof value;
         const record: Record<string, unknown> = { path: next, name, type };
-        if (next === '$.ai_label_info.attribution_label_text' && typeof value === 'string') {
+        if ((next === '$.ai_label_info.attribution_label_text' || next === '$.ai_label_info.subtitle_text') && typeof value === 'string') {
           const text = value.replace(/[\u0000-\u001f\u007f-\u009f]/g, '');
-          if (!/https?:\/\/|[?&][^\s=]+=/i.test(text)) record.value = Array.from(text).slice(0, 60).join('');
+          if (!/https?:\/\/|[?&][^\s=]+=/i.test(text)) record.value = Array.from(text).slice(0, name === 'subtitle_text' ? 120 : 60).join('');
         } else if (!sensitive && (typeof value === 'boolean' ||
             typeof value === 'number' && Number.isFinite(value) ||
             typeof value === 'string' && /^[A-Za-z0-9_]{1,40}$/.test(value))) record.value = value;

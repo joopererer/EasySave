@@ -1,6 +1,8 @@
 package com.james.easysave
 
 import android.animation.ValueAnimator
+import android.app.Activity
+import android.app.AlertDialog
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.Color
@@ -226,6 +228,52 @@ class SelectPanelView(
     private lateinit var downloadBtn: TextView
     private lateinit var grid: GridLayout
     private lateinit var savedBanner: TextView
+    private lateinit var postTitleView: TextView
+    private lateinit var aiBadge: TextView
+    private var aiDialog: AlertDialog? = null
+
+    override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
+        postTitleView.maxWidth = (View.MeasureSpec.getSize(widthMeasureSpec) - dp(80)).coerceAtLeast(0)
+        super.onMeasure(widthMeasureSpec, heightMeasureSpec)
+    }
+
+    fun setPostMetadata(title: String?, label: Map<*, *>?) {
+        aiDialog?.dismiss()
+        postTitleView.text = title?.takeIf { it.isNotBlank() } ?: "选择要下载的内容"
+        val text = (label?.get("text") as? String)?.takeIf { it.isNotBlank() }
+        aiBadge.visibility = if (text == null) View.GONE else View.VISIBLE
+        aiBadge.setOnClickListener(if (text == null) null else OnClickListener {
+            val source = when (label?.get("source")) {
+                "platform" -> "平台识别"
+                "author" -> "作者声明"
+                else -> "来源未知"
+            }
+            val content = LinearLayout(context).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding(dp(24), dp(12), dp(24), dp(12))
+                for (line in listOf(text, source, "来自平台标注，仅供参考")) {
+                    addView(TextView(context).apply {
+                        this.text = line
+                        setTextIsSelectable(true)
+                        setPadding(0, dp(4), 0, dp(4))
+                    })
+                }
+            }
+            aiDialog = AlertDialog.Builder(context).setTitle("AI 标注").setView(content)
+                .setPositiveButton("关闭") { dialog, _ -> dialog.dismiss() }.create().also {
+                    if (context !is Activity) {
+                        val overlayType = if (android.os.Build.VERSION.SDK_INT >= 26) {
+                            android.view.WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
+                        } else {
+                            @Suppress("DEPRECATION")
+                            android.view.WindowManager.LayoutParams.TYPE_PHONE
+                        }
+                        it.window?.setType(overlayType)
+                    }
+                    it.show()
+                }
+        })
+    }
 
     // Fullscreen preview components
     private var previewOverlay: FrameLayout? = null
@@ -385,6 +433,38 @@ class SelectPanelView(
             visibility = View.GONE
         }
         sheet.addView(savedBanner)
+
+        val postHeader = LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(0, dp(4), 0, dp(4))
+        }
+        postTitleView = TextView(context).apply {
+            text = "选择要下载的内容"
+            setTextColor(Color.WHITE)
+            textSize = 16f
+            maxLines = 1
+            ellipsize = android.text.TextUtils.TruncateAt.END
+        }
+        postHeader.addView(postTitleView, LinearLayout.LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT))
+        aiBadge = TextView(context).apply {
+            text = "AI"
+            textSize = 11f
+            typeface = Typeface.DEFAULT_BOLD
+            setTextColor(Color.WHITE)
+            setPadding(dp(4), 0, dp(4), 0)
+            background = GradientDrawable().apply {
+                setColor(Color.TRANSPARENT)
+                setStroke(dp(2), 0xFFFF6A3D.toInt())
+                cornerRadius = dp(8).toFloat()
+            }
+            contentDescription = "AI 标注"
+            visibility = View.GONE
+        }
+        postHeader.addView(aiBadge, LinearLayout.LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT).apply {
+            leftMargin = dp(4)
+        })
+        sheet.addView(postHeader)
 
         val header = LinearLayout(context).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -1518,6 +1598,8 @@ class SelectPanelView(
     }
 
     fun release() {
+        aiDialog?.dismiss()
+        aiDialog = null
         hidePreview()
         shimmerAnim?.cancel()
         shimmerAnim = null

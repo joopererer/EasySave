@@ -85,6 +85,15 @@ class PreviewPage extends StatefulWidget {
     );
   }
 
+  static Future<void> open(BuildContext context, {
+    required ParsedPost post,
+    List<RawImageEntry> rawImages = const [],
+    VoidCallback? onSaved,
+  }) async {
+    if (PreviewRouteObserver.instance.revealPreview(post.id)) return;
+    await Navigator.of(context).push(route(post: post, rawImages: rawImages, onSaved: onSaved));
+  }
+
   @override
   State<PreviewPage> createState() => _PreviewPageState();
 }
@@ -198,6 +207,7 @@ class _PreviewPageState extends State<PreviewPage> {
 
   @override
   void dispose() {
+    _imageReadyTimer?.cancel();
     GalleryLocatorService.instance.removeListener(_checkDownloaded);
     _batchPoll?.cancel();
     DownloadManager.instance.removeListener(_refreshBatch);
@@ -216,11 +226,14 @@ class _PreviewPageState extends State<PreviewPage> {
     GalleryLocatorService.instance.addListener(_checkDownloaded);
     _checkDownloaded();
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      Future.delayed(const Duration(milliseconds: 350), () {
+      if (!mounted) return;
+      _imageReadyTimer = Timer(const Duration(milliseconds: 350), () {
         if (mounted) setState(() => _imagesReady = true);
       });
     });
   }
+
+  Timer? _imageReadyTimer;
 
   Future<void> _checkDownloaded() async {
     try {

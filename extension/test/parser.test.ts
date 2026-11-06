@@ -75,7 +75,7 @@ describe('Parser bundle verification', () => {
         const expected = JSON.parse(readFileSync(jsonPath, 'utf-8'));
         // Keep the original spec vector; assert the new post-level field too.
         if (platform === 'instagram' && file === 'ig_reel.html') {
-          expected.aiLabel = { text: 'AI 内容', source: 'platform' };
+          expected.aiLabel = { text: 'AI content', source: 'platform' };
         }
         // Get pageUrl from sources.json
         const basename = file.replace(ext, '');

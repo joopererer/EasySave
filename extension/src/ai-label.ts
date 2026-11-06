@@ -6,7 +6,7 @@ export interface AiLabel {
 export function instagramAiLabel(info: unknown): AiLabel | undefined {
   if (!info || typeof info !== 'object' || Array.isArray(info)) return;
   const text = (info as Record<string, unknown>).attribution_label_text;
-  if (typeof text === 'string' && text.trim()) return { text, source: 'platform' };
+  if (typeof text === 'string' && text.trim()) return { text: 'AI content', source: 'platform' };
 }
 
 // Dedicated bridge to App DevLog; never log the surrounding post payload.

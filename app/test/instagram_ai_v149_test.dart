@@ -32,6 +32,32 @@ void main() {
       );
     }
 
+    test('records safe subtitle prose with a 120-codepoint limit', () {
+      send(
+        r'$.ai_label_info.subtitle_text',
+        'subtitle_text',
+        'string',
+        'AI\u0000\n ${List.filled(130, '😀').join()}',
+      );
+      final record =
+          jsonDecode(lines.single.substring(lines.single.indexOf('{'))) as Map;
+      expect(record['value'], 'AI ${List.filled(117, '😀').join()}');
+    });
+
+    for (final text in [
+      'ht\ntps://private.invalid/',
+      'AI ?to\nken=PRIVATE',
+      '${List.filled(130, '😀').join()} https://private.invalid/',
+    ]) {
+      test('filters subtitle URL/query before truncation ${text.length}', () {
+        send(r'$.ai_label_info.subtitle_text', 'subtitle_text', 'string', text);
+        final record =
+            jsonDecode(lines.single.substring(lines.single.indexOf('{')))
+                as Map;
+        expect(record.containsKey('value'), false);
+      });
+    }
+
     test('accepts root platform wording and discriminator enums', () {
       send(
         r'$.ai_label_info.attribution_label_text',
@@ -128,7 +154,7 @@ void main() {
       'id': 'AIPlatform149',
       'url': 'https://www.instagram.com/p/AIPlatform149/',
       'items': [],
-      'aiLabel': {'text': 'Made with AI', 'source': 'platform'},
+      'aiLabel': {'text': 'AI content', 'source': 'platform'},
     });
     final label = ParsedPost.fromJson(post.toJson()).aiLabel!;
     final provenance = buildSiteProvenance(
@@ -141,7 +167,7 @@ void main() {
       itemIndex: 1,
       itemCount: 1,
     );
-    expect(provenance.aiLabel, 'Made with AI');
+    expect(provenance.aiLabel, 'AI content');
     expect(provenance.aiLabelSource, 'platform');
     expect(
       provenance.digitalSourceType,

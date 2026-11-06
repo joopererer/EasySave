@@ -169,10 +169,7 @@
       "headers": {
         "Referer": "https://www.xiaohongshu.com/"
       },
-      "cookieDomains": [
-        "xiaohongshu.com",
-        "rednote.com"
-      ],
+      "cookieDomains": [],
       "transport": "background",
       "resumable": true,
       "thumbnailScenes": [

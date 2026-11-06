@@ -137,7 +137,7 @@ packages:
     source: hosted
     version: "0.1.2"
   file:
-    dependency: transitive
+    dependency: "direct dev"
     description:
       name: file
       sha256: a3b4f84adafef897088c160faf7dfffb7696046cb13ae90b508c2cbc95d3b8d4
@@ -718,7 +718,7 @@ packages:
     source: hosted
     version: "2.4.2+3"
   sqflite_common:
-    dependency: transitive
+    dependency: "direct dev"
     description:
       name: sqflite_common
       sha256: "5e8377564d95166761a968ed96104e0569b6b6cc611faac92a36ab8a169112c3"

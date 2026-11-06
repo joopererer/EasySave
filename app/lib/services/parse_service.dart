@@ -224,6 +224,7 @@ class CachedPostParser {
   final MethodChannel channel;
   final DateTime Function() now;
   final _fallback = SharedParseCache<Map<String, dynamic>>();
+  final _running = <String, Future<ParseOutcome>>{};
 
   String keyFor(String url) {
     final site = SiteRegistry.current.match(url);
@@ -249,6 +250,28 @@ class CachedPostParser {
     String entry = 'app_input',
     bool forceRefresh = false,
     FutureOr<void> Function()? onCacheMiss,
+    void Function()? onCacheHit,
+  }) {
+    final key = keyFor(url);
+    final existing = _running[key];
+    if (existing != null) return existing;
+    final task = _parse(url, entry: entry, forceRefresh: forceRefresh,
+        onCacheMiss: onCacheMiss, onCacheHit: onCacheHit);
+    _running[key] = task;
+    unawaited(task.then<void>((_) {
+      if (identical(_running[key], task)) _running.remove(key);
+    }, onError: (Object _, StackTrace __) {
+      if (identical(_running[key], task)) _running.remove(key);
+    }));
+    return task;
+  }
+
+  Future<ParseOutcome> _parse(
+    String url, {
+    required String entry,
+    required bool forceRefresh,
+    FutureOr<void> Function()? onCacheMiss,
+    void Function()? onCacheHit,
   }) async {
     final site = SiteRegistry.current.match(url);
     if (site == null || !site.enabled) return parseNetwork(url, entry);
@@ -295,7 +318,8 @@ class CachedPostParser {
                 throw StateError('EXPIRED');
             }
           }
-          await log('hit');
+          onCacheHit?.call();
+          unawaited(log('hit'));
           return cached;
         } catch (_) {
           await log('expired');
@@ -304,7 +328,7 @@ class CachedPostParser {
         await log('expired');
       }
     }
-    await log('miss');
+    unawaited(log('miss'));
     await onCacheMiss?.call();
     final outcome = await parseNetwork(url, entry);
     postId = outcome.data.id;
@@ -366,12 +390,14 @@ Future<ParseOutcome> parsePostOutcome(
   String source = 'app_input',
   bool forceRefresh = false,
   FutureOr<void> Function()? onCacheMiss,
+  void Function()? onCacheHit,
 }) async {
   final outcome = await cachedPostParser.parse(
     url,
     entry: source,
     forceRefresh: forceRefresh,
     onCacheMiss: onCacheMiss,
+    onCacheHit: onCacheHit,
   );
   unawaited(SharedThumbnailCache.instance.prefetch(outcome.data));
   return outcome;

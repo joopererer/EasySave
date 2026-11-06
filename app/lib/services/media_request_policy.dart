@@ -158,9 +158,8 @@ class MediaRequestPolicy {
     }
     _headers(config['headers'] as Map, raw);
     _headers(resource.request.headers, raw);
-    final declared = (config['cookieDomains'] as List).cast<String>().toSet();
     for (final domain in resource.request.cookieDomains) {
-      if (!_domain.hasMatch(domain) || !declared.contains(domain)) {
+      if (!_domain.hasMatch(domain)) {
         _reject('REQUEST_COOKIE_DOMAIN_REJECTED', raw);
       }
     }
@@ -180,9 +179,15 @@ class MediaRequestPolicy {
       ..._headers(config['headers'] as Map, resource.url),
       ..._headers(resource.request.headers, resource.url),
     };
+    final declared = (config['cookieDomains'] as List).cast<String>().toSet();
     final eligible = resource.request.cookieDomains.any(
-      (d) => uri.host == d || uri.host.endsWith('.$d'),
+      (d) => declared.contains(d) && (uri.host == d || uri.host.endsWith('.$d')),
     );
+    final required = (config['cookieRequiredHosts'] as List? ?? const [])
+        .cast<Map>().any((rule) => matchesHost(uri.host, rule));
+    if (required && !eligible) {
+      _reject('REQUEST_COOKIE_DOMAIN_REJECTED', resource.url);
+    }
     String? cookie;
     if (eligible) {
       try {
@@ -195,6 +200,9 @@ class MediaRequestPolicy {
       }
       // Expiry can elapse while querying the platform CookieManager.
       validate(resource);
+    } else {
+      unawaited(DevLog.write('RequestPolicy',
+          'REQUEST_COOKIE_STRIPPED host=${site.hasHost(uri.host) ? 'site_media' : 'cdn_media'}'));
     }
     return AuthorizedMediaRequest._(
       this,

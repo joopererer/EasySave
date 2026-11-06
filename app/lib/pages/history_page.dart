@@ -121,6 +121,8 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
   Map<String, DownloadBatch> _downloadBatches = const {};
 
   bool _isPaused(String postId) => _downloadBatches[postId]?.isPaused ?? false;
+  bool _isFailed(String postId) => _downloadBatches[postId]?.isTerminal == true &&
+      (_downloadBatches[postId]?.failedCount ?? 0) > 0;
 
   bool _isStalled(String postId) =>
       _downloadBatches[postId]?.isStalledAt(
@@ -134,7 +136,9 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
     if (batch == null) return;
     final dm = DownloadManager.instance;
     try {
-      if (batch.isPaused) {
+      if (batch.isTerminal && batch.failedCount > 0) {
+        await dm.retryBatch(await dm.forceAdopt(batch));
+      } else if (batch.isPaused) {
         await dm.resumeBatch(batch);
       } else if (batch.isStalledAt(DateTime.now().millisecondsSinceEpoch)) {
         await dm.restartBatch(await dm.forceAdopt(batch));
@@ -190,7 +194,8 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
     try {
       final all = await DownloadManager.instance.liveBatches().timeout(const Duration(seconds: 2));
       if (!mounted) return;
-      final unfinished = [for (final b in all) if (!b.isTerminal) b];
+      final unfinished = [for (final b in all)
+        if (!b.cancelledByDeletion && (!b.isTerminal || b.failedCount > 0)) b];
       final progress = <String, double>{
         for (final b in unfinished) b.postId: b.progress,
       };
@@ -344,6 +349,7 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
       setState(() {
         _records = records;
         _loading = false;
+        _dbError = null;
       });
     } catch (e) {
       if (!mounted) return;
@@ -351,6 +357,7 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
         _loading = false;
         _dbError = '$e';
       });
+      if (e is TimeoutException) HistoryDb.retryPendingOpen();
     }
   }
 
@@ -509,12 +516,10 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
       final outcome = await parsePostOutcome(record.postUrl, source: 'history_refresh', forceRefresh: true);
       if (!mounted) return;
       ScaffoldMessenger.of(context).hideCurrentSnackBar();
-      Navigator.of(context).push(
-        PreviewPage.route(
+      unawaited(PreviewPage.open(context,
           post: outcome.data,
           rawImages: outcome.rawImages,
-        ),
-      );
+      ));
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).hideCurrentSnackBar();
@@ -523,9 +528,7 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
           e is ParseFailure && e.code == ParseErrorCode.loginRequired && loginSiteIds.contains(platformFromKey(record.platform));
       final cachedPost = record.toPost();
       if (cachedPost.items.isNotEmpty) {
-        Navigator.of(context).push(
-          PreviewPage.route(post: cachedPost),
-        );
+        unawaited(PreviewPage.open(context, post: cachedPost));
         if (isLoginRequired) {
           final platform = platformFromKey(record.platform);
           LoginExpiredBus.markParseLoginRequired(platform);
@@ -581,6 +584,17 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
   /// Build the fullscreen browser items for a record and open it.
   Future<void> _openRecord(HistoryRecord record, {int? highlightItemIndex}) async {
     if (_opening) return;
+    if (record.fileCount == 0 && record.files.isEmpty &&
+        _downloadBatches.containsKey(record.postId)) {
+      _opening = true;
+      try {
+        await Navigator.of(context).push(MaterialPageRoute<void>(
+            builder: (_) => const DownloadQueuePage()));
+      } finally {
+        _opening = false;
+      }
+      return;
+    }
     _opening = true;
 
     try {
@@ -1067,7 +1081,7 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
   Widget _queueButton() {
     final count = _unfinished.length;
     return Tooltip(
-      message: count > 0 ? '下载队列（$count 个进行中）' : '下载队列',
+      message: count > 0 ? '下载队列（$count 个待完成）' : '下载队列',
       child: InkWell(
         borderRadius: BorderRadius.circular(999),
         onTap: () async {
@@ -1743,7 +1757,8 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
                   downloadProgress: _downloadProgress[record.postId],
                   downloadPaused: _isPaused(record.postId),
                   downloadStalled: _isStalled(record.postId),
-                  onToggleDownload: _downloadBatches[record.postId]?.supportsPause == false ? null : () => _toggleDownload(record.postId),
+                  downloadFailed: _isFailed(record.postId),
+                  onToggleDownload: _downloadBatches[record.postId]?.supportsPause == false && !_isFailed(record.postId) ? null : () => _toggleDownload(record.postId),
                   onCancelDownload: () => _cancelDownload(record.postId),
                   onTap: () => _openRecord(record),
                   onLongPress: () => _enterSelection(key),
@@ -1813,7 +1828,8 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
                         downloadProgress: _downloadProgress[record.postId],
                         downloadPaused: _isPaused(record.postId),
                         downloadStalled: _isStalled(record.postId),
-                        onToggleDownload: _downloadBatches[record.postId]?.supportsPause == false ? null : () => _toggleDownload(record.postId),
+                  downloadFailed: _isFailed(record.postId),
+                        onToggleDownload: _downloadBatches[record.postId]?.supportsPause == false && !_isFailed(record.postId) ? null : () => _toggleDownload(record.postId),
                         onCancelDownload: () =>
                             _cancelDownload(record.postId),
                         onTap: () => _openRecord(record),

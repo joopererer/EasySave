@@ -266,6 +266,7 @@ void _validateSemantics(Map<String, dynamic> payload) {
       for (final short in (site['shortLinks'] as List).cast<Map>())
         short['host'] as Map,
       ...(download['mediaHosts'] as List).cast<Map>(),
+      ...(download['cookieRequiredHosts'] as List? ?? const []).cast<Map>(),
     ];
     final domains = [
       for (final host in hosts) host['domain'] as String,

@@ -181,6 +181,7 @@ class DownloadingOverlay extends StatelessWidget {
     this.compact = false,
     this.paused = false,
     this.stalled = false,
+    this.failed = false,
     this.onTogglePause,
     this.onCancel,
   });
@@ -193,6 +194,7 @@ class DownloadingOverlay extends StatelessWidget {
 
   /// No sign of life for a while: the toggle becomes "retry".
   final bool stalled;
+  final bool failed;
 
   /// Pause / resume (retry when [stalled]); null hides the control.
   final VoidCallback? onTogglePause;
@@ -204,11 +206,11 @@ class DownloadingOverlay extends StatelessWidget {
   Widget build(BuildContext context) {
     final pct = (progress.clamp(0.0, 1.0) * 100).round();
     final size = compact ? 28.0 : 44.0;
-    final label = paused ? '已暂停 $pct%' : (stalled ? '已停滞 $pct%' : '下载中 $pct%');
+    final label = failed ? '下载失败，点击重试' : paused ? '已暂停 $pct%' : (stalled ? '已停滞 $pct%' : '下载中 $pct%');
     final toggleIcon = paused
         ? Icons.play_arrow_rounded
-        : (stalled ? Icons.refresh : Icons.pause_rounded);
-    final toggleTip = paused ? '继续下载' : (stalled ? '重试' : '暂停下载');
+        : (stalled || failed ? Icons.refresh : Icons.pause_rounded);
+    final toggleTip = failed ? '重试' : paused ? '继续下载' : (stalled ? '重试' : '暂停下载');
     final actionSize = compact ? 18.0 : 22.0;
 
     Widget action(IconData icon, String tip, VoidCallback onTap) {
@@ -222,7 +224,8 @@ class DownloadingOverlay extends StatelessWidget {
           width: compact ? 28 : 36,
           height: compact ? 28 : 36,
         ),
-        style: IconButton.styleFrom(backgroundColor: Colors.black38),
+        style: IconButton.styleFrom(backgroundColor: Colors.black38,
+          minimumSize: Size.zero, tapTargetSize: MaterialTapTargetSize.shrinkWrap),
       );
     }
 
@@ -237,7 +240,7 @@ class DownloadingOverlay extends StatelessWidget {
               SizedBox(
                 width: size,
                 height: size,
-                child: CircularProgressIndicator(
+                child: failed ? const Icon(Icons.error_outline, color: Colors.white) : CircularProgressIndicator(
                   // Indeterminate until the first bytes arrive.
                   value: paused || progress > 0
                       ? progress.clamp(0.0, 1.0)
@@ -434,6 +437,7 @@ class WaterfallPostCard extends StatelessWidget {
     this.downloadProgress,
     this.downloadPaused = false,
     this.downloadStalled = false,
+    this.downloadFailed = false,
     this.onToggleDownload,
     this.onCancelDownload,
   });
@@ -449,6 +453,7 @@ class WaterfallPostCard extends StatelessWidget {
   final double? downloadProgress;
   final bool downloadPaused;
   final bool downloadStalled;
+  final bool downloadFailed;
 
   /// Pause / resume (retry when stalled) and cancel of the running download.
   final VoidCallback? onToggleDownload;
@@ -549,6 +554,7 @@ class WaterfallPostCard extends StatelessWidget {
                           progress: downloadProgress!,
                           paused: downloadPaused,
                           stalled: downloadStalled,
+                          failed: downloadFailed,
                           // Hidden in multi-select so taps keep selecting.
                           onTogglePause: selectionMode
                               ? null
@@ -660,6 +666,7 @@ class ListPostRow extends StatelessWidget {
     this.downloadProgress,
     this.downloadPaused = false,
     this.downloadStalled = false,
+    this.downloadFailed = false,
     this.onToggleDownload,
     this.onCancelDownload,
   });
@@ -677,6 +684,7 @@ class ListPostRow extends StatelessWidget {
   final double? downloadProgress;
   final bool downloadPaused;
   final bool downloadStalled;
+  final bool downloadFailed;
   final VoidCallback? onToggleDownload;
   final VoidCallback? onCancelDownload;
 
@@ -719,6 +727,7 @@ class ListPostRow extends StatelessWidget {
                             compact: true,
                             paused: downloadPaused,
                             stalled: downloadStalled,
+                          failed: downloadFailed,
                             onTogglePause: selectionMode
                                 ? null
                                 : onToggleDownload,

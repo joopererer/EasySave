@@ -22,6 +22,7 @@ import '../services/history_db.dart';
 import '../services/host_bridge.dart';
 import '../services/links.dart';
 import '../services/preview_open_guard.dart';
+import '../services/preview_route_observer.dart';
 import '../services/parse_service.dart';
 import '../services/seal.dart';
 import '../services/settings.dart';
@@ -632,13 +633,6 @@ class ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
     }
     final links = extractLinks(url);
     if (links.isEmpty) return;
-    if (links.length == 1) {
-      final link = links.first;
-      if (await _alreadyDownloaded(link)) {
-        if (mounted) _clearStaleInput();
-        return;
-      }
-    }
     if (!mounted) return;
     _handleLinks(url, entry: 'bubble');
   }
@@ -658,118 +652,82 @@ class ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
   /// is what the DevLog line reports, so a device log shows which door the
   /// request came through. The dedup rule itself lives in [PreviewOpenGuard].
   Future<void> _resolve(String link, {String entry = 'input'}) async {
-    if (_busy || _resolving) return;
-    final resolveToken = ++_resolveEpoch;
-
-    final decision = await PreviewOpenGuard.decide(entry: entry, link: link);
-    final normalizedLink = decision.normalizedLink;
-
-    switch (decision.action) {
-      case PreviewOpenAction.skipAlreadyOnPreview:
-        return;
-
-      case PreviewOpenAction.openCached:
-        if (entry == 'bubble') {
-          // When entering via bubble "打开 EasySave", if already in history,
-          // do not push preview; no action needed.
-          if (mounted) _clearStaleInput();
-          return;
-        }
-        final existing = decision.cachedRecord;
-        if (existing == null) return;
-        if (!mounted) return;
-        await Navigator.of(context).push(
-          PreviewPage.route(
-            post: PreviewPage.postFromRecord(existing),
-            onSaved: () {
-              if (mounted) _linkController.clear();
-            },
-          ),
-        );
-        _reloadRecent();
-        return;
-
-      case PreviewOpenAction.parseFresh:
-        break;
+    final tap = Stopwatch()..start();
+    var waitMs = 0;
+    final label = const {'input', 'share', 'clipboard', 'bubble', 'retry',
+      'login', 'refresh', 'paste', 'batch'}.contains(entry) ? entry : 'other';
+    void log(String event, {bool dedup = false}) {
+      unawaited(DevLog.write('ParseFlow', 'event=$event entry=$label '
+          'waitMs=$waitMs dedup=${dedup ? 1 : 0} elapsedMs=${tap.elapsedMilliseconds}'));
     }
-
-    // Anything below touches state and BuildContext after the awaits above.
-    if (!mounted) return;
-
-    _currentLink = normalizedLink;
-    // Reflect the link actually being parsed (it may come from a share intent,
-    // not the box), so retry / login flows re-use the correct one.
-    if (_linkController.text != normalizedLink) {
-      _linkController.value = TextEditingValue(
-        text: normalizedLink,
-        selection: TextSelection.collapsed(offset: normalizedLink.length),
-      );
+    log('tap');
+    final normalized = link.trim();
+    final postId = postIdOfUrl(normalized);
+    if (PreviewRouteObserver.instance.revealPreview(postId)) {
+      log('previewShown', dedup: true);
+      return;
+    }
+    if (_busy || _resolving) {
+      log('start', dedup: true);
+      widget.onShowSelf?.call();
+      return;
+    }
+    final resolveToken = ++_resolveEpoch;
+    if (_linkController.text != normalized) {
+      _linkController.value = TextEditingValue(text: normalized,
+          selection: TextSelection.collapsed(offset: normalized.length));
     }
     setState(() {
-      _busy = false;
+      _busy = true;
       _resolving = true;
       _cancelRequested = false;
       _errorCode = null;
       _errorMessage = null;
+      _currentLink = normalized;
     });
-    // Parsing started from another tab: the inline state below is not on
-    // screen, so show it as a snackbar until the preview opens or it fails.
     final offscreen = !(widget.isVisible?.call() ?? true);
-    void showMissLoading() {
-      if (!mounted || _cancelRequested) return;
-      setState(() => _busy = true);
-      if (!offscreen) return;
-      showParsingSnackBar(
-        context,
-        onCancel: () {
-          if (!mounted) return;
-          setState(() {
-            _cancelRequested = true;
-            _busy = false;
-          });
-        },
-      );
-    }
-
-    void closeParsingSnackBar() {
-      if (offscreen && mounted) {
-        ScaffoldMessenger.of(context).hideCurrentSnackBar();
-      }
-    }
-
-    try {
-      final outcome = await parsePostOutcome(
-        normalizedLink,
-        source: entry == 'bubble' ? 'bubble_open_app' : entry,
-        forceRefresh: entry == 'retry' || entry == 'refresh',
-        onCacheMiss: showMissLoading,
-      );
-      if (!mounted || _cancelRequested) return;
-      closeParsingSnackBar();
-      setState(() {
-        _busy = false;
-        _resolving = false;
+    if (offscreen) {
+      showParsingSnackBar(context, onCancel: () {
+        if (mounted) setState(() { _cancelRequested = true; _busy = false; });
       });
-
-      // Preview pages are always pushed through PreviewPage.route so the route
-      // carries the post id that PreviewRouteObserver reads back.
-      await Navigator.of(context).push(
-        PreviewPage.route(
-          post: outcome.data,
-          rawImages: outcome.rawImages,
-          onSaved: () {
-            if (mounted) _linkController.clear();
-          },
-        ),
+    }
+    waitMs = tap.elapsedMilliseconds;
+    log('start');
+    try {
+      // The click path reads only the already loaded history snapshot. Opening
+      // SQLite, repairing history or expanding a short link belongs elsewhere.
+      final decision = await PreviewOpenGuard.decide(entry: entry,
+          link: normalized, resolveShortLinks: false, knownRecords: _recentAll);
+      if (!mounted || _cancelRequested || resolveToken != _resolveEpoch) return;
+      if (decision.action == PreviewOpenAction.skipAlreadyOnPreview) return;
+      ParseOutcome outcome;
+      if (decision.cachedRecord != null && entry != 'retry' && entry != 'refresh') {
+        log('cacheHit');
+        outcome = ParseOutcome(data: PreviewPage.postFromRecord(decision.cachedRecord!),
+            rawImages: const []);
+      } else {
+        outcome = await parsePostOutcome(normalized,
+            source: entry == 'bubble' ? 'bubble_open_app' : entry,
+            forceRefresh: entry == 'retry' || entry == 'refresh',
+            onCacheHit: () => log('cacheHit'));
+      }
+      if (!mounted || _cancelRequested || resolveToken != _resolveEpoch) return;
+      if (offscreen) ScaffoldMessenger.of(context).hideCurrentSnackBar();
+      if (PreviewRouteObserver.instance.revealPreview(outcome.data.id)) {
+        log('previewShown', dedup: true);
+        return;
+      }
+      setState(() => _busy = false);
+      final shown = PreviewPage.open(context,
+        post: outcome.data, rawImages: outcome.rawImages,
+        onSaved: () { if (mounted) _linkController.clear(); },
       );
-      _reloadRecent();
+      log('previewShown');
+      await shown;
+      unawaited(_reloadRecent());
     } on ParseFailure catch (e) {
       if (!mounted || _cancelRequested) return;
-      setState(() {
-        _busy = false;
-        _errorCode = e.code;
-        _errorMessage = e.message;
-      });
+      setState(() { _errorCode = e.code; _errorMessage = e.message; });
       if (e.code == ParseErrorCode.loginRequired) {
         final platform = platformFromUrl(link);
         if (platform != null) LoginExpiredBus.markParseLoginRequired(platform);
@@ -777,22 +735,16 @@ class ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
       if (offscreen) _showOffscreenError(e.code, e.message);
     } catch (e) {
       if (!mounted || _cancelRequested) return;
-      // An unexpected engine failure (a hook that could not run, a disposed
-      // WebView ...) is not "the page changed": name it in the log so the next
-      // device round can tell the two apart instead of seeing INVALID_PAGE.
-      DevLog.write(
-        'ParseMismatch', // i18n:ignore 日志
-        'check=UNCAUGHT site=${platformFromUrl(link) ?? "-"} post=- '
-            'expected=ParseFailure actual=type=${e.runtimeType}',
-      );
-      setState(() {
-        _busy = false;
-        _errorCode = ParseErrorCode.invalidPage;
-        _errorMessage = null;
-      });
+      unawaited(DevLog.write('ParseMismatch',
+          'check=UNCAUGHT site=${platformFromUrl(link) ?? "-"} post=- '
+          'expected=ParseFailure actual=type=${e.runtimeType}'));
+      setState(() { _errorCode = ParseErrorCode.invalidPage; _errorMessage = null; });
       if (offscreen) _showOffscreenError(ParseErrorCode.invalidPage, null);
     } finally {
-      if (_resolveEpoch == resolveToken) _resolving = false;
+      if (mounted && _resolveEpoch == resolveToken) {
+        setState(() { _busy = false; _resolving = false; });
+        if (offscreen) ScaffoldMessenger.of(context).hideCurrentSnackBar();
+      }
     }
   }
 
@@ -1098,9 +1050,7 @@ class ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
       );
       if (!mounted) return;
       ScaffoldMessenger.of(context).hideCurrentSnackBar();
-      Navigator.of(context).push(
-        PreviewPage.route(post: outcome.data, rawImages: outcome.rawImages),
-      );
+      unawaited(PreviewPage.open(context, post: outcome.data, rawImages: outcome.rawImages));
       _reloadRecent();
     } catch (e) {
       if (!mounted) return;
@@ -1117,7 +1067,7 @@ class ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
       final cachedPost = PreviewPage.postFromRecord(record);
       final platform = platformFromKey(record.platform);
       if (cachedPost.items.isNotEmpty) {
-        Navigator.of(context).push(PreviewPage.route(post: cachedPost));
+        unawaited(PreviewPage.open(context, post: cachedPost));
         if (isLoginRequired) {
           LoginExpiredBus.markParseLoginRequired(platform);
           ScaffoldMessenger.of(context).showSnackBar(

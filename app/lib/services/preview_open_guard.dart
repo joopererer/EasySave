@@ -89,6 +89,7 @@ abstract final class PreviewOpenGuard {
     String? resolvedUrl,
     HistoryDb? db,
     bool resolveShortLinks = true,
+    Iterable<HistoryRecord>? knownRecords,
   }) async {
     final normalized = link.trim();
     var postId = postIdOfUrl(normalized);
@@ -126,6 +127,14 @@ abstract final class PreviewOpenGuard {
       return finish(PreviewOpenAction.skipAlreadyOnPreview);
     }
 
+    if (knownRecords != null) {
+      final matches = knownRecords.where((record) => !record.isDeleted &&
+          record.fileCount > 0 &&
+          ((postId != null && record.postId.toLowerCase() == postId.toLowerCase()) ||
+           linkKey(record.postUrl) == linkKey(normalized)));
+      return finish(matches.isEmpty ? PreviewOpenAction.parseFresh : PreviewOpenAction.openCached,
+          cached: matches.isEmpty ? null : matches.first);
+    }
     final store = db ?? await HistoryDb.instance();
     final cached = await store.findRecordByLink(normalized, resolvedUrl: resolved);
 

@@ -108,7 +108,7 @@ class _DownloadQueuePageState extends State<DownloadQueuePage> {
       // to the history.
       _batches = [
         for (final b in list)
-          if (!b.isTerminal) b,
+          if (!b.cancelledByDeletion && (!b.isTerminal || b.failedCount > 0)) b,
       ];
       _loading = false;
     });
@@ -210,7 +210,9 @@ class _DownloadQueuePageState extends State<DownloadQueuePage> {
                 onToggle: () => _run(() async {
                   final b = _batches[i];
                   final dm = DownloadManager.instance;
-                  if (b.isPaused) {
+                  if (b.isTerminal && b.failedCount > 0) {
+                    await dm.retryBatch(await dm.forceAdopt(b));
+                  } else if (b.isPaused) {
                     await dm.resumeBatch(b);
                   } else if (b.isStalledAt(now)) {
                     final owned = await dm.forceAdopt(b);
@@ -248,6 +250,7 @@ class _BatchCard extends StatelessWidget {
   final VoidCallback onRemove;
 
   String get _status {
+    if (batch.isTerminal && batch.failedCount > 0) return '下载失败，点击重试';
     if (batch.isPaused) return '已暂停';
     return stalled ? '已停滞' : '下载中';
   }
@@ -258,10 +261,11 @@ class _BatchCard extends StatelessWidget {
     final pct = (batch.progress * 100).round();
     final items = batchItems(batch);
     final paused = batch.isPaused;
-    final toggleTip = paused ? '继续下载' : (stalled ? '重试' : '暂停下载');
+    final failed = batch.isTerminal && batch.failedCount > 0;
+    final toggleTip = failed ? '重试' : paused ? '继续下载' : (stalled ? '重试' : '暂停下载');
     final toggleIcon = paused
         ? Icons.play_arrow_rounded
-        : (stalled ? Icons.refresh : Icons.pause_rounded);
+        : (stalled || failed ? Icons.refresh : Icons.pause_rounded);
     return Card(
       margin: EdgeInsets.zero,
       child: ExpansionTile(

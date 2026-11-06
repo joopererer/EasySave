@@ -247,7 +247,7 @@ void main() {
   );
 
   test(
-    'rejects cookie-domain escalation before querying CookieManager',
+    'ignores unauthorized cookie scopes and rejects malformed scopes without reading cookies',
     () async {
       var calls = 0;
       final p = policy(
@@ -258,16 +258,17 @@ void main() {
       );
       for (final domain in [
         'com',
-        'co.uk',
         '.tiktok.com',
-        'tiktok.com.evil.com',
-        'instagram.com',
-        'tiktokcdn.com',
       ]) {
         await expectLater(
           p.authorize(resource('https://www.tiktok.com/a', cookies: [domain])),
           rejected('REQUEST_COOKIE_DOMAIN_REJECTED'),
         );
+      }
+      for (final domain in ['co.uk', 'tiktok.com.evil.com', 'instagram.com', 'tiktokcdn.com']) {
+        final authorized = await p.authorize(
+          resource('https://www.tiktok.com/a', cookies: [domain]));
+        expect(authorized.wireHeaders.containsKey('Cookie'), isFalse);
       }
       expect(calls, 0);
       await p.authorize(

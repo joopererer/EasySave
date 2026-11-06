@@ -157,7 +157,8 @@ test('readback verification accepts matching signed artifacts and rejects change
   const downloaded = resolve(root, 'downloaded');
   mkdirSync(downloaded);
   for (const name of ['manifest.json', 'parser.js']) writeFileSync(resolve(downloaded, name), readFileSync(resolve(directory, name)));
-  assert.equal(verifyRelease({ root, downloadDirectory: downloaded }).manifestVersion, 5);
+  assert.equal(verifyRelease({ root, downloadDirectory: downloaded }).manifestVersion,
+    JSON.parse(readFileSync(resolve(root, 'config/parser-release.json'), 'utf8')).manifestVersion);
   writeFileSync(resolve(downloaded, 'parser.js'), 'unexpected parser bytes');
   assert.throws(() => verifyRelease({ root, downloadDirectory: downloaded }), /differs/);
   writeFileSync(resolve(downloaded, 'parser.js'), readFileSync(resolve(directory, 'parser.js')));
@@ -205,7 +206,12 @@ test('release gates real App preview and Instagram AI regressions before signing
   const gate = workflow.indexOf('name: Verify App preview and Instagram AI regressions');
   assert.ok(gate >= 0 && gate < workflow.indexOf('name: Require signing key'));
   for (const file of ['preview_media_roundtrip_test.dart', 'preview_media_consumers_test.dart',
-    'history_preview_media_source_test.dart', 'instagram_ai_v149_test.dart', 'media_policy_diagnostics_v149_test.dart']) {
+    'history_preview_media_source_test.dart', 'instagram_ai_v149_test.dart', 'media_policy_diagnostics_v149_test.dart',
+    'xhs_download_cookie_v1410_test.dart', 'cookie_required_hosts_test.dart',
+    'selected_download_history_regression_test.dart', 'history_pending_card_route_test.dart',
+    'parse_entry_responsiveness_test.dart', 'parse_singleflight_test.dart', 'preview_route_reuse_test.dart',
+    'history_retry_recovery_test.dart', 'history_read_efficiency_test.dart', 'background_download_saf_test.dart',
+    'retry_media_resources_test.dart']) {
     assert.ok(workflow.includes('test/' + file), file);
   }
 });

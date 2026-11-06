@@ -421,7 +421,9 @@ void main() {
       ).writeAsStringSync('bad');
       File('${directory.path}/state.json').writeAsStringSync('invalid');
       await prepare();
-      expect(state()['highestAcceptedManifestVersion'], 5);
+      final builtinVersion = (jsonDecode(File('assets/parser/builtin-manifest.json')
+          .readAsStringSync()) as Map)['manifestVersion'] as int;
+      expect(state()['highestAcceptedManifestVersion'], builtinVersion > 5 ? builtinVersion : 5);
       remote = await sign(payload(4));
       expect(await manager.checkForUpdates(force: true), isFalse);
       // Remove all cached candidates: the APK-bundled manifest still supplies a floor.

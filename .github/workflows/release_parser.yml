@@ -64,6 +64,17 @@ jobs:
           test/history_preview_media_source_test.dart
           test/instagram_ai_v149_test.dart
           test/media_policy_diagnostics_v149_test.dart
+          test/xhs_download_cookie_v1410_test.dart
+          test/cookie_required_hosts_test.dart
+          test/selected_download_history_regression_test.dart
+          test/history_pending_card_route_test.dart
+          test/parse_entry_responsiveness_test.dart
+          test/parse_singleflight_test.dart
+          test/preview_route_reuse_test.dart
+          test/history_retry_recovery_test.dart
+          test/history_read_efficiency_test.dart
+          test/background_download_saf_test.dart
+          test/retry_media_resources_test.dart
 
       - name: Require signing key
         env:

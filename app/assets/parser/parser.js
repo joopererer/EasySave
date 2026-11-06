@@ -37,7 +37,7 @@ var EasySaveParser = (() => {
   function instagramAiLabel(info) {
     if (!info || typeof info !== "object" || Array.isArray(info)) return;
     const text2 = info.attribution_label_text;
-    if (typeof text2 === "string" && text2.trim()) return { text: text2, source: "platform" };
+    if (typeof text2 === "string" && text2.trim()) return { text: "AI content", source: "platform" };
   }
   function unknownAiLabel(id, value) {
     console.info("EasySaveAiLabel:" + JSON.stringify({ id, value }));
@@ -844,9 +844,9 @@ var EasySaveParser = (() => {
         if ((next.startsWith("$.ai_label_info.") || /ai|gen_ai|genai|label|disclosure|c2pa/i.test(name)) && lines.length < 256) {
           const type = value === null ? "null" : Array.isArray(value) ? "array" : typeof value;
           const record2 = { path: next, name, type };
-          if (next === "$.ai_label_info.attribution_label_text" && typeof value === "string") {
+          if ((next === "$.ai_label_info.attribution_label_text" || next === "$.ai_label_info.subtitle_text") && typeof value === "string") {
             const text2 = value.replace(/[\u0000-\u001f\u007f-\u009f]/g, "");
-            if (!/https?:\/\/|[?&][^\s=]+=/i.test(text2)) record2.value = Array.from(text2).slice(0, 60).join("");
+            if (!/https?:\/\/|[?&][^\s=]+=/i.test(text2)) record2.value = Array.from(text2).slice(0, name === "subtitle_text" ? 120 : 60).join("");
           } else if (!sensitive && (typeof value === "boolean" || typeof value === "number" && Number.isFinite(value) || typeof value === "string" && /^[A-Za-z0-9_]{1,40}$/.test(value))) record2.value = value;
           lines.push(JSON.stringify(record2));
         }

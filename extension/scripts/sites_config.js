@@ -51,7 +51,7 @@ export function validatePayload(payload, schema) {
   for (const site of payload.sites) {
     if (ids.has(site.id)) throw new Error('Duplicate site id');
     ids.add(site.id);
-    const hosts = [...site.match.routes.flatMap((r) => r.hosts), ...site.shortLinks.map((r) => r.host), ...site.download.mediaHosts];
+    const hosts = [...site.match.routes.flatMap((r) => r.hosts), ...site.shortLinks.map((r) => r.host), ...site.download.mediaHosts, ...(site.download.cookieRequiredHosts || [])];
     if (hosts.some((h) => !domain.test(h.domain)) || site.download.cookieDomains.some((d) => !domain.test(d))) throw new Error('Invalid site domain');
     for (const route of site.match.routes) {
       if (!route.hosts.length || !route.pathPatterns.length) throw new Error('Empty site route');

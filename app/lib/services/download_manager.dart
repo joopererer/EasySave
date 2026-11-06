@@ -191,7 +191,7 @@ class DownloadJob {
   final String label;
   final String filename;
   List<String> urls;
-  final List<MediaRequestResource> resources;
+  List<MediaRequestResource> resources;
   final bool isImage;
   final int itemIndex;
   final bool isLivePhoto;
@@ -1084,6 +1084,8 @@ class DownloadManager extends ChangeNotifier {
   Future<void> Function()? prepareStartForTesting;
   @visibleForTesting
   Future<void> Function(DownloadBatch, DownloadJob)? enqueueForTesting;
+  @visibleForTesting
+  Future<ParseOutcome> Function(String)? reparseForTesting;
 
   Future<List<String>> _reserve(
     DownloadBatch batch,
@@ -1283,16 +1285,16 @@ class DownloadManager extends ChangeNotifier {
       await _startSessionDownload(batch, job);
       return;
     }
-    job.attempts++;
-    final index = (job.attempts - 1) % job.urls.length;
+    final index = job.attempts % job.urls.length;
     final policy = _policyFor(batch.platform);
     final authorized = await policy.authorize(_jobResource(job, index, policy));
     if (authorized.cookie != null && authorized.cookie!.isNotEmpty) {
-      throw MediaPolicyException(
-        'REQUEST_COOKIE_DOMAIN_REJECTED',
-        authorized.uri.host,
-      );
+      // Cookie-bearing transfers stay in Dart so every redirect is authorised
+      // again. Native background tasks receive no credential material.
+      await _startSessionDownload(batch, job);
+      return;
     }
+    job.attempts++;
     final url = authorized.uri.toString();
     final taskId = '${job.key}-try${job.attempts}';
     job.currentTaskId = taskId;
@@ -1402,10 +1404,10 @@ class DownloadManager extends ChangeNotifier {
     });
     try {
       await transfer.download(
-        url: job.urls.first,
+        url: job.urls[(job.attempts - 1) % job.urls.length],
         destination: file,
         policy: _policyFor(batch.platform),
-        resource: _jobResource(job, 0, _policyFor(batch.platform)),
+        resource: _jobResource(job, (job.attempts - 1) % job.urls.length, _policyFor(batch.platform)),
         onProgress: (progress) {
           job.progress = progress;
           job.lastProgressAt = DateTime.now().millisecondsSinceEpoch;
@@ -1418,7 +1420,7 @@ class DownloadManager extends ChangeNotifier {
         batch,
         job,
         file.path,
-        isImage: false,
+        isImage: job.isImage,
         itemIndex: job.itemIndex,
       );
     } on SessionDownloadCanceled {
@@ -1877,15 +1879,26 @@ class DownloadManager extends ChangeNotifier {
     // history record once more when it finishes.
     batch.historyWritten = false;
     try {
-      final outcome = await parsePostOutcome(
-        batch.postUrl,
-        source: 'download_retry',
-        forceRefresh: true,
-      );
+      final outcome = await (reparseForTesting?.call(batch.postUrl) ??
+          parsePostOutcome(batch.postUrl,
+              source: 'download_retry', forceRefresh: true));
       final postIdx = job.itemIndex > 0 ? job.itemIndex - 1 : job.itemIndex;
-      final fresh = planFilesForItem(outcome.data, postIdx);
-      if (fresh != null && fresh.isNotEmpty) {
-        job.urls = fresh;
+      final planned = planFiles(outcome.data, [postIdx], (_, _, _) => job.filename)
+          .where((file) => file.isImage == job.isImage &&
+              file.isLivePhoto == job.isLivePhoto)
+          .firstOrNull;
+      if (planned != null && planned.urls.isNotEmpty) {
+        final policy = _policyFor(batch.platform);
+        final declarations = policy.resourcesFor(outcome.data.items[postIdx]);
+        final freshResources = [
+          for (final url in planned.urls)
+            declarations.firstWhere((resource) => resource.url == url,
+                orElse: () => policy.rejectResource(url)),
+        ];
+        // URL, role and authorization are one refreshed resource set. Keeping
+        // old declarations would revive old cookie scopes and expired URLs.
+        job.urls = planned.urls;
+        job.resources = freshResources;
       } else if (needsSessionDownload(batch, job)) {
         throw const SessionDownloadException(interruptedMediaMessage);
       }
@@ -1901,7 +1914,14 @@ class DownloadManager extends ChangeNotifier {
     }
     job.attempts = 0;
     job.lastStatusCode = null;
-    await _enqueueAttempt(batch, job);
+    try {
+      await _enqueueAttempt(batch, job);
+    } catch (_) {
+      job.state = JobState.failed;
+      job.error = '加入下载队列失败，请重试';
+    }
+    await _persist(batch);
+    notifyListeners();
   }
 
   /// Retry every failed job in the batch (manual "重试" from the preview page).

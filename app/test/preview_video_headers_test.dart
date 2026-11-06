@@ -64,7 +64,7 @@ void main() {
           MediaItem(type: 'video', url: 'https://media.xhscdn.com/file.mp4'),
         )
         .single;
-    expect(resource.request.cookieDomains, ['xiaohongshu.com', 'rednote.com']);
+    expect(resource.request.cookieDomains, isEmpty);
     final authorized = await policy.authorize(resource);
     expect(calls, isEmpty);
     expect(authorized.wireHeaders.containsKey('Cookie'), isFalse);

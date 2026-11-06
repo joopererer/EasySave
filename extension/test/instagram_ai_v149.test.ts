@@ -7,7 +7,7 @@ const fixture = (name: string): Record<string, unknown> => JSON.parse(readFileSy
 
 describe("Instagram post-level AI attribution", () => {
   for (const [name, label] of [
-    ["ig_ai_platform", { text: "Made with AI", source: "platform" }],
+    ["ig_ai_platform", { text: "AI content", source: "platform" }],
     ["ig_ai_null", undefined],
     ["ig_ai_account_only", undefined],
   ] as const) {
@@ -26,11 +26,11 @@ describe("Instagram post-level AI attribution", () => {
     });
   }
 
-  it("preserves the exact nonblank platform label without deriving the source from method", () => {
+  for (const text of ["AI 内容", "AI content", "Contenu IA", "  使用 AI 制作  "]) it(`normalises ${text} without deriving the source from method`, () => {
     const product = fixture("ig_ai_platform");
-    product.ai_label_info = { attribution_label_text: "  使用 AI 制作  ", method: "PLATFORM_DETECTED" };
+    product.ai_label_info = { attribution_label_text: text, method: "PLATFORM_DETECTED" };
     expect(buildPostFromProduct(product, String(product.code))).toMatchObject({
-      ok: true, data: { aiLabel: { text: "  使用 AI 制作  ", source: "platform" } },
+      ok: true, data: { aiLabel: { text: "AI content", source: "platform" } },
     });
   });
 
@@ -48,6 +48,19 @@ describe("Instagram post-level AI attribution", () => {
 
 describe("Instagram root platform-label diagnostics", () => {
   const decode = (product: unknown) => probeInstagramAiFields(product).map(line => JSON.parse(line));
+
+  it("records subtitle prose with controls stripped and a 120-codepoint limit", () => {
+    const output = decode({ ai_label_info: { subtitle_text: "AI\u0000\n " + "😀".repeat(130) } });
+    expect(output).toContainEqual({ path: "$.ai_label_info.subtitle_text", name: "subtitle_text", type: "string", value: "AI " + "😀".repeat(117) });
+  });
+
+  for (const text of ["ht\ntps://private.invalid/", "AI ?to\nken=PRIVATE", "😀".repeat(130) + " https://private.invalid/"]) {
+    it("filters subtitle URLs and queries before truncation", () => {
+      expect(decode({ ai_label_info: { subtitle_text: text } })).toContainEqual({
+        path: "$.ai_label_info.subtitle_text", name: "subtitle_text", type: "string",
+      });
+    });
+  }
 
   it("records platform wording and every root info field including discriminator enums", () => {
     expect(decode(fixture("ig_ai_platform"))).toEqual(expect.arrayContaining([

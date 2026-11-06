@@ -482,7 +482,9 @@ class HistoryRecord {
       } catch (_) {}
     }
 
-    if (resolvedFiles.isEmpty) {
+    // An explicitly stored empty list means no file was saved. Only legacy
+    // records without a file list may infer old local file identifiers.
+    if (resolvedFiles.isEmpty && (filesJsonStr == null || filesJsonStr.isEmpty)) {
       resolvedFiles = inferHistoryFiles(
         postId: postId,
         authorName: authorName ?? '',
@@ -512,6 +514,18 @@ class HistoryRecord {
       isDeleted: isDeleted,
     );
   }
+}
+
+({List<HistoryRecord> records, List<int> repairs, int decodeMs}) _decodeHistoryRows(
+    List<Map<String, Object?>> rows) {
+  final watch = Stopwatch()..start();
+  final records = <HistoryRecord>[];
+  final repairs = <int>[];
+  for (var index = 0; index < rows.length; index++) {
+    records.add(HistoryRecord.fromMap(rows[index]));
+    if (historyFilesNeedRepair(rows[index]['files_json'] as String?)) repairs.add(index);
+  }
+  return (records: records, repairs: repairs, decodeMs: watch.elapsedMilliseconds);
 }
 
 class HistoryDb {
@@ -584,14 +598,23 @@ class HistoryDb {
 
   static void resetInstanceForTesting() {
     _instances.clear();
+    _readyInstances.clear();
   }
 
   static void setInstanceForTesting(HistoryDb? db) {
     if (db == null) {
       _instances.remove(_defaultKey);
+      _readyInstances.remove(_defaultKey);
     } else {
       _instances[_defaultKey] = Future.value(db);
+      _readyInstances[_defaultKey] = db;
     }
+  }
+
+  @visibleForTesting
+  static void setOpeningForTesting(Future<HistoryDb> opening) {
+    _instances[_defaultKey] = opening;
+    _readyInstances.remove(_defaultKey);
   }
 
   /// One history store per database file, per isolate.
@@ -605,13 +628,29 @@ class HistoryDb {
   /// page deleted through a different one, so `notify()` reported "no
   /// listeners attached".
   static final Map<String, Future<HistoryDb>> _instances = {};
+  static final Map<String, HistoryDb> _readyInstances = {};
+
+  /// Retry a timed-out open without replacing a healthy shared connection.
+  static void retryPendingOpen() {
+    if (!_readyInstances.containsKey(_defaultKey)) _instances.remove(_defaultKey);
+  }
 
   /// Cache key for the default database (the only one the app uses).
   static const String _defaultKey = '<default>';
 
   static Future<HistoryDb> instance({String? dbPath}) {
     final key = dbPath ?? _defaultKey;
-    return _instances[key] ??= _open(dbPath);
+    final existing = _instances[key];
+    if (existing != null) return existing;
+    late final Future<HistoryDb> opening;
+    opening = _open(dbPath).then((db) {
+      if (identical(_instances[key], opening)) _readyInstances[key] = db;
+      return db;
+    }, onError: (Object error, StackTrace stack) {
+      if (identical(_instances[key], opening)) _instances.remove(key);
+      Error.throwWithStackTrace(error, stack);
+    });
+    return _instances[key] = opening;
   }
 
   static Future<HistoryDb> _open(String? dbPath) async {
@@ -636,6 +675,10 @@ class HistoryDb {
           'CREATE TABLE IF NOT EXISTS resolved_post_links('
           'link_key TEXT PRIMARY KEY, platform TEXT NOT NULL, post_id TEXT NOT NULL)',
         );
+        await db.execute('CREATE INDEX IF NOT EXISTS history_visible_recent '
+            'ON history_records(is_deleted, created_at DESC, id DESC)');
+        await db.execute('CREATE INDEX IF NOT EXISTS history_post_id_folded '
+            'ON history_records(LOWER(post_id))');
       },
       onCreate: (db, version) => db.execute(
         'CREATE TABLE history_records('
@@ -1151,15 +1194,21 @@ class HistoryDb {
   }
 
   Future<HistoryRecord?> getByPostUrl(String postUrl) async {
-    final record = await _getByPostUrl(_db, postUrl);
-    if (record == null) return null;
-    return _persistFileRepair(record);
+    final rows = await _db.query('history_records', where: 'post_url = ?',
+        whereArgs: [postUrl], limit: 1);
+    if (rows.isEmpty) return null;
+    final record = HistoryRecord.fromMap(rows.first);
+    return historyFilesNeedRepair(rows.first['files_json'] as String?)
+        ? _persistFileRepair(record) : record;
   }
 
   Future<HistoryRecord?> getByPostId(String postId) async {
-    final record = await _getByPostId(_db, postId);
-    if (record == null) return null;
-    return _persistFileRepair(record);
+    final rows = await _db.query('history_records', where: 'LOWER(post_id) = LOWER(?)',
+        whereArgs: [postId], limit: 1);
+    if (rows.isEmpty) return null;
+    final record = HistoryRecord.fromMap(rows.first);
+    return historyFilesNeedRepair(rows.first['files_json'] as String?)
+        ? _persistFileRepair(record) : record;
   }
 
   static Future<HistoryRecord?> _getByPostUrl(
@@ -1252,21 +1301,27 @@ class HistoryDb {
   }
 
   Future<List<HistoryRecord>> recent({int limit = 50}) async {
+    final watch = Stopwatch()..start();
     final rows = await _db.query(
       'history_records',
       where: 'is_deleted = 0',
       orderBy: 'created_at DESC, id DESC',
       limit: limit,
     );
-    final records = <HistoryRecord>[];
-    for (final row in rows) {
-      final record = HistoryRecord.fromMap(row);
-      records.add(
-        historyFilesNeedRepair(row['files_json'] as String?)
-            ? await _persistFileRepair(record)
-            : record,
-      );
+    final queryMs = watch.elapsedMilliseconds;
+    final snapshot = [for (final row in rows) Map<String, Object?>.from(row)];
+    final decoded = rows.length > 100
+        ? await compute(_decodeHistoryRows, snapshot)
+        : _decodeHistoryRows(snapshot);
+    final records = decoded.records;
+    final repairWatch = Stopwatch()..start();
+    for (final index in decoded.repairs) {
+      records[index] = await _persistFileRepair(records[index]);
     }
+    unawaited(DevLog.write('HistoryTiming', 'step=recent rows=${rows.length} '
+        'decodeMode=${rows.length > 100 ? 'background' : 'inline'} '
+        'queryMs=$queryMs decodeMs=${decoded.decodeMs} repairCount=${decoded.repairs.length} '
+        'repairMs=${repairWatch.elapsedMilliseconds} ms=${watch.elapsedMilliseconds}'));
     return records;
   }
 

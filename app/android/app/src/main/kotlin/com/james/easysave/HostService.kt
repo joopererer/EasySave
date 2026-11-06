@@ -144,6 +144,7 @@ class HostService : Service() {
             SharedPreviewBridge.register(applicationContext, e.dartExecutor.binaryMessenger, background = true)
             ProvenancePairWriter.register(applicationContext, e.dartExecutor.binaryMessenger)
             DownloadControl.register(e.dartExecutor.binaryMessenger)
+            SafStorageBridge.register(applicationContext, e.dartExecutor.binaryMessenger)
             engine = e
             val ch = MethodChannel(e.dartExecutor.binaryMessenger, "easysave/bgtask")
             channel = ch
@@ -240,7 +241,8 @@ class HostService : Service() {
                         val args = call.arguments as? Map<*, *>
                         val items = args?.get("items") as? List<Any?> ?: emptyList()
                         val stickyPreview = args?.get("stickyPreview") as? Boolean ?: false
-                        showSelectPanel(items, stickyPreview, args?.get("postUrl") as? String)
+                        showSelectPanel(items, stickyPreview, args?.get("postUrl") as? String,
+                            args?.get("postTitle") as? String, args?.get("aiLabel") as? Map<*, *>)
                         result.success(null)
                     }
                     "unmountSelectPanel" -> {
@@ -280,7 +282,8 @@ class HostService : Service() {
 
     /// Show the native "选择下载" panel as an overlay window. A FlutterView in
     /// an overlay proved unreliable, so this is a plain Android view tree.
-    private fun showSelectPanel(items: List<Any?>, stickyPreview: Boolean = false, postUrl: String? = null) {
+    private fun showSelectPanel(items: List<Any?>, stickyPreview: Boolean = false, postUrl: String? = null,
+        postTitle: String? = null, aiLabel: Map<*, *>? = null) {
         handler.post {
             unmountSelectPanel()
             try {
@@ -332,6 +335,7 @@ class HostService : Service() {
                 }
                 (getSystemService(WINDOW_SERVICE) as WindowManager).addView(panel, params)
                 panelView = panel
+                panel.setPostMetadata(postTitle, aiLabel)
                 panel.setItems(items)
             } catch (e: Exception) {
                 NativeLog.e(TAG, "showSelectPanel failed: $e")
