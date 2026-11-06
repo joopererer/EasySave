@@ -164,7 +164,33 @@ APK evidence is under `app/build/v1411/`; actual native render PNG is
 The initial APK verification correctly rejected an older APK while assembleDebug
 was still running; only the final completed and verified artifact above is delivered.
 
-Release CI and independent published-byte verification are appended after release.
+Source commit **4a3ef9e9b619fbe101f607d66266991988f3c138** is on feature/v1.10 and
+the remote tag parser-v1.4.11 points exactly to it. The tag push's eventual response
+reported an existing ref; remote ref and successful CI were checked against this
+exact SHA. No tag was overwritten/deleted and no force push was used.
+
+- [CI 42268516151](https://github.com/joopererer/EasySave/actions/runs/42268516151)
+  succeeds, **19/19 steps**, including configuration parity, App regressions,
+  signing, upload, independent CI readback and channel update.
+- [Parser 1.4.11 Release](https://github.com/joopererer/EasySave/releases/tag/parser-v1.4.11)
+  is neither draft nor prerelease. Assets are parser.js (**69,615 bytes**) and
+  manifest.json (**12,701 bytes**). Manifest SHA-256:
+  `a78e79db5596d1ca0322c84f9fbb8377df92d2b9b3989203e46be2e15b873365`.
+- Fixed App public key independently verifies Ed25519 over the original UTF-8
+  payload, schema/contract, parser hash, release URL and **1.4.11 / 7**. Release
+  envelope and master envelope are byte-identical. Anonymous public downloads
+  of both assets and raw master channel match authenticated readback bytes.
+- Published payload equals the complete APK builtin manifest; published parser
+  bytes equal the delivered APK parser. Actual published files pass production
+  SignedParserManifest verification, ParserReleaseStore activation and two fresh
+  ParserManager starts: both remote / 1.4.11 / 7, watermark 7. Configuration hash
+  is `89851b195ae8b34403ca57e6afb4fe38a56b7e4f168ce79875318021436beee1`.
+- CI automatically advances master to **d0c39dd**; its only changed file is
+  spec/v2/manifest.json. Local work only fetched this result; no manual master
+  push, merge or rebase was performed. The signing private key stayed in CI.
+- Signed/public readback bytes, activation cache/test and release-evidence.json
+  are retained under app/build/v1411/. The user's original **51 uncommitted lines**
+  in v1.11.md and untracked build script/.claude/ were kept out of the source commit.
 
 ## Device retest steps
 
