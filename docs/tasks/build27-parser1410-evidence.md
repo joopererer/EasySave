@@ -145,7 +145,29 @@ DEX 另确认 HostService → SafStorageBridge.register、MainActivity → SafSt
 签名与包信息在同目录 `apk-signature.log`、`apk-badging.log`。较早 APK 证据保留但不作为本次交付摘要。
 四个平台的渲染 PNG 在 `app/android/app/build/reports/ai-panel/`，已人工检查 Instagram 图像，AI 标记紧邻标题。以上均为宿主机测试和 APK 证据，不声称设备联网或相册保存已验证。
 
-全部门槛通过后提交并仅推送 feature/v1.10 与新 parser-v1.4.10；实际 CI 和独立发布回读结果在完成后补充。
+## 发布与发布后校验
+
+源提交 `4318f1eb95e6846bcde9fe8b1785bc18670fcc9e` 已推送 feature/v1.10，新 tag 为 parser-v1.4.10。
+没有复用/删除旧 tag、force push、merge 或手动修改 master；用户原有 51 行任务文档及未提交脚本保留。
+
+- [CI 42210137913](https://github.com/joopererer/EasySave/actions/runs/42210137913)：**success，19/19 步，2m1s**。
+  含扩展测试、配置一致性、当前 App 配置契约及扩展后的 16 个 App 回归测试文件门槛；
+  签名、上传、回读和通道更新全部通过。只有托管 Node/Ubuntu 迁移提示，没有失败步骤。
+- [Parser 1.4.10 正式 Release](https://github.com/joopererer/EasySave/releases/tag/parser-v1.4.10)：
+  非 draft / prerelease，仅 parser.js（68,458 bytes）和 manifest.json（12,701 bytes）。
+  manifest SHA-256：`92e853b12f468d04d6ed4fe56bb999b1709e0c9b3461e8f1f1d139395e84320f`。
+- 使用固定 App 公钥独立校验 Release、master envelope 的原始 UTF-8 payload Ed25519 签名、版本、
+  下载地址和 parser SHA-256；两份 envelope 逐字节相同。签名私钥没有在本地读取或使用。
+- 匿名公开下载 parser 与 raw master 通道，分别与 Release 文件相同；完整 payload 与最终 APK 内置
+  manifest 相同，parser 与 APK 内置 parser 字节相同。模块确为 **1.4.10 / manifestVersion 6**。
+- 实际发布文件通过 App 的生产验签、配置契约、ParserReleaseStore 激活和全新 ParserManager 重载，
+  两次均为 remote / 1.4.10 / 6，防回退水位 6。
+  配置摘要：`89851b195ae8b34403ca57e6afb4fe38a56b7e4f168ce79875318021436beee1`。
+- CI 自动更新 master 为 `5b5cc44a8608719371c5e85dffb917bc0e3594b8`，相对发布前
+  `00f1d189c0aed954f3203a2ea80a6d44a55304c9` 仅修改 spec/v2/manifest.json；本地只 fetch 核对。
+
+发布证据在 `app/build/v1410/release-readback.log`、`release-activation.log`，签名资产和匿名公开下载副本同目录保留。
+宿主机生产路径测试、实际 widget 渲染和 APK 检查均不等同于设备联网、相册保存或后台实际备份结果。
 
 ## 设备复测
 
