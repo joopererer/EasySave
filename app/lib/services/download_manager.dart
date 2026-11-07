@@ -771,7 +771,10 @@ Future<void> writeBatchHistory(
           relativePath: job.relativePath,
           itemCount: job.provenanceItemCount,
           capturedBy: job.provenanceCapturedBy,
-          status: job.mediaId != null ? FileStatus.found : FileStatus.unknown,
+          // A finished save is a confirmation: the album accepted the file.
+          // The history only counts confirmed rows, so a successful save must
+          // not be written as `unknown` just because MediaStore returned no id.
+          status: FileStatus.found,
           size: job.fileBytes,
           notOriginal: job.notOriginal,
         ),

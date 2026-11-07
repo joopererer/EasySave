@@ -14,6 +14,9 @@ abstract final class ParseErrorCode {
   static const blocked = 'BLOCKED';
   static const invalidPage = 'INVALID_PAGE';
   static const postNotFound = 'POST_NOT_FOUND';
+  /// The address carried no access token (`xsec_token`), so a 404 says nothing
+  /// about whether the post exists.
+  static const tokenRequired = 'TOKEN_REQUIRED';
   static const unsupportedUrl = 'UNSUPPORTED_URL';
   static const timeout = 'TIMEOUT';
 }

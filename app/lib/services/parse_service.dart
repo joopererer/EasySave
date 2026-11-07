@@ -110,13 +110,39 @@ Future<String> chooseFinalParseUrl(
   return selected;
 }
 
-ParseFailure? terminalPageFailure(SiteDefinition site, Uri? uri) {
+/// Terminal page check for [uri].
+///
+/// [requestedUri] is the post URL the App asked the page to load. The token
+/// rule must look at that URL: xiaohongshu sends a page without `xsec_token` to
+/// its own 404 route, which drops the original query string.
+ParseFailure? terminalPageFailure(
+  SiteDefinition site,
+  Uri? uri, {
+  Uri? requestedUri,
+}) {
   if (uri == null || !site.hasHost(uri.host)) return null;
   final category = terminalPathCategory(uri);
   for (final rule in site.terminalPages) {
-    if (rule is Map && rule['category'] == category) {
-      return ParseFailure(rule['code'] as String, rule['message'] as String);
+    if (rule is! Map || rule['category'] != category) continue;
+    // A site can name the query parameters that carry its access token. When
+    // the addressed page has none of them, the page being unavailable says
+    // nothing about the post: xiaohongshu returns 404 for a link that was not
+    // produced by its own share sheet, while the same post opens fine in a
+    // browser. Report the missing token instead of "post does not exist".
+    final tokens = site.accessTokenParams;
+    final altCode = rule['missingTokenCode'];
+    final altMessage = rule['missingTokenMessage'];
+    final tokenSource = requestedUri ?? uri;
+    final hasToken = tokens.any(
+      (name) => (tokenSource.queryParameters[name] ?? '').trim().isNotEmpty,
+    );
+    if (tokens.isNotEmpty &&
+        altCode is String &&
+        altMessage is String &&
+        !hasToken) {
+      return ParseFailure(altCode, altMessage);
     }
+    return ParseFailure(rule['code'] as String, rule['message'] as String);
   }
   return null;
 }
@@ -702,9 +728,14 @@ Future<NavigateStep> navigateStep({
   required String currentUrl,
   required bool alreadyNavigated,
   required Future<dynamic> Function() navigate,
+  String? requestedUrl,
 }) async {
   final uri = Uri.tryParse(currentUrl);
-  final terminal = terminalPageFailure(site, uri);
+  final terminal = terminalPageFailure(
+    site,
+    uri,
+    requestedUri: requestedUrl == null ? null : Uri.tryParse(requestedUrl),
+  );
   if (terminal != null) throw terminal;
   final action = await navigate();
   if (action is Map) {
@@ -1012,6 +1043,9 @@ Future<ParseOutcome> _run(
               currentUrl: current,
               alreadyNavigated: navigated,
               navigate: () => hooks.call(controller, 'navigate', current),
+              // The token rule has to look at the post URL the App requested,
+              // not at the 404 route the site redirected to.
+              requestedUrl: targetUrl,
             );
             DevLog.write(
               'ParseWebView',

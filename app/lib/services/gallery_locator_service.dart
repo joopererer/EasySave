@@ -881,13 +881,10 @@ class GalleryLocatorService extends ChangeNotifier {
             updatedFiles.add(file);
           }
         } else {
-          // If permission is limited, denied, notDetermined, or album not scanned yet, keep unknown
-          if (file.status != FileStatus.unknown) {
-            updatedFiles.add(file.copyWith(status: FileStatus.unknown));
-            changed = true;
-          } else {
-            updatedFiles.add(file);
-          }
+          // Not being able to look at the album is not evidence that a file
+          // disappeared. Never downgrade a row that was already confirmed: that
+          // made the history hide (and later re-show) files the user had saved.
+          updatedFiles.add(file);
         }
       }
     }
@@ -907,7 +904,7 @@ class GalleryLocatorService extends ChangeNotifier {
     }
   }
 
-  /// Return the set of item indices for [post] that are already saved locally.
+  /// Return the item indices of [post] that are already saved locally.
   ///
   /// [refreshAlbum] re-reads permission and rescans the used albums first. The
   /// overlay's background engine passes it: that engine never ran the
@@ -915,6 +912,14 @@ class GalleryLocatorService extends ChangeNotifier {
   /// files the foreground saved since. The result is never cached; every
   /// caller decides again from the current history rows and album.
   Future<Set<int>> findDownloadedIndices(
+    ParsedPost post, {
+    bool refreshAlbum = false,
+  }) async => (await findDownloadedAssets(post, refreshAlbum: refreshAlbum)).keys.toSet();
+
+  /// Same lookup as [findDownloadedIndices], but keeps the album asset behind
+  /// each saved index. The native selection panel needs the MediaStore id to
+  /// open an already-saved image from the album instead of the network.
+  Future<Map<int, AssetEntity>> findDownloadedAssets(
     ParsedPost post, {
     bool refreshAlbum = false,
   }) async {
@@ -926,7 +931,7 @@ class GalleryLocatorService extends ChangeNotifier {
         await _loadNativeIndex();
       }
     }
-    final indices = (await matchPostItems(post)).keys.toSet();
+    final matched = await matchPostItems(post);
     final native = _lookupMethod == 'native';
     unawaited(DevLog.write(
       'SavedLookup',
@@ -935,9 +940,9 @@ class GalleryLocatorService extends ChangeNotifier {
           'pluginPermission=${_permission.name} '
           'scanned=${_scanned ? 1 : 0} refreshed=${refreshAlbum ? 1 : 0} '
           'albumAssets=${_allAssets.length}${native ? ' owned=$_nativeOwned' : ''} '
-          'items=${post.items.length} saved=${indices.length}',
+          'items=${post.items.length} saved=${matched.length}',
     ));
-    return indices;
+    return matched;
   }
 
   /// Locate the album asset behind each item of [post] (index -> asset) using

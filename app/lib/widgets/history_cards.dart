@@ -140,7 +140,7 @@ class HistoryThumb extends StatelessWidget {
       );
     }
 
-    final isUnlocated = record.savedFiles.any(
+    final isUnlocated = record.files.any(
       (f) =>
           f.status == FileStatus.unknown &&
           (f.mediaId == null || f.mediaId!.isEmpty),

@@ -206,6 +206,8 @@ class SelectPanelView(
         val live: Boolean,
         val saved: Boolean,
         val openOnHold: Boolean,
+        /** MediaStore id of the already-saved copy, when the album has it. */
+        val savedMediaId: String?,
     )
 
     private val main = Handler(Looper.getMainLooper())
@@ -385,6 +387,7 @@ class SelectPanelView(
                     live = m["live"] as? Boolean ?: false,
                     saved = m["saved"] as? Boolean ?: false,
                     openOnHold = m["openOnHold"] as? Boolean ?: false,
+                    savedMediaId = (m["savedMediaId"] as? String)?.takeIf { it.isNotBlank() },
                 )
             )
         }
@@ -1208,7 +1211,51 @@ class SelectPanelView(
             main.removeCallbacks(updateProgressRunnable)
             previewTexture?.visibility = View.GONE
             previewImage?.visibility = View.VISIBLE
-            loadImage(listOf(cell.imageRequest) + cell.imageFallbacks, generation)
+            // A file the album already holds is opened from the album: no
+            // network request, no thumbnail placeholder and no spinner. Only
+            // items that are not saved locally go through the network path.
+            val savedId = cell.savedMediaId
+            if (cell.saved && !cell.video && savedId != null) {
+                loadSavedImage(savedId, generation)
+            } else {
+                loadImage(listOf(cell.imageRequest) + cell.imageFallbacks, generation)
+            }
+        }
+    }
+
+    /**
+     * Decode the already-saved album copy of an image for the fullscreen
+     * preview. Runs off the main thread like [loadImage]; falls back to the
+     * network request when MediaStore no longer serves the id.
+     */
+    private fun loadSavedImage(mediaId: String, generation: Int) {
+        val target = previewImage ?: return
+        val cell = cells.getOrNull(previewIndex)
+        previewProgress?.visibility = View.GONE
+        val maxDim = resources.displayMetrics.widthPixels.coerceAtLeast(resources.displayMetrics.heightPixels)
+        pool.execute {
+            val bitmap = runCatching {
+                val id = mediaId.toLongOrNull() ?: return@runCatching null
+                val uri = android.content.ContentUris.withAppendedId(
+                    android.provider.MediaStore.Images.Media.EXTERNAL_CONTENT_URI, id
+                )
+                NativeLocalBitmap.decode(context, uri, maxDim)
+            }.getOrNull()
+            main.post {
+                if (!previewCurrent(generation)) return@post
+                if (bitmap != null) {
+                    val parent = target.parent as? View
+                    val fit = stillLetterbox(bitmap.width, bitmap.height,
+                        parent?.width ?: target.width, parent?.height ?: target.height)
+                    target.scaleType = ImageView.ScaleType.FIT_CENTER
+                    if (fit != null) target.layoutParams = LayoutParams(fit.width, fit.height, Gravity.CENTER)
+                    target.setImageBitmap(bitmap)
+                } else if (cell != null) {
+                    NativeLog.w(TAG, "local preview unavailable, using network")
+                    previewProgress?.visibility = View.VISIBLE
+                    loadImage(listOf(cell.imageRequest) + cell.imageFallbacks, generation)
+                }
+            }
         }
     }
 

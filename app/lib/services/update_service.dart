@@ -16,6 +16,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../generated/parser_version.dart';
+import '../core/app_version.dart';
 import '../core/dev_log.dart';
 import 'parser_config_contract.dart';
 import 'signed_parser_manifest.dart';
@@ -33,7 +34,30 @@ const String kDefaultManifestUrl =
 
 const String kPrefKeyLastUpdateCheckMs = 'parser_v2_last_update_check_ms';
 
+/// Minimum spacing between the automatic checks (App start / return to
+/// foreground). Manual refreshes from "我的" bypass it.
+const Duration kAutomaticCheckInterval = Duration(hours: 6);
+
 enum ParserSource { builtin, remote }
+
+/// One update check, reported as a single `[ParserUpdate] event=check` line.
+class ParserCheckOutcome {
+  const ParserCheckOutcome(
+    this.result, {
+    this.remoteVersion,
+    this.remoteManifest,
+    this.reason,
+    this.activated = false,
+  });
+
+  /// `newer` (activated), `same`, `older` (rejected by the watermark),
+  /// `error`, or `skipped` when the minimum interval had not elapsed.
+  final String result;
+  final String? remoteVersion;
+  final int? remoteManifest;
+  final String? reason;
+  final bool activated;
+}
 
 class PlatformConfig {
   PlatformConfig({
@@ -302,6 +326,28 @@ class ParserManager {
     _canUpdate = canUpdate;
     await _selectVerified();
     if (_canUpdate) await _refreshRecognitionView();
+    _logSession(canUpdate: canUpdate);
+  }
+
+  /// Marks where the current process' log lines start.
+  ///
+  /// The device log is append-only across app updates, so without a boundary a
+  /// line written by an older install (e.g. `version=1.4.12 source=builtin`)
+  /// reads like the current one. Everything after this marker belongs to the
+  /// running build.
+  void _logSession({required bool canUpdate}) {
+    final builtin = _builtin;
+    final localManifest = _signedManifest?.version ?? builtin?.version ?? 0;
+    unawaited(
+      DevLog.write(
+        'ParserUpdate',
+        'event=session stream=${canUpdate ? 'foreground' : 'background'} '
+            'app=${_appVersion ?? AppVersion.currentVersion} '
+            'builtinVersion=${builtin?.parserVersion ?? ParserVersion.version} '
+            'builtinManifest=${builtin?.version ?? 0} '
+            'activeVersion=$_activeVersion activeManifest=$localManifest',
+      ),
+    );
   }
 
   void _useBuiltin() {
@@ -415,87 +461,164 @@ class ParserManager {
         await rootBundle.loadString('assets/parser/parser.js');
   }
 
-  Future<bool> checkForUpdates({bool force = false}) {
+  /// Check the cloud channel.
+  ///
+  /// [trigger] is `startup`, `resume` or `manual`; automatic triggers share a
+  /// minimum interval ([kAutomaticCheckInterval]) and [force] bypasses it. Every
+  /// run writes one `[ParserUpdate] event=check` line, activated or not.
+  Future<bool> checkForUpdates({
+    bool force = false,
+    String trigger = 'manual',
+  }) {
     if (!_canUpdate) return Future.value(false);
-    return _updating ??= _checkForUpdates(
-      force,
+    final running = _updating;
+    if (running != null) return running;
+    return _updating = _runCheck(
+      force: force,
+      trigger: trigger,
     ).whenComplete(() => _updating = null);
   }
 
-  Future<bool> _checkForUpdates(bool force) async {
+  Future<bool> _runCheck({required bool force, required String trigger}) async {
+    ParserCheckOutcome outcome;
     try {
-      final store = await _store();
-      await store.recoverStateIfNeeded();
-      final prefs = _prefs ??= await SharedPreferences.getInstance();
-      final now = DateTime.now().millisecondsSinceEpoch;
-      final last = prefs.getInt(kPrefKeyLastUpdateCheckMs) ?? 0;
-      if (!force && now - last < const Duration(days: 1).inMilliseconds) {
-        return false;
-      }
-      // Count failed attempts too: foreground automatic checks run at most daily.
-      await prefs.setInt(kPrefKeyLastUpdateCheckMs, now);
-      final uri = Uri.parse(_manifestUrl);
-      if (uri.scheme != 'https' || uri.userInfo.isNotEmpty) return false;
-      final stateBeforeFetch = store.readState();
-      final cachedBeforeFetch = await store.load();
-      // A cached ETag cannot stand in for a damaged/missing current bundle.
-      // Omit it so the server returns the bytes needed to repair that release.
-      final etag =
-          cachedBeforeFetch?.reference == stateBeforeFetch?['current'] &&
-              cachedBeforeFetch != null
-          ? prefs.getString('parser_v2_etag')
-          : null;
-      final response = await _client
-          .get(
-            uri,
-            headers: {if (!force && etag != null) 'If-None-Match': etag},
-          )
-          .timeout(const Duration(seconds: 15));
-      if (response.statusCode == 304) {
-        await _selectVerified();
-        await _refreshRecognitionView();
-        return false;
-      }
-      if (response.statusCode != 200) return false;
-      final manifest = await SignedParserManifest.verify(
+      outcome = await _checkForUpdates(force);
+    } catch (error) {
+      _logMissingConfig(error);
+      debugPrint('ParserManager: v2 update rejected; retaining current release');
+      outcome = ParserCheckOutcome(
+        'error',
+        reason: error is FormatException ? 'format' : 'exception',
+      );
+    }
+    _logCheck(trigger, outcome);
+    return outcome.activated;
+  }
+
+  void _logCheck(String trigger, ParserCheckOutcome outcome) {
+    final builtin = _builtin;
+    final localManifest = _signedManifest?.version ?? builtin?.version ?? 0;
+    final localVersion = _activeSource == ParserSource.remote
+        ? _activeVersion
+        : (builtin?.parserVersion ?? ParserVersion.version);
+    unawaited(
+      DevLog.write(
+        'ParserUpdate',
+        'event=check trigger=$trigger result=${outcome.result} '
+            'remoteVersion=${outcome.remoteVersion ?? '-'} '
+            'remoteManifest=${outcome.remoteManifest ?? '-'} '
+            'localManifest=$localManifest localVersion=$localVersion'
+            '${outcome.reason == null ? '' : ' reason=${outcome.reason}'}',
+      ),
+    );
+  }
+
+  Future<ParserCheckOutcome> _checkForUpdates(bool force) async {
+    final store = await _store();
+    await store.recoverStateIfNeeded();
+    final prefs = _prefs ??= await SharedPreferences.getInstance();
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final last = prefs.getInt(kPrefKeyLastUpdateCheckMs) ?? 0;
+    if (!force && now - last < kAutomaticCheckInterval.inMilliseconds) {
+      return const ParserCheckOutcome('skipped', reason: 'interval');
+    }
+    // Count failed attempts too: automatic checks run at most every 6 hours.
+    await prefs.setInt(kPrefKeyLastUpdateCheckMs, now);
+    final uri = Uri.parse(_manifestUrl);
+    if (uri.scheme != 'https' || uri.userInfo.isNotEmpty) {
+      return const ParserCheckOutcome('error', reason: 'manifest_url');
+    }
+    final stateBeforeFetch = store.readState();
+    final cachedBeforeFetch = await store.load();
+    // A cached ETag cannot stand in for a damaged/missing current bundle.
+    // Omit it so the server returns the bytes needed to repair that release.
+    final etag =
+        cachedBeforeFetch?.reference == stateBeforeFetch?['current'] &&
+            cachedBeforeFetch != null
+        ? prefs.getString('parser_v2_etag')
+        : null;
+    final response = await _client
+        .get(uri, headers: {if (!force && etag != null) 'If-None-Match': etag})
+        .timeout(const Duration(seconds: 15));
+    if (response.statusCode == 304) {
+      await _selectVerified();
+      await _refreshRecognitionView();
+      return const ParserCheckOutcome('same', reason: 'not_modified');
+    }
+    if (response.statusCode != 200) {
+      return ParserCheckOutcome('error', reason: 'http');
+    }
+    final SignedParserManifest manifest;
+    try {
+      manifest = await SignedParserManifest.verify(
         response.bodyBytes,
         publicKeyHex: _publicKeyHex,
         schema: _schema!,
       );
-      if (!manifest.supportsApp(_appVersion!)) return false;
-      _validateConfig(manifest);
-      store.checkWatermark(manifest, store.readState());
-      final current = await store.load();
-      if (current != null &&
-          current.manifest.version == manifest.version &&
-          current.manifest.payloadHash == manifest.payloadHash) {
-        return false;
-      }
-      final parser = await downloadParserHttps(
-        _client,
-        Uri.parse(manifest.parserUrl),
-      ).timeout(const Duration(seconds: 30));
-      if (parser.statusCode != 200 ||
-          parser.bodyBytes.length > 10 * 1024 * 1024) {
-        return false;
-      }
-      final release = await store.activate(manifest, parser.bodyBytes);
-      _useRemote(release);
-      await _refreshRecognitionView();
-      final nextEtag = response.headers['etag'];
-      if (nextEtag != null) {
-        await prefs.setString('parser_v2_etag', nextEtag);
-      } else {
-        await prefs.remove('parser_v2_etag');
-      }
-      return true;
-    } catch (error) {
-      _logMissingConfig(error);
-      debugPrint(
-        'ParserManager: v2 update rejected; retaining current release',
-      );
-      return false;
+    } catch (_) {
+      return const ParserCheckOutcome('error', reason: 'verify');
     }
+    final remoteVersion = manifest.parserVersion;
+    final remoteManifest = manifest.version;
+    if (!manifest.supportsApp(_appVersion!)) {
+      return ParserCheckOutcome(
+        'error',
+        remoteVersion: remoteVersion,
+        remoteManifest: remoteManifest,
+        reason: 'min_app_version',
+      );
+    }
+    _validateConfig(manifest);
+    try {
+      store.checkWatermark(manifest, store.readState());
+    } on FormatException catch (error) {
+      if (error.message == 'parser_rollback') {
+        return ParserCheckOutcome(
+          'older',
+          remoteVersion: remoteVersion,
+          remoteManifest: remoteManifest,
+        );
+      }
+      rethrow;
+    }
+    final current = await store.load();
+    if (current != null &&
+        current.manifest.version == manifest.version &&
+        current.manifest.payloadHash == manifest.payloadHash) {
+      return ParserCheckOutcome(
+        'same',
+        remoteVersion: remoteVersion,
+        remoteManifest: remoteManifest,
+      );
+    }
+    final parser = await downloadParserHttps(
+      _client,
+      Uri.parse(manifest.parserUrl),
+    ).timeout(const Duration(seconds: 30));
+    if (parser.statusCode != 200 ||
+        parser.bodyBytes.length > 10 * 1024 * 1024) {
+      return ParserCheckOutcome(
+        'error',
+        remoteVersion: remoteVersion,
+        remoteManifest: remoteManifest,
+        reason: 'parser_download',
+      );
+    }
+    final release = await store.activate(manifest, parser.bodyBytes);
+    _useRemote(release);
+    await _refreshRecognitionView();
+    final nextEtag = response.headers['etag'];
+    if (nextEtag != null) {
+      await prefs.setString('parser_v2_etag', nextEtag);
+    } else {
+      await prefs.remove('parser_v2_etag');
+    }
+    return ParserCheckOutcome(
+      'newer',
+      remoteVersion: remoteVersion,
+      remoteManifest: remoteManifest,
+      activated: true,
+    );
   }
 
   void _logMissingConfig(Object error) {

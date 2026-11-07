@@ -97,6 +97,9 @@
       "mode": "webview",
       "timeoutMs": 30000,
       "readyHook": "xhs_ready",
+      "accessTokenParams": [
+        "xsec_token"
+      ],
       "terminalPages": [
         {
           "category": "home",
@@ -116,7 +119,9 @@
         {
           "category": "404",
           "code": "POST_NOT_FOUND",
-          "message": "帖子不存在，或链接已失效"
+          "message": "帖子不存在，或链接已失效",
+          "missingTokenCode": "TOKEN_REQUIRED",
+          "missingTokenMessage": "链接缺少访问令牌，请使用小红书 App 内“分享”得到的链接，或登录后重试"
         }
       ],
       "userAgent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36"

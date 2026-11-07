@@ -36,7 +36,7 @@ Future<void> main() async {
   // finished while the app was dead.
   await DownloadManager.instance.init();
   await ParserManager.instance.init(canUpdate: true);
-  unawaited(ParserManager.instance.checkForUpdates());
+  unawaited(ParserManager.instance.checkForUpdates(trigger: 'startup'));
   // v1.8: Cold-start backup evaluation (ensures empty history check runs before auto-backup)
   unawaited(StartupBackupCoordinator.evaluateAndRunStartupBackup());
   runApp(const EasySaveApp());

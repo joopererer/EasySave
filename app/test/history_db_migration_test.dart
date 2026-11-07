@@ -177,12 +177,14 @@ void main() {
       await historyDb.upsert(newDownloadRecord);
       final mergedPost1 = await historyDb.getByPostId('post123');
       expect(mergedPost1, isNotNull);
-      // Retains previously inferred files (1, 2) + newly downloaded file (3).
-      // Indices are 1-based since v1.10; the old inference used list positions.
-      expect(mergedPost1!.files.length, equals(3));
+      // Only rows confirmed in the album join a new write. Item 1 was located
+      // by the scan, item 2 was marked missing, and the inferred guess of
+      // item 2 is not a file, so the record keeps exactly the two files that
+      // exist: 1 (found) and 3 (newly downloaded).
+      expect(mergedPost1!.files.length, equals(2));
       expect(mergedPost1.fileCount, equals(2));
       expect(mergedPost1.savedFiles.map((file) => file.itemIndex), [1, 3]);
-      expect(mergedPost1.files.map((f) => f.itemIndex).toList(), equals([1, 2, 3]));
+      expect(mergedPost1.files.map((f) => f.itemIndex).toList(), equals([1, 3]));
       // The found status and mediaId on item 1 are preserved!
       expect(mergedPost1.files[0].status, equals(FileStatus.found));
       expect(mergedPost1.files[0].mediaId, equals('asset_1001'));

@@ -74,7 +74,10 @@ abstract final class BackupService {
       f.assetId?.trim().isNotEmpty == true;
 
   static BackupPostStatus statusOf(HistoryRecord record) {
-    if (record.savedFiles.isEmpty) return BackupPostStatus.failed;
+    // Judged by the stored rows, not by the rows confirmed in the album: a file
+    // this device cannot locate is still part of the post and is exported as an
+    // identity the restoring device may verify.
+    if (record.files.isEmpty) return BackupPostStatus.failed;
     return record.downloadError != null
         ? BackupPostStatus.partial
         : BackupPostStatus.success;

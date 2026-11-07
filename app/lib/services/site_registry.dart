@@ -16,6 +16,17 @@ class SiteDefinition {
       (load['terminalPages'] as List?) ??
       (SiteRegistry.builtinById(id)?.load['terminalPages'] as List?) ??
       const [];
+
+  /// Query parameters that carry a site's access token (`xsec_token` for
+  /// xiaohongshu). A page load without any of them cannot be judged as "post
+  /// missing" — see [terminalPageFailure].
+  List<String> get accessTokenParams =>
+      ((load['accessTokenParams'] as List?) ??
+              (SiteRegistry.builtinById(id)?.load['accessTokenParams']
+                  as List?) ??
+              const [])
+          .whereType<String>()
+          .toList();
   Map get normalization => data['normalize'] as Map;
   String get parserModule => data['parserModule'] as String;
   String get authorIdRule =>

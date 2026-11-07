@@ -62,6 +62,11 @@ ErrorCopy errorCopyFor(String code) {
         message: '帖子不存在，或链接已失效',
         action: ErrorAction.backHome,
       );
+    case ParseErrorCode.tokenRequired:
+      return const ErrorCopy(
+        message: '链接缺少访问令牌，请使用小红书 App 内“分享”得到的链接，或登录后重试',
+        action: ErrorAction.repaste,
+      );
     case ParseErrorCode.blocked:
       return const ErrorCopy(
         message: '请求被对方限制，请稍后再试',

@@ -22,15 +22,30 @@ void main() {
   test('configured terminal pages fail before invoking navigation hook', () async {
     SiteRegistry.useBuiltin();
     final site = SiteRegistry.current.byId('xhs')!;
+    // The token rule only changes the answer for a link that was requested
+    // without xsec_token; this case carries one.
+    const requested =
+        'https://www.xiaohongshu.com/explore/abc?xsec_token=synthetic_token';
     for (final (path, code) in [('/login', 'LOGIN_REQUIRED'), ('/captcha', 'LOGIN_REQUIRED'), ('/404', 'POST_NOT_FOUND')]) {
       var invoked = false;
       await expectLater(
         navigateStep(site: site, currentUrl: 'https://www.xiaohongshu.com$path',
-          alreadyNavigated: false, navigate: () async { invoked = true; return null; }),
+          alreadyNavigated: false, navigate: () async { invoked = true; return null; },
+          requestedUrl: requested),
         throwsA(isA<ParseFailure>().having((e) => e.code, 'code', code)),
       );
       expect(invoked, isFalse);
     }
+    // Without a token the same 404 names the missing token instead.
+    await expectLater(
+      navigateStep(
+        site: site,
+        currentUrl: 'https://www.xiaohongshu.com/404',
+        alreadyNavigated: false,
+        navigate: () async => null,
+      ),
+      throwsA(isA<ParseFailure>().having((e) => e.code, 'code', 'TOKEN_REQUIRED')),
+    );
     final normal = await navigateStep(site: site, currentUrl: 'https://www.xiaohongshu.com/explore/abc',
       alreadyNavigated: false, navigate: () async => null);
     expect(normal.kind, NavigateKind.parse);

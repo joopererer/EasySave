@@ -227,13 +227,15 @@ Future<void> _handleSubmit(
         // Which items of this post were already downloaded (so the panel can
         // mark them and the user can just fetch what is missing).
         final savedIdx = <int>{};
+        final savedAssets = <int, String>{};
         try {
-          savedIdx.addAll(
-            await GalleryLocatorService.instance.findDownloadedIndices(
-              post,
-              refreshAlbum: true,
-            ),
-          );
+          final found = await GalleryLocatorService.instance
+              .findDownloadedAssets(post, refreshAlbum: true);
+          for (final entry in found.entries) {
+            savedIdx.add(entry.key);
+            final id = entry.value.id;
+            if (id.isNotEmpty) savedAssets[entry.key] = id;
+          }
         } catch (e) {
           await _log(
             channel,
@@ -345,6 +347,10 @@ Future<void> _handleSubmit(
                 item.videoUrl!.isNotEmpty,
             'openOnHold': post.platform == 'tiktok' && item.type == 'video',
             'saved': savedIdx.contains(i),
+            // MediaStore id of the saved copy: the panel opens that file
+            // directly for a fullscreen preview instead of fetching the
+            // original again.
+            if (savedAssets[i] != null) 'savedMediaId': savedAssets[i],
           });
         }
         await _invoke(channel, 'showSelectPanel', {

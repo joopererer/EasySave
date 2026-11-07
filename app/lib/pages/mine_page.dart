@@ -986,7 +986,7 @@ class _MinePageState extends State<MinePage> with WidgetsBindingObserver {
                         const SnackBar(content: Text('正在检查解析器更新…')),
                       );
                       final updated = await ParserManager.instance
-                          .checkForUpdates(force: true);
+                          .checkForUpdates(force: true, trigger: 'manual');
                       if (!mounted) return;
                       setState(() {});
                       messenger.showSnackBar(

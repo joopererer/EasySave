@@ -312,7 +312,10 @@ void main() {
         ),
       );
       final merged = (await db.getByPostId('count-post'))!;
-      expect(merged.files, hasLength(9));
+      // Only rows confirmed in the album join the merge: the six filename
+      // guesses are not files, so they no longer occupy rows next to the three
+      // saved ones (they made the history claim files the album does not hold).
+      expect(merged.files, hasLength(3));
       expect(merged.savedFiles.map((file) => file.itemIndex), [2, 5, 8]);
       expect(merged.fileCount, 3);
       expect(deletableMediaFor([merged]), hasLength(3));

@@ -128,10 +128,20 @@ class HistoryFile {
   );
 }
 
-bool isSavedHistoryFile(HistoryFile file) =>
-    file.status != FileStatus.notFound &&
-    (file.status == FileStatus.found || file.mediaId?.trim().isNotEmpty == true ||
-        file.assetId?.trim().isNotEmpty == true);
+/// Whether a stored file row is confirmed to exist in the album.
+///
+/// Only a row the album scan located (`found`) may be counted, shown or merged
+/// into a later write. Rows whose existence was never confirmed (`unknown`, or
+/// `notFound` after a deletion) are bookkeeping leftovers: showing them made the
+/// history claim files the album does not hold.
+bool isSavedHistoryFile(HistoryFile file) => file.status == FileStatus.found;
+
+/// A row kept through the one-time cleanup: anything the album has not already
+/// reported missing. An `unknown` row may still be resolved by the next album
+/// scan (it is never counted or merged), while a `notFound` row is a known
+/// leftover.
+bool isRetainedHistoryFile(HistoryFile file) =>
+    file.status != FileStatus.notFound;
 
 /// Whether a stored file row is a *winner* when two rows describe the same
 /// album file: a real 1-based index with written provenance is preferred.
@@ -228,6 +238,69 @@ bool historyFilesNeedRepair(String? filesJson) {
     return repairHistoryFiles(files) != null;
   } catch (_) {
     return false;
+  }
+}
+
+/// Number of file rows stored in a `files_json` value (0 for unknown/invalid).
+int _countStoredFiles(String? filesJson) {
+  if (filesJson == null || filesJson.isEmpty) return 0;
+  try {
+    final decoded = jsonDecode(filesJson);
+    return decoded is List ? decoded.length : 0;
+  } catch (_) {
+    return 0;
+  }
+}
+
+/// One-time cleanup of the file rows that an older build kept for deleted posts
+/// and for files that were already known to be gone.
+///
+/// Database only: no album file is read, moved or deleted. A deleted record
+/// loses its rows (they must never be restorable), an active record loses the
+/// rows the album scan already marked missing and the pure filename guesses that
+/// carry no physical identity. Rows that still carry a MediaStore id or a
+/// provenance asset id are kept so a later scan can confirm or drop them.
+Future<void> _cleanResidualFileRows(Database db) async {
+  final rows = await db.query(
+    'history_records',
+    columns: ['id', 'post_id', 'is_deleted', 'files_json'],
+  );
+  for (final row in rows) {
+    final json = row['files_json'] as String?;
+    if (json == null || json.isEmpty) continue;
+    final List<dynamic> decoded;
+    try {
+      final value = jsonDecode(json);
+      if (value is! List) continue;
+      decoded = value;
+    } catch (_) {
+      continue;
+    }
+    final files = [
+      for (final item in decoded)
+        if (item is Map) HistoryFile.fromMap(item.cast<String, Object?>()),
+    ];
+    if (files.isEmpty) continue;
+    final deleted = ((row['is_deleted'] as num?)?.toInt() ?? 0) != 0;
+    final kept = deleted
+        ? const <HistoryFile>[]
+        : files.where(isRetainedHistoryFile).toList();
+    if (kept.length == files.length) continue;
+    final repaired = repairHistoryFiles(kept) ?? kept;
+    await db.update(
+      'history_records',
+      {
+        'files_json': jsonEncode([for (final f in repaired) f.toMap()]),
+        'file_count': repaired.where(isSavedHistoryFile).length,
+      },
+      where: 'id = ?',
+      whereArgs: [row['id']],
+    );
+    DevLog.write(
+      'HIST',
+      'file rows cleaned source=migration post=${row['post_id']} '
+          'deleted=${deleted ? 1 : 0} from=${files.length} kept=${repaired.length}',
+    );
   }
 }
 
@@ -729,7 +802,7 @@ class HistoryDb {
     final path = dbPath ?? '${await getDatabasesPath()}/easysave_history.db';
     final db = await openDatabase(
       path,
-      version: 6,
+      version: 7,
       // Two engines (main UI isolate + background isolate) can hold a
       // connection to the same file. WAL lets readers work while a writer is
       // active, and busy_timeout makes a writer wait for the lock instead of
@@ -829,6 +902,9 @@ class HistoryDb {
             'ALTER TABLE history_records ADD COLUMN download_error TEXT',
           );
         }
+        if (oldVersion < 7) {
+          await _cleanResidualFileRows(db);
+        }
       },
     );
     // Save names while a site is known, so later removal keeps records legible.
@@ -907,6 +983,8 @@ class HistoryDb {
           'restoreDeleted=$restoreDeleted',
     );
     HistoryRecord? committedRecord;
+    var mergedKept = 0;
+    var mergedDropped = 0;
     final writtenCount = await _writeTransaction<int?>((txn) async {
       if (downloadStartedAt != null) {
         final barriers = await txn.query(
@@ -927,12 +1005,24 @@ class HistoryDb {
             if (f.mediaId != null && f.mediaId!.isNotEmpty) f.mediaId!: f,
         };
 
+        // Only rows confirmed to exist in the album may join the new write, and
+        // a record the user deleted contributes post-level information only.
+        // Its file rows were dropped when it was deleted; resurrecting them with
+        // a later download of the same post was what made the history show more
+        // files than the album holds.
+        final carried = existing.isDeleted
+            ? const <HistoryFile>[]
+            : existing.files.where(isSavedHistoryFile);
+        final carriedKeys = <String>{};
         final fileMap = <String, HistoryFile>{};
-        for (final f in existing.files) {
+        for (final f in carried) {
+          final key = '${f.itemIndex}_${f.isImage}';
+          carriedKeys.add(key);
+          // The same physical album file written again is not a new file.
           if (f.mediaId != null && recordByMediaId.containsKey(f.mediaId)) {
             continue;
           }
-          fileMap['${f.itemIndex}_${f.isImage}'] = f;
+          fileMap[key] = f;
         }
         for (final f in record.files) {
           fileMap['${f.itemIndex}_${f.isImage}'] = f;
@@ -947,10 +1037,14 @@ class HistoryDb {
         // written with the real provenance; collapse them before persisting.
         final mergedFiles = repairHistoryFiles(sortedFiles) ?? sortedFiles;
         validateHistoryFiles(mergedFiles);
+        // Diagnostics: how many rows the existing record contributed to this
+        // write and how many unconfirmed rows were left out.
+        mergedKept = fileMap.keys.where(carriedKeys.contains).length;
+        mergedDropped = existing.files.length - carriedKeys.length;
 
-        final hasNewFiles = record.files.any((file) => !existing.files.any(
-          (old) => old.itemIndex == file.itemIndex && old.isImage == file.isImage &&
-              old.status != FileStatus.notFound));
+        final hasNewFiles = record.files.any(
+          (file) => !carriedKeys.contains('${file.itemIndex}_${file.isImage}'),
+        );
         final resolvedCreatedAt =
             userSave && (hasNewFiles || (restoreDeleted && existing.isDeleted))
             ? record.createdAt
@@ -1013,7 +1107,8 @@ class HistoryDb {
       if (committedRecord != null) _remember(committedRecord!);
       DevLog.write(
         'HIST',
-        'file rows written source=$source post=${record.postId} count=$writtenCount',
+        'file rows written source=$source post=${record.postId} '
+            'count=$writtenCount kept=$mergedKept dropped=$mergedDropped',
       );
     }
     notifyChanged('upsert post=${record.postId}');
@@ -1449,26 +1544,45 @@ class HistoryDb {
     // Soft delete: mark as deleted instead of removing. The row count is logged
     // because a caller passing an id that does not exist silently changes
     // nothing — that used to look like "the list did not refresh".
+    //
+    // The file rows are dropped in the same transaction. Keeping them meant the
+    // next download of the same post merged the old rows back
+    // (`restoreDeleted: true`), so the history listed more files than the album
+    // held and the viewer fell back to the network for files that no longer
+    // existed. Re-downloading now restores the post itself only; the album files
+    // are found again through MediaStore by name and provenance.
+    var clearedFiles = 0;
     final rows = await _writeTransaction((txn) async {
       final records = await txn.query(
         'history_records',
-        columns: ['platform', 'post_id'],
+        columns: ['platform', 'post_id', 'files_json'],
         where: 'id = ?',
         whereArgs: [id],
       );
-      if (records.isNotEmpty)
+      if (records.isNotEmpty) {
         await txn.insert('download_delete_barriers', {
           'platform': records.first['platform'],
           'post_id': records.first['post_id'],
           'deleted_at': DateTime.now().microsecondsSinceEpoch,
         }, conflictAlgorithm: ConflictAlgorithm.replace);
+        clearedFiles = _countStoredFiles(records.first['files_json'] as String?);
+      }
       return txn.update(
         'history_records',
-        {'is_deleted': 1},
+        {
+          'is_deleted': 1,
+          'files_json': '[]',
+          'file_count': 0,
+          'download_error': null,
+        },
         where: 'id = ?',
         whereArgs: [id],
       );
     });
+    DevLog.write(
+      'HIST', // i18n:ignore 日志
+      'record deleted id=$id rows=$rows clearedFiles=$clearedFiles',
+    );
     notifyChanged('delete id=$id rows=$rows');
     _knownRecords.removeWhere((_, record) => record.id == id);
   }

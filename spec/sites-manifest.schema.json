@@ -296,6 +296,15 @@
               "type": "string",
               "pattern": "^[a-z][a-z0-9_]{0,63}$"
             },
+            "accessTokenParams": {
+              "type": "array",
+              "maxItems": 4,
+              "uniqueItems": true,
+              "items": {
+                "type": "string",
+                "pattern": "^[a-z][a-z0-9_]{0,63}$"
+              }
+            },
             "terminalPages": {
               "type": "array",
               "maxItems": 8,
@@ -319,6 +328,19 @@
                     ]
                   },
                   "message": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 200
+                  },
+                  "missingTokenCode": {
+                    "enum": [
+                      "TOKEN_REQUIRED",
+                      "LOGIN_REQUIRED",
+                      "POST_NOT_FOUND",
+                      "UNSUPPORTED_URL"
+                    ]
+                  },
+                  "missingTokenMessage": {
                     "type": "string",
                     "minLength": 1,
                     "maxLength": 200
