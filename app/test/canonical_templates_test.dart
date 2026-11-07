@@ -20,16 +20,17 @@ void main() {
     });
   }
   test(
-    'unknown-domain tracking and fragment cleanup is accepted; repeated queries are a known package defect',
+    'unknown-domain tracking and fragment cleanup; repeated queries are kept (spec 0.1.8)',
     () {
       expect(
         normalizeUrl('https://unknown.example/post?id=42&utm_source=a#part'),
         'https://unknown.example/post?id=42',
       );
-      final result = Uri.parse(
+      // provenance-spec 0.1.8 §5 keeps repeated parameters in order.
+      expect(
         normalizeUrl('https://unknown.example/post?id=1&id=2'),
+        'https://unknown.example/post?id=1&id=2',
       );
-      expect(result.queryParametersAll['id'], hasLength(1));
     },
   );
   test('compare Rednote and XHS canonicalization for the same post', () {
@@ -40,9 +41,9 @@ void main() {
     expect(site.sourceId(Uri.parse(rednote)), id);
     expect(site.sourceId(Uri.parse(xhs)), id);
     expect(site.canonical(id), xhs);
-    expect(normalizeUrl(rednote), rednote);
+    // provenance-spec 0.1.8 §5: both domains share the xiaohongshu canonical.
+    expect(normalizeUrl(rednote), xhs);
     expect(normalizeUrl(xhs), xhs);
-    expect(normalizeUrl(rednote), isNot(normalizeUrl(xhs)));
     final rednoteOrigin = buildSiteProvenance(
       platform: 'xhs', capturedBy: 'EasySave/1.10.0',
       sourceId: site.sourceId(Uri.parse(rednote))!, sourceUrl: rednote,

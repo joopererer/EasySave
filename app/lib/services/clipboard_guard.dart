@@ -1,6 +1,7 @@
 // Pure decisions behind the parse tab's clipboard prompt and stale-input
 // handling. Kept free of Flutter / database imports so they are unit-tested.
 
+import '../metadata/url_normalizer.dart';
 import 'links.dart';
 import 'site_registry.dart';
 
@@ -36,10 +37,16 @@ bool isLinkKnown(
   String? resolvedUrl,
 }) {
   final key = linkKey(link);
-  if (records.any((r) => linkKey(r.postUrl) == key)) return true;
+  if (records.any((r) => linkKey(r.postUrl) == key ||
+      sameCanonicalUrl(r.postUrl, link))) {
+    return true;
+  }
   if (resolvedUrl != null && resolvedUrl.trim().isNotEmpty) {
     final resKey = linkKey(resolvedUrl);
-    if (records.any((r) => linkKey(r.postUrl) == resKey)) return true;
+    if (records.any((r) => linkKey(r.postUrl) == resKey ||
+        sameCanonicalUrl(r.postUrl, resolvedUrl))) {
+      return true;
+    }
   }
   final id =
       postIdOfUrl(link) ??

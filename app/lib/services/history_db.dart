@@ -8,6 +8,7 @@ import 'package:sqflite/sqflite.dart';
 
 import '../core/dev_log.dart';
 import '../core/models.dart';
+import '../metadata/url_normalizer.dart' show sameCanonicalUrl;
 import 'clipboard_guard.dart';
 import 'site_registry.dart';
 
@@ -1363,6 +1364,11 @@ class HistoryDb {
     for (final r in all) {
       final rKey = linkKey(r.postUrl);
       if (rKey == key || (resKey != null && rKey == resKey)) {
+        return r;
+      }
+      // Old rows may hold a canonical of an earlier spec (rednote.com).
+      if (sameCanonicalUrl(r.postUrl, link) ||
+          (resolvedUrl != null && sameCanonicalUrl(r.postUrl, resolvedUrl))) {
         return r;
       }
     }
