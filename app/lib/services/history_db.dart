@@ -26,6 +26,7 @@ class HistoryFile {
     this.relativePath,
     this.itemCount,
     this.capturedBy,
+    this.size,
   });
 
   final String filename;
@@ -56,6 +57,10 @@ class HistoryFile {
   /// never re-derived from the app version at export time.
   final String? capturedBy;
 
+  /// Bytes of the file handed to the album, when known. Used with the name to
+  /// verify a mediaId hint after a backup restore.
+  final int? size;
+
   Map<String, Object?> toMap() => {
     'filename': filename,
     'saved_at': savedAt,
@@ -67,6 +72,7 @@ class HistoryFile {
     'relative_path': relativePath,
     if (itemCount != null) 'item_count': itemCount,
     if (capturedBy != null) 'captured_by': capturedBy,
+    if (size != null) 'size': size,
   };
 
   factory HistoryFile.fromMap(Map<String, Object?> map) => HistoryFile(
@@ -83,6 +89,7 @@ class HistoryFile {
     relativePath: map['relative_path'] as String?,
     itemCount: (map['item_count'] as num?)?.toInt(),
     capturedBy: map['captured_by'] as String?,
+    size: (map['size'] as num?)?.toInt(),
   );
 
   HistoryFile copyWith({
@@ -96,6 +103,7 @@ class HistoryFile {
     String? relativePath,
     int? itemCount,
     String? capturedBy,
+    int? size,
   }) => HistoryFile(
     filename: filename ?? this.filename,
     savedAt: savedAt ?? this.savedAt,
@@ -107,6 +115,7 @@ class HistoryFile {
     relativePath: relativePath ?? this.relativePath,
     itemCount: itemCount ?? this.itemCount,
     capturedBy: capturedBy ?? this.capturedBy,
+    size: size ?? this.size,
   );
 }
 
@@ -312,6 +321,7 @@ class HistoryRecord {
     this.itemsJson,
     List<HistoryFile>? files,
     this.isDeleted = false,
+    this.downloadError,
   }) : platformDisplayName =
            platformDisplayName ??
            SiteRegistry.current.byId(platform)?.displayName,
@@ -343,6 +353,12 @@ class HistoryRecord {
   /// Soft delete flag. When true, record is hidden from UI but files remain in gallery
   /// and can be restored on rebuild. See spec/metadata.md §7.1.
   final bool isDeleted;
+
+  /// Short reason of the last failed download of this post ("存储空间不足",
+  /// "HTTP 403", ...), null when the last download saved everything it tried.
+  /// It keeps a failed post retryable when no download batch exists (after a
+  /// restart or a backup restore).
+  final String? downloadError;
 
   /// Rebuild the parsed post from the stored `items_json`. Shared by the
   /// history cards and the preview page so both decode identically. Falls back
@@ -471,6 +487,7 @@ class HistoryRecord {
     'items_json': itemsJson,
     'files_json': jsonEncode([for (final f in files) f.toMap()]),
     'is_deleted': isDeleted ? 1 : 0,
+    'download_error': downloadError,
   };
 
   static HistoryRecord fromMap(Map<String, Object?> map) {
@@ -524,6 +541,7 @@ class HistoryRecord {
       itemsJson: itemsJson,
       files: resolvedFiles,
       isDeleted: isDeleted,
+      downloadError: map['download_error'] as String?,
     );
   }
 }
@@ -702,7 +720,7 @@ class HistoryDb {
     final path = dbPath ?? '${await getDatabasesPath()}/easysave_history.db';
     final db = await openDatabase(
       path,
-      version: 5,
+      version: 6,
       // Two engines (main UI isolate + background isolate) can hold a
       // connection to the same file. WAL lets readers work while a writer is
       // active, and busy_timeout makes a writer wait for the lock instead of
@@ -742,7 +760,8 @@ class HistoryDb {
         'created_at INTEGER NOT NULL,'
         'items_json TEXT,'
         'files_json TEXT,'
-        'is_deleted INTEGER DEFAULT 0)',
+        'is_deleted INTEGER DEFAULT 0,'
+        'download_error TEXT)',
       ),
       onUpgrade: (db, oldVersion, newVersion) async {
         if (oldVersion < 2) {
@@ -794,6 +813,11 @@ class HistoryDb {
           );
           await db.execute(
             'ALTER TABLE history_records ADD COLUMN ai_label_source TEXT',
+          );
+        }
+        if (oldVersion < 6) {
+          await db.execute(
+            'ALTER TABLE history_records ADD COLUMN download_error TEXT',
           );
         }
       },
@@ -954,6 +978,9 @@ class HistoryDb {
           files: mergedFiles,
           // Only restore deleted records when explicitly requested (rebuild flow)
           isDeleted: restoreDeleted ? false : existing.isDeleted,
+          // The newest write states the download outcome: a placeholder or a
+          // successful save clears it, a failed terminal write or restore sets it.
+          downloadError: record.downloadError,
         );
         await txn.update(
           'history_records',

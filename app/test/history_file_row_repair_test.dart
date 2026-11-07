@@ -361,13 +361,14 @@ void main() {
       final files = (post['files'] as List).cast<Map<String, dynamic>>();
       expect(files, hasLength(4));
 
-      final provenance = files.first['provenance'] as Map<String, dynamic>?;
-      expect(provenance, isNotNull);
-      expect(provenance!['capturedBy'], 'EasySave/1.10.0');
-      final source = provenance['source'] as Map<String, dynamic>;
-      expect(source['itemIndex'], 1);
-      expect(source['itemCount'], 4);
-      expect(source['itemCount'], isNot(5));
+      // Schema v2 keeps the stored provenance facts on the file itself; the
+      // v1 `provenance` object (which repeated the post URL) is gone.
+      final first = files.first;
+      expect(first.containsKey('provenance'), isFalse);
+      expect(first['capturedBy'], 'EasySave/1.10.0');
+      expect(first['itemIndex'], 1);
+      expect(first['itemCount'], 4);
+      expect(first['itemCount'], isNot(5));
     });
 
     test('the hard-coded 1.8.0 writer is gone from the export', () async {
@@ -396,13 +397,11 @@ void main() {
       ]));
 
       final post = await exportPost();
-      final provenance =
-          ((post['files'] as List).first as Map)['provenance'] as Map?;
-      expect(provenance, isNotNull);
-      expect(provenance!.containsKey('capturedBy'), isFalse);
-      final source = provenance['source'] as Map;
-      expect(source.containsKey('itemCount'), isFalse);
-      expect(source['itemIndex'], 1);
+      final first = (post['files'] as List).first as Map;
+      expect(first.containsKey('provenance'), isFalse);
+      expect(first.containsKey('capturedBy'), isFalse);
+      expect(first.containsKey('itemCount'), isFalse);
+      expect(first['itemIndex'], 1);
     });
 
     test('the backup header reports the real app version', () {

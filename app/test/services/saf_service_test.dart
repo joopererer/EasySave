@@ -426,7 +426,7 @@ void main() {
     test('writeAndVerifyBackup: verification succeeds and triggers rotation', () async {
       var rotateCalled = false;
       var writeCalled = false;
-      const validJson = '{"format":"easysave-backup","formatVersion":1,"exportedAt":"2026-10-22T10:00:00Z","posts":[{"platform":"xiaohongshu","postId":"1"}]}';
+      const validJson = '{"format":"easysave-backup","schemaVersion":2,"formatVersion":2,"exportedAt":"2026-10-22T10:00:00Z","posts":[{"platform":"xiaohongshu","postId":"1"}]}';
 
       final channel = MethodChannel('mock_verify_channel');
       TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
@@ -492,7 +492,7 @@ void main() {
       var rotateCalled = false;
       int existingBackupsCount = 5;
       // Read-back content has 1 post, but expected was 2
-      const jsonWithOnePost = '{"format":"easysave-backup","formatVersion":1,"exportedAt":"2026-10-22T10:00:00Z","posts":[{"platform":"xiaohongshu","postId":"1"}]}';
+      const jsonWithOnePost = '{"format":"easysave-backup","schemaVersion":2,"formatVersion":2,"exportedAt":"2026-10-22T10:00:00Z","posts":[{"platform":"xiaohongshu","postId":"1"}]}';
 
       final channel = MethodChannel('mock_verify_channel');
       TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger

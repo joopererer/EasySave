@@ -735,6 +735,7 @@ Future<void> writeBatchHistory(
           itemCount: job.provenanceItemCount,
           capturedBy: job.provenanceCapturedBy,
           status: job.mediaId != null ? FileStatus.found : FileStatus.unknown,
+          size: job.fileBytes,
         ),
   ];
   DevLog.write(
@@ -757,6 +758,7 @@ Future<void> writeBatchHistory(
       createdAt: DateTime.now(),
       itemsJson: batch.itemsJson,
       files: files,
+      downloadError: batch.failedCount > 0 ? batch.failureReason ?? '下载出错' : null,
     ),
     // User-initiated downloads (live updates): restore deleted records.
     // Startup-resumed / interrupted batches: preserve deletion state.

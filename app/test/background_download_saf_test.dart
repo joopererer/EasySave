@@ -182,7 +182,8 @@ void main() {
       'writeBackupToDirectory', 'readDocumentContent', 'listBackupDirectory']);
     final backup = jsonDecode(written.single['content'] as String) as Map;
     expect(backup['format'], 'easysave-backup');
-    expect(backup['formatVersion'], 1);
+    expect(backup['schemaVersion'], 2);
+    expect(backup['formatVersion'], 2);
     final post = (backup['posts'] as List).single as Map;
     expect(post['sourceId'], 'background_saf');
     expect(post['files'], hasLength(1));

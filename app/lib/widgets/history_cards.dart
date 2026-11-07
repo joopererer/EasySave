@@ -212,7 +212,7 @@ class DownloadingOverlay extends StatelessWidget {
   Widget build(BuildContext context) {
     final pct = (progress.clamp(0.0, 1.0) * 100).round();
     final size = compact ? 28.0 : 44.0;
-    final reason = failureReason == null ? '' : '（$failureReason）';
+    final reason = failureReason?.isNotEmpty == true ? '（$failureReason）' : '';
     final label = failed ? (partial ? '部分保存成功$reason，点击重试' : '下载失败$reason，点击重试') : paused ? '已暂停 $pct%' : (stalled ? '已停滞 $pct%' : '下载中 $pct%');
     final toggleIcon = paused
         ? Icons.play_arrow_rounded

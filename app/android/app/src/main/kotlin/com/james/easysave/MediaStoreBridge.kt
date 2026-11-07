@@ -69,6 +69,7 @@ class MediaStoreBridge(private val context: Context) {
             "savedMediaIndex" -> savedMediaIndex(call, result)
             "storageInfo" -> storageInfo(result)
             "mediaSize" -> mediaSize(call, result)
+            "mediaSizes" -> mediaSizes(call, result)
             else -> return false
         }
         return true
@@ -182,6 +183,28 @@ class MediaStoreBridge(private val context: Context) {
         } catch (e: Exception) {
             result.success(null)
         }
+    }
+
+    /** MediaStore SIZE of many ids (images and videos), id -> bytes. */
+    private fun mediaSizes(call: MethodCall, result: MethodChannel.Result) {
+        val ids = (call.argument<List<String>>("ids") ?: emptyList())
+            .mapNotNull { it.toLongOrNull() }.distinct()
+        val sizes = mutableMapOf<String, Long>()
+        try {
+            for (chunk in ids.chunked(400)) {
+                context.contentResolver.query(MediaStore.Files.getContentUri("external"),
+                    arrayOf(MediaStore.MediaColumns._ID, MediaStore.MediaColumns.SIZE),
+                    "${MediaStore.MediaColumns._ID} IN (" + chunk.joinToString(",") { "?" } + ")",
+                    chunk.map { it.toString() }.toTypedArray(), null)?.use { cursor ->
+                    while (cursor.moveToNext()) {
+                        sizes[cursor.getLong(0).toString()] = cursor.getLong(1)
+                    }
+                }
+            }
+        } catch (_: Exception) {
+            // Sizes are optional backup data; missing ones are omitted.
+        }
+        result.success(sizes)
     }
 
     private fun readMediaHeader(call: MethodCall, result: MethodChannel.Result) {

@@ -128,7 +128,8 @@ void main() {
       expect(exportedJson, isNotEmpty);
       final decoded = jsonDecode(exportedJson) as Map<String, dynamic>;
       expect(decoded['format'], 'easysave-backup');
-      expect(decoded['formatVersion'], 1);
+      expect(decoded['schemaVersion'], 2);
+      expect(decoded['formatVersion'], 2);
       // The header tracks the real app version; it used to be a hard-coded
       // '1.8.0' string long after the app had moved on.
       expect(decoded['appVersion'], BackupData.currentAppVersion);
@@ -140,7 +141,12 @@ void main() {
       final postsList = decoded['posts'] as List;
       final xhsExported = postsList.firstWhere((p) => p['sourceId'] == 'xhs_note_123');
       expect(xhsExported['platform'], 'xiaohongshu');
-      expect(xhsExported['items'], isA<List>()); // structured array, not JSON string!
+      // Schema v2: no media / thumbnail URLs; the link is kept as saved and
+      // as its query-free canonical form.
+      expect(xhsExported.containsKey('items'), isFalse);
+      expect(xhsExported['originalUrl'],
+          'https://www.xiaohongshu.com/explore/xhs_note_123?xsec_token=sec123');
+      expect(xhsExported['status'], 'success');
 
       // Clear database and settings
       await db.clear();
@@ -431,9 +437,10 @@ void main() {
 
     test('TC-05: Incompatible version rejection and backwards compatibility', () async {
       // 1. Higher version rejected
+      // Schema 2 is current since build 31; 3 is the first unknown one.
       final v2Json = jsonEncode({
         'format': 'easysave-backup',
-        'formatVersion': 2,
+        'formatVersion': 3,
         'exportedAt': '2026-10-22T10:00:00+08:00',
         'appVersion': '2.0.0',
         'provenanceSpecVersion': '0.1.3',

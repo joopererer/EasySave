@@ -2,6 +2,8 @@
 
 本文档定义 EasySave v1.8 备份与恢复的架构、文件格式（`easysave-backup.json`）、导入导出规则与恢复流程。
 
+> 自 build 31（v1.10 2c）起，App 写入 schema v2 并同时读取 v1/v2；v2 的字段、v1→v2 差异与恢复匹配规则见 `docs/tasks/v1.10.md`“备份格式 v2”。本文其余内容描述 v1。
+
 ---
 
 ## 1. 目标与设计原则

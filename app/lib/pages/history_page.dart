@@ -124,6 +124,12 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
   bool _isFailed(String postId) => _downloadBatches[postId]?.isTerminal == true &&
       (_downloadBatches[postId]?.failedCount ?? 0) > 0;
 
+  /// A failed post with no download batch in memory (after a restart or a
+  /// backup restore) keeps its failure on the record; its retry re-parses the
+  /// original link.
+  bool _recordFailed(HistoryRecord record) =>
+      _downloadBatches[record.postId] == null && record.downloadError != null;
+
   bool _isStalled(String postId) =>
       _downloadBatches[postId]?.isStalledAt(
         DateTime.now().millisecondsSinceEpoch,
@@ -1729,12 +1735,12 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
                   record: record,
                   selectionMode: _selectionMode,
                   selected: _selected.contains(key),
-                  downloadProgress: _downloadProgress[record.postId],
+                  downloadProgress: _downloadProgress[record.postId] ?? (_recordFailed(record) ? 0 : null),
                   downloadPaused: _isPaused(record.postId),
                   downloadStalled: _isStalled(record.postId),
-                  downloadFailed: _isFailed(record.postId),
-                  downloadFailureReason: _downloadBatches[record.postId]?.failureReason,
-                  onToggleDownload: _downloadBatches[record.postId]?.supportsPause == false && !_isFailed(record.postId) ? null : () => _toggleDownload(record.postId),
+                  downloadFailed: _isFailed(record.postId) || _recordFailed(record),
+                  downloadFailureReason: _downloadBatches[record.postId]?.failureReason ?? record.downloadError,
+                  onToggleDownload: _recordFailed(record) ? () => _reparse(record) : _downloadBatches[record.postId]?.supportsPause == false && !_isFailed(record.postId) ? null : () => _toggleDownload(record.postId),
                   onCancelDownload: () => _cancelDownload(record.postId),
                   onTap: () => _openRecord(record),
                   onLongPress: () => _enterSelection(key),
@@ -1801,12 +1807,12 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
                         record: record,
                         selectionMode: _selectionMode,
                         selected: _selected.contains(key),
-                        downloadProgress: _downloadProgress[record.postId],
+                        downloadProgress: _downloadProgress[record.postId] ?? (_recordFailed(record) ? 0 : null),
                         downloadPaused: _isPaused(record.postId),
                         downloadStalled: _isStalled(record.postId),
-                  downloadFailed: _isFailed(record.postId),
-                  downloadFailureReason: _downloadBatches[record.postId]?.failureReason,
-                        onToggleDownload: _downloadBatches[record.postId]?.supportsPause == false && !_isFailed(record.postId) ? null : () => _toggleDownload(record.postId),
+                  downloadFailed: _isFailed(record.postId) || _recordFailed(record),
+                  downloadFailureReason: _downloadBatches[record.postId]?.failureReason ?? record.downloadError,
+                        onToggleDownload: _recordFailed(record) ? () => _reparse(record) : _downloadBatches[record.postId]?.supportsPause == false && !_isFailed(record.postId) ? null : () => _toggleDownload(record.postId),
                         onCancelDownload: () =>
                             _cancelDownload(record.postId),
                         onTap: () => _openRecord(record),

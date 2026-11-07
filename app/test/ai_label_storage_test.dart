@@ -76,14 +76,15 @@ void main() {
     expect((await db.getByPostId('123'))?.aiLabelSource, 'author');
   });
 
-  test('backup v1 round trip keeps AI fields and accepts old backups', () async {
+  test('backup v2 round trip keeps AI fields and accepts old backups', () async {
     final dir = await Directory.systemTemp.createTemp('ai_backup_');
     final db = await HistoryDb.instance(dbPath: '${dir.path}/history.db');
     await writePlaceholderHistory(db, batch());
     final settings = AppSettings();
     final encoded = await BackupService.exportBackup(db: db, settings: settings);
     final data = jsonDecode(encoded) as Map<String, dynamic>;
-    expect(data['formatVersion'], 1);
+    expect(data['schemaVersion'], 2);
+    expect(data['formatVersion'], 2);
     expect(data['posts'][0]['aiLabel'], labelText);
     expect(data['posts'][0]['aiLabelSource'], 'author');
     await db.clear();
