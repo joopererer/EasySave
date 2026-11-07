@@ -431,6 +431,10 @@ class ParserManager {
       if (_canUpdate) await store.recoverStateIfNeeded();
       final release = await store.load();
       if (release != null) {
+        // A cached bundle that predates this App's required configuration is
+        // rejected inside `_useRemote` (logged as event=rejected with the
+        // missing field), and the embedded parser takes over. That keeps the
+        // activation log unambiguous: `source=builtin` always means the APK.
         _useRemote(release);
         return release;
       }

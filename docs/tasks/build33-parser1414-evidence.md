@@ -45,6 +45,11 @@ the previous APK reads exactly like the current one. Build 31's APK embeds
   is written once per process at init. Everything after the last `event=session`
   line belongs to the running build, so a stale line can no longer be mistaken
   for the current state.
+- Upgrading with 1.4.13 still cached: the first start writes
+  `event=rejected reason=sites.xhs.load.accessTokenParams`, then
+  `event=activated version=1.4.14 source=builtin manifestVersion=10`. That
+  rejection is deliberate (the cached bundle cannot express the token rule), so
+  `source=builtin` always means "the parser inside this APK".
 - Build-time gate: `extension/scripts/check_builtin_versions.js` fails the build
   (and `npm test`) when the bundled `builtin-manifest.json` `manifestVersion`,
   `parserVersion`, `sha256`, `parserUrl`, or the generated
@@ -186,15 +191,31 @@ Parser **1.4.14 / manifestVersion 10**. `parser.js` bytes are unchanged
 (`a3f152c6812d39d1d48198617d33c4ef22af657744bc5063d3f8d4f1f076956a`,
 88,652 bytes): only the manifest payload (site config + schema) changed.
 
+- Branch push: `feature/v1.10` at `7908589`.
+- Tag `parser-v1.4.14`; CI run
+  [42400727072](https://github.com/joopererer/EasySave/actions/runs/42400727072)
+  — **completed / success** (tests, candidate build, sign, upload, readback,
+  channel commit).
+- Release `parser-v1.4.14` (not draft, not prerelease): `manifest.json`
+  **13,091 bytes** (SHA-256
+  `633cfa28ff48d1640a0238c536d1d99fe3600689ae381248ec596dd5a6c1f26e`),
+  `parser.js` **88,652 bytes**
+  (`a3f152c6812d39d1d48198617d33c4ef22af657744bc5063d3f8d4f1f076956a`).
+- Post-release check (`tools/verify_parser_release_published.py 1.4.14`):
+  Ed25519 signature valid against the App public key, payload `1.4.14 / 10`,
+  parser hash matches, the published payload **equals the manifest embedded in
+  this APK byte-for-byte**, and master's `spec/v2/manifest.json` equals the
+  release asset (channel commit `8d21a4a`).
+
 ## APK
 
 - Debug (delivered, source-verified):
   `app/build/app/outputs/flutter-apk/EasySave-1.10.0-build33-debug.apk`,
   **173,720,677 bytes**, SHA-256
-  `e3e6ac969cdec4b8d25c1da23898c1187aa00304de060041a7d76e853840fa3f`.
+  `81e35bbbca2eafc753f5771657d1fcc2bb724393f53535da37d3467c43e29100`.
 - Release: `app/build/app/outputs/flutter-apk/EasySave-1.10.0-build33-release.apk`,
   **69,014,628 bytes**, SHA-256
-  `07f60b9bdd650875c156df26e5418486b63ba073db1a781b2851e43ed157a2da`.
+  `13945795bce38dbb8866afbd0f6a50c5cff506cb9531c8d674b1ea094925c34e`.
 - `aapt dump badging`: `com.james.easysave`, versionName **1.10.0**,
   versionCode **33**. `apksigner verify` passes; certificate SHA-256
   `7ec6c14f1c8c9fff6de9a31fda73150c12db7c81c98ee8017960d838aecb3484` (same as
