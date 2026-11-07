@@ -1733,6 +1733,7 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
                   downloadPaused: _isPaused(record.postId),
                   downloadStalled: _isStalled(record.postId),
                   downloadFailed: _isFailed(record.postId),
+                  downloadFailureReason: _downloadBatches[record.postId]?.failureReason,
                   onToggleDownload: _downloadBatches[record.postId]?.supportsPause == false && !_isFailed(record.postId) ? null : () => _toggleDownload(record.postId),
                   onCancelDownload: () => _cancelDownload(record.postId),
                   onTap: () => _openRecord(record),
@@ -1804,6 +1805,7 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
                         downloadPaused: _isPaused(record.postId),
                         downloadStalled: _isStalled(record.postId),
                   downloadFailed: _isFailed(record.postId),
+                  downloadFailureReason: _downloadBatches[record.postId]?.failureReason,
                         onToggleDownload: _downloadBatches[record.postId]?.supportsPause == false && !_isFailed(record.postId) ? null : () => _toggleDownload(record.postId),
                         onCancelDownload: () =>
                             _cancelDownload(record.postId),

@@ -89,7 +89,9 @@ void main() {
     manager.prepareStartForTesting = () async {};
     saveSucceeds = true;
     manager.enqueueForTesting = (_, job) async {
-      job.state = saveSucceeds ? JobState.done : JobState.failed;
+      // Since build 30 a failed post stays in history; only a canceled
+      // download leaves history empty for the empty-history guard.
+      job.state = saveSucceeds ? JobState.done : JobState.canceled;
       job.saved = saveSucceeds;
       job.mediaId = saveSucceeds ? 'synthetic_media_id' : null;
     };

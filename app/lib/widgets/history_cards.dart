@@ -183,6 +183,7 @@ class DownloadingOverlay extends StatelessWidget {
     this.stalled = false,
     this.failed = false,
     this.partial = false,
+    this.failureReason,
     this.onTogglePause,
     this.onCancel,
   });
@@ -198,6 +199,9 @@ class DownloadingOverlay extends StatelessWidget {
   final bool failed;
   final bool partial;
 
+  /// Short failure reason ("存储空间不足", "HTTP 403", ...) shown in the label.
+  final String? failureReason;
+
   /// Pause / resume (retry when [stalled]); null hides the control.
   final VoidCallback? onTogglePause;
 
@@ -208,7 +212,8 @@ class DownloadingOverlay extends StatelessWidget {
   Widget build(BuildContext context) {
     final pct = (progress.clamp(0.0, 1.0) * 100).round();
     final size = compact ? 28.0 : 44.0;
-    final label = failed ? (partial ? '部分保存成功，点击重试' : '下载失败，点击重试') : paused ? '已暂停 $pct%' : (stalled ? '已停滞 $pct%' : '下载中 $pct%');
+    final reason = failureReason == null ? '' : '（$failureReason）';
+    final label = failed ? (partial ? '部分保存成功$reason，点击重试' : '下载失败$reason，点击重试') : paused ? '已暂停 $pct%' : (stalled ? '已停滞 $pct%' : '下载中 $pct%');
     final toggleIcon = paused
         ? Icons.play_arrow_rounded
         : (stalled || failed ? Icons.refresh : Icons.pause_rounded);
@@ -440,6 +445,7 @@ class WaterfallPostCard extends StatelessWidget {
     this.downloadPaused = false,
     this.downloadStalled = false,
     this.downloadFailed = false,
+    this.downloadFailureReason,
     this.onToggleDownload,
     this.onCancelDownload,
   });
@@ -456,6 +462,7 @@ class WaterfallPostCard extends StatelessWidget {
   final bool downloadPaused;
   final bool downloadStalled;
   final bool downloadFailed;
+  final String? downloadFailureReason;
 
   /// Pause / resume (retry when stalled) and cancel of the running download.
   final VoidCallback? onToggleDownload;
@@ -555,6 +562,7 @@ class WaterfallPostCard extends StatelessWidget {
                           paused: downloadPaused,
                           stalled: downloadStalled,
                           failed: downloadFailed,
+                          failureReason: downloadFailureReason,
                           partial: record.savedFiles.isNotEmpty,
                           // Hidden in multi-select so taps keep selecting.
                           onTogglePause: selectionMode
@@ -668,6 +676,7 @@ class ListPostRow extends StatelessWidget {
     this.downloadPaused = false,
     this.downloadStalled = false,
     this.downloadFailed = false,
+    this.downloadFailureReason,
     this.onToggleDownload,
     this.onCancelDownload,
   });
@@ -686,6 +695,7 @@ class ListPostRow extends StatelessWidget {
   final bool downloadPaused;
   final bool downloadStalled;
   final bool downloadFailed;
+  final String? downloadFailureReason;
   final VoidCallback? onToggleDownload;
   final VoidCallback? onCancelDownload;
 
@@ -727,6 +737,7 @@ class ListPostRow extends StatelessWidget {
                             paused: downloadPaused,
                             stalled: downloadStalled,
                           failed: downloadFailed,
+                          failureReason: downloadFailureReason,
                           partial: record.savedFiles.isNotEmpty,
                             onTogglePause: selectionMode
                                 ? null

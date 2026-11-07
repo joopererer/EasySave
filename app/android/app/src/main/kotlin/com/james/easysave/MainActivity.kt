@@ -14,7 +14,6 @@ import android.os.Bundle
 import android.provider.MediaStore
 import android.provider.Settings
 import androidx.core.content.ContextCompat
-import android.media.MediaScannerConnection
 import android.util.Log
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
@@ -25,7 +24,7 @@ class MainActivity : FlutterActivity() {
     companion object {
         private const val SEAL_CHANNEL = "easysave/seal"
         private const val SEAL_PACKAGE = "com.junkfood.seal"
-        private const val MEDIA_CHANNEL = "easysave/media"
+        private const val MEDIA_CHANNEL = MediaStoreBridge.CHANNEL
         private const val HOST_CHANNEL = "easysave/host"
         private const val TILE_CHANNEL = "easysave/tile"
         private const val BUBBLE_CHANNEL = "easysave/bubble"
@@ -186,6 +185,7 @@ class MainActivity : FlutterActivity() {
                 }
             }
 
+        val mediaStore = MediaStoreBridge(applicationContext)
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, MEDIA_CHANNEL,
             io.flutter.plugin.common.StandardMethodCodec.INSTANCE,
             flutterEngine.dartExecutor.binaryMessenger.makeBackgroundTaskQueue())
@@ -193,10 +193,8 @@ class MainActivity : FlutterActivity() {
                 when (call.method) {
                     "deleteMedia" -> runOnUiThread { deleteMedia(call, result) }
                     "requestWriteAccess" -> runOnUiThread { requestWriteAccess(call, result) }
-                    "readMediaHeader" -> readMediaHeader(call, result)
-                    "queryMediaAlbum" -> queryMediaAlbum(call, result)
-                    "scanFile" -> scanFile(call, result)
-                    else -> result.notImplemented()
+                    // Activity-free reads are shared with the overlay engine.
+                    else -> if (!mediaStore.handle(call, result)) result.notImplemented()
                 }
             }
 
@@ -512,78 +510,6 @@ class MainActivity : FlutterActivity() {
         } catch (e: Exception) {
             pendingWriteResult = null
             result.error("write_request_failed", e.message, null)
-        }
-    }
-
-    /**
-     * Read only the header bytes of a media file (see [MediaHeaderReader]).
-     * The result is the byte array that was read, never a byte count.
-     */
-    private fun readMediaHeader(call: MethodCall, result: MethodChannel.Result) {
-        val id = call.argument<String>("id")
-        val mediaId = id?.toLongOrNull()
-        if (mediaId == null) {
-            result.error("bad_args", "id must be a numeric media id", null)
-            return
-        }
-        val mimeType = call.argument<String>("mimeType")
-        try {
-            val isVideo = mimeType?.startsWith("video/") == true ||
-                mimeType?.contains("mp4") == true ||
-                mimeType?.contains("quicktime") == true
-            val collection = if (isVideo) {
-                MediaStore.Video.Media.EXTERNAL_CONTENT_URI
-            } else {
-                MediaStore.Images.Media.EXTERNAL_CONTENT_URI
-            }
-            val uri = ContentUris.withAppendedId(collection, mediaId)
-            result.success(MediaHeaderReader.readHeader(contentResolver, uri, mimeType))
-        } catch (e: Exception) {
-            result.error("read_failed", e.message, null)
-        }
-    }
-
-    /**
-     * Album (MediaStore bucket / relative path) of a media file.
-     * The album name is never derived from the file name.
-     */
-    private fun queryMediaAlbum(call: MethodCall, result: MethodChannel.Result) {
-        val id = call.argument<String>("id")
-        val mediaId = id?.toLongOrNull()
-        if (mediaId == null) {
-            result.error("bad_args", "id must be a numeric media id", null)
-            return
-        }
-        try {
-            val uri = ContentUris.withAppendedId(
-                MediaStore.Files.getContentUri("external"),
-                mediaId,
-            )
-            result.success(MediaHeaderReader.queryAlbum(contentResolver, uri))
-        } catch (e: Exception) {
-            result.error("query_failed", e.message, null)
-        }
-    }
-
-    private fun scanFile(call: MethodCall, result: MethodChannel.Result) {
-        val path = call.argument<String>("path")
-        val mimeType = call.argument<String>("mimeType")
-        if (path == null) {
-            result.error("bad_args", "path required", null)
-            return
-        }
-        try {
-            MediaScannerConnection.scanFile(
-                this,
-                arrayOf(path),
-                if (mimeType != null) arrayOf(mimeType) else null,
-            ) { _, uri ->
-                runOnUiThread {
-                    result.success(uri?.toString())
-                }
-            }
-        } catch (e: Exception) {
-            result.error("scan_failed", e.message, null)
         }
     }
 

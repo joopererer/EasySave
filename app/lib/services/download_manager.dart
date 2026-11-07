@@ -8,6 +8,8 @@ import 'dart:io';
 
 import 'package:background_downloader/background_downloader.dart';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart' show MethodChannel;
+import 'package:http/http.dart' as http;
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:gal/gal.dart';
 import 'package:photo_manager/photo_manager.dart';
@@ -26,6 +28,7 @@ import 'gallery_locator_service.dart';
 import 'history_db.dart';
 import 'history_io.dart';
 import 'mp4_audio_probe.dart';
+import 'storage_guard.dart';
 import 'parse_service.dart';
 import 'saver.dart';
 import 'download_provenance.dart';
@@ -172,6 +175,30 @@ List<DownloadBatch> mergeBatchViews(
 /// Longest the gallery import of one finished file may take.
 const Duration kFinishFileTimeout = Duration(seconds: 60);
 
+/// Import budget for a file of [bytes]: the base budget plus one second per
+/// 8 MiB, because a large video is rewritten for provenance and then copied
+/// into the album (a 1 GB video gets about 3 minutes instead of 60 s).
+Duration finishTimeoutFor(int? bytes) =>
+    kFinishFileTimeout + Duration(seconds: (bytes ?? 0) ~/ (8 * 1024 * 1024));
+
+/// Short reason shown in history next to "下载失败".
+String? shortFailureReason(DownloadJob job) {
+  if (job.state != JobState.failed) return null;
+  final error = job.error ?? '';
+  if (job.errorCode == storageFullCode || isStorageFullError(error)) {
+    return '存储空间不足';
+  }
+  final status = job.lastStatusCode ??
+      int.tryParse(RegExp(r'HTTP (\d{3})').firstMatch(error)?.group(1) ?? '');
+  if (status != null) return 'HTTP $status';
+  if (error.contains('超时')) return '保存超时';
+  if (error.contains('过期')) return '链接已过期';
+  if (error.contains('允许范围')) return '地址不被允许';
+  if (error.contains('文件丢失')) return '文件丢失';
+  if (error.contains('来源信息')) return '来源信息写入失败';
+  return '下载出错';
+}
+
 /// `paused` is appended last: job states are persisted by index.
 enum JobState { queued, active, done, failed, canceled, paused }
 
@@ -221,6 +248,16 @@ class DownloadJob {
   String? error;
   int? lastStatusCode;
 
+  /// Machine-readable failure code ([storageFullCode]) next to [error].
+  String? errorCode;
+
+  /// Content-Length of the media when known (storage preflight).
+  int? expectedBytes;
+
+  /// Size of the file handed to the album (after provenance), used to decide
+  /// whether an album copy found on retry is complete.
+  int? fileBytes;
+
   /// Provenance assetId written to this file (if any).
   String? assetId;
 
@@ -265,6 +302,9 @@ class DownloadJob {
     'saved': saved,
     'error': error,
     'lastStatusCode': lastStatusCode,
+    if (errorCode != null) 'errorCode': errorCode,
+    if (expectedBytes != null) 'expectedBytes': expectedBytes,
+    if (fileBytes != null) 'fileBytes': fileBytes,
     'assetId': assetId,
     'mediaId': mediaId,
     'savedTitle': savedTitle,
@@ -295,6 +335,9 @@ class DownloadJob {
     job.saved = map['saved'] as bool? ?? false;
     job.error = map['error'] as String?;
     job.lastStatusCode = (map['lastStatusCode'] as num?)?.toInt();
+    job.errorCode = map['errorCode'] as String?;
+    job.expectedBytes = (map['expectedBytes'] as num?)?.toInt();
+    job.fileBytes = (map['fileBytes'] as num?)?.toInt();
     job.assetId = map['assetId'] as String?;
     job.mediaId = map['mediaId'] as String?;
     job.savedTitle = map['savedTitle'] as String?;
@@ -422,6 +465,12 @@ class DownloadBatch {
 
   int get doneCount => jobs.where((j) => j.state == JobState.done).length;
   int get failedCount => jobs.where((j) => j.state == JobState.failed).length;
+
+  /// Short reason of the first failed job, for the history card.
+  String? get failureReason => jobs
+      .map(shortFailureReason)
+      .whereType<String>()
+      .firstOrNull;
 
   /// Newest sign of life among the unfinished jobs; falls back to the
   /// snapshot time for snapshots without per-job timestamps.
@@ -1126,6 +1175,50 @@ class DownloadManager extends ChangeNotifier {
   @visibleForTesting
   Future<ParseOutcome> Function(String)? reparseForTesting;
 
+  /// Content-Length of a job URL (production: HEAD request).
+  @visibleForTesting
+  Future<int?> Function(DownloadJob job, String url)? contentLengthProbeForTesting;
+
+  /// Album save of a finished file (production: provenance + native save).
+  @visibleForTesting
+  Future<({String? mediaId, String? title, String? relativePath})> Function(
+    String path,
+    DownloadJob job,
+  )? gallerySaveForTesting;
+
+  /// Terminal history write (production: [writeBatchHistory]).
+  @visibleForTesting
+  Future<void> Function(HistoryDb db, DownloadBatch batch, bool recovered)?
+      historyWriterForTesting;
+
+  /// Provenance of an album file and its MediaStore size.
+  @visibleForTesting
+  Future<XmpProvenance?> Function(AssetEntity asset)? albumProvenanceForTesting;
+  @visibleForTesting
+  Future<int?> Function(String mediaId, bool video)? mediaSizeForTesting;
+
+  @visibleForTesting
+  Duration? finishTimeoutForTesting;
+  @visibleForTesting
+  Duration historyRetryDelay = const Duration(seconds: 30);
+  @visibleForTesting
+  Future<Directory> Function()? tempRootForTesting;
+
+  @visibleForTesting
+  Future<void> importFileForTesting(
+    DownloadBatch batch,
+    DownloadJob job,
+    String path,
+  ) => _importFile(batch, job, path, isImage: job.isImage);
+
+  @visibleForTesting
+  Future<void> afterTerminalForTesting(DownloadBatch batch) =>
+      _afterTerminal(batch, recovered: false);
+
+  @visibleForTesting
+  Future<void> lateImportForTesting(String key) =>
+      _lateImports[key] ?? Future<void>.value();
+
   Future<List<String>> _reserve(
     DownloadBatch batch,
     List<DownloadJob> jobs,
@@ -1254,13 +1347,13 @@ class DownloadManager extends ChangeNotifier {
     _log('batch start id=$batchId source=${batch.source} post=${batch.postId}');
     unawaited(_refreshNotification(batch));
     await _persist(batch);
-    try {
-      final db = await HistoryDb.instance();
-      await writePlaceholderHistory(db, batch);
-    } catch (e) {
-      // The placeholder is a convenience; the download must still start.
-      _log('placeholder write failed post=${batch.postId}: $e');
-    }
+    // The placeholder is a convenience; the download must still start. The
+    // terminal history write creates the record if this one cannot.
+    await _writeHistoryWithRetry(
+      batch,
+      (db) => writePlaceholderHistory(db, batch),
+      stage: 'placeholder',
+    );
     for (final job in batch.jobs) {
       // One failing enqueue must not strand the remaining jobs in `queued`
       // (that kept the batch non-terminal forever, e.g. stuck at ~50%).
@@ -1318,6 +1411,7 @@ class DownloadManager extends ChangeNotifier {
       return;
     }
     if ((await _reserve(batch, [job])).isEmpty) throw AlreadyDownloading();
+    if (await _storageBlocked(batch, job)) return;
     if (enqueueForTesting != null) {
       await enqueueForTesting!(batch, job);
       return;
@@ -1393,6 +1487,121 @@ class DownloadManager extends ChangeNotifier {
     if (!accepted) {
       throw StateError('enqueue rejected for ${job.key}');
     }
+  }
+
+  /// Fail [job] before it downloads when its known size does not fit.
+  Future<bool> _storageBlocked(DownloadBatch batch, DownloadJob job) async {
+    if (job.urls.isEmpty) return false;
+    final index = job.attempts % job.urls.length;
+    var size = job.expectedBytes;
+    if (size == null) {
+      try {
+        final probe = contentLengthProbeForTesting;
+        size = probe != null
+            ? await probe(job, job.urls[index])
+            : await _probeContentLength(batch, job, index);
+      } catch (_) {
+        size = null;
+      }
+      if (size != null && size > 0) job.expectedBytes = size;
+    }
+    final required = await StorageGuard.shortfall(size);
+    _log('preflight index=${job.itemIndex} size=${size ?? -1} '
+        'result=${required == null ? 'ok' : storageFullCode}');
+    if (required == null) return false;
+    await _failForStorage(batch, job, required);
+    return true;
+  }
+
+  /// HEAD for the Content-Length of a cookie-free background download. No
+  /// redirect is followed (each hop would need its own authorization).
+  Future<int?> _probeContentLength(
+    DownloadBatch batch,
+    DownloadJob job,
+    int index,
+  ) async {
+    if (needsSessionDownload(batch, job)) return null;
+    final policy = _policyFor(batch.platform);
+    final authorized = await policy.authorize(_jobResource(job, index, policy));
+    if (authorized.cookie != null && authorized.cookie!.isNotEmpty) return null;
+    final client = http.Client();
+    try {
+      final request = http.Request('HEAD', authorized.uri)
+        ..followRedirects = false
+        ..headers.addAll(authorized.headers);
+      final response =
+          await client.send(request).timeout(const Duration(seconds: 8));
+      return response.statusCode == 200 ? response.contentLength : null;
+    } finally {
+      client.close();
+    }
+  }
+
+  Future<void> _failForStorage(
+    DownloadBatch batch,
+    DownloadJob job,
+    int? required,
+  ) async {
+    job.state = JobState.failed;
+    job.errorCode = storageFullCode;
+    job.error = storageFullMessage(required ??
+        (job.expectedBytes == null
+            ? null
+            : requiredBytesForDownload(job.expectedBytes!)));
+    await _cleanupJobTemp(batch, job);
+    await _persist(batch);
+    notifyListeners();
+    await _afterTerminal(batch, recovered: false);
+  }
+
+  /// Delete every temp file of [job]'s attempts (and [path] when given).
+  Future<int> _cleanupJobTemp(
+    DownloadBatch batch,
+    DownloadJob job, {
+    String? path,
+  }) async {
+    var bytes = 0;
+    Future<void> remove(FileSystemEntity entity) async {
+      try {
+        if (entity is File) {
+          if (!await entity.exists()) return;
+          bytes += await entity.length();
+          await entity.delete();
+        } else if (entity is Directory) {
+          if (!await entity.exists()) return;
+          await for (final child in entity.list(recursive: true)) {
+            if (child is File) bytes += await child.length();
+          }
+          await entity.delete(recursive: true);
+        }
+      } catch (_) {
+        // Best effort; the next cleanup sees what is left.
+      }
+    }
+
+    if (path != null) {
+      await remove(File(path));
+      await remove(File('$path.xmp'));
+    }
+    try {
+      final root = await (tempRootForTesting?.call() ?? getTemporaryDirectory());
+      final batchDir = Directory(
+        '${root.path}/${downloadTempDirectory(batch.batchId, '')}',
+      );
+      if (await batchDir.exists()) {
+        await for (final entry in batchDir.list()) {
+          final name = Uri.decodeComponent(entry.uri.pathSegments
+              .where((segment) => segment.isNotEmpty)
+              .last);
+          if (name.startsWith('${job.key}-try')) await remove(entry);
+        }
+      }
+      if (tempRootForTesting == null) await remove(await _sessionFile(job));
+    } catch (_) {
+      // Temp roots are unavailable in some engines/tests.
+    }
+    _log('cleanup bytes=$bytes index=${job.itemIndex}');
+    return bytes;
   }
 
   Future<File> _sessionFile(DownloadJob job) async {
@@ -1475,9 +1684,11 @@ class DownloadManager extends ChangeNotifier {
       job.state = JobState.failed;
       job.error = e.message;
       job.lastStatusCode = e.statusCode;
-    } catch (_) {
+      if (isStorageFullError(e.message)) _markStorageFull(job);
+    } catch (e) {
       job.state = JobState.failed;
       job.error = '下载失败，请重新解析';
+      if (isStorageFullError(e)) _markStorageFull(job);
     } finally {
       control.cancel();
       _sessionTransfers.remove(job.key);
@@ -1486,6 +1697,13 @@ class DownloadManager extends ChangeNotifier {
       notifyListeners();
       await _afterTerminal(batch, recovered: false);
     }
+  }
+
+  void _markStorageFull(DownloadJob job) {
+    job.errorCode = storageFullCode;
+    job.error = storageFullMessage(job.expectedBytes == null
+        ? null
+        : requiredBytesForDownload(job.expectedBytes!));
   }
 
   void _onUpdate(TaskUpdate update) {
@@ -1540,7 +1758,10 @@ class DownloadManager extends ChangeNotifier {
         job.lastStatusCode = update.responseStatusCode;
         unawaited(_failAttempt(batch, job, update));
       case TaskStatus.canceled:
-        if (job.state != JobState.done) job.state = JobState.canceled;
+        // A storage failure cancels its task; keep the failure visible.
+        if (job.state != JobState.done && job.errorCode != storageFullCode) {
+          job.state = JobState.canceled;
+        }
         unawaited(_afterTerminal(batch, recovered: false));
       case TaskStatus.paused:
       case TaskStatus.enqueued:
@@ -1558,16 +1779,17 @@ class DownloadManager extends ChangeNotifier {
   /// simply proceed and save the file.
   Future<AssetEntity?> _findExistingAlbumAsset(
     DownloadBatch batch,
-    DownloadJob job,
-  ) async {
+    DownloadJob job, {
+    bool refresh = false,
+  }) async {
     final locator = GalleryLocatorService.instance;
-    if (!locator.hasAccess) return null;
-    if (_albumIndexed.add(batch.batchId)) {
-      try {
-        await locator.scanAlbum(force: true);
-      } catch (_) {
-        // Indexing is best effort.
-      }
+    final first = _albumIndexed.add(batch.batchId);
+    try {
+      // photo_manager in the foreground, native MediaStore in the overlay
+      // engine (which cannot read photo_manager's permission).
+      if (!await locator.ensureIndexed(force: first || refresh)) return null;
+    } catch (_) {
+      return null;
     }
     final name = cleanMediaFilename(
       batch.postId,
@@ -1680,10 +1902,13 @@ class DownloadManager extends ChangeNotifier {
     int? itemIndex,
     required bool isImage,
   }) async {
+    int? sourceBytes;
     try {
-      // A hung album scan / metadata write / gallery copy must not leave the
-      // job `active` forever (the batch would never finish).
-      await (() async {
+      sourceBytes = await File(path).length();
+    } catch (_) {}
+    // A hung album scan / metadata write / gallery copy must not leave the
+    // job `active` forever (the batch would never finish).
+    final work = (() async {
         final file = File(path);
         if (!await file.exists()) {
           job.error = '文件丢失，请重试';
@@ -1698,12 +1923,8 @@ class DownloadManager extends ChangeNotifier {
           if (existing != null) {
             // A same-name file may be the result of an older skipped write.
             // Reuse only after checking its credentials against this save.
-            final local = await existing.originFile;
-            final read =
-                (local == null
-                    ? null
-                    : await MetadataService.readProvenance(local.path)) ??
-                await readProvenanceSidecar(existing.id);
+            // Header bytes only: originFile would copy a large video again.
+            final read = await _albumProvenance(existing);
             final expected = provenanceForBatchItem(
               batch,
               itemIndex: itemIndex ?? job.itemIndex,
@@ -1740,6 +1961,18 @@ class DownloadManager extends ChangeNotifier {
             }
           } else {
             // Embed provenance metadata before saving to gallery (images and videos)
+            final saveForTesting = gallerySaveForTesting;
+            if (saveForTesting != null) {
+              job.fileBytes = await File(path).length();
+              final saved = await saveForTesting(path, job);
+              job.mediaId = saved.mediaId;
+              job.savedTitle = saved.title;
+              job.relativePath = saved.relativePath;
+              job.state = JobState.done;
+              job.progress = 1;
+              job.saved = true;
+              return;
+            }
             final writtenAssetId = await _embedProvenance(
               filePath: path,
               batch: batch,
@@ -1747,6 +1980,9 @@ class DownloadManager extends ChangeNotifier {
               existingAssetId: existingAssetId,
               itemIndex: itemIndex ?? job.itemIndex,
             );
+            try {
+              job.fileBytes = await File(path).length();
+            } catch (_) {}
             final finalName = await exportNameFor(
               path,
               batch.postId,
@@ -1783,18 +2019,108 @@ class DownloadManager extends ChangeNotifier {
             job.assetId = outcome.reusedAssetId ?? writtenAssetId;
           }
         }
-      })().timeout(kFinishFileTimeout);
+      })();
+    try {
+      await work.timeout(finishTimeoutForTesting ?? finishTimeoutFor(sourceBytes));
     } on TimeoutException {
-      _log('gallery import timed out: ${job.filename}');
+      _log('gallery import timed out: ${job.filename} bytes=${sourceBytes ?? -1}');
       job.error = '保存超时，请重试';
       job.state = JobState.failed;
+      // The album copy keeps running; record its real outcome when it ends
+      // instead of leaving an album file without a history row.
+      _lateImports[job.key] = work.then(
+        (_) => _settleLateImport(batch, job, path),
+        onError: (Object e) => _settleLateImport(batch, job, path, error: e),
+      ).whenComplete(() {
+        // A block body: returning the removed future would await itself.
+        _lateImports.remove(job.key);
+      });
     } catch (e) {
-      job.error = '$e';
       job.state = JobState.failed;
+      if (isStorageFullError(e)) {
+        _markStorageFull(job);
+      } else {
+        job.error = '$e';
+      }
+      await _cleanupJobTemp(batch, job, path: path);
     }
     await _persist(batch);
     notifyListeners();
     await _afterTerminal(batch, recovered: false);
+  }
+
+  /// Imports that outlived their timeout, by job key.
+  final _lateImports = <String, Future<void>>{};
+
+  Future<void> _settleLateImport(
+    DownloadBatch batch,
+    DownloadJob job,
+    String path, {
+    Object? error,
+  }) async {
+    if (error == null && job.saved && job.mediaId != null) {
+      _log('late import done index=${job.itemIndex} media=${job.mediaId}');
+      job
+        ..state = JobState.done
+        ..error = null
+        ..errorCode = null
+        ..progress = 1;
+      batch.historyWritten = false;
+      await _persist(batch);
+      notifyListeners();
+      await _afterTerminal(batch, recovered: false);
+      return;
+    }
+    _log('late import failed index=${job.itemIndex} '
+        'reason=${isStorageFullError(error) ? storageFullCode : error?.runtimeType ?? 'unsaved'}');
+    if (isStorageFullError(error) && job.state == JobState.failed) {
+      _markStorageFull(job);
+      await _persist(batch);
+      notifyListeners();
+    }
+    await _cleanupJobTemp(batch, job, path: path);
+  }
+
+  Future<XmpProvenance?> _albumProvenance(AssetEntity asset) =>
+      (albumProvenanceForTesting ??
+              GalleryLocatorService.instance.readAlbumProvenance)(asset);
+
+  /// A complete album copy of [job] (provenance of this post item and, when
+  /// the imported size is known, the same MediaStore size), or null.
+  Future<AssetEntity?> _completeAlbumCopy(
+    DownloadBatch batch,
+    DownloadJob job,
+  ) async {
+    final asset = await _findExistingAlbumAsset(batch, job, refresh: true);
+    if (asset == null) return null;
+    final read = await _albumProvenance(asset);
+    final expected = provenanceForBatchItem(batch, itemIndex: job.itemIndex);
+    if (read == null ||
+        read.platform != expected.platform ||
+        read.sourceId != expected.sourceId ||
+        read.itemIndex != expected.itemIndex) {
+      _log('retry album copy rejected index=${job.itemIndex} reason=provenance');
+      return null;
+    }
+    final size = await (mediaSizeForTesting ?? _mediaSize)(asset.id, !job.isImage);
+    if (job.fileBytes != null && size != job.fileBytes) {
+      _log('retry album copy rejected index=${job.itemIndex} reason=size '
+          'album=${size ?? -1} expected=${job.fileBytes}');
+      return null;
+    }
+    job.provenanceItemCount = read.itemCount;
+    job.provenanceCapturedBy = read.capturedBy;
+    return asset;
+  }
+
+  static Future<int?> _mediaSize(String mediaId, bool video) async {
+    try {
+      final size = await const MethodChannel('easysave/media')
+          .invokeMethod<num>('mediaSize', {'id': mediaId, 'video': video});
+      return size?.toInt();
+    } catch (_) {
+      return null;
+    }
   }
 
   /// Embed provenance metadata into an image or video file.
@@ -1857,6 +2183,11 @@ class DownloadManager extends ChangeNotifier {
       await _afterTerminal(batch, recovered: false);
       return;
     }
+    if (isStorageFullError(diagnostic) || isStorageFullError(update.exception)) {
+      _log('download write failed index=${job.itemIndex} reason=$storageFullCode');
+      await _failForStorage(batch, job, null);
+      return;
+    }
     if (job.attempts < maxAttemptsFor(batch, job)) {
       await _enqueueAttempt(batch, job);
       return;
@@ -1865,9 +2196,50 @@ class DownloadManager extends ChangeNotifier {
     job.error = update.responseStatusCode != null
         ? '下载失败（HTTP ${update.responseStatusCode}）'
         : (update.exception?.toString() ?? '下载失败');
+    await _cleanupJobTemp(batch, job);
     await _persist(batch);
     notifyListeners();
     await _afterTerminal(batch, recovered: false);
+  }
+
+  /// Write history with up to three attempts; a full disk (SQLITE_FULL) is
+  /// logged as such. Returns false when every attempt failed.
+  Future<bool> _writeHistoryWithRetry(
+    DownloadBatch batch,
+    Future<void> Function(HistoryDb db) write, {
+    required String stage,
+  }) async {
+    const delays = [Duration(milliseconds: 300), Duration(seconds: 1)];
+    for (var attempt = 1; ; attempt++) {
+      try {
+        await write(await HistoryDb.instance());
+        if (attempt > 1) {
+          unawaited(DevLog.write('HistoryDb', 'event=write_recovered '
+              'stage=$stage post=${batch.postId} attempt=$attempt'));
+        }
+        return true;
+      } catch (e) {
+        final reason = isStorageFullError(e) ? storageFullCode : '${e.runtimeType}';
+        unawaited(DevLog.write('HistoryDb', 'event=write_retry stage=$stage '
+            'post=${batch.postId} attempt=$attempt reason=$reason'));
+        if (attempt > delays.length) {
+          unawaited(DevLog.write('HistoryDb', 'event=write_failed stage=$stage '
+              'post=${batch.postId} reason=$reason'));
+          return false;
+        }
+        await Future<void>.delayed(delays[attempt - 1]);
+      }
+    }
+  }
+
+  final _historyRetries = <String, Timer>{};
+
+  void _scheduleHistoryRetry(DownloadBatch batch) {
+    _historyRetries[batch.batchId]?.cancel();
+    _historyRetries[batch.batchId] = Timer(historyRetryDelay, () {
+      _historyRetries.remove(batch.batchId);
+      unawaited(_afterTerminal(batch, recovered: false));
+    });
   }
 
   /// [recovered] is true only when the batch is finished by the startup /
@@ -1886,16 +2258,35 @@ class DownloadManager extends ChangeNotifier {
     }
     if (!batch.historyWritten) {
       batch.historyWritten = true;
-      final db = await HistoryDb.instance();
-      await writeBatchHistory(db, batch, recovered: recovered);
-      if (batch.succeeded == 0) {
-        // Nothing was saved: do not leave an empty placeholder behind.
+      final written = await _writeHistoryWithRetry(
+        batch,
+        (db) => (historyWriterForTesting ??
+            (db, batch, recovered) =>
+                writeBatchHistory(db, batch, recovered: recovered))(
+          db,
+          batch,
+          recovered,
+        ),
+        stage: 'terminal',
+      );
+      if (!written) {
+        // Keep the batch owing its history row; try again later.
+        batch.historyWritten = false;
+        await _persist(batch);
+        _scheduleHistoryRetry(batch);
+        return;
+      }
+      if (batch.succeeded == 0 && batch.failedCount == 0) {
+        // Nothing was saved and nothing failed (everything was canceled): do
+        // not leave an empty placeholder behind. A failed post stays visible
+        // in history with its failure and a retry.
         try {
-          await discardEmptyPlaceholder(db, batch);
+          await discardEmptyPlaceholder(await HistoryDb.instance(), batch);
         } catch (e) {
           _log('placeholder cleanup failed post=${batch.postId}: $e');
         }
       }
+      final db = await HistoryDb.instance();
       final locator = GalleryLocatorService.instance;
       if (locator.hasAccess) {
         unawaited(locator.scanAlbum(force: true));
@@ -1925,6 +2316,8 @@ class DownloadManager extends ChangeNotifier {
   /// are refreshed; fall back to the stored URLs when parsing fails.
   Future<void> retryJob(DownloadBatch batch, DownloadJob job) async {
     await _finishing[job.key];
+    // A timed-out import may still finish its album copy: its outcome decides.
+    await _lateImports[job.key];
     if (job.state != JobState.failed && job.state != JobState.canceled) return;
     // Claim the retry synchronously, before parsing or any plugin await.
     job.state = JobState.queued;
@@ -1932,6 +2325,31 @@ class DownloadManager extends ChangeNotifier {
     // The batch becomes active again: let its terminal handler write the
     // history record once more when it finishes.
     batch.historyWritten = false;
+    // Idempotent retry: an earlier attempt may have completed the album copy
+    // and failed afterwards (timeout, history write). Link it, do not fetch.
+    try {
+      final existing = await _completeAlbumCopy(batch, job);
+      if (existing != null) {
+        _log('retry reused album copy index=${job.itemIndex} media=${existing.id}');
+        job
+          ..mediaId = existing.id
+          ..savedTitle = existing.title
+          ..relativePath = existing.relativePath
+          ..state = JobState.done
+          ..progress = 1
+          ..saved = true
+          ..error = null
+          ..errorCode = null;
+        await _persist(batch);
+        notifyListeners();
+        await _afterTerminal(batch, recovered: false);
+        return;
+      }
+    } catch (e) {
+      _log('retry album lookup failed index=${job.itemIndex}: ${e.runtimeType}');
+    }
+    job.errorCode = null;
+    job.expectedBytes = null;
     try {
       final outcome = await (reparseForTesting?.call(batch.postUrl) ??
           parsePostOutcome(batch.postUrl,
@@ -2453,7 +2871,8 @@ class DownloadManager extends ChangeNotifier {
   Future<void> _persist(DownloadBatch batch) async {
     for (final job in batch.jobs.where((j) => j.state == JobState.failed)) {
       final error = job.error ?? '';
-      final reason = error.contains('403') ? 'HTTP_403' : error.contains('404') ? 'HTTP_404'
+      final reason = job.errorCode == storageFullCode ? storageFullCode
+          : error.contains('403') ? 'HTTP_403' : error.contains('404') ? 'HTTP_404'
           : error.contains('超时') || error.contains('Timeout') ? 'TIMEOUT'
           : error.contains('REQUEST_') ? 'POLICY'
           : error.contains('保存') || error.contains('import') ? 'IMPORT'

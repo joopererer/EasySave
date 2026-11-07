@@ -7,6 +7,7 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
 import 'package:photo_manager/photo_manager.dart';
 
 import '../core/dev_log.dart';
@@ -25,8 +26,27 @@ class GalleryLocatorService extends ChangeNotifier {
     evictMediaIds([id]);
     notifyListeners();
   }
-  Future<bool> isPresent(String id) async => !_unreadableIds.contains(id) &&
-      await (presenceProbeForTesting ?? mediaExists)(id);
+  Future<bool> isPresent(String id) async {
+    if (_unreadableIds.contains(id)) return false;
+    // The native index lists what MediaStore returns to this app right now;
+    // photo_manager's per-id query is not usable without its permission.
+    final native = _nativeIds;
+    if (native != null && !hasAccess) return native.contains(id);
+    return (presenceProbeForTesting ?? mediaExists)(id);
+  }
+
+  static const MethodChannel _mediaChannel = MethodChannel('easysave/media');
+
+  /// How the current album index was built: `plugin` (photo_manager with its
+  /// permission) or `native` (MediaStore through [_mediaChannel], used when
+  /// photo_manager reports no access, e.g. in the overlay engine).
+  String _lookupMethod = 'plugin';
+  String get lookupMethod => _lookupMethod;
+
+  /// Permission reported by the native side for the native index.
+  String? _nativePermission;
+  Set<String>? _nativeIds;
+  int _nativeOwned = 0;
 
   /// Test seams for the platform calls; production leaves them null.
   @visibleForTesting
@@ -35,6 +55,9 @@ class GalleryLocatorService extends ChangeNotifier {
   Future<List<AssetEntity>> Function()? albumReaderForTesting;
   @visibleForTesting
   Future<bool> Function(String id)? presenceProbeForTesting;
+  @visibleForTesting
+  Future<Map<Object?, Object?>?> Function(List<String> albums)?
+      nativeIndexReaderForTesting;
 
   GalleryLocatorService._();
 
@@ -57,6 +80,15 @@ class GalleryLocatorService extends ChangeNotifier {
   bool get isScanning => _isScanning;
 
   final Map<String, AssetEntity> _exactMap = {};
+
+  /// Lower-case display name without extension -> asset. MediaStore titles
+  /// carry their extension, so a lookup by base name needs this map.
+  final Map<String, AssetEntity> _stemMap = {};
+
+  void _indexStem(String baseName, AssetEntity asset) {
+    final dot = baseName.lastIndexOf('.');
+    if (dot > 0) _stemMap.putIfAbsent(baseName.substring(0, dot), () => asset);
+  }
   final Map<String, AssetEntity> _idMap = {};
   final List<AssetEntity> _allAssets = [];
   final Map<String, String?> _relPathMap = {};
@@ -136,6 +168,7 @@ class GalleryLocatorService extends ChangeNotifier {
         _exactMap.remove(baseName);
       }
       _allAssets.removeWhere((a) => a.id == id);
+      _stemMap.removeWhere((_, a) => a.id == id);
     }
     notifyListeners();
   }
@@ -215,11 +248,10 @@ class GalleryLocatorService extends ChangeNotifier {
     try {
       final testAlbum = albumReaderForTesting;
       if (testAlbum != null) {
-        setScannedForTesting(
-          scanned: true,
-          permission: _permission,
-          assets: await testAlbum(),
-        );
+        _replaceIndex(await testAlbum());
+        _lookupMethod = 'plugin';
+        _nativeIds = null;
+        _scanned = true;
         return;
       }
       final settings = await AppSettings.load();
@@ -282,26 +314,9 @@ class GalleryLocatorService extends ChangeNotifier {
         }
       }
 
-      _exactMap.clear();
-      _idMap.clear();
-      _allAssets.clear();
-      _relPathMap.clear();
-      _xmpCache.clear();
-
-      for (final asset in assetsToIndex) {
-        _idMap[asset.id] = asset;
-        _allAssets.add(asset);
-
-        final title = (asset.title ?? '').trim().toLowerCase();
-        if (title.isNotEmpty) {
-          _exactMap[title] = asset;
-
-          // Strip directory path if title has any
-          final baseName = title.split('/').last.split('\\').last;
-          _exactMap[baseName] = asset;
-        }
-      }
-
+      _replaceIndex(assetsToIndex);
+      _lookupMethod = 'plugin';
+      _nativeIds = null;
       _scanned = true;
     } catch (e) {
       debugPrint('GalleryLocatorService.scanAlbum error: $e');
@@ -311,14 +326,117 @@ class GalleryLocatorService extends ChangeNotifier {
     }
   }
 
+  void _replaceIndex(List<AssetEntity> assets) {
+    _exactMap.clear();
+    _stemMap.clear();
+    _idMap.clear();
+    _allAssets.clear();
+    _relPathMap.clear();
+    _xmpCache.clear();
+    for (final asset in assets) {
+      _idMap[asset.id] = asset;
+      _allAssets.add(asset);
+      final title = (asset.title ?? '').trim().toLowerCase();
+      if (title.isNotEmpty) {
+        _exactMap[title] = asset;
+        // Strip directory path if title has any
+        final baseName = title.split('/').last.split('\\').last;
+        _exactMap[baseName] = asset;
+        _indexStem(baseName, asset);
+      }
+    }
+  }
+
+  /// Index EasySave's albums through native MediaStore when photo_manager has
+  /// no access (its permission query needs an Activity, so the overlay engine
+  /// always sees notDetermined). Without read permission Android 10+ still
+  /// returns the files this app wrote, so EasySave's own saves are found.
+  Future<bool> _loadNativeIndex() async {
+    try {
+      final settings = await AppSettings.load();
+      final albums = [
+        for (final name in settings.effectiveAlbumNames)
+          if (name.trim().isNotEmpty) name.trim(),
+      ];
+      final raw = await (nativeIndexReaderForTesting?.call(albums) ??
+          _mediaChannel.invokeMethod<Map<Object?, Object?>>(
+            'savedMediaIndex',
+            {'albums': albums},
+          ));
+      if (raw == null) return false;
+      final assets = <AssetEntity>[];
+      var owned = 0;
+      for (final item in (raw['items'] as List? ?? const []).whereType<Map>()) {
+        final id = item['id']?.toString();
+        if (id == null || id.isEmpty) continue;
+        if (item['owned'] == true) owned++;
+        assets.add(AssetEntity(
+          id: id,
+          typeInt: (item['type'] == 'video' ? AssetType.video : AssetType.image).index,
+          width: (item['width'] as num?)?.toInt() ?? 0,
+          height: (item['height'] as num?)?.toInt() ?? 0,
+          title: item['title']?.toString(),
+          relativePath: item['relativePath']?.toString(),
+        ));
+      }
+      _replaceIndex(assets);
+      for (final asset in assets) {
+        _relPathMap[asset.id] = asset.relativePath;
+      }
+      _nativeIds = {for (final asset in assets) asset.id};
+      _nativeOwned = owned;
+      _nativePermission = raw['permission']?.toString() ?? 'unknown';
+      _lookupMethod = 'native';
+      _scanned = true;
+      if (raw['error'] != null) {
+        unawaited(DevLog.write('SavedLookup',
+            'event=native_query_error error=${raw['error']} sdk=${raw['sdk']}'));
+      }
+      return true;
+    } catch (e) {
+      unawaited(DevLog.write('SavedLookup',
+          'event=native_unavailable type=${e.runtimeType}'));
+      return false;
+    }
+  }
+
+  /// Make sure an album index exists: photo_manager when it has access,
+  /// otherwise native MediaStore. [force] rebuilds it. Returns false when no
+  /// index could be built.
+  Future<bool> ensureIndexed({bool force = false}) async {
+    if (!hasAccess) await checkPermission();
+    if (hasAccess) {
+      if (force || !_scanned || _lookupMethod == 'native') {
+        await scanAlbum(force: true);
+      }
+      return true;
+    }
+    if (force || _lookupMethod != 'native' || _nativeIds == null) {
+      return _loadNativeIndex();
+    }
+    return true;
+  }
+
+  /// Provenance of an album file from its header bytes and sidecar (never a
+  /// full-file copy, which a large video would not survive on a full disk).
+  Future<XmpProvenance?> readAlbumProvenance(AssetEntity asset) async {
+    if (_xmpCache.containsKey(asset.id)) return _xmpCache[asset.id];
+    final mime = asset.type == AssetType.video ? 'video/mp4' : 'image/jpeg';
+    final bytes = await MediaHeaderService.readHeader(asset.id, mime);
+    final prov = mergeProvenanceXml(MetadataService.readXmpXmlFromBytes(bytes),
+        await readProvenanceSidecarXml(asset.id));
+    _xmpCache[asset.id] = prov;
+    return prov;
+  }
+
   /// Exact album lookup by a file's base name (no extension). Unlike
   /// [locateAsset] this never fuzzy-matches, so it is safe to use as an
   /// idempotency guard: "is a file with this name already in the album?"
   AssetEntity? assetByBaseName(String baseName) {
-    if (!hasAccess) return null;
+    if (!hasAccess && _nativeIds == null) return null;
     final key = baseName.trim().toLowerCase();
     if (key.isEmpty) return null;
-    return _exactMap[key];
+    return _exactMap[key] ?? _stemMap[key];
   }
 
   /// Testing hook to inject pre-scanned assets and permission state.
@@ -331,23 +449,7 @@ class GalleryLocatorService extends ChangeNotifier {
   }) {
     _scanned = scanned;
     _permission = permission;
-    _exactMap.clear();
-    _idMap.clear();
-    _allAssets.clear();
-    _relPathMap.clear();
-    _xmpCache.clear();
-    if (assets != null) {
-      for (final a in assets) {
-        _idMap[a.id] = a;
-        _allAssets.add(a);
-        final title = (a.title ?? '').trim().toLowerCase();
-        if (title.isNotEmpty) {
-          _exactMap[title] = a;
-          final baseName = title.split('/').last.split('\\').last;
-          _exactMap[baseName] = a;
-        }
-      }
-    }
+    _replaceIndex(assets ?? const []);
     if (relativePaths != null) {
       _relPathMap.addAll(relativePaths);
     }
@@ -357,6 +459,11 @@ class GalleryLocatorService extends ChangeNotifier {
   /// Testing hook to reset locator state.
   @visibleForTesting
   void resetForTesting() {
+    nativeIndexReaderForTesting = null;
+    _lookupMethod = 'plugin';
+    _nativeIds = null;
+    _nativePermission = null;
+    _nativeOwned = 0;
     permissionReaderForTesting = null;
     albumReaderForTesting = null;
     presenceProbeForTesting = null;
@@ -364,6 +471,7 @@ class GalleryLocatorService extends ChangeNotifier {
     _isScanning = false;
     _permission = PermissionState.notDetermined;
     _exactMap.clear();
+    _stemMap.clear();
     _idMap.clear();
     _allAssets.clear();
     _relPathMap.clear();
@@ -812,15 +920,22 @@ class GalleryLocatorService extends ChangeNotifier {
   }) async {
     if (refreshAlbum) {
       await checkPermission();
-      if (hasAccess) await scanAlbum(force: true);
+      if (hasAccess) {
+        await scanAlbum(force: true);
+      } else {
+        await _loadNativeIndex();
+      }
     }
     final indices = (await matchPostItems(post)).keys.toSet();
+    final native = _lookupMethod == 'native';
     unawaited(DevLog.write(
       'SavedLookup',
-      'engine=${HistoryDb.engine} permission=${_permission.name} '
+      'engine=${HistoryDb.engine} method=$_lookupMethod '
+          'permission=${native ? _nativePermission : _permission.name} '
+          'pluginPermission=${_permission.name} '
           'scanned=${_scanned ? 1 : 0} refreshed=${refreshAlbum ? 1 : 0} '
-          'albumAssets=${_allAssets.length} items=${post.items.length} '
-          'saved=${indices.length}',
+          'albumAssets=${_allAssets.length}${native ? ' owned=$_nativeOwned' : ''} '
+          'items=${post.items.length} saved=${indices.length}',
     ));
     return indices;
   }
@@ -833,8 +948,10 @@ class GalleryLocatorService extends ChangeNotifier {
       // A secondary engine starts with an unknown permission state; without
       // this read every lookup below would silently report nothing saved.
       if (!hasAccess) await checkPermission();
-      if (hasAccess && !_scanned) {
-        await scanAlbum();
+      if (hasAccess && (!_scanned || _lookupMethod == 'native')) {
+        await scanAlbum(force: _lookupMethod == 'native');
+      } else if (!hasAccess && _lookupMethod != 'native') {
+        await _loadNativeIndex();
       }
       final db = await HistoryDb.instance();
       final record = await db.getByPostId(post.id, platform: post.platform);

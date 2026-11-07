@@ -145,6 +145,7 @@ class HostService : Service() {
             ProvenancePairWriter.register(applicationContext, e.dartExecutor.binaryMessenger)
             DownloadControl.register(e.dartExecutor.binaryMessenger)
             SafStorageBridge.register(applicationContext, e.dartExecutor.binaryMessenger)
+            MediaStoreBridge.register(applicationContext, e.dartExecutor.binaryMessenger)
             engine = e
             val ch = MethodChannel(e.dartExecutor.binaryMessenger, "easysave/bgtask")
             channel = ch
