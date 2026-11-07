@@ -19,6 +19,7 @@ import '../services/history_db.dart';
 import '../services/preview_video.dart';
 import '../services/media_request_policy.dart';
 import 'shared.dart';
+import 'decoded_image_keeper.dart';
 import 'verified_asset_image.dart';
 import 'ai_label_badge.dart';
 
@@ -166,8 +167,32 @@ class _GalleryBrowserPageState extends State<GalleryBrowserPage> {
   Offset? _dragStart;
   bool _isPullDownActive = false;
 
+  /// Decoded local originals of this session: the current page, its
+  /// neighbours and the last pages seen.
+  final _decoded = DecodedImageKeeper(capacity: 5);
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _keepDecodedAround(_currentIndex);
+  }
+
+  /// Decode the current local image and the one or two next to it, and keep
+  /// them, so swiping back and forth never decodes a seen image again.
+  void _keepDecodedAround(int index) {
+    final configuration = createLocalImageConfiguration(context);
+    for (final i in [index, index + 1, index - 1]) {
+      if (i < 0 || i >= widget.items.length) continue;
+      final item = widget.items[i];
+      final asset = item.asset;
+      if (asset == null || item.type == 'video' || item.isGif) continue;
+      _decoded.keep(VerifiedAssetImage.providerFor(asset, isOriginal: true), configuration);
+    }
+  }
+
   @override
   void dispose() {
+    _decoded.dispose();
     _pageController.dispose();
     _thumbController.dispose();
     super.dispose();
@@ -302,6 +327,7 @@ class _GalleryBrowserPageState extends State<GalleryBrowserPage> {
                       _currentIndex = idx;
                       _isZoomed = false;
                     });
+                    _keepDecodedAround(idx);
                     // Scroll thumbnail into view
                     if (_thumbController.hasClients) {
                       _thumbController.animateTo(

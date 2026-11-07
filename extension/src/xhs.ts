@@ -941,3 +941,86 @@ function thumbnailOf(entry: Record<string, unknown>, scenes: string[]): string |
   }
   return undefined;
 }
+
+/**
+ * Kind of a Xiaohongshu image URL. `preview` covers every preview scene
+ * (`!nd_prv_*`, WB_PRV, H5_PRV) and is never downloaded.
+ */
+export type XhsImageVariant = "jpeg" | "original" | "original_ci" | "default" | "preview" | "other";
+
+export function xhsImageVariant(url: string): XhsImageVariant {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return "other";
+  }
+  const host = parsed.hostname.toLowerCase();
+  const bang = parsed.pathname.indexOf("!");
+  const style = bang >= 0 ? parsed.pathname.slice(bang + 1).toLowerCase() : "";
+  if (/prv/.test(style) || /(?:^|[^a-z])prv(?:[^a-z]|$)/i.test(parsed.search)) return "preview";
+  if (host === "ci.xiaohongshu.com") {
+    if (/imageView2/i.test(parsed.search) && !/thumbnail|\/w\/|\/h\//i.test(parsed.search)) return "jpeg";
+    return parsed.search || style ? "other" : "original_ci";
+  }
+  if (host.endsWith(".xhscdn.com") && !style && !parsed.search && host.startsWith("sns-img-")) return "original";
+  if (/dft/.test(style)) return "default";
+  return "other";
+}
+
+/**
+ * Download preference: the original resolution first (the CDN's JPEG
+ * transcode of the original, which the album and provenance writer support,
+ * then the original bucket and the bare ci original), then the default-size
+ * variant, then anything else. Preview variants are left out.
+ */
+const VARIANT_RANK: Record<Exclude<XhsImageVariant, "preview">, number> = {
+  jpeg: 0, original: 1, original_ci: 2, default: 3, other: 4,
+};
+
+export function xhsImageDownloadOrder(url: string, fallbacks: string[] = []): string[] {
+  const unique = [...new Set([url, ...fallbacks].filter((u) => typeof u === "string" && u.length > 0))];
+  return unique
+    .map((u, index) => ({ u, index, variant: xhsImageVariant(u) }))
+    .filter((c) => c.variant !== "preview")
+    .sort((a, b) => VARIANT_RANK[a.variant as keyof typeof VARIANT_RANK] -
+      VARIANT_RANK[b.variant as keyof typeof VARIANT_RANK] || a.index - b.index)
+    .map((c) => c.u);
+}
+
+/** Field names, scenes, declared size and ranked candidates of one image. */
+export interface XhsImageProbeEntry {
+  index: number;
+  fields: string[];
+  scenes: string[];
+  width?: number;
+  height?: number;
+  candidates: XhsImageVariant[];
+  selected?: XhsImageVariant;
+}
+
+const IMAGE_FIELDS = ["urlDefault", "urlPre", "url", "infoList", "traceId", "fileId", "livePhoto", "stream"];
+
+export function xhsImageProbe(note: unknown): XhsImageProbeEntry[] {
+  if (!isRecord(note)) return [];
+  const list = note["imageList"] ?? note["images"];
+  if (!Array.isArray(list)) return [];
+  return list.flatMap((entry, index) => {
+    if (!isRecord(entry)) return [];
+    const resolved = imageUrlOf(entry);
+    const order = resolved ? xhsImageDownloadOrder(resolved.url, resolved.fallbacks) : [];
+    const info = Array.isArray(entry["infoList"]) ? entry["infoList"] as unknown[] : [];
+    const probe: XhsImageProbeEntry = {
+      index: index + 1,
+      fields: IMAGE_FIELDS.filter((key) => entry[key] !== undefined && entry[key] !== null && entry[key] !== ""),
+      scenes: info.flatMap((e) => isRecord(e) && typeof e["imageScene"] === "string" ? [e["imageScene"] as string] : []),
+      candidates: order.map(xhsImageVariant),
+    };
+    const width = num(entry["width"]);
+    const height = num(entry["height"]);
+    if (width !== undefined) probe.width = width;
+    if (height !== undefined) probe.height = height;
+    if (probe.candidates.length > 0) probe.selected = probe.candidates[0];
+    return [probe];
+  });
+}

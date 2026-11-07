@@ -1,12 +1,13 @@
 import { withMediaResources } from './media-resources';
 import { parseX, parseXGraphql, xProbe, calculateToken, extractTweetId, X_SENSITIVE_MEDIA_HINT, X_SESSION_EXPIRED } from './x';
-import { findNoteInStates, xhsStreamProbe } from './xhs';
+import { findNoteInStates, xhsImageDownloadOrder, xhsImageProbe, xhsStreamProbe } from './xhs';
 import { parseTiktok, extractTiktokPostId, tiktokExpiresAt } from './tiktok';
 import { parsePageForModule as legacyPage, parse as legacyParse } from './_parse_page';
 import { installIgSniff, installXGraphqlSniff, readXhsAccount, tiktokReady } from './page-hooks';
 
 type Context = { url: string; input?: string; site: any; error?: any; loggedIn?: boolean; statusCode?: number; location?: string };
-type Hooks = Partial<Record<'install' | 'request' | 'ready' | 'navigate' | 'prepare' | 'parsePage' | 'parse' | 'classify' | 'account' | 'probeSession' | 'expiresAt' | 'probe', (c: Context) => any>>;
+type Hooks = Partial<Record<'install' | 'request' | 'ready' | 'navigate' | 'prepare' | 'parsePage' | 'parse' | 'classify' | 'account' | 'probeSession' | 'expiresAt' | 'probe', (c: Context) => any>>
+  & { decorate?: (result: any) => any };
 const page = () => window as any;
 const failure = (code: string, message: string) => ({ code, message });
 const onXPage = () => {
@@ -50,6 +51,12 @@ const modules: Record<string, Hooks> = {
       : parseX(c.input || '', c.url),
   },
   xhs: {
+    // App-only download order: original resolution first, preview scenes
+    // (WB_PRV / H5_PRV / !nd_prv) never. The legacy url/fallbacks stay as-is.
+    decorate: (result) => !result?.ok || !Array.isArray(result.data?.items) ? result
+      : { ...result, data: { ...result.data, items: result.data.items.map((item: any) =>
+          item.type === 'video' ? item
+            : { ...item, downloadOrder: xhsImageDownloadOrder(item.url, item.fallbacks ?? []) }) } },
     ready: (c) => {
       const state = page().__INITIAL_STATE__;
       if (!state) return false;
@@ -63,7 +70,7 @@ const modules: Record<string, Hooks> = {
     probe: (c) => {
       const id = /\/(?:explore|discovery\/item|user\/profile\/[^/]+)\/([a-zA-Z0-9]+)/.exec(c.url)?.[1];
       const note = findNoteInStates([page().__INITIAL_STATE__], id);
-      return { tag: 'XhsStreamProbe', streams: xhsStreamProbe(note?.['video']) };
+      return { tag: 'XhsStreamProbe', streams: xhsStreamProbe(note?.['video']), images: xhsImageProbe(note) };
     },
     probeSession: (c) => {
       if ((c.statusCode || 0) >= 300 && (c.statusCode || 0) < 400) return !(c.location || '').includes('/login');
@@ -109,6 +116,7 @@ const modules: Record<string, Hooks> = {
 
 export function moduleCall(moduleId: string, hook: string, context: Context): string {
   if (!Object.hasOwn(modules, moduleId)) throw new Error('UNSUPPORTED_MODULE');
+  if (hook === 'decorate') throw new Error('UNSUPPORTED_HOOK');
   if (hook === 'classify' && context.error?.code === 'PRIVATE_OR_UNAVAILABLE' &&
       context.site.auth.mode !== 'none' && !context.loggedIn && moduleId !== 'x') {
     context = { ...context, error: failure('LOGIN_REQUIRED', '可能需要登录' + context.site.displayName) };
@@ -116,7 +124,7 @@ export function moduleCall(moduleId: string, hook: string, context: Context): st
   const module = modules[moduleId];
   const output = (value: any) => JSON.stringify({ value:
     hook === 'parse' || hook === 'parsePage'
-      ? withMediaResources(value, context.site, (url) =>
+      ? withMediaResources(module.decorate ? module.decorate(value) : value, context.site, (url) =>
           module.expiresAt?.({ ...context, url }))
       : value });
   if (Object.hasOwn(module, hook)) return output((module as any)[hook](context) ?? null);

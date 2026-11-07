@@ -27,6 +27,7 @@ import 'backup/saf_service.dart';
 import 'gallery_locator_service.dart';
 import 'history_db.dart';
 import 'history_io.dart';
+import 'image_dimensions.dart';
 import 'mp4_audio_probe.dart';
 import 'storage_guard.dart';
 import 'parse_service.dart';
@@ -90,12 +91,16 @@ Future<bool> shouldRetryForMissingAudio(
   return hasAudio == false;
 }
 
-List<String> orderedMediaUrls(ParsedPost post, MediaItem item) =>
-    (SiteRegistry.current.byId(post.platform)?.data['download']
-            as Map?)?['urlOrder'] ==
-        'primaryFirst'
-    ? [item.url, ...item.fallbacks]
-    : [...item.fallbacks, item.url];
+List<String> orderedMediaUrls(ParsedPost post, MediaItem item) {
+  // A parser-ranked order wins (XHS images: original resolution first,
+  // preview variants never).
+  if (item.downloadOrder.isNotEmpty) return item.downloadOrder;
+  return (SiteRegistry.current.byId(post.platform)?.data['download']
+              as Map?)?['urlOrder'] ==
+          'primaryFirst'
+      ? [item.url, ...item.fallbacks]
+      : [...item.fallbacks, item.url];
+}
 
 /// How long a batch snapshot may stay untouched before the other engine may
 /// consider its owner dead and adopt the batch. The owner refreshes the
@@ -258,6 +263,18 @@ class DownloadJob {
   /// whether an album copy found on retry is complete.
   int? fileBytes;
 
+  /// Declared pixel size of an image; a download clearly smaller is retried
+  /// with the next candidate.
+  int? expectedWidth;
+  int? expectedHeight;
+
+  /// Largest too-small download kept while better candidates are tried.
+  String? lowResPath;
+  int? lowResPixels;
+
+  /// All candidates were too small; the largest was saved ("非原图").
+  bool notOriginal = false;
+
   /// Provenance assetId written to this file (if any).
   String? assetId;
 
@@ -305,6 +322,11 @@ class DownloadJob {
     if (errorCode != null) 'errorCode': errorCode,
     if (expectedBytes != null) 'expectedBytes': expectedBytes,
     if (fileBytes != null) 'fileBytes': fileBytes,
+    if (expectedWidth != null) 'expectedWidth': expectedWidth,
+    if (expectedHeight != null) 'expectedHeight': expectedHeight,
+    if (lowResPath != null) 'lowResPath': lowResPath,
+    if (lowResPixels != null) 'lowResPixels': lowResPixels,
+    if (notOriginal) 'notOriginal': true,
     'assetId': assetId,
     'mediaId': mediaId,
     'savedTitle': savedTitle,
@@ -338,6 +360,11 @@ class DownloadJob {
     job.errorCode = map['errorCode'] as String?;
     job.expectedBytes = (map['expectedBytes'] as num?)?.toInt();
     job.fileBytes = (map['fileBytes'] as num?)?.toInt();
+    job.expectedWidth = (map['expectedWidth'] as num?)?.toInt();
+    job.expectedHeight = (map['expectedHeight'] as num?)?.toInt();
+    job.lowResPath = map['lowResPath'] as String?;
+    job.lowResPixels = (map['lowResPixels'] as num?)?.toInt();
+    job.notOriginal = map['notOriginal'] as bool? ?? false;
     job.assetId = map['assetId'] as String?;
     job.mediaId = map['mediaId'] as String?;
     job.savedTitle = map['savedTitle'] as String?;
@@ -571,10 +598,16 @@ class PlannedFile {
     required this.isImage,
     required this.itemIndex,
     this.isLivePhoto = false,
+    this.expectedWidth,
+    this.expectedHeight,
   });
 
   final String label;
   final List<String> urls;
+
+  /// Declared pixel size of an image (for the low-resolution check).
+  final int? expectedWidth;
+  final int? expectedHeight;
   final String filename;
   final bool isImage;
   final int itemIndex;
@@ -611,6 +644,8 @@ List<PlannedFile> planFiles(
           isImage: true,
           itemIndex: index + 1, // 1-based position in original post
           isLivePhoto: true,
+          expectedWidth: item.width?.toInt(),
+          expectedHeight: item.height?.toInt(),
         ),
       );
       planned.add(
@@ -647,6 +682,8 @@ List<PlannedFile> planFiles(
           filename: '${nameFor(label, seq, 'jpg')}.jpg',
           isImage: true,
           itemIndex: index + 1, // 1-based position in original post
+          expectedWidth: item.width?.toInt(),
+          expectedHeight: item.height?.toInt(),
         ),
       );
     }
@@ -736,6 +773,7 @@ Future<void> writeBatchHistory(
           capturedBy: job.provenanceCapturedBy,
           status: job.mediaId != null ? FileStatus.found : FileStatus.unknown,
           size: job.fileBytes,
+          notOriginal: job.notOriginal,
         ),
   ];
   DevLog.write(
@@ -1201,6 +1239,17 @@ class DownloadManager extends ChangeNotifier {
 
   @visibleForTesting
   Duration? finishTimeoutForTesting;
+
+  /// Header pixel size of a downloaded image (production: [readImageSize]).
+  @visibleForTesting
+  Future<ImageSize?> Function(String path)? imageSizeForTesting;
+
+  @visibleForTesting
+  Future<({bool retry, String path})> checkResolutionForTesting(
+    DownloadBatch batch,
+    DownloadJob job,
+    String path,
+  ) => _checkResolution(batch, job, path);
   @visibleForTesting
   Duration historyRetryDelay = const Duration(seconds: 30);
   @visibleForTesting
@@ -1304,7 +1353,9 @@ class DownloadManager extends ChangeNotifier {
             isImage: planned[i].isImage,
             itemIndex: planned[i].itemIndex,
             isLivePhoto: planned[i].isLivePhoto,
-          ),
+          )
+            ..expectedWidth = planned[i].expectedWidth
+            ..expectedHeight = planned[i].expectedHeight,
       ],
     );
     final accepted = (await _reserve(batch, batch.jobs)).toSet();
@@ -1491,6 +1542,87 @@ class DownloadManager extends ChangeNotifier {
     }
   }
 
+  /// Low-resolution guard for images with a declared size. A file whose long
+  /// side is below 80 % of the declared one is set aside (only the largest
+  /// such copy is kept) and the next candidate is downloaded. When no
+  /// candidate is left the largest copy is imported and marked "非原图".
+  /// Returns `retry: true` when another candidate was enqueued, otherwise the
+  /// path to import.
+  Future<({bool retry, String path})> _checkResolution(
+    DownloadBatch batch,
+    DownloadJob job,
+    String path,
+  ) async {
+    final expectedWidth = job.expectedWidth;
+    final expectedHeight = job.expectedHeight;
+    if (!job.isImage ||
+        expectedWidth == null ||
+        expectedHeight == null ||
+        expectedWidth <= 0 ||
+        expectedHeight <= 0) {
+      return (retry: false, path: path);
+    }
+    final actual = await (imageSizeForTesting ?? readImageSize)(path);
+    if (actual == null ||
+        !isLowResolution(expectedWidth, expectedHeight, actual.width, actual.height)) {
+      // A full-size file: a smaller copy kept earlier is no longer needed.
+      final kept = job.lowResPath;
+      if (kept != null) {
+        job.lowResPath = null;
+        try {
+          await File(kept).delete();
+        } catch (_) {}
+      }
+      return (retry: false, path: path);
+    }
+    unawaited(DevLog.write(
+      'V16DL', // i18n:ignore 日志
+      'event=retry reason=low_resolution index=${job.itemIndex} '
+          'expected=${expectedWidth}x$expectedHeight '
+          'actual=${actual.width}x${actual.height} '
+          'candidate=${job.attempts}/${job.urls.length}',
+    ));
+    final pixels = actual.width * actual.height;
+    final previous = job.lowResPath;
+    if (previous == null || pixels > (job.lowResPixels ?? 0) || !await File(previous).exists()) {
+      final root = await (tempRootForTesting?.call() ?? getTemporaryDirectory());
+      final keep = File(
+        '${root.path}/easysave_lowres/${Uri.encodeComponent(job.key)}/'
+        'try${job.attempts}_${File(path).uri.pathSegments.last}',
+      );
+      await keep.parent.create(recursive: true);
+      try {
+        await File(path).rename(keep.path);
+      } on FileSystemException {
+        await File(path).copy(keep.path);
+        await File(path).delete();
+      }
+      if (previous != null) {
+        try {
+          await File(previous).delete();
+        } catch (_) {}
+      }
+      job
+        ..lowResPath = keep.path
+        ..lowResPixels = pixels;
+    } else {
+      try {
+        await File(path).delete();
+      } catch (_) {}
+    }
+    if (job.attempts < job.urls.length) {
+      await _persist(batch);
+      await _enqueueAttempt(batch, job);
+      return (retry: true, path: '');
+    }
+    final kept = job.lowResPath!;
+    job
+      ..lowResPath = null
+      ..notOriginal = true;
+    _log('low resolution: no larger candidate, keeping the largest index=${job.itemIndex}');
+    return (retry: false, path: kept);
+  }
+
   /// Fail [job] before it downloads when its known size does not fit.
   Future<bool> _storageBlocked(DownloadBatch batch, DownloadJob job) async {
     if (job.urls.isEmpty) return false;
@@ -1584,6 +1716,11 @@ class DownloadManager extends ChangeNotifier {
     if (path != null) {
       await remove(File(path));
       await remove(File('$path.xmp'));
+    }
+    final kept = job.lowResPath;
+    if (kept != null) {
+      await remove(File(kept));
+      job.lowResPath = null;
     }
     try {
       final root = await (tempRootForTesting?.call() ?? getTemporaryDirectory());
@@ -1850,7 +1987,7 @@ class DownloadManager extends ChangeNotifier {
         await DownloadClaims.isCancelled(batch.batchId)) {
       return;
     }
-    final String path;
+    String path;
     try {
       path = await task.filePath();
     } catch (_) {
@@ -1872,6 +2009,10 @@ class DownloadManager extends ChangeNotifier {
       itemIndex = meta['itemIndex'] as int?;
       isImage = meta['isImage'] as bool? ?? true;
     } catch (_) {}
+
+    final resolution = await _checkResolution(batch, job, path);
+    if (resolution.retry) return;
+    path = resolution.path;
 
     if (await shouldRetryForMissingAudio(job, path)) {
       unawaited(DevLog.write(
@@ -2194,6 +2335,16 @@ class DownloadManager extends ChangeNotifier {
       await _enqueueAttempt(batch, job);
       return;
     }
+    // A too-small copy kept from an earlier candidate beats no file at all.
+    final kept = job.lowResPath;
+    if (kept != null && await File(kept).exists()) {
+      _log('low resolution copy kept after failure index=${job.itemIndex}');
+      job
+        ..lowResPath = null
+        ..notOriginal = true;
+      await _importFile(batch, job, kept, isImage: job.isImage, itemIndex: job.itemIndex);
+      return;
+    }
     job.state = JobState.failed;
     job.error = update.responseStatusCode != null
         ? '下载失败（HTTP ${update.responseStatusCode}）'
@@ -2352,6 +2503,7 @@ class DownloadManager extends ChangeNotifier {
     }
     job.errorCode = null;
     job.expectedBytes = null;
+    job.notOriginal = false;
     try {
       final outcome = await (reparseForTesting?.call(batch.postUrl) ??
           parsePostOutcome(batch.postUrl,

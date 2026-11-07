@@ -350,8 +350,24 @@ List<Widget> coverBadges(
   required MediaItem? cover,
   required int fileCount,
   bool showInfo = true,
+  bool notOriginal = false,
 }) {
   final widgets = <Widget>[];
+  if (notOriginal) {
+    // A saved image smaller than the platform's declared size.
+    widgets.add(
+      const Positioned(
+        top: 34,
+        left: 8,
+        child: DarkBadge(
+          child: Text(
+            '非原图',
+            style: TextStyle(color: Colors.white, fontSize: 10),
+          ),
+        ),
+      ),
+    );
+  }
   if (showInfo && cover != null) {
     final kind = mediaKindLabel(cover);
     if (kind == 'LIVE' || kind == 'Live 图') {
@@ -554,7 +570,12 @@ class WaterfallPostCard extends StatelessWidget {
                         ),
                       ),
                     ),
-                    ...coverBadges(context, cover: cover, fileCount: fileCount),
+                    ...coverBadges(
+                      context,
+                      cover: cover,
+                      fileCount: fileCount,
+                      notOriginal: record.savedFiles.any((f) => f.notOriginal),
+                    ),
                     if (downloadProgress != null)
                       Positioned.fill(
                         child: DownloadingOverlay(
@@ -944,6 +965,14 @@ class AllMediaCard extends StatelessWidget {
                   top: 6,
                   left: 6,
                   child: _TranslucentBadge(label: badge),
+                ),
+              if (record.savedFiles.any(
+                (f) => f.itemIndex == itemIndex && f.notOriginal,
+              ))
+                const Positioned(
+                  top: 30,
+                  left: 6,
+                  child: _TranslucentBadge(label: '非原图'),
                 ),
               if (record.aiLabel != null)
                 Positioned(

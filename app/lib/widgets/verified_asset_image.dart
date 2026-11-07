@@ -15,15 +15,56 @@ class VerifiedAssetImage extends StatefulWidget {
   final BoxFit? fit;
   final double? width, height;
   final Future<bool> Function(String)? verifyExistence;
+
+  /// Test seam for the existence check of an asset.
+  @visibleForTesting
+  static Future<bool> Function(String id)? existenceForTesting;
+
+  /// Test seam for the decoded image of an asset.
+  @visibleForTesting
+  static ImageProvider Function(AssetEntity asset, bool isOriginal, ThumbnailSize size)?
+      providerForTesting;
+
+  /// The image provider this widget shows; the gallery keeps the same
+  /// provider alive so a revisited page reuses the decoded image.
+  static ImageProvider providerFor(
+    AssetEntity asset, {
+    bool isOriginal = false,
+    ThumbnailSize thumbnailSize = const ThumbnailSize.square(400),
+  }) =>
+      providerForTesting?.call(asset, isOriginal, thumbnailSize) ??
+      AssetEntityImageProvider(asset, isOriginal: isOriginal, thumbnailSize: thumbnailSize);
+
+  /// Assets confirmed present in this session; a revisited page renders
+  /// at once instead of waiting for another existence check.
+  static final Set<String> _knownPresent = {};
+
+  @visibleForTesting
+  static void resetKnownPresentForTesting() => _knownPresent.clear();
+
   @override
   State<VerifiedAssetImage> createState() => _VerifiedAssetImageState();
 }
 
 class _VerifiedAssetImageState extends State<VerifiedAssetImage> with WidgetsBindingObserver {
-  late Future<bool> _exists = (widget.verifyExistence ?? mediaExists)(widget.asset.id);
+  late Future<bool> _exists = _verify();
   bool _failed = false;
-  AssetEntityImageProvider get _provider => AssetEntityImageProvider(widget.asset,
+  ImageProvider get _provider => VerifiedAssetImage.providerFor(widget.asset,
       isOriginal: widget.isOriginal, thumbnailSize: widget.thumbnailSize);
+
+  Future<bool> _verify() async {
+    final id = widget.asset.id;
+    final present = await (widget.verifyExistence ??
+        VerifiedAssetImage.existenceForTesting ??
+        mediaExists)(id);
+    if (present) {
+      VerifiedAssetImage._knownPresent.add(id);
+    } else {
+      VerifiedAssetImage._knownPresent.remove(id);
+    }
+    return present;
+  }
+
   @override
   void initState() {
     super.initState();
@@ -37,14 +78,14 @@ class _VerifiedAssetImageState extends State<VerifiedAssetImage> with WidgetsBin
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
-      setState(() => _exists = (widget.verifyExistence ?? mediaExists)(widget.asset.id));
+      setState(() => _exists = _verify());
     }
   }
   @override
   void didUpdateWidget(VerifiedAssetImage old) {
     super.didUpdateWidget(old);
     if (old.asset.id != widget.asset.id) {
-      _exists = (widget.verifyExistence ?? mediaExists)(widget.asset.id);
+      _exists = _verify();
       _failed = false;
     }
   }
@@ -52,6 +93,7 @@ class _VerifiedAssetImageState extends State<VerifiedAssetImage> with WidgetsBin
     if (_failed) return;
     _failed = true;
     final id = widget.asset.id;
+    VerifiedAssetImage._knownPresent.remove(id);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       GalleryLocatorService.instance.markUnreadable(id);
       if (mounted && widget.asset.id == id) setState(() {});
@@ -60,6 +102,7 @@ class _VerifiedAssetImageState extends State<VerifiedAssetImage> with WidgetsBin
   @override
   Widget build(BuildContext context) => FutureBuilder<bool>(
     future: _exists,
+    initialData: VerifiedAssetImage._knownPresent.contains(widget.asset.id) ? true : null,
     builder: (context, snapshot) {
       if (_failed) return widget.fallback;
       if (snapshot.connectionState == ConnectionState.done && snapshot.data != true) {
@@ -72,18 +115,13 @@ class _VerifiedAssetImageState extends State<VerifiedAssetImage> with WidgetsBin
         // frame later. On layout switches the decoded local image is reused.
         return SizedBox(width: widget.width, height: widget.height);
       }
-      return AssetEntityImage(widget.asset, key: ValueKey(widget.asset.id), isOriginal: widget.isOriginal,
-        thumbnailSize: widget.thumbnailSize, fit: widget.fit,
+      // A local original is decoded straight away. While it decodes the area
+      // stays empty: no enlarged thumbnail and no loading indicator, which
+      // are reserved for remote previews of files not yet on this device.
+      return Image(image: _provider, key: ValueKey(widget.asset.id), fit: widget.fit,
         gaplessPlayback: true,
         width: widget.width, height: widget.height,
-        frameBuilder: widget.isOriginal ? (context, child, frame, synchronous) => frame != null || synchronous
-            ? child : Stack(alignment: Alignment.center, children: [
-                AssetEntityImage(widget.asset, isOriginal: false,
-                    thumbnailSize: widget.thumbnailSize, fit: widget.fit,
-                    width: widget.width, height: widget.height),
-                const CircularProgressIndicator(),
-              ]) : null,
-        errorBuilder: (_, __, ___) { _invalidate(); return widget.fallback; });
+        errorBuilder: (_, _, _) { _invalidate(); return widget.fallback; });
     },
   );
 }

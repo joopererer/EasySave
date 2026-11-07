@@ -814,9 +814,22 @@ List<(String, String)> formatParserProbe(dynamic probe) {
   if (probe is! Map || !_probeTags.contains(probe['tag'])) return const [];
   final tag = probe['tag'] as String;
   if (tag == 'XhsStreamProbe') {
-    final streams = probe['streams'];
-    if (streams is! List || streams.isEmpty) return const [];
+    final rawStreams = probe['streams'];
+    final streams = rawStreams is List ? rawStreams : const [];
+    final rawImages = probe['images'];
+    final images = rawImages is List ? rawImages : const [];
     return [
+      for (final (index, image) in images.indexed)
+        if (image is Map)
+          (
+            'XhsImageProbe',
+            'image=${index + 1}/${images.length} '
+                'declared=${_probeValue(image['width'])}x${_probeValue(image['height'])} '
+                'fields=${_probeValue(image['fields'])} '
+                'scenes=${_probeValue(image['scenes'])} '
+                'candidates=${_probeValue(image['candidates'])} '
+                'selected=${_probeValue(image['selected'])}',
+          ),
       for (final (index, stream) in streams.indexed)
         if (stream is Map)
           (

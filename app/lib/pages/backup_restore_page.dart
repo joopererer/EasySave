@@ -14,6 +14,7 @@ import '../services/history_rebuild_service.dart';
 import '../services/host_bridge.dart';
 import '../services/settings.dart';
 import '../widgets/restore_preview_sheet.dart';
+import '../widgets/restore_progress_dialog.dart';
 import 'download_queue_page.dart';
 
 class BackupRestorePage extends StatefulWidget {
@@ -28,6 +29,10 @@ class _BackupRestorePageState extends State<BackupRestorePage> with WidgetsBindi
   bool _loading = true;
   bool _hasFolderAccess = true;
   bool _backingUp = false;
+
+  /// A restore flow is running (picking, previewing or importing); the
+  /// restore button stays disabled until it ends.
+  bool _restoring = false;
 
   String? _folderDisplayName;
   bool _isPickingFolder = false;
@@ -221,6 +226,16 @@ class _BackupRestorePageState extends State<BackupRestorePage> with WidgetsBindi
   }
 
   Future<void> _handleRestoreFromFile() async {
+    if (_restoring) return;
+    setState(() => _restoring = true);
+    try {
+      await _restoreFromFile();
+    } finally {
+      if (mounted) setState(() => _restoring = false);
+    }
+  }
+
+  Future<void> _restoreFromFile() async {
     // 1. Unfinished downloads (either engine, stalled ones included) would be
     // overwritten by the restore. Never dead-end the user: offer the queue or
     // a one-tap cancel-all instead of a hard block.
@@ -348,14 +363,28 @@ class _BackupRestorePageState extends State<BackupRestorePage> with WidgetsBindi
     );
     if (previewResult == null || !mounted) return;
 
-    // 6. Execute Import
+    // 6. Execute Import with visible progress
     try {
-      final result = await BackupService.importBackup(
-        jsonStr,
-        settings: _settings,
-        restoreSettings: previewResult.restoreSettings,
-        checkOverlayPermission: (_) => BubbleService.hasPermission(),
-      );
+      final progress = ValueNotifier<(int, int)>((0, preview.postCount));
+      var progressOpen = true;
+      unawaited(showDialog<void>(
+        context: context,
+        barrierDismissible: false,
+        builder: (_) => RestoreProgressDialog(progress: progress),
+      ).whenComplete(() => progressOpen = false));
+      final ImportResult result;
+      try {
+        result = await BackupService.importBackup(
+          jsonStr,
+          settings: _settings,
+          restoreSettings: previewResult.restoreSettings,
+          checkOverlayPermission: (_) => BubbleService.hasPermission(),
+          onProgress: (done, total) => progress.value = (done, total),
+        );
+      } finally {
+        if (mounted && progressOpen) Navigator.of(context, rootNavigator: true).pop();
+        progress.dispose();
+      }
 
       await _loadState();
       HostBridge.historyRevision.value = HostBridge.historyRevision.value + 1;
@@ -366,14 +395,7 @@ class _BackupRestorePageState extends State<BackupRestorePage> with WidgetsBindi
         context: context,
         builder: (ctx) => AlertDialog(
           title: const Text('恢复结果'),
-          content: Text(
-            '恢复完成！\n\n'
-            '· 新增记录：${result.insertedPosts} 条\n'
-            '· 合并记录：${result.mergedPosts} 条\n'
-            '· 跳过记录：${result.skippedPosts} 条\n'
-            '· 恢复媒体文件：${result.restoredFiles} 个'
-            '${result.overlayNotice ? '\n\n提示：由于系统未授予悬浮窗权限，悬浮球已设为关闭，可在权限管理中授权后开启。' : ''}',
-          ),
+          content: Text(restoreSummaryText(result)),
           actions: [
             TextButton(
               onPressed: () => Navigator.of(ctx).pop(),
@@ -669,8 +691,8 @@ class _BackupRestorePageState extends State<BackupRestorePage> with WidgetsBindi
                     ),
                   ),
                   trailing: FilledButton(
-                    onPressed: _handleRestoreFromFile,
-                    child: const Text('从文件恢复'),
+                    onPressed: _restoring ? null : _handleRestoreFromFile,
+                    child: Text(_restoring ? '恢复中…' : '从文件恢复'),
                   ),
                 ),
               );

@@ -27,6 +27,7 @@ class HistoryFile {
     this.itemCount,
     this.capturedBy,
     this.size,
+    this.notOriginal = false,
   });
 
   final String filename;
@@ -61,6 +62,10 @@ class HistoryFile {
   /// verify a mediaId hint after a backup restore.
   final int? size;
 
+  /// Every download candidate was clearly smaller than the declared size; the
+  /// largest one was kept. History marks the file "非原图".
+  final bool notOriginal;
+
   Map<String, Object?> toMap() => {
     'filename': filename,
     'saved_at': savedAt,
@@ -73,6 +78,7 @@ class HistoryFile {
     if (itemCount != null) 'item_count': itemCount,
     if (capturedBy != null) 'captured_by': capturedBy,
     if (size != null) 'size': size,
+    if (notOriginal) 'not_original': 1,
   };
 
   factory HistoryFile.fromMap(Map<String, Object?> map) => HistoryFile(
@@ -90,6 +96,7 @@ class HistoryFile {
     itemCount: (map['item_count'] as num?)?.toInt(),
     capturedBy: map['captured_by'] as String?,
     size: (map['size'] as num?)?.toInt(),
+    notOriginal: (map['not_original'] as num?)?.toInt() == 1,
   );
 
   HistoryFile copyWith({
@@ -104,6 +111,7 @@ class HistoryFile {
     int? itemCount,
     String? capturedBy,
     int? size,
+    bool? notOriginal,
   }) => HistoryFile(
     filename: filename ?? this.filename,
     savedAt: savedAt ?? this.savedAt,
@@ -116,6 +124,7 @@ class HistoryFile {
     itemCount: itemCount ?? this.itemCount,
     capturedBy: capturedBy ?? this.capturedBy,
     size: size ?? this.size,
+    notOriginal: notOriginal ?? this.notOriginal,
   );
 }
 

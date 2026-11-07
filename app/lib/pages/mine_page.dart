@@ -34,6 +34,9 @@ class MinePage extends StatefulWidget {
 class _MinePageState extends State<MinePage> with WidgetsBindingObserver {
   final Map<String, bool> _loggedIn = {for (final p in loginSiteIds) p: false};
   SessionStatus? _xhsStatus;
+
+  /// Platforms being re-checked individually (the initial load checks all).
+  final Set<String> _checking = {};
   bool _checkingLogin = true;
   AppSettings _settings = AppSettings();
   String _version = '';
@@ -742,7 +745,7 @@ class _MinePageState extends State<MinePage> with WidgetsBindingObserver {
             child: Column(
               children: [
                 for (final platform in loginSiteIds)
-                  if (_checkingLogin)
+                  if (_checkingLogin || _checking.contains(platform))
                     ListTile(
                       leading: PlatformIcon(platform: platform),
                       title: Text(platformLabel(platform)),
@@ -760,13 +763,23 @@ class _MinePageState extends State<MinePage> with WidgetsBindingObserver {
                       subtitle: _loginSubtitle(platform),
                       trailing:
                           platform == 'xhs' && _xhsStatus == SessionStatus.unknown
-                          ? TextButton(
-                              onPressed: () async {
-                                setState(() => _checkingLogin = true);
-                                try { await _refreshPlatform(platform); }
-                                finally { if (mounted) setState(() => _checkingLogin = false); }
-                              },
-                              child: const Text('重新检查'),
+                          // A session cookie exists but its page state could
+                          // not be read: re-check this platform only, or log in.
+                          ? Wrap(
+                              children: [
+                                TextButton(
+                                  onPressed: () async {
+                                    setState(() => _checking.add(platform));
+                                    try { await _refreshPlatform(platform); }
+                                    finally { if (mounted) setState(() => _checking.remove(platform)); }
+                                  },
+                                  child: const Text('重新检查'),
+                                ),
+                                TextButton(
+                                  onPressed: () => _openLogin(platform),
+                                  child: const Text('去登录'),
+                                ),
+                              ],
                             )
                           : platform == 'xhs' && (_loggedIn[platform] ?? false)
                           ? Wrap(

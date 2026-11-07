@@ -1,5 +1,5 @@
 {
-  "manifestVersion": 8,
+  "manifestVersion": 9,
   "parserAbi": 1,
   "minAppVersion": "1.9.0",
   "parserUrlTemplate": "https://github.com/joopererer/EasySave/releases/download/parser-v{parserVersion}/parser.js",

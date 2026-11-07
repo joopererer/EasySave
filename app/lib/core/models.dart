@@ -47,6 +47,7 @@ class MediaItem {
     this.height,
     this.duration,
     this.fallbacks = const [],
+    this.downloadOrder = const [],
     this.requestResources,
     this.localFilename,
     this.localVideoFilename,
@@ -73,6 +74,9 @@ class MediaItem {
     duration: json['duration'] as num?,
     fallbacks:
         (json['fallbacks'] as List?)?.whereType<String>().toList() ?? const [],
+    downloadOrder:
+        (json['downloadOrder'] as List?)?.whereType<String>().toList() ??
+        const [],
   );
 
   final String type;
@@ -100,6 +104,11 @@ class MediaItem {
   /// Never serialized: toJson must keep matching the spec fixtures exactly.
   final List<String> fallbacks;
 
+  /// URLs to download, best first, when the parser ranks them (XHS images:
+  /// original resolution first, preview variants never). Empty means the
+  /// site's url/fallbacks order applies.
+  final List<String> downloadOrder;
+
   /// v2 request declarations. Deliberately excluded from legacy/history/backup
   /// JSON; step 2 will persist task requirements separately, never Cookie values.
   final List<MediaRequestResource>? requestResources;
@@ -124,6 +133,7 @@ class MediaItem {
     if (fallbacks.isNotEmpty) {
       map['fallbacks'] = fallbacks;
     }
+    if (downloadOrder.isNotEmpty) map['downloadOrder'] = downloadOrder;
     return map;
   }
 }

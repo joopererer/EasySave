@@ -24,6 +24,9 @@ class ImportResult {
   final int mergedPosts;
   final int skippedPosts;
 
+  /// Backup files with no matching album file on this device.
+  final int notOnDevice;
+
   ImportResult({
     required this.restoredPosts,
     required this.restoredFiles,
@@ -32,6 +35,7 @@ class ImportResult {
     this.insertedPosts = 0,
     this.mergedPosts = 0,
     this.skippedPosts = 0,
+    this.notOnDevice = 0,
   });
 }
 
@@ -210,6 +214,7 @@ abstract final class BackupService {
     bool restoreSettings = false,
     FutureOr<bool> Function(String)? checkOverlayPermission,
     RestoreAlbum? album,
+    void Function(int done, int total)? onProgress,
   }) async {
     final decoded = jsonDecode(jsonStr);
     if (decoded is! Map) {
@@ -226,8 +231,13 @@ abstract final class BackupService {
     var skippedPosts = 0;
     final via = <RestoreMatchVia, int>{};
     var notOnDevice = 0;
+    final total = data.posts.length;
+    var done = 0;
+    onProgress?.call(0, total);
 
     for (final post in data.posts) {
+      if (done > 0) onProgress?.call(done, total);
+      done++;
       final appPlatform = toAppPlatform(post.platform);
       final postUrl = post.originalUrl.trim().isNotEmpty
           ? post.originalUrl
@@ -332,6 +342,7 @@ abstract final class BackupService {
 
       await database.upsert(record, restoreDeleted: true, source: 'backup-restore');
     }
+    onProgress?.call(total, total);
     unawaited(DevLog.write('BackupRestore', 'event=done schema=${data.schemaVersion} '
         'posts=${data.posts.length} inserted=$insertedPosts merged=$mergedPosts '
         'skipped=$skippedPosts files=$restoredFilesCount indexed=${indexed ? 1 : 0} '
@@ -396,6 +407,7 @@ abstract final class BackupService {
       insertedPosts: insertedPosts,
       mergedPosts: mergedPosts,
       skippedPosts: skippedPosts,
+      notOnDevice: notOnDevice,
     );
   }
 }

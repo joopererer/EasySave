@@ -323,20 +323,8 @@ Future<String> cookieHeaderFor(List<String> urls) async {
 }
 
 /// True when the persistent cookie store holds a session cookie.
-Future<bool> isLoggedIn(String platform) async {
-  try {
-    final cookieManager = CookieManager.instance();
-    final urls = _cookieUrls(platform).map(WebUri.new);
-
-    for (final u in urls) {
-      final cookies = await cookieManager.getCookies(url: u);
-      if (cookies.any((c) => _isSessionCookie(platform, c.name))) return true;
-    }
-    return false;
-  } catch (_) {
-    return false;
-  }
-}
+Future<bool> isLoggedIn(String platform) async =>
+    await hasSessionCookie(platform) == true;
 
 /// Test seam for the cookie store's names at a URL; production leaves it null.
 @visibleForTesting
@@ -421,7 +409,39 @@ Future<bool> checkLogin(
 
 /// Probe each origin in a separate WebView using domain-scoped cookies from
 /// Android's shared WebView cookie store.
+/// Whether a configured session cookie *name* exists on any of [platform]'s
+/// cookie URLs (both XHS domains for xhs). Null when the store fails. Values
+/// are never read.
+Future<bool?> hasSessionCookie(String platform) async {
+  try {
+    for (final url in _cookieUrls(platform)) {
+      final names = await (cookieNamesReaderForTesting?.call(url) ??
+          CookieManager.instance()
+              .getCookies(url: WebUri(url))
+              .then((cookies) => [for (final c in cookies) c.name]));
+      if (names.any((name) => _isSessionCookie(platform, name))) return true;
+    }
+    return false;
+  } catch (_) {
+    return null;
+  }
+}
+
 Future<SessionStatus> probeXhsSessions({String entry = 'unspecified'}) async {
+  // No session cookie on either domain is a definite "not logged in"; only a
+  // present cookie needs the page state to tell valid from unknown.
+  if (await hasSessionCookie('xhs') == false) {
+    await _logXhsCheck(
+      entry: entry,
+      condition: 'no_session_cookie',
+      result: 'invalid',
+    );
+    for (final domain in _xhsDomains) {
+      await saveXhsDomainStatus(domain, SessionStatus.invalid);
+    }
+    await AccountCache.clear('xhs');
+    return SessionStatus.invalid;
+  }
   final urls = xhsProbeUrls();
   if (urls.length != 2 ||
       urls.map((url) => xhsDomain(Uri.tryParse(url)?.host)).toSet().length !=

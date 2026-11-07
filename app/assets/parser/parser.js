@@ -692,6 +692,60 @@ var EasySaveParser = (() => {
     }
     return void 0;
   }
+  function xhsImageVariant(url) {
+    let parsed;
+    try {
+      parsed = new URL(url);
+    } catch {
+      return "other";
+    }
+    const host = parsed.hostname.toLowerCase();
+    const bang = parsed.pathname.indexOf("!");
+    const style = bang >= 0 ? parsed.pathname.slice(bang + 1).toLowerCase() : "";
+    if (/prv/.test(style) || /(?:^|[^a-z])prv(?:[^a-z]|$)/i.test(parsed.search)) return "preview";
+    if (host === "ci.xiaohongshu.com") {
+      if (/imageView2/i.test(parsed.search) && !/thumbnail|\/w\/|\/h\//i.test(parsed.search)) return "jpeg";
+      return parsed.search || style ? "other" : "original_ci";
+    }
+    if (host.endsWith(".xhscdn.com") && !style && !parsed.search && host.startsWith("sns-img-")) return "original";
+    if (/dft/.test(style)) return "default";
+    return "other";
+  }
+  var VARIANT_RANK = {
+    jpeg: 0,
+    original: 1,
+    original_ci: 2,
+    default: 3,
+    other: 4
+  };
+  function xhsImageDownloadOrder(url, fallbacks = []) {
+    const unique = [...new Set([url, ...fallbacks].filter((u) => typeof u === "string" && u.length > 0))];
+    return unique.map((u, index) => ({ u, index, variant: xhsImageVariant(u) })).filter((c) => c.variant !== "preview").sort((a, b) => VARIANT_RANK[a.variant] - VARIANT_RANK[b.variant] || a.index - b.index).map((c) => c.u);
+  }
+  var IMAGE_FIELDS = ["urlDefault", "urlPre", "url", "infoList", "traceId", "fileId", "livePhoto", "stream"];
+  function xhsImageProbe(note) {
+    if (!isRecord(note)) return [];
+    const list = note["imageList"] ?? note["images"];
+    if (!Array.isArray(list)) return [];
+    return list.flatMap((entry, index) => {
+      if (!isRecord(entry)) return [];
+      const resolved = imageUrlOf(entry);
+      const order = resolved ? xhsImageDownloadOrder(resolved.url, resolved.fallbacks) : [];
+      const info = Array.isArray(entry["infoList"]) ? entry["infoList"] : [];
+      const probe = {
+        index: index + 1,
+        fields: IMAGE_FIELDS.filter((key) => entry[key] !== void 0 && entry[key] !== null && entry[key] !== ""),
+        scenes: info.flatMap((e) => isRecord(e) && typeof e["imageScene"] === "string" ? [e["imageScene"]] : []),
+        candidates: order.map(xhsImageVariant)
+      };
+      const width = num(entry["width"]);
+      const height = num(entry["height"]);
+      if (width !== void 0) probe.width = width;
+      if (height !== void 0) probe.height = height;
+      if (probe.candidates.length > 0) probe.selected = probe.candidates[0];
+      return [probe];
+    });
+  }
 
   // src/instagram.ts
   var SHORTCODE_PATTERN = /\/(?:p|reels?|tv)\/([A-Za-z0-9-_]+)/;
@@ -1717,6 +1771,9 @@ var EasySaveParser = (() => {
       parse: (c) => c.statusCode === 404 ? { ok: false, error: failure2("PRIVATE_OR_UNAVAILABLE", "Post is unavailable or private") } : parseX(c.input || "", c.url)
     },
     xhs: {
+      // App-only download order: original resolution first, preview scenes
+      // (WB_PRV / H5_PRV / !nd_prv) never. The legacy url/fallbacks stay as-is.
+      decorate: (result) => !result?.ok || !Array.isArray(result.data?.items) ? result : { ...result, data: { ...result.data, items: result.data.items.map((item) => item.type === "video" ? item : { ...item, downloadOrder: xhsImageDownloadOrder(item.url, item.fallbacks ?? []) }) } },
       ready: (c) => {
         const state = page().__INITIAL_STATE__;
         if (!state) return false;
@@ -1730,7 +1787,7 @@ var EasySaveParser = (() => {
       probe: (c) => {
         const id = /\/(?:explore|discovery\/item|user\/profile\/[^/]+)\/([a-zA-Z0-9]+)/.exec(c.url)?.[1];
         const note = findNoteInStates([page().__INITIAL_STATE__], id);
-        return { tag: "XhsStreamProbe", streams: xhsStreamProbe(note?.["video"]) };
+        return { tag: "XhsStreamProbe", streams: xhsStreamProbe(note?.["video"]), images: xhsImageProbe(note) };
       },
       probeSession: (c) => {
         if ((c.statusCode || 0) >= 300 && (c.statusCode || 0) < 400) return !(c.location || "").includes("/login");
@@ -1771,11 +1828,12 @@ var EasySaveParser = (() => {
   };
   function moduleCall(moduleId, hook, context) {
     if (!Object.hasOwn(modules, moduleId)) throw new Error("UNSUPPORTED_MODULE");
+    if (hook === "decorate") throw new Error("UNSUPPORTED_HOOK");
     if (hook === "classify" && context.error?.code === "PRIVATE_OR_UNAVAILABLE" && context.site.auth.mode !== "none" && !context.loggedIn && moduleId !== "x") {
       context = { ...context, error: failure2("LOGIN_REQUIRED", "\u53EF\u80FD\u9700\u8981\u767B\u5F55" + context.site.displayName) };
     }
     const module = modules[moduleId];
-    const output = (value) => JSON.stringify({ value: hook === "parse" || hook === "parsePage" ? withMediaResources(value, context.site, (url) => module.expiresAt?.({ ...context, url })) : value });
+    const output = (value) => JSON.stringify({ value: hook === "parse" || hook === "parsePage" ? withMediaResources(module.decorate ? module.decorate(value) : value, context.site, (url) => module.expiresAt?.({ ...context, url })) : value });
     if (Object.hasOwn(module, hook)) return output(module[hook](context) ?? null);
     switch (hook) {
       case "install":
