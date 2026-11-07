@@ -128,3 +128,44 @@ for in-progress placeholders).
   build 29, none in new code.
 - Parser, extension and spec files are unchanged in this round; their suites were
   not rerun.
+
+## APK
+
+`app/build/app/outputs/flutter-apk/EasySave-1.10.0-build30-debug.apk`,
+**173,661,053 bytes**, `com.james.easysave` **1.10.0 (30)**, built from
+**e629237d0e98c37bbc235a04e102ef2350edc2d0**.
+SHA-256 `e09ba83ad407960e5fd90a8a17d4b233de5e062aa5e2e0e163627c44e4c7b470`.
+`apksigner verify` passes; certificate SHA-256
+`7ec6c14f1c8c9fff6de9a31fda73150c12db7c81c98ee8017960d838aecb3484` (same as
+builds 27–29). `tools/verify_build30_apk.py` passes: builtin parser 1.4.12 / 8
+bytes and digest unchanged; six changed Dart sources (including
+`history_cards.dart`, `history_page.dart`, `gallery_locator_service.dart`) are
+embedded byte-for-byte; the DEX contains `MediaStoreBridge` and its companion
+registration, `savedMediaIndex`, `storageInfo`, `mediaSize` and the owner column
+(`app/build/build30/apk-verification.json`).
+
+The commits are local on feature/v1.10; nothing was pushed (no parser change,
+so this round only builds build 30).
+
+## Device retest steps
+
+1. Cover-install build 30 without clearing data; confirm 1.10.0 (30) and parser
+   1.4.12 / 8 (no parser update expected).
+2. 本地已有: in the App download 3 items of `xhslink.cn/o/2UN2COpb1Ov`, then open
+   the overlay "选择下载" for the same link. The same 3 items must be marked. Export
+   logs: `[SavedLookup] engine=background method=native permission=<granted|
+   partial|denied> owned=` with `saved=3`. Repeat with album permission revoked
+   (Settings → Apps → EasySave → Photos) — own saves must still be marked.
+3. Storage: with little free space, download the ~1 GB X video. Expect an
+   immediate failure "存储空间不足，需要约 X GB", the post in history with
+   "下载失败（存储空间不足），点击重试", no growing temp data, and
+   `[V16DL] preflight ... result=STORAGE_FULL` plus `cleanup bytes=`.
+4. Free space, tap the history card to retry: it must download, appear once in
+   the album and in history, and no new failure may appear afterwards. If an
+   earlier attempt had already put the file in the album, the retry must link it
+   (`retry reused album copy`) instead of downloading again.
+5. Large file with enough space: the import may take minutes; the queue must not
+   show a failure while the album copy completes (or, if it does time out,
+   `late import done` must follow and the failure clear).
+6. Meanwhile an XHS download must not stall. Regress XHS, IG, X and TikTok
+   downloads and the build 29 items (waterfall reorder, X login data, XHS audio).
