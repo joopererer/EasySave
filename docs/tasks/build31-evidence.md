@@ -78,3 +78,51 @@ no `items`, provenance facts on the file instead of the nested object).
 - `dart analyze --no-fatal-warnings lib` exits 0; 61 diagnostics, unchanged,
   none in new code.
 - Parser and extension are unchanged; their suites were not rerun.
+
+## APK
+
+`app/build/app/outputs/flutter-apk/EasySave-1.10.0-build31-debug.apk`,
+**173,685,709 bytes**, `com.james.easysave` **1.10.0 (31)**, built from
+**e507ba4f2c6df72ecab84abca81853854ea0f9a7**.
+SHA-256 `73d29d6556fbfb9be4727946eacad11547b3726360da2c961edbf234e173426f`.
+`apksigner verify` passes; certificate SHA-256
+`7ec6c14f1c8c9fff6de9a31fda73150c12db7c81c98ee8017960d838aecb3484` (same as
+builds 27–30). `tools/verify_build31_apk.py` passes: builtin parser 1.4.12 / 8
+unchanged; nine changed Dart sources (backup service/model/matcher/SAF,
+history_db, url_normalizer, clipboard_guard, history_cards, history_page) are
+embedded byte-for-byte; the DEX contains the bridge's `mediaSizes`
+(`app/build/build31/apk-verification.json`).
+
+## Device retest steps
+
+Keep a copy of an existing (v1) backup before starting: in Mine → 备份与恢复,
+export once with build 30 if none exists yet, or copy the newest file from the
+SAF backup folder.
+
+1. Cover-install build 31 without clearing data; confirm 1.10.0 (31) and parser
+   1.4.12 / 8. History must open normally (database upgrades to version 6).
+2. **Export**: 备份与恢复 → 导出备份. Open the file in a text viewer and check:
+   `"schemaVersion": 2`; each post has `canonicalUrl`
+   (`https://www.xiaohongshu.com/explore/<id>` also for rednote links) and
+   `originalUrl` (xsec_token kept); `status` is `success`, `partial` or
+   `failed`; files have `size`, `assetId`, `mediaIdHint`; there is no `items`,
+   `thumbnailUrl`, `provenance`, and no `xhscdn.com`, `twimg.com`,
+   `cdninstagram`, `tiktokcdn` or `sign=` anywhere. Compare the size with the
+   v1 file. A failed download (e.g. the storage-full X post) appears with
+   `"status": "failed"`.
+3. **Restore the old (v1) backup** on the same phone: it must import without
+   error; history shows the same posts; saved files open; posts without files
+   show "下载失败，点击重试". Export again: the new file is v2 and has no media
+   URL.
+4. **Restore the new (v2) backup**: run it twice; post count, file count and
+   cards must be identical after each run (no duplicates). Export logs and check
+   `[BackupRestore] event=done ... viaProvenance= viaFilename= viaMediaIdHint=
+   notOnDevice=`.
+5. On a failed post card tap "下载失败，点击重试": it re-parses the original link
+   and opens the preview to download.
+6. Optional, on a second device or after reinstalling: restore the v2 backup;
+   files present in the album are linked (thumbnails open), missing ones show as
+   not on this device; no card shows another post's image.
+7. Regress: XHS rednote and xiaohongshu links of the same note are recognized as
+   one post (already-downloaded prompt), and download / overlay behaviour from
+   builds 29–30.
