@@ -13,6 +13,21 @@ import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 const _id = '6ad2f7050000000012034042';
 
+/// Every released normalization vector file the App must satisfy. 0.1.9 is a
+/// purely additive release (Douyin vectors); the App only enables the site
+/// rules it ships, so the Douyin cases are checked against the package's
+/// normalization, not against the App's site registry.
+const _vectorFiles = ['urls-0.1.8.json', 'urls-0.1.9.json'];
+
+List<Map> _readVectors() => [
+  for (final name in _vectorFiles)
+    ...((jsonDecode(
+              File('../docs/provenance-spec/test-vectors/$name').readAsStringSync(),
+            ) as Map)['cases']
+            as List)
+        .cast<Map>(),
+];
+
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
   setUpAll(() {
@@ -20,23 +35,40 @@ void main() {
     databaseFactory = databaseFactoryFfi;
   });
 
-  final vectors = (jsonDecode(
-    File('../docs/provenance-spec/test-vectors/urls-0.1.8.json').readAsStringSync(),
-  ) as Map)['cases'] as List;
+  final vectors = _readVectors();
 
-  test('the App depends on provenance-spec 0.1.8', () {
-    expect(provenanceSpecVersion, '0.1.8');
+  test('the App depends on provenance-spec 0.1.9', () {
+    expect(provenanceSpecVersion, '0.1.9');
   });
 
-  test('normalizeUrl passes every urls-0.1.8 vector', () {
-    for (final c in vectors.cast<Map>()) {
+  test('normalizeUrl passes every released vector (0.1.8 and 0.1.9)', () {
+    for (final c in vectors) {
       expect(normalizeUrl(c['in'] as String), c['out'], reason: c['in'] as String);
     }
   });
 
+  test('the 0.1.9 release is additive: every previous vector is unchanged', () {
+    final previous = {
+      for (final c in (jsonDecode(
+                File('../docs/provenance-spec/test-vectors/urls-0.1.8.json')
+                    .readAsStringSync(),
+              ) as Map)['cases']
+              as List)
+        (c as Map)['in'] as String: c['out'] as String,
+    };
+    final current = {
+      for (final c in vectors) c['in'] as String: c['out'] as String,
+    };
+    previous.forEach((input, out) => expect(current[input], out, reason: input));
+  });
+
   test('App canonical URL and sourceId agree with the spec for every valid '
       'Xiaohongshu note vector', () {
-    for (final c in vectors.cast<Map>().where((c) => c['id'] != null)) {
+    final xhs = vectors.where(
+      (c) => c['id'] != null && c['platform'] == 'xiaohongshu',
+    );
+    expect(xhs, isNotEmpty);
+    for (final c in xhs) {
       final input = c['in'] as String;
       expect(SiteRegistry.current.canonicalUrl(input), c['out'], reason: input);
       expect(postIdOfUrl(input), c['id'], reason: input);
@@ -99,4 +131,3 @@ void main() {
     expect((await db.getByPostId('legacy-row'))!.postUrl, old);
   });
 }
-
