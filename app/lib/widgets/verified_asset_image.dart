@@ -1,13 +1,16 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:photo_manager/photo_manager.dart';
 import 'package:photo_manager_image_provider/photo_manager_image_provider.dart';
 import '../services/gallery_locator_service.dart';
 import '../services/verified_media.dart';
+import 'progressive_asset_image.dart';
 
 class VerifiedAssetImage extends StatefulWidget {
   const VerifiedAssetImage(this.asset, {super.key, required this.fallback,
     this.isOriginal = false, this.thumbnailSize = const ThumbnailSize.square(400),
-    this.fit, this.width, this.height, this.verifyExistence});
+    this.fit, this.width, this.height, this.verifyExistence,
+    this.placeholderColor, this.highResolution});
   final AssetEntity asset;
   final Widget fallback;
   final bool isOriginal;
@@ -15,6 +18,15 @@ class VerifiedAssetImage extends StatefulWidget {
   final BoxFit? fit;
   final double? width, height;
   final Future<bool> Function(String)? verifyExistence;
+
+  /// Colour of the cover area before any frame exists; the caller passes the
+  /// platform-tinted cover colour so a new cover never shows an empty (black)
+  /// rectangle.
+  final Color? placeholderColor;
+
+  /// The viewer reports "zoomed past the high-resolution threshold" here; the
+  /// original is decoded on demand and released when it goes back to false.
+  final ValueListenable<bool>? highResolution;
 
   /// Test seam for the existence check of an asset.
   @visibleForTesting
@@ -25,15 +37,53 @@ class VerifiedAssetImage extends StatefulWidget {
   static ImageProvider Function(AssetEntity asset, bool isOriginal, ThumbnailSize size)?
       providerForTesting;
 
-  /// The image provider this widget shows; the gallery keeps the same
-  /// provider alive so a revisited page reuses the decoded image.
+  /// The image provider for one tier of an asset. With [screenPixels] an
+  /// original is decoded at the screen size instead of its own pixels; the
+  /// result is value-equal across rebuilds, so the gallery keeps the same
+  /// provider alive and a revisited page reuses the decoded image.
   static ImageProvider providerFor(
     AssetEntity asset, {
     bool isOriginal = false,
     ThumbnailSize thumbnailSize = const ThumbnailSize.square(400),
-  }) =>
-      providerForTesting?.call(asset, isOriginal, thumbnailSize) ??
-      AssetEntityImageProvider(asset, isOriginal: isOriginal, thumbnailSize: thumbnailSize);
+    Size? screenPixels,
+  }) {
+    final seam = providerForTesting;
+    if (seam != null) return seam(asset, isOriginal, thumbnailSize);
+    if (isOriginal && screenPixels != null) {
+      return screenSizedAssetProvider(
+        asset,
+        decodeTargetFor(
+          imageWidth: asset.width,
+          imageHeight: asset.height,
+          screenPixels: screenPixels,
+        ),
+      );
+    }
+    return AssetEntityImageProvider(
+      asset,
+      isOriginal: isOriginal,
+      thumbnailSize: thumbnailSize,
+    );
+  }
+
+  /// The system thumbnail underlay of the fullscreen viewer: same box as the
+  /// screen-size decode, served by MediaStore in a few milliseconds.
+  static ImageProvider underlayFor(
+    AssetEntity asset, {
+    required Size screenPixels,
+  }) {
+    final target = decodeTargetFor(
+      imageWidth: asset.width,
+      imageHeight: asset.height,
+      screenPixels: screenPixels,
+    );
+    final seam = providerForTesting;
+    if (seam != null) {
+      return seam(asset, false, ThumbnailSize(target.width.round(),
+          target.height.round()));
+    }
+    return systemThumbnailProvider(asset, target);
+  }
 
   /// Assets confirmed present in this session; a revisited page renders
   /// at once instead of waiting for another existence check.
@@ -49,8 +99,13 @@ class VerifiedAssetImage extends StatefulWidget {
 class _VerifiedAssetImageState extends State<VerifiedAssetImage> with WidgetsBindingObserver {
   late Future<bool> _exists = _verify();
   bool _failed = false;
-  ImageProvider get _provider => VerifiedAssetImage.providerFor(widget.asset,
-      isOriginal: widget.isOriginal, thumbnailSize: widget.thumbnailSize);
+
+  /// The sharpest tier this widget asks for in the current build.
+  ImageProvider _providerFor(BuildContext context) =>
+      VerifiedAssetImage.providerFor(widget.asset,
+          isOriginal: widget.isOriginal,
+          thumbnailSize: widget.thumbnailSize,
+          screenPixels: widget.isOriginal ? screenPixelSize(context) : null);
 
   Future<bool> _verify() async {
     final id = widget.asset.id;
@@ -105,23 +160,46 @@ class _VerifiedAssetImageState extends State<VerifiedAssetImage> with WidgetsBin
     initialData: VerifiedAssetImage._knownPresent.contains(widget.asset.id) ? true : null,
     builder: (context, snapshot) {
       if (_failed) return widget.fallback;
+      final provider = _providerFor(context);
       if (snapshot.connectionState == ConnectionState.done && snapshot.data != true) {
         // A decoded thumbnail is display-only: a fresh negative lookup wins.
-        PaintingBinding.instance.imageCache.evict(_provider);
+        PaintingBinding.instance.imageCache.evict(provider);
         return widget.fallback;
       }
-      if (snapshot.data != true && !PaintingBinding.instance.imageCache.statusForKey(_provider).keepAlive) {
-        // Do not start a CDN image and then replace it with a local image a
-        // frame later. On layout switches the decoded local image is reused.
-        return SizedBox(width: widget.width, height: widget.height);
+      final resolved = snapshot.data == true ||
+          PaintingBinding.instance.imageCache.statusForKey(provider).keepAlive;
+      if (!resolved) {
+        // Still checking and nothing decoded yet: keep the cover area in the
+        // placeholder colour instead of an empty rectangle.
+        return SizedBox(
+          width: widget.width,
+          height: widget.height,
+          child: ColoredBox(
+            color: widget.placeholderColor ??
+                Theme.of(context).colorScheme.surfaceContainerHighest,
+          ),
+        );
       }
-      // A local original is decoded straight away. While it decodes the area
-      // stays empty: no enlarged thumbnail and no loading indicator, which
-      // are reserved for remote previews of files not yet on this device.
-      return Image(image: _provider, key: ValueKey(widget.asset.id), fit: widget.fit,
-        gaplessPlayback: true,
-        width: widget.width, height: widget.height,
-        errorBuilder: (_, _, _) { _invalidate(); return widget.fallback; });
+      final screen = screenPixelSize(context);
+      // A local original of the viewer is decoded at the screen size; the
+      // system thumbnail under it makes a swipe show pixels immediately.
+      final ImageProvider? underlay = widget.isOriginal
+          ? VerifiedAssetImage.underlayFor(widget.asset, screenPixels: screen)
+          : null;
+      return ProgressiveAssetImage(
+        key: ValueKey(widget.asset.id),
+        sharp: provider,
+        underlay: underlay,
+        original: widget.isOriginal
+            ? VerifiedAssetImage.providerFor(widget.asset, isOriginal: true)
+            : null,
+        highResolution: widget.isOriginal ? widget.highResolution : null,
+        fit: widget.fit ?? BoxFit.cover,
+        width: widget.width,
+        height: widget.height,
+        placeholderColor: widget.placeholderColor,
+        onError: _invalidate,
+      );
     },
   );
 }

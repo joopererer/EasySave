@@ -31,6 +31,12 @@ This draft is compiled from task documents and handover notes in `docs/tasks/` a
   Improved original-image selection on Xiaohongshu and added a warning when images are smaller than the dimensions declared by the post.
 - Instagram 来源信息不再将可变的用户名作为稳定作者标识。
   Instagram provenance information no longer treats mutable usernames as stable author identifiers.
+- 历史页“按作者”增加排序：帖子数、最近修改时间（该作者最近一次保存）和名字，各自支持正序与倒序，默认最近修改时间倒序，选择会记住。
+  Added sorting to the history "by author" view: post count, most recent save, and name, each ascending or descending; the most recent save first is the default and the choice is remembered.
+- 历史页封面先显示占位底色（本地文件优先使用系统缩略图），解码完成后淡入，不再闪一帧黑屏。
+  History covers now show a placeholder colour first (system thumbnails for local files) and fade in when decoded, instead of flashing a black frame.
+- 浏览已保存的大图时按屏幕尺寸解码，切换瞬间先用系统缩略图垫底；双指放大超过约 2 倍时再加载原图细节，缩小后释放。
+  Saved full-screen images are now decoded at screen size, with the system thumbnail underneath while switching; zooming past about 2x loads the original detail and releases it again when zoomed out.
 
 ### 修复 / Fixed
 

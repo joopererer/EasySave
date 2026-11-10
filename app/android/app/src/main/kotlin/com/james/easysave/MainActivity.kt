@@ -166,6 +166,7 @@ class MainActivity : FlutterActivity() {
         super.configureFlutterEngine(flutterEngine)
         ProvenancePairWriter.register(this, flutterEngine.dartExecutor.binaryMessenger)
         DownloadControl.register(flutterEngine.dartExecutor.binaryMessenger)
+        NativeCollation.register(flutterEngine.dartExecutor.binaryMessenger)
 
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, SEAL_CHANNEL)
             .setMethodCallHandler { call, result ->

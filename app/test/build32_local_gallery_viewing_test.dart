@@ -81,8 +81,8 @@ void main() {
       ..maximumSize = 1000;
   });
 
-  testWidgets('a local original decodes without a thumbnail or a loading indicator',
-      (tester) async {
+  testWidgets('a local original decodes with the system thumbnail underneath '
+      'and no loading indicator', (tester) async {
     await _prepareImage(tester);
     final gate = Completer<void>();
     VerifiedAssetImage.providerForTesting =
@@ -94,7 +94,11 @@ void main() {
     await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 20)));
     await tester.pump();
     expect(find.byType(CircularProgressIndicator), findsNothing);
-    expect(loads['a:thumb'], isNull, reason: 'no enlarged thumbnail placeholder');
+    // The MediaStore thumbnail is the instant underlay of the fullscreen view;
+    // the sharp tier is the screen-size decode of the original.
+    await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 40)));
+    await tester.pump();
+    expect(loads['a:thumb'], 1, reason: 'system thumbnail underlay');
     expect(loads['a:original'], 1);
 
     await tester.runAsync(() async {
@@ -102,8 +106,9 @@ void main() {
       await Future<void>.delayed(const Duration(milliseconds: 50));
     });
     await tester.pump();
-    final raw = tester.widget<RawImage>(find.byType(RawImage));
-    expect(raw.image, isNotNull);
+    final images = tester.widgetList<RawImage>(find.byType(RawImage));
+    expect(images.length, greaterThanOrEqualTo(2));
+    expect(images.where((i) => i.image != null), isNotEmpty);
     expect(find.byType(CircularProgressIndicator), findsNothing);
   });
 

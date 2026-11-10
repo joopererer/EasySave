@@ -148,7 +148,14 @@ class _CoverImageState extends State<CoverImage> {
           ),
           loadingBuilder: (context, child, progress) => progress == null
               ? child
-              : (widget.placeholder ?? const ColoredBox(color: Colors.black12)),
+              // A neutral surface tint, never black: a cover that is still
+              // downloading must not read as a black frame.
+              : (widget.placeholder ??
+                    ColoredBox(
+                      color: Theme.of(
+                        context,
+                      ).colorScheme.surfaceContainerHighest,
+                    )),
         );
       },
     );

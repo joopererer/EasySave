@@ -15,6 +15,7 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../core/models.dart';
 import '../services/auth.dart';
+import '../services/creator_sort.dart';
 import '../services/download_manager.dart';
 import '../services/gallery_locator_service.dart';
 import '../services/history_backfill_service.dart';
@@ -26,6 +27,7 @@ import '../services/media_delete_service.dart';
 import '../services/parse_service.dart';
 import '../services/settings.dart';
 import '../services/site_registry.dart';
+import '../services/system_collation.dart';
 import '../theme/app_theme.dart';
 import '../widgets/delete_records_sheet.dart';
 import '../widgets/download_sheet.dart';
@@ -81,6 +83,14 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
   HistoryView _view = HistoryView.posts;
   HistoryLayout _layout = HistoryLayout.waterfall;
   HistorySort _sort = HistorySort.latest;
+
+  /// Creators ("按作者") ordering, remembered across sessions.
+  CreatorSortKey _creatorSort = CreatorSortKey.recentSaved;
+  bool _creatorSortDescending = true;
+
+  /// Locale-aware sort keys of the author names (SystemCollation). Filled
+  /// when the records load; a missing name falls back to its lower-cased form.
+  Map<String, String> _collationKeys = const {};
 
   bool _searchOpen = false;
   String _query = '';
@@ -270,6 +280,8 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
       _view = settings.historyView;
       _layout = settings.historyLayout;
       _sort = settings.historySort;
+      _creatorSort = settings.creatorSort;
+      _creatorSortDescending = settings.creatorSortDescending;
     });
     await _initPermissionsAndLoad();
   }
@@ -280,6 +292,8 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
     settings.historyView = _view;
     settings.historyLayout = _layout;
     settings.historySort = _sort;
+    settings.creatorSort = _creatorSort;
+    settings.creatorSortDescending = _creatorSortDescending;
     await settings.save();
   }
 
@@ -352,8 +366,13 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
           () => HistoryDb.instance().then((db) => db.recent(limit: 10000)),
           deadline: _historyRefresh.deadline);
       if (!mounted) return;
+      // Resolve the authors' locale sort keys before the first paint so the
+      // creators view never visibly re-sorts after loading.
+      final keys = await _collationKeysFor(records);
+      if (!mounted) return;
       setState(() {
         _records = records;
+        _collationKeys = keys;
         _loading = false;
         _dbError = null;
       });
@@ -1039,6 +1058,20 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
     return ref.record.createdAt;
   }
 
+  /// Locale sort keys for every author of [records], reusing the ones already
+  /// resolved; the platform collation runs once per new name.
+  Future<Map<String, String>> _collationKeysFor(
+    List<HistoryRecord> records,
+  ) async {
+    final names = <String>{
+      for (final r in records) r.authorName ?? '',
+    }.where((n) => n.isNotEmpty);
+    final missing = names.where((n) => !_collationKeys.containsKey(n)).toList();
+    if (missing.isEmpty) return _collationKeys;
+    final fetched = await SystemCollation.keysFor(missing);
+    return {..._collationKeys, ...fetched};
+  }
+
   // ------------------------------------------------------------------- build
 
   @override
@@ -1139,6 +1172,7 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
         ),
         _platformMenu(),
         if (_view != HistoryView.creators) _sortMenu(),
+        if (_view == HistoryView.creators) _creatorSortMenu(),
         if (_view == HistoryView.posts)
           _toolbarButton(
             icon: _layout == HistoryLayout.waterfall
@@ -1598,6 +1632,66 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
     );
   }
 
+  String _creatorSortLabel(CreatorSortKey key) {
+    switch (key) {
+      case CreatorSortKey.postCount:
+        return '帖子数';
+      case CreatorSortKey.recentSaved:
+        return '最近修改时间';
+      case CreatorSortKey.name:
+        return '名字';
+    }
+  }
+
+  /// Ordering of the creators view: one of three keys plus a direction, both
+  /// remembered locally. The default is "最近修改时间" descending.
+  Widget _creatorSortMenu() {
+    final direction = _creatorSortDescending ? '倒序' : '正序';
+    return PopupMenuButton<String>(
+      key: const ValueKey('creator-sort-menu'),
+      tooltip: '作者排序：${_creatorSortLabel(_creatorSort)}（$direction）',
+      onSelected: (value) {
+        setState(() {
+          if (value == 'direction') {
+            _creatorSortDescending = !_creatorSortDescending;
+          } else {
+            final key = CreatorSortKey.values.firstWhere((k) => k.name == value);
+            // Picking the key that is already active flips the direction, so a
+            // single tap always does something useful.
+            if (key == _creatorSort) {
+              _creatorSortDescending = !_creatorSortDescending;
+            } else {
+              _creatorSort = key;
+            }
+          }
+        });
+        _persistPrefs();
+      },
+      itemBuilder: (_) => [
+        for (final key in CreatorSortKey.values)
+          CheckedPopupMenuItem(
+            value: key.name,
+            checked: _creatorSort == key,
+            child: Text(_creatorSortLabel(key)),
+          ),
+        const PopupMenuDivider(),
+        PopupMenuItem(
+          value: 'direction',
+          child: Text(
+            _creatorSortDescending ? '倒序（点按改为正序）' : '正序（点按改为倒序）',
+          ),
+        ),
+      ],
+      child: _toolbarButtonInner(
+        icon: _creatorSortDescending
+            ? Icons.sort
+            : Icons.sort_outlined,
+        active: _creatorSort != CreatorSortKey.recentSaved ||
+            !_creatorSortDescending,
+      ),
+    );
+  }
+
   Widget _toolbarButtonInner({required IconData icon, required bool active}) {
     return Container(
       width: 34,
@@ -1911,6 +2005,16 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
       );
       group.postCount++;
       group.fileCount += r.savedFiles.length;
+      // The author's "most recent modification": the newest save of any of
+      // their posts (a re-save counts, the record's createdAt does not).
+      var latest = r.createdAt;
+      for (final f in r.savedFiles) {
+        final at = DateTime.fromMillisecondsSinceEpoch(f.savedAt);
+        if (at.isAfter(latest)) latest = at;
+      }
+      if (group.lastSavedAt == null || latest.isAfter(group.lastSavedAt!)) {
+        group.lastSavedAt = latest;
+      }
       if (group.thumbs.length < 4) {
         for (final f in r.savedFiles) {
           if (group.thumbs.length >= 4) break;
@@ -1918,12 +2022,24 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
         }
       }
     }
-    final list = map.values.toList()
-      ..sort(
-        (a, b) =>
-            a.authorName.toLowerCase().compareTo(b.authorName.toLowerCase()),
-      );
-    return list;
+    final rows = [
+      for (final entry in map.entries)
+        CreatorSortRow(
+          id: entry.key,
+          name: entry.value.authorName.isEmpty
+              ? '未知作者'
+              : entry.value.authorName,
+          postCount: entry.value.postCount,
+          lastSavedAt: entry.value.lastSavedAt ?? DateTime(0),
+        ),
+    ];
+    final ordered = sortCreatorRows(
+      rows,
+      key: _creatorSort,
+      descending: _creatorSortDescending,
+      collationKeys: _collationKeys,
+    );
+    return [for (final row in ordered) map[row.id]!];
   }
 
   Future<void> _confirmClearAll() async {
@@ -1973,6 +2089,9 @@ class _CreatorGroup {
   int postCount = 0;
   int fileCount = 0;
   final List<HistThumbRef> thumbs = [];
+
+  /// The author's most recent save, used by the creators ordering.
+  DateTime? lastSavedAt;
 }
 
 class _StickyHeaderDelegate extends SliverPersistentHeaderDelegate {
