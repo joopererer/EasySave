@@ -85,7 +85,10 @@ bitmaps evicted the neighbouring decoded images from the image cache.
   releasing the least recently kept first; the neighbours are pre-decoded at the
   same screen-size tier, so a pre-decode costs 5.9 MB instead of 134.9 MB.
 - Videos and Live Photos keep their existing widgets and behaviour; only their
-  decode size follows the same screen-size rule.
+  decode size follows the same screen-size rule. In the fullscreen viewer the
+  placeholder is transparent (`placeholderColor: Colors.transparent`), so the
+  viewer's own background is unchanged while the thumbnail decodes; the tinted
+  placeholder is only used for list covers, where it replaces an empty box.
 
 **Region decoding.** Tile/region decoding (Android `BitmapRegionDecoder`,
 `SubsamplingScaleImageView`, `extended_image`/`photo_view` style) was evaluated
@@ -203,7 +206,7 @@ path   app/build/app/outputs/flutter-apk/EasySave-1.10.0-build34-release.apk
        (same file as app/build/app/outputs/flutter-apk/app-release.apk)
 version 1.10.0 (versionName='1.10.0', versionCode='34'), package com.james.easysave
 bytes  69,129,408
-sha256 fe7610836ea7616ddd9a1919d9f1f03d6087cc40a09d12cc439973f79ffe8a01
+sha256 1e29c980157964691bcea3343c1f81bb372eae4d9a507efbab2e4611a3db297d
 signer C=US, O=Android, CN=Android Debug
        7ec6c14f1c8c9fff6de9a31fda73150c12db7c81c98ee8017960d838aecb3484 (same as build 33)
 ```

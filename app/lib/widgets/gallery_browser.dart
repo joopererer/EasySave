@@ -1304,6 +1304,7 @@ class _BrowserItemViewState extends State<_BrowserItemView> {
                             fullResolution: true,
                           ),
                           isOriginal: true,
+                          placeholderColor: Colors.transparent,
                           fit: BoxFit.contain,
                         )
                       : Stack(
@@ -1495,6 +1496,9 @@ class _ZoomableImageViewState extends State<_ZoomableImageView>
                   ),
                   isOriginal: true,
                   highResolution: _highResolution,
+                  // The viewer's own background is the right colour until the
+                  // system thumbnail paints; no placeholder rectangle.
+                  placeholderColor: Colors.transparent,
                   fit: BoxFit.contain,
                 )
               : Stack(
