@@ -1,17 +1,105 @@
 # Changelog
 
-## Unreleased
+本文按 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 整理面向用户的主要变化。
 
-- Instagram 不再把非数字的作者标识写入 prov:authorId。
+本稿依据 `docs/tasks/` 的任务文档与交接记录回顾整理，待用户审核；未确认的历史发布日期暂不填写，v1.10 仍在进行中，不代表已发布或全部真机验收通过。
 
-- Floating ball select panel: type item numbers directly (`1,3,5-8`) without loading previews; thumbnails are off by default and load on demand.
-- Downloads: a history record is written as soon as a download starts, with a progress overlay on the card; a failed enqueue no longer strands the other files.
-- Downloads: a 90 s watchdog imports, retries or fails stuck files, and the gallery import has a 60 s timeout, so a batch can no longer hang at 50%.
-- Added a download queue page (history top bar) with per-file cancel/retry and batch delete; the preview page shows progress with cancel/retry for its post.
-- Backup restore is no longer hard-blocked by unfinished downloads; it offers "go to download queue" or "cancel all and continue".
-- History viewer: no item is pre-selected any more (positional indices were compared with post item indices).
+## [Unreleased] - v1.10
 
-## v1.7.0 - 2026-10-22
+### 新增
+
+- 增加小红书中国大陆与海外账号登录入口，并分别显示已验证的登录状态。
+- 增加 Instagram 帖子 AI 标注识别与显示。
+- 增加 TikTok 视频封面及悬浮球 Live 预览，支持从悬浮球打开 App 观看受限视频。
+
+### 修改
+
+- 改进解析规则在线更新，兼容性检查或更新失败时继续使用可用规则。
+- 改进备份格式，保留原帖链接与失败状态、不再保存易失效的媒体链接，并兼容恢复旧备份。
+- 恢复备份时显示处理进度，并更谨慎地匹配本机相册文件。
+- 改进多入口共享预览与缩略图加载，减少重复解析和滚动等待。
+- 改进小红书原图选择，对未达到原帖声明尺寸的图片提示“非原图”。
+- Instagram 来源信息不再将可变的用户名作为稳定作者标识。
+
+### 修复
+
+- 修复小红书及 TikTok 部分短链解析失败、小红书缺少分享凭据时提示不明确的问题。
+- 修复部分受限 X 帖子未使用已有登录状态，以及部分小红书视频下载后缺少音轨的问题。
+- 修复历史文件重复计数、扫描覆盖新下载文件，以及删除后重新保存仍显示旧文件的问题。
+- 修复历史分组标题叠加、排序后布局异常及部分读取或刷新卡顿问题。
+- 修复已保存媒体预览误走网络、默认误选图片及部分视频画面拉伸问题。
+- 修复悬浮球横屏贴边、已保存文件识别及大图预览异常。
+- 修复大文件下载时存储不足提示、失败记录展示及备份恢复状态不准确的问题。
+
+## [1.9.0]
+
+### 新增
+- 支持 TikTok 视频和图集的解析、下载、预览及历史记录。
+- 增加帖子 AI 标注识别、展示，并将标注写入媒体来源信息。
+- 增加 C2PA 媒体的安全保存与来源边车文件处理。
+
+### 修改
+- 统一媒体文件命名并改进相册重建、来源信息回填和下载冲突处理。
+- 改进历史缩略图加载、下载任务状态反馈及媒体预览体验。
+
+### 修复
+- 修复 TikTok 移动页面解析、短链识别及会话视频下载问题。
+- 修复历史删除与下载并发、重复保存及相册文件重新定位问题。
+- 修复 Live Photo、媒体来源信息和多入口下载中的若干兼容问题。
+
+## [1.8.3]
+
+### 新增
+
+- 悬浮球选择面板支持长按预览大图和视频，并提供预览常驻、滑动切换及播放控制。
+- 支持直接输入媒体编号批量选择，缩略图默认关闭并可按需加载。
+- 增加下载队列页面，支持逐项取消、重试和批量删除，并在历史及预览页显示下载进度。
+
+### 修改
+
+- 备份恢复遇到未完成下载时，可选择前往下载队列或取消全部后继续。
+
+### 修复
+
+- 修复单项入队失败拖住其他下载及下载或相册导入长期停滞的问题。
+- 修复历史浏览器默认误选媒体的问题。
+- 改进 Instagram 敏感内容、年龄限制及动态加载帖子的解析，减少错误的登录失效提示。
+
+## [1.8.2]
+
+### 新增
+
+- 支持 MP4 和 MOV 视频的来源信息保存、读取与旧文件补写。
+- 支持 Live Photo 图片与视频配对，并在相册重建时合并为同一项。
+
+### 修复
+
+- 修复历史中已拆开的 Live Photo 记录无法正确合并的问题。
+
+## [1.8.1]
+
+### 修改
+
+- 统一图片来源信息的读写规则，改善旧文件补写及 PNG 相册重建兼容性。
+
+### 修复
+
+- 修复备份轮转与去重行为，保留最近七份备份且不影响同文件夹内的其他文件。
+
+## [1.8.0]
+
+### 新增
+- 增加本地与用户指定文件夹的自动备份、备份预览及历史恢复功能。
+- 增加从相册重建历史、跨设备定位媒体文件和恢复设置的支持。
+
+### 修改
+- 备份恢复支持合并历史与相册信息，并在恢复后重新定位本机文件。
+
+### 修复
+- 修复空历史自动备份覆盖现有备份、软删除记录被导出及重复恢复等问题。
+- 修复恢复时悬浮球权限、相册路径和历史文件匹配方面的问题。
+
+## [1.7.0] - 2026-10-22
 
 - Added provenance metadata writing and preservation for JPEG, PNG, and WebP images.
 - Added C2PA detection and safe skip behavior without generating sidecars.
