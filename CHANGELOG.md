@@ -31,8 +31,6 @@ This draft is compiled from task documents and handover notes in `docs/tasks/` a
   Improved original-image selection on Xiaohongshu and added a warning when images are smaller than the dimensions declared by the post.
 - Instagram 来源信息不再将可变的用户名作为稳定作者标识。
   Instagram provenance information no longer treats mutable usernames as stable author identifiers.
-- 历史页“按作者”增加排序：帖子数、最近修改时间（该作者最近一次保存）和名字，各自支持正序与倒序，默认最近修改时间倒序，选择会记住。
-  Added sorting to the history "by author" view: post count, most recent save, and name, each ascending or descending; the most recent save first is the default and the choice is remembered.
 
 ### 修复 / Fixed
 

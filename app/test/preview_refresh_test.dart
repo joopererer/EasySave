@@ -7,7 +7,6 @@ import 'package:easysave/services/history_db.dart';
 import 'package:easysave/services/verified_media.dart';
 import 'package:easysave/widgets/verified_asset_image.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:photo_manager/photo_manager.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
@@ -15,19 +14,6 @@ import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
   setUpAll(() { sqfliteFfiInit(); databaseFactory = databaseFactoryFfi; });
-
-  // The media load gate arms a deadline for every local request; the album
-  // plugin has to answer so no platform call stays pending past the test.
-  const photos = MethodChannel('com.fluttercandies/photo_manager');
-  setUp(() {
-    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
-        .setMockMethodCallHandler(photos, (_) async => null);
-  });
-  tearDown(() {
-    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
-        .setMockMethodCallHandler(photos, null);
-  });
-
   test('missing MediaStore ID and query errors are not local files', () async {
     expect(await mediaExists('123', query: (_) async => null), isFalse);
     expect(await mediaExists('123', query: (_) async => throw StateError('query unavailable')), isFalse);

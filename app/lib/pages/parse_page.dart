@@ -8,6 +8,7 @@ import '../widgets/ai_label_badge.dart';
 import 'package:flutter/services.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:photo_manager/photo_manager.dart';
+import 'package:photo_manager_image_provider/photo_manager_image_provider.dart';
 import 'package:receive_sharing_intent/receive_sharing_intent.dart';
 
 import '../core/error_copy.dart';
@@ -31,7 +32,6 @@ import '../widgets/download_sheet.dart';
 import '../widgets/gallery_browser.dart';
 import '../widgets/parse_feedback.dart';
 import '../widgets/shared.dart';
-import '../widgets/verified_asset_image.dart';
 import 'batch_page.dart';
 import 'login_page.dart';
 import 'preview_page.dart';
@@ -1271,10 +1271,9 @@ class ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
           height: 48,
           color: SecondaryBg.beige(context),
           child: Image(
-            // Thumbnail pool + 5 s deadline; the plugin's own queue is never
-            // entered without a limit.
-            image: VerifiedAssetImage.providerFor(
+            image: AssetEntityImageProvider(
               asset,
+              isOriginal: false,
               thumbnailSize: const ThumbnailSize.square(150),
             ),
             fit: BoxFit.cover,

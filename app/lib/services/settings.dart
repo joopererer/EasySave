@@ -11,12 +11,6 @@ enum HistoryLayout { waterfall, list }
 /// Sort modes (ui-spec §2.4.7).
 enum HistorySort { latest, earliest, type, mostFiles, author }
 
-/// Sort key of the creators ("按作者") view (v1.10).
-///
-/// [recentSaved] is the author's most recent save, which is what a "who did I
-/// save from lately" list wants; the default is the newest first.
-enum CreatorSortKey { postCount, recentSaved, name }
-
 class AppSettings {
   static const defaultAlbumName = 'EasySave';
   static const defaultNamePattern = '{id}_{seq}';
@@ -62,11 +56,6 @@ class AppSettings {
   HistoryView historyView = HistoryView.posts;
   HistoryLayout historyLayout = HistoryLayout.waterfall;
   HistorySort historySort = HistorySort.latest;
-
-  /// Creators view ordering (v1.10): by post count, by the author's latest
-  /// save, or by name. Descending by default (newest/largest first).
-  CreatorSortKey creatorSort = CreatorSortKey.recentSaved;
-  bool creatorSortDescending = true;
 
   /// User-chosen directory tree URI for external automatic backups (v1.8).
   String? backupTreeUri;
@@ -114,12 +103,6 @@ class AppSettings {
         prefs.getString('historySort'),
         HistorySort.latest,
       )
-      ..creatorSort = _enumFromName(
-        CreatorSortKey.values,
-        prefs.getString('creatorSort'),
-        CreatorSortKey.recentSaved,
-      )
-      ..creatorSortDescending = prefs.getBool('creatorSortDescending') ?? true
       ..saveProvenanceInImages = prefs.getBool('saveProvenanceInImages') ?? true
       ..usedAlbumNames = List<String>.from(
         prefs.getStringList('usedAlbumNames') ?? const <String>[],
@@ -146,8 +129,6 @@ class AppSettings {
     await prefs.setString('historyView', historyView.name);
     await prefs.setString('historyLayout', historyLayout.name);
     await prefs.setString('historySort', historySort.name);
-    await prefs.setString('creatorSort', creatorSort.name);
-    await prefs.setBool('creatorSortDescending', creatorSortDescending);
     await prefs.setBool('saveProvenanceInImages', saveProvenanceInImages);
     await prefs.setStringList('usedAlbumNames', usedAlbumNames);
     if (backupTreeUri != null) {

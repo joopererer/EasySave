@@ -16,7 +16,6 @@ import '../metadata/metadata_service.dart';
 import '../metadata/site_provenance.dart';
 import 'gallery_locator_service.dart';
 import 'history_db.dart';
-import 'local_media.dart';
 import 'media_delete_service.dart';
 import 'media_header_service.dart';
 
@@ -106,24 +105,10 @@ class HistoryBackfillService {
   @visibleForTesting
   static Future<File?> Function(AssetEntity asset)? assetFileResolver;
 
-  /// Rewriting provenance needs a real path, and on Android 10 photo_manager
-  /// answers that by copying the whole file into the app cache. A 1 GB video
-  /// must therefore never enter this path.
-  static const int maxBackfillBytes = 128 * 1024 * 1024;
-
-  static Future<File?> _resolveAssetFile(AssetEntity asset) async {
+  static Future<File?> _resolveAssetFile(AssetEntity asset) {
     final override = assetFileResolver;
     if (override != null) return override(asset);
-    final bytes = await LocalMedia.fileSize(asset);
-    if (bytes != null && bytes > maxBackfillBytes) {
-      DevLog.write(
-        _logTag,
-        'Skipped (file too large for provenance rewrite: '
-        '${bytes ~/ (1024 * 1024)} MB)',
-      );
-      return null;
-    }
-    return LocalMedia.file(asset, knownBytes: bytes);
+    return asset.file;
   }
 
   /// Backfill provenance metadata to files that don't have it.

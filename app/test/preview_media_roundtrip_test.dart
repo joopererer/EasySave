@@ -8,7 +8,6 @@ import 'package:easysave/services/site_registry.dart';
 import 'package:easysave/widgets/gallery_browser.dart';
 import 'package:easysave/widgets/shared.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 // Model the declarations produced by ParseService, including the additional
@@ -37,20 +36,6 @@ MediaItem declaredItem(String platform, String host, String type, int index) {
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
-
-  // Every local media request now goes through the media load gate, which arms
-  // a deadline timer. A test run must not leave a platform call hanging until
-  // that deadline, so the album plugin answers immediately (with "nothing").
-  const photos = MethodChannel('com.fluttercandies/photo_manager');
-  setUp(() {
-    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
-        .setMockMethodCallHandler(photos, (_) async => null);
-  });
-  tearDown(() {
-    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
-        .setMockMethodCallHandler(photos, null);
-  });
-
   for (final (platform, host, types) in [
     ('instagram', 'scontent.cdninstagram.com', ['video']),
     ('instagram', 'scontent.cdninstagram.com', ['image']),
