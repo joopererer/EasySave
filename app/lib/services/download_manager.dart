@@ -786,6 +786,9 @@ Future<void> writeBatchHistory(
           status: FileStatus.found,
           size: job.fileBytes,
           notOriginal: job.notOriginal,
+          // A Live photo's still and motion clip are one entry from the moment
+          // they are written, not after a later album scan.
+          pairId: job.isLivePhoto ? '${batch.postId}#${job.itemIndex}' : null,
         ),
   ];
   DevLog.write(

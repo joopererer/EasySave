@@ -28,6 +28,7 @@ class HistoryFile {
     this.capturedBy,
     this.size,
     this.notOriginal = false,
+    this.pairId,
   });
 
   final String filename;
@@ -66,6 +67,12 @@ class HistoryFile {
   /// largest one was kept. History marks the file "非原图".
   final bool notOriginal;
 
+  /// `prov:pairId` of the file (`<sourceId>#<itemIndex>`) when it belongs to a
+  /// Live photo. Written together with the row, so the still and its motion
+  /// clip are known to be one entry at save time and do not depend on a later
+  /// album scan. Null for ordinary files and for rows written before v1.10.1.
+  final String? pairId;
+
   Map<String, Object?> toMap() => {
     'filename': filename,
     'saved_at': savedAt,
@@ -79,6 +86,7 @@ class HistoryFile {
     if (capturedBy != null) 'captured_by': capturedBy,
     if (size != null) 'size': size,
     if (notOriginal) 'not_original': 1,
+    if (pairId != null) 'pair_id': pairId,
   };
 
   factory HistoryFile.fromMap(Map<String, Object?> map) => HistoryFile(
@@ -97,6 +105,7 @@ class HistoryFile {
     capturedBy: map['captured_by'] as String?,
     size: (map['size'] as num?)?.toInt(),
     notOriginal: (map['not_original'] as num?)?.toInt() == 1,
+    pairId: map['pair_id'] as String?,
   );
 
   HistoryFile copyWith({
@@ -112,6 +121,7 @@ class HistoryFile {
     String? capturedBy,
     int? size,
     bool? notOriginal,
+    String? pairId,
   }) => HistoryFile(
     filename: filename ?? this.filename,
     savedAt: savedAt ?? this.savedAt,
@@ -125,6 +135,7 @@ class HistoryFile {
     capturedBy: capturedBy ?? this.capturedBy,
     size: size ?? this.size,
     notOriginal: notOriginal ?? this.notOriginal,
+    pairId: pairId ?? this.pairId,
   );
 }
 

@@ -16,6 +16,7 @@ import '../core/models.dart';
 import '../core/media_request.dart';
 import '../services/gallery_locator_service.dart';
 import '../services/history_db.dart';
+import '../services/live_pairs.dart';
 import '../services/preview_video.dart';
 import '../services/media_request_policy.dart';
 import 'shared.dart';
@@ -108,6 +109,101 @@ class GalleryBrowserItem {
 /// item indices ([GalleryBrowserItem.index]); null means nothing is selected.
 Set<int> initialGallerySelection(Set<int>? selectedIndices) =>
     Set<int>.from(selectedIndices ?? const <int>{});
+
+/// Locates the album asset behind one stored history row.
+typedef HistoryAssetLocator = Future<AssetEntity?> Function(HistoryFile file);
+
+/// Fullscreen browser items for one saved post, plus the page to open.
+///
+/// The history page and the "最近保存" list both build from here: a Live
+/// photo's still and motion clip are one entry ([pairSavedMedia]), shown as one
+/// page with the LIVE badge and long-press playback, never as two duplicates.
+Future<({List<GalleryBrowserItem> items, int initial})> savedBrowserItems({
+  required HistoryRecord record,
+  required List<HistoryFile> files,
+  required ParsedPost post,
+  int? highlightItemIndex,
+  HistoryAssetLocator? locate,
+  bool? albumScanned,
+}) async {
+  final entries = pairSavedMedia(files);
+  if (entries.isEmpty) {
+    return (items: <GalleryBrowserItem>[], initial: 0);
+  }
+
+  final locator = GalleryLocatorService.instance;
+  final resolver =
+      locate ??
+      (HistoryFile file) async {
+        var asset =
+            locator.getAssetById(file.mediaId) ??
+            locator.locateAsset(file, record.postId);
+        if (asset == null && locator.hasAccess) {
+          asset = await locator.locateAssetAsync(
+            file,
+            record.postId,
+            platform: record.platform,
+          );
+        }
+        return asset;
+      };
+  final scanned = albumScanned ?? (locate == null && locator.scanned);
+  final is1Based = files.every((f) => f.itemIndex > 0);
+
+  final items = <GalleryBrowserItem>[];
+  var initial = 0;
+  for (final entry in entries) {
+    final rawIndex = entry.itemIndex;
+    final zeroBased = is1Based ? rawIndex - 1 : rawIndex;
+    MediaItem? postItem;
+    if (zeroBased >= 0 && zeroBased < post.items.length) {
+      postItem = post.items[zeroBased];
+    } else if (rawIndex >= 0 && rawIndex < post.items.length) {
+      postItem = post.items[rawIndex];
+    }
+
+    final imageAsset = entry.image == null ? null : await resolver(entry.image!);
+    final videoAsset = entry.video == null ? null : await resolver(entry.video!);
+
+    if (highlightItemIndex != null &&
+        (rawIndex == highlightItemIndex || zeroBased == highlightItemIndex)) {
+      initial = items.length;
+    }
+
+    final coverAsset = entry.isLive ? imageAsset : (entry.image == null ? videoAsset : imageAsset);
+    final coverFile = entry.cover;
+    final fallbackType = coverFile.isImage
+        ? 'image'
+        : (postItem?.isGif == true ? 'gif' : 'video');
+    final itemType = entry.isLive
+        ? 'live'
+        : (postItem != null && postItem.type != 'live'
+              ? postItem.type
+              : fallbackType);
+
+    items.add(
+      GalleryBrowserItem(
+        index: zeroBased,
+        cachePostId: record.postId,
+        type: itemType,
+        url: postItem?.url ?? '',
+        videoUrl: postItem?.videoUrl,
+        posterUrl: postItem?.posterUrl,
+        thumbnailUrl: postItem?.thumbnailUrl,
+        fallbacks: postItem?.fallbacks ?? const [],
+        requestResources: postItem?.requestResources,
+        isGif: postItem?.isGif ?? false,
+        asset: coverAsset,
+        liveVideoAsset: entry.isLive ? videoAsset : null,
+        status: coverAsset != null
+            ? FileStatus.found
+            : (scanned ? coverFile.status : FileStatus.unknown),
+        filename: coverFile.filename,
+      ),
+    );
+  }
+  return (items: items, initial: initial);
+}
 
 class GalleryBrowserPage extends StatefulWidget {
   const GalleryBrowserPage({

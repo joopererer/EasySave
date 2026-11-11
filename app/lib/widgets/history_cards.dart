@@ -10,6 +10,7 @@ import 'package:photo_manager_image_provider/photo_manager_image_provider.dart';
 import '../core/models.dart';
 import '../services/gallery_locator_service.dart';
 import '../services/history_db.dart';
+import '../services/live_pairs.dart';
 import '../theme/app_theme.dart';
 import 'shared.dart';
 import 'verified_asset_image.dart';
@@ -487,7 +488,7 @@ class WaterfallPostCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final cover = coverItemFor(record);
-    final fileCount = record.savedFiles.length;
+    final fileCount = savedMediaEntryCount(record.savedFiles);
     final title = (record.title?.isNotEmpty == true) ? record.title! : '无标题';
     final radius = BorderRadius.circular(20);
 
@@ -723,7 +724,7 @@ class ListPostRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final cover = coverItemFor(record);
-    final fileCount = record.savedFiles.length;
+    final fileCount = savedMediaEntryCount(record.savedFiles);
     final title = (record.title?.isNotEmpty == true) ? record.title! : '无标题';
     final badge = listTypeBadge(cover);
 
