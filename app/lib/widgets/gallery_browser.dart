@@ -7,6 +7,7 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:photo_manager/photo_manager.dart';
+import 'package:photo_manager_image_provider/photo_manager_image_provider.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:video_player/video_player.dart';
@@ -19,7 +20,6 @@ import '../services/preview_video.dart';
 import '../services/media_request_policy.dart';
 import 'shared.dart';
 import 'decoded_image_keeper.dart';
-import 'progressive_asset_image.dart';
 import 'verified_asset_image.dart';
 import 'ai_label_badge.dart';
 
@@ -178,25 +178,15 @@ class _GalleryBrowserPageState extends State<GalleryBrowserPage> {
   }
 
   /// Decode the current local image and the one or two next to it, and keep
-  /// them, so swiping back and forth never decodes a seen image again. Kept
-  /// at the same screen-size decode the viewer asks for, so a pre-decode never
-  /// costs the memory of an original.
+  /// them, so swiping back and forth never decodes a seen image again.
   void _keepDecodedAround(int index) {
     final configuration = createLocalImageConfiguration(context);
-    final screen = screenPixelSize(context);
     for (final i in [index, index + 1, index - 1]) {
       if (i < 0 || i >= widget.items.length) continue;
       final item = widget.items[i];
       final asset = item.asset;
       if (asset == null || item.type == 'video' || item.isGif) continue;
-      _decoded.keep(
-        VerifiedAssetImage.providerFor(
-          asset,
-          isOriginal: true,
-          screenPixels: screen,
-        ),
-        configuration,
-      );
+      _decoded.keep(VerifiedAssetImage.providerFor(asset, isOriginal: true), configuration);
     }
   }
 
@@ -1304,7 +1294,6 @@ class _BrowserItemViewState extends State<_BrowserItemView> {
                             fullResolution: true,
                           ),
                           isOriginal: true,
-                          placeholderColor: Colors.transparent,
                           fit: BoxFit.contain,
                         )
                       : Stack(
@@ -1408,13 +1397,6 @@ class _ZoomableImageViewState extends State<_ZoomableImageView>
   TapDownDetails? _doubleTapDetails;
   late final AnimationController _animController;
 
-  /// Pinch past this factor asks for the original pixels; zooming back out
-  /// releases them again.
-  static const highResolutionScale = 2.0;
-
-  /// Feeds the image widget: false -> screen-size decode, true -> original.
-  final ValueNotifier<bool> _highResolution = ValueNotifier<bool>(false);
-
   @override
   void initState() {
     super.initState();
@@ -1430,14 +1412,12 @@ class _ZoomableImageViewState extends State<_ZoomableImageView>
     _transformationController.removeListener(_handleTransform);
     _transformationController.dispose();
     _animController.dispose();
-    _highResolution.dispose();
     super.dispose();
   }
 
   void _handleTransform() {
     final scale = _transformationController.value.getMaxScaleOnAxis();
     widget.onZoomChanged?.call(scale > 1.05);
-    _highResolution.value = scale > highResolutionScale;
   }
 
   void _onDoubleTap() {
@@ -1495,10 +1475,6 @@ class _ZoomableImageViewState extends State<_ZoomableImageView>
                     fullResolution: true,
                   ),
                   isOriginal: true,
-                  highResolution: _highResolution,
-                  // The viewer's own background is the right colour until the
-                  // system thumbnail paints; no placeholder rectangle.
-                  placeholderColor: Colors.transparent,
                   fit: BoxFit.contain,
                 )
               : Stack(

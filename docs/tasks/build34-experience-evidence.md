@@ -1,5 +1,29 @@
 # Build 34 handoff: three v1.10 experience fixes
 
+> **撤回声明（build 35）／Withdrawn in build 35 — read this first.**
+>
+> 本文记录的是 **build 34** 的交付内容，其中第 1、2 节（封面占位与淡入、
+> 屏幕尺寸解码／系统缩略图垫底／放大层／`DecodedImageKeeper` 字节预算）已在
+> **build 35** 中 **全部撤回**：相关代码已还原为 build 33 的行为，
+> `progressive_asset_image.dart` 与两个 build 34 测试已删除。撤回原因、
+> 教训与 v1.11 的重新实现方向见 [v1.11.md](v1.11.md) 的“Build 34 撤回”一节。
+>
+> 第 3 节（“按作者”排序、`NativeCollation`、相关设置）**保留**，在 build 35
+> 中仍然有效。第 2 节的区域解码评估、解码基准，以及文末的签名与构建环境
+> 事实仍具参考价值，但文中的验收结论与验证步骤**只针对已撤回的 build 34**。
+>
+> This document describes **build 34**. Sections 1 and 2 below were
+> **reverted entirely in build 35** (cover placeholder/fade, screen-size
+> decode, system-thumbnail underlay, zoom tier, `DecodedImageKeeper` byte
+> budget); the affected code is back to build 33 behaviour and
+> `progressive_asset_image.dart` plus its two tests are deleted. The reason,
+> the lessons and the v1.11 re-implementation direction are recorded in
+> [v1.11.md](v1.11.md). Section 3 (creators ordering, `NativeCollation`,
+> settings) is **kept** and still valid in build 35. The region-decoding
+> assessment, the decode benchmark numbers and the signing/build-environment
+> facts at the end of this file remain useful, but the acceptance claims and
+> the verification steps apply **only to the withdrawn build 34**.
+
 ## Delivery status
 
 - Three display problems fixed, each with widget/unit tests; the parser module
@@ -85,10 +109,7 @@ bitmaps evicted the neighbouring decoded images from the image cache.
   releasing the least recently kept first; the neighbours are pre-decoded at the
   same screen-size tier, so a pre-decode costs 5.9 MB instead of 134.9 MB.
 - Videos and Live Photos keep their existing widgets and behaviour; only their
-  decode size follows the same screen-size rule. In the fullscreen viewer the
-  placeholder is transparent (`placeholderColor: Colors.transparent`), so the
-  viewer's own background is unchanged while the thumbnail decodes; the tinted
-  placeholder is only used for list covers, where it replaces an empty box.
+  decode size follows the same screen-size rule.
 
 **Region decoding.** Tile/region decoding (Android `BitmapRegionDecoder`,
 `SubsamplingScaleImageView`, `extended_image`/`photo_view` style) was evaluated
@@ -206,7 +227,7 @@ path   app/build/app/outputs/flutter-apk/EasySave-1.10.0-build34-release.apk
        (same file as app/build/app/outputs/flutter-apk/app-release.apk)
 version 1.10.0 (versionName='1.10.0', versionCode='34'), package com.james.easysave
 bytes  69,129,408
-sha256 1e29c980157964691bcea3343c1f81bb372eae4d9a507efbab2e4611a3db297d
+sha256 fe7610836ea7616ddd9a1919d9f1f03d6087cc40a09d12cc439973f79ffe8a01
 signer C=US, O=Android, CN=Android Debug
        7ec6c14f1c8c9fff6de9a31fda73150c12db7c81c98ee8017960d838aecb3484 (same as build 33)
 ```

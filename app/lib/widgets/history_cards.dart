@@ -5,30 +5,15 @@
 
 import 'package:flutter/material.dart';
 import 'package:photo_manager/photo_manager.dart';
+import 'package:photo_manager_image_provider/photo_manager_image_provider.dart';
 
 import '../core/models.dart';
 import '../services/gallery_locator_service.dart';
 import '../services/history_db.dart';
-import '../services/site_registry.dart';
 import '../theme/app_theme.dart';
 import 'shared.dart';
 import 'verified_asset_image.dart';
 import 'ai_label_badge.dart';
-
-/// Cover area colour before any thumbnail pixel exists: the platform's tag
-/// colour mixed into the page surface. A cover that is still decoding reads as
-/// "this post" instead of a black or empty rectangle.
-Color coverPlaceholderColor(BuildContext context, String platform) {
-  final base = Theme.of(context).colorScheme.surfaceContainerHighest;
-  final raw = SiteRegistry.current
-      .byId(SiteRegistry.current.canonicalId(platform))
-      ?.data['tagColor'];
-  if (raw is String && RegExp(r'^#[0-9a-fA-F]{6}$').hasMatch(raw)) {
-    final tint = Color(0xFF000000 | int.parse(raw.substring(1), radix: 16));
-    return Color.alphaBlend(tint.withValues(alpha: 0.14), base);
-  }
-  return base;
-}
 
 /// Short saved-time label, e.g. "今天 18:24", "昨天 09:10", "10-12 09:10".
 String formatSavedAt(DateTime time) {
@@ -128,7 +113,6 @@ class HistoryThumb extends StatelessWidget {
     }
 
     if (asset != null) {
-      final placeholder = coverPlaceholderColor(context, record.platform);
       return VerifiedAssetImage(
         asset,
         fallback: CoverImage(
@@ -137,14 +121,12 @@ class HistoryThumb extends StatelessWidget {
           fit: fit,
           width: width,
           height: height,
-          placeholder: ColoredBox(color: placeholder),
         ),
         isOriginal: false,
         thumbnailSize: const ThumbnailSize.square(400),
         fit: fit,
         width: width,
         height: height,
-        placeholderColor: placeholder,
       );
     }
 
@@ -155,9 +137,6 @@ class HistoryThumb extends StatelessWidget {
         fit: fit,
         width: width,
         height: height,
-        placeholder: ColoredBox(
-          color: coverPlaceholderColor(context, record.platform),
-        ),
       );
     }
 
