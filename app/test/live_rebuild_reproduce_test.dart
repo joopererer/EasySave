@@ -162,16 +162,14 @@ void main() {
       // 第一项: itemIndex 1
       final item1 = post.items[0];
       expect(item1.type, 'live', reason: '第 1 项应被标记为 Live');
-      expect(item1.url.toLowerCase(), endsWith('.jpg'), reason: '图片地址应为图片类型');
-      expect(item1.videoUrl, isNotNull);
-      expect(item1.videoUrl!.toLowerCase(), endsWith('.mp4'), reason: '视频媒体地址应为视频类型');
+      expect(item1.localFilename?.toLowerCase(), endsWith('.jpg'));
+      expect(item1.localVideoFilename?.toLowerCase(), endsWith('.mp4'));
 
       // 第二项: itemIndex 2
       final item2 = post.items[1];
       expect(item2.type, 'live', reason: '第 2 项应被标记为 Live');
-      expect(item2.url.toLowerCase(), endsWith('.jpg'), reason: '图片地址应为图片类型');
-      expect(item2.videoUrl, isNotNull);
-      expect(item2.videoUrl!.toLowerCase(), endsWith('.mp4'), reason: '视频媒体地址应为视频类型');
+      expect(item2.localFilename?.toLowerCase(), endsWith('.jpg'));
+      expect(item2.localVideoFilename?.toLowerCase(), endsWith('.mp4'));
 
       // 封面与标记检查
       expect(coverItemFor(record)?.type, 'live');
@@ -220,8 +218,8 @@ void main() {
       final post = record!.toPost();
       expect(post.items.length, 1, reason: '组合 a 应成功配成 1 项 Live 图');
       expect(post.items[0].type, 'live');
-      expect(post.items[0].url.toLowerCase(), endsWith('.jpg'));
-      expect(post.items[0].videoUrl?.toLowerCase(), endsWith('.mp4'));
+      expect(post.items[0].localFilename?.toLowerCase(), endsWith('.jpg'));
+      expect(post.items[0].localVideoFilename?.toLowerCase(), endsWith('.mp4'));
     });
 
     test('组合 b: 图片无 pairId，视频无 pairId，sourceId 和 itemIndex 相同', () async {
@@ -267,8 +265,8 @@ void main() {
       final post = record!.toPost();
       expect(post.items.length, 1, reason: '组合 b 应成功配成 1 项 Live 图');
       expect(post.items[0].type, 'live');
-      expect(post.items[0].url.toLowerCase(), endsWith('.jpg'));
-      expect(post.items[0].videoUrl?.toLowerCase(), endsWith('.mp4'));
+      expect(post.items[0].localFilename?.toLowerCase(), endsWith('.jpg'));
+      expect(post.items[0].localVideoFilename?.toLowerCase(), endsWith('.mp4'));
     });
 
     test('修复已有坏记录: 数据库中存在拆成独立项的记录，再次重建后按 mediaId 修正为 2 个 Live 项', () async {
@@ -343,11 +341,11 @@ void main() {
       final post = updatedRecord.toPost();
       expect(post.items.length, 2, reason: '执行重建后，结果应为 2 个 Live 项');
       expect(post.items[0].type, 'live');
-      expect(post.items[0].url.toLowerCase(), endsWith('.jpg'));
-      expect(post.items[0].videoUrl?.toLowerCase(), endsWith('.mp4'));
+      expect(post.items[0].localFilename?.toLowerCase(), endsWith('.jpg'));
+      expect(post.items[0].localVideoFilename?.toLowerCase(), endsWith('.mp4'));
       expect(post.items[1].type, 'live');
-      expect(post.items[1].url.toLowerCase(), endsWith('.jpg'));
-      expect(post.items[1].videoUrl?.toLowerCase(), endsWith('.mp4'));
+      expect(post.items[1].localFilename?.toLowerCase(), endsWith('.jpg'));
+      expect(post.items[1].localVideoFilename?.toLowerCase(), endsWith('.mp4'));
 
       // 序号与配对已修正为 1 和 2，且旧的拆开序号 3 和 4 不存在
       expect(updatedRecord.files.any((f) => f.itemIndex == 3 || f.itemIndex == 4), isFalse);

@@ -166,8 +166,9 @@ void main() {
           HistoryFile(
             filename: 'post123_3.jpg',
             savedAt: DateTime.now().millisecondsSinceEpoch,
-            status: FileStatus.unknown,
-            itemIndex: 2,
+            status: FileStatus.found,
+            mediaId: 'asset_1003',
+            itemIndex: 3,
             isImage: true,
           ),
         ],
@@ -176,11 +177,15 @@ void main() {
       await historyDb.upsert(newDownloadRecord);
       final mergedPost1 = await historyDb.getByPostId('post123');
       expect(mergedPost1, isNotNull);
-      // Retains previously downloaded files (0, 1) + newly downloaded file (2)
-      expect(mergedPost1!.files.length, equals(3));
-      expect(mergedPost1.fileCount, equals(3));
-      expect(mergedPost1.files.map((f) => f.itemIndex).toList(), equals([0, 1, 2]));
-      // The found status and mediaId on item 0 are preserved!
+      // Only rows confirmed in the album join a new write. Item 1 was located
+      // by the scan, item 2 was marked missing, and the inferred guess of
+      // item 2 is not a file, so the record keeps exactly the two files that
+      // exist: 1 (found) and 3 (newly downloaded).
+      expect(mergedPost1!.files.length, equals(2));
+      expect(mergedPost1.fileCount, equals(2));
+      expect(mergedPost1.savedFiles.map((file) => file.itemIndex), [1, 3]);
+      expect(mergedPost1.files.map((f) => f.itemIndex).toList(), equals([1, 3]));
+      // The found status and mediaId on item 1 are preserved!
       expect(mergedPost1.files[0].status, equals(FileStatus.found));
       expect(mergedPost1.files[0].mediaId, equals('asset_1001'));
     });

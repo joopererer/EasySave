@@ -14,10 +14,6 @@ import android.os.Bundle
 import android.provider.MediaStore
 import android.provider.Settings
 import androidx.core.content.ContextCompat
-import androidx.documentfile.provider.DocumentFile
-import android.provider.DocumentsContract
-import java.io.IOException
-import android.media.MediaScannerConnection
 import android.util.Log
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
@@ -28,7 +24,7 @@ class MainActivity : FlutterActivity() {
     companion object {
         private const val SEAL_CHANNEL = "easysave/seal"
         private const val SEAL_PACKAGE = "com.junkfood.seal"
-        private const val MEDIA_CHANNEL = "easysave/media"
+        private const val MEDIA_CHANNEL = MediaStoreBridge.CHANNEL
         private const val HOST_CHANNEL = "easysave/host"
         private const val TILE_CHANNEL = "easysave/tile"
         private const val BUBBLE_CHANNEL = "easysave/bubble"
@@ -86,6 +82,7 @@ class MainActivity : FlutterActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        NativeLog.init(this)
         handleErrorIntent(intent)
         handleOpenIntent(intent)
     }
@@ -158,7 +155,14 @@ class MainActivity : FlutterActivity() {
         super.onStop()
     }
 
+    override fun cleanUpFlutterEngine(flutterEngine: FlutterEngine) {
+        SharedPreviewBridge.detach(flutterEngine.dartExecutor.binaryMessenger)
+        super.cleanUpFlutterEngine(flutterEngine)
+    }
+
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
+        NativeLog.register(this, flutterEngine.dartExecutor.binaryMessenger)
+        SharedPreviewBridge.register(this, flutterEngine.dartExecutor.binaryMessenger)
         super.configureFlutterEngine(flutterEngine)
         ProvenancePairWriter.register(this, flutterEngine.dartExecutor.binaryMessenger)
         DownloadControl.register(flutterEngine.dartExecutor.binaryMessenger)
@@ -181,15 +185,16 @@ class MainActivity : FlutterActivity() {
                 }
             }
 
-        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, MEDIA_CHANNEL)
+        val mediaStore = MediaStoreBridge(applicationContext)
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, MEDIA_CHANNEL,
+            io.flutter.plugin.common.StandardMethodCodec.INSTANCE,
+            flutterEngine.dartExecutor.binaryMessenger.makeBackgroundTaskQueue())
             .setMethodCallHandler { call, result ->
                 when (call.method) {
-                    "deleteMedia" -> deleteMedia(call, result)
-                    "requestWriteAccess" -> requestWriteAccess(call, result)
-                    "readMediaHeader" -> readMediaHeader(call, result)
-                    "queryMediaAlbum" -> queryMediaAlbum(call, result)
-                    "scanFile" -> scanFile(call, result)
-                    else -> result.notImplemented()
+                    "deleteMedia" -> runOnUiThread { deleteMedia(call, result) }
+                    "requestWriteAccess" -> runOnUiThread { requestWriteAccess(call, result) }
+                    // Activity-free reads are shared with the overlay engine.
+                    else -> if (!mediaStore.handle(call, result)) result.notImplemented()
                 }
             }
 
@@ -271,62 +276,14 @@ class MainActivity : FlutterActivity() {
                 }
             }
 
-        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, SAF_CHANNEL)
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, SAF_CHANNEL,
+            io.flutter.plugin.common.StandardMethodCodec.INSTANCE,
+            flutterEngine.dartExecutor.binaryMessenger.makeBackgroundTaskQueue())
             .setMethodCallHandler { call, result ->
                 when (call.method) {
-                    "pickDirectory" -> pickDirectory(result)
-                    "pickBackupFile" -> pickBackupFile(result)
-                    "checkDirectoryAccess" -> {
-                        val treeUri = call.argument<String>("treeUri")
-                        if (treeUri != null) {
-                            checkDirectoryAccess(treeUri, result)
-                        } else {
-                            result.success(false)
-                        }
-                    }
-                    "writeBackupToDirectory" -> {
-                        val treeUri = call.argument<String>("treeUri")
-                        val fileName = call.argument<String>("fileName")
-                        val content = call.argument<String>("content")
-                        if (treeUri != null && fileName != null && content != null) {
-                            writeBackupToDirectory(treeUri, fileName, content, result)
-                        } else {
-                            result.error("INVALID_ARGS", "Missing required arguments", null)
-                        }
-                    }
-                    "readDocumentContent" -> {
-                        val uri = call.argument<String>("uri")
-                        if (uri != null) {
-                            readDocumentContent(uri, result)
-                        } else {
-                            result.error("INVALID_ARGS", "Missing URI argument", null)
-                        }
-                    }
-                    "listBackupDirectory" -> {
-                        val treeUri = call.argument<String>("treeUri")
-                        if (treeUri != null) {
-                            listBackupDirectory(treeUri, result)
-                        } else {
-                            result.error("INVALID_ARGS", "Missing treeUri argument", null)
-                        }
-                    }
-                    "deleteDocuments" -> {
-                        val uris = call.argument<List<String>>("uris")
-                        if (uris != null) {
-                            deleteDocuments(uris, result)
-                        } else {
-                            result.error("INVALID_ARGS", "Missing uris argument", null)
-                        }
-                    }
-                    "getDirectoryDisplayName" -> {
-                        val treeUri = call.argument<String>("treeUri")
-                        if (treeUri != null) {
-                            getDirectoryDisplayName(treeUri, result)
-                        } else {
-                            result.success(null)
-                        }
-                    }
-                    else -> result.notImplemented()
+                    "pickDirectory" -> runOnUiThread { pickDirectory(result) }
+                    "pickBackupFile" -> runOnUiThread { pickBackupFile(result) }
+                    else -> if (!SafStorageBridge(applicationContext).handle(call, result)) result.notImplemented()
                 }
             }
     }
@@ -389,7 +346,7 @@ class MainActivity : FlutterActivity() {
                         contentResolver.takePersistableUriPermission(treeUri, takeFlags)
                         pendingPickDirectoryResult?.success(treeUri.toString())
                     } catch (e: Exception) {
-                        Log.e("EasySaveSAF", "Failed to take persistable URI permission: ${e.message}", e)
+                        NativeLog.e("EasySaveSAF", "Failed to take persistable URI permission: ${e.message}", e)
                         pendingPickDirectoryResult?.error("PERMISSION_LOST", e.message, null)
                     }
                 } else {
@@ -459,18 +416,30 @@ class MainActivity : FlutterActivity() {
         }
 
         try {
-            pendingDeleteSidecars = ProvenancePairWriter.sidecarsFor(this, ids)
-            val pendingIntent = MediaStore.createDeleteRequest(contentResolver, uris)
             pendingDeleteResult = result
-            @Suppress("DEPRECATION")
-            startIntentSenderForResult(
-                pendingIntent.intentSender,
-                DELETE_REQUEST_CODE,
-                null,
-                0,
-                0,
-                0,
-            )
+            Thread {
+                try {
+                    val sidecars = ProvenancePairWriter.sidecarsFor(this, ids)
+                    val pendingIntent = MediaStore.createDeleteRequest(contentResolver, uris)
+                    runOnUiThread {
+                        try {
+                            pendingDeleteSidecars = sidecars
+                            @Suppress("DEPRECATION")
+                            startIntentSenderForResult(pendingIntent.intentSender, DELETE_REQUEST_CODE, null, 0, 0, 0)
+                        } catch (_: Exception) {
+                            pendingDeleteResult = null
+                            pendingDeleteSidecars = emptyList()
+                            result.error("delete_failed", "Delete request failed", null)
+                        }
+                    }
+                } catch (_: Exception) {
+                    runOnUiThread {
+                        pendingDeleteResult = null
+                        pendingDeleteSidecars = emptyList()
+                        result.error("delete_failed", "Delete request failed", null)
+                    }
+                }
+            }.start()
         } catch (e: Exception) {
             pendingDeleteResult = null
             pendingDeleteSidecars = emptyList()
@@ -518,92 +487,29 @@ class MainActivity : FlutterActivity() {
         }
 
         try {
-            val pendingIntent = MediaStore.createWriteRequest(contentResolver, uris)
             pendingWriteResult = result
-            @Suppress("DEPRECATION")
-            startIntentSenderForResult(
-                pendingIntent.intentSender,
-                WRITE_REQUEST_CODE,
-                null,
-                0,
-                0,
-                0,
-            )
+            Thread {
+                try {
+                    val pendingIntent = MediaStore.createWriteRequest(contentResolver, uris)
+                    runOnUiThread {
+                        try {
+                            @Suppress("DEPRECATION")
+                            startIntentSenderForResult(pendingIntent.intentSender, WRITE_REQUEST_CODE, null, 0, 0, 0)
+                        } catch (_: Exception) {
+                            pendingWriteResult = null
+                            result.error("write_request_failed", "Write request failed", null)
+                        }
+                    }
+                } catch (_: Exception) {
+                    runOnUiThread {
+                        pendingWriteResult = null
+                        result.error("write_request_failed", "Write request failed", null)
+                    }
+                }
+            }.start()
         } catch (e: Exception) {
             pendingWriteResult = null
             result.error("write_request_failed", e.message, null)
-        }
-    }
-
-    /**
-     * Read only the header bytes of a media file (see [MediaHeaderReader]).
-     * The result is the byte array that was read, never a byte count.
-     */
-    private fun readMediaHeader(call: MethodCall, result: MethodChannel.Result) {
-        val id = call.argument<String>("id")
-        val mediaId = id?.toLongOrNull()
-        if (mediaId == null) {
-            result.error("bad_args", "id must be a numeric media id", null)
-            return
-        }
-        val mimeType = call.argument<String>("mimeType")
-        try {
-            val isVideo = mimeType?.startsWith("video/") == true ||
-                mimeType?.contains("mp4") == true ||
-                mimeType?.contains("quicktime") == true
-            val collection = if (isVideo) {
-                MediaStore.Video.Media.EXTERNAL_CONTENT_URI
-            } else {
-                MediaStore.Images.Media.EXTERNAL_CONTENT_URI
-            }
-            val uri = ContentUris.withAppendedId(collection, mediaId)
-            result.success(MediaHeaderReader.readHeader(contentResolver, uri, mimeType))
-        } catch (e: Exception) {
-            result.error("read_failed", e.message, null)
-        }
-    }
-
-    /**
-     * Album (MediaStore bucket / relative path) of a media file.
-     * The album name is never derived from the file name.
-     */
-    private fun queryMediaAlbum(call: MethodCall, result: MethodChannel.Result) {
-        val id = call.argument<String>("id")
-        val mediaId = id?.toLongOrNull()
-        if (mediaId == null) {
-            result.error("bad_args", "id must be a numeric media id", null)
-            return
-        }
-        try {
-            val uri = ContentUris.withAppendedId(
-                MediaStore.Files.getContentUri("external"),
-                mediaId,
-            )
-            result.success(MediaHeaderReader.queryAlbum(contentResolver, uri))
-        } catch (e: Exception) {
-            result.error("query_failed", e.message, null)
-        }
-    }
-
-    private fun scanFile(call: MethodCall, result: MethodChannel.Result) {
-        val path = call.argument<String>("path")
-        val mimeType = call.argument<String>("mimeType")
-        if (path == null) {
-            result.error("bad_args", "path required", null)
-            return
-        }
-        try {
-            MediaScannerConnection.scanFile(
-                this,
-                arrayOf(path),
-                if (mimeType != null) arrayOf(mimeType) else null,
-            ) { _, uri ->
-                runOnUiThread {
-                    result.success(uri?.toString())
-                }
-            }
-        } catch (e: Exception) {
-            result.error("scan_failed", e.message, null)
         }
     }
 
@@ -616,6 +522,7 @@ class MainActivity : FlutterActivity() {
     }
 
     private fun sendToSeal(url: String): Boolean {
+        if (!ExternalHandlers.accepts(url) || !isSealInstalled()) return false
         return try {
             val intent = Intent(Intent.ACTION_SEND).apply {
                 type = "text/plain"
@@ -641,7 +548,7 @@ class MainActivity : FlutterActivity() {
             }
             startActivityForResult(intent, SAF_PICK_DIRECTORY_REQUEST_CODE)
         } catch (e: Exception) {
-            Log.e("EasySaveSAF", "Failed to start ACTION_OPEN_DOCUMENT_TREE: ${e.message}", e)
+            NativeLog.e("EasySaveSAF", "Failed to start ACTION_OPEN_DOCUMENT_TREE: ${e.message}", e)
             pendingPickDirectoryResult = null
             result.error("SAF_ERROR", e.message, null)
         }
@@ -657,168 +564,11 @@ class MainActivity : FlutterActivity() {
             }
             startActivityForResult(intent, SAF_PICK_FILE_REQUEST_CODE)
         } catch (e: Exception) {
-            Log.e("EasySaveSAF", "Failed to start ACTION_OPEN_DOCUMENT: ${e.message}", e)
+            NativeLog.e("EasySaveSAF", "Failed to start ACTION_OPEN_DOCUMENT: ${e.message}", e)
             pendingPickFileResult = null
             result.error("SAF_ERROR", e.message, null)
         }
     }
 
-    private fun checkDirectoryAccess(treeUriString: String, result: MethodChannel.Result) {
-        try {
-            val uri = Uri.parse(treeUriString)
-            // 1. persistedUriPermissions 中仍包含该 URI 且可写
-            val hasPersistedWrite = contentResolver.persistedUriPermissions.any {
-                it.uri == uri && it.isWritePermission
-            }
-            if (!hasPersistedWrite) {
-                result.success(false)
-                return
-            }
-            // 2. DocumentFile 存在; 3. 是目录; 4. canWrite
-            val treeDoc = DocumentFile.fromTreeUri(this, uri)
-            val isValid = treeDoc != null &&
-                    treeDoc.exists() &&
-                    treeDoc.isDirectory &&
-                    treeDoc.canWrite()
-            result.success(isValid)
-        } catch (e: Exception) {
-            Log.w("EasySaveSAF", "checkDirectoryAccess error for $treeUriString: ${e.message}")
-            result.success(false)
-        }
-    }
 
-    private fun writeBackupToDirectory(
-        treeUriString: String,
-        fileName: String,
-        content: String,
-        result: MethodChannel.Result
-    ) {
-        try {
-            val uri = Uri.parse(treeUriString)
-            val treeDoc = DocumentFile.fromTreeUri(this, uri)
-            if (treeDoc == null || !treeDoc.exists() || !treeDoc.isDirectory) {
-                Log.e("EasySaveSAF", "Directory not found: $treeUriString")
-                result.error("DIRECTORY_NOT_FOUND", "Directory does not exist", null)
-                return
-            }
-
-            if (!treeDoc.canWrite()) {
-                Log.e("EasySaveSAF", "Permission lost for directory: $treeUriString")
-                result.error("PERMISSION_LOST", "Permission lost for directory", null)
-                return
-            }
-
-            // Overwrite existing file with same name if present, avoiding system auto-renaming (e.g. xxx (1).json)
-            val existingFile = treeDoc.findFile(fileName)
-            val targetFile = if (existingFile != null && existingFile.isFile) {
-                existingFile
-            } else {
-                treeDoc.createFile("application/json", fileName)
-            }
-            if (targetFile == null) {
-                Log.e("EasySaveSAF", "Failed to obtain or create document file: $fileName")
-                result.error("IO_ERROR", "Failed to create backup document file", null)
-                return
-            }
-
-            // Always open with "wt" mode to truncate and overwrite cleanly
-            val outputStream = contentResolver.openOutputStream(targetFile.uri, "wt")
-                ?: throw IOException("Unable to open output stream for ${targetFile.uri}")
-
-            outputStream.use { os ->
-                os.write(content.toByteArray(Charsets.UTF_8))
-                os.flush()
-            }
-
-            result.success(targetFile.uri.toString())
-        } catch (e: SecurityException) {
-            Log.e("EasySaveSAF", "SecurityException writing backup: ${e.message}", e)
-            result.error("PERMISSION_LOST", e.message, null)
-        } catch (e: IOException) {
-            Log.e("EasySaveSAF", "IOException writing backup: ${e.message}", e)
-            val msg = e.message ?: ""
-            if (msg.contains("ENOSPC", ignoreCase = true) || msg.contains("No space left", ignoreCase = true)) {
-                result.error("STORAGE_FULL", "Storage device is full", null)
-            } else {
-                result.error("IO_ERROR", e.message, null)
-            }
-        } catch (e: Exception) {
-            Log.e("EasySaveSAF", "Unexpected error writing backup: ${e.message}", e)
-            result.error("IO_ERROR", e.message, null)
-        }
-    }
-
-    private fun listBackupDirectory(treeUriString: String, result: MethodChannel.Result) {
-        try {
-            val uri = Uri.parse(treeUriString)
-            val treeDoc = DocumentFile.fromTreeUri(this, uri)
-            if (treeDoc == null || !treeDoc.exists() || !treeDoc.isDirectory) {
-                result.success(emptyList<Map<String, String>>())
-                return
-            }
-            val files = treeDoc.listFiles()
-            val list = mutableListOf<Map<String, String>>()
-            for (file in files) {
-                val name = file.name ?: continue
-                list.add(mapOf(
-                    "name" to name,
-                    "uri" to file.uri.toString()
-                ))
-            }
-            result.success(list)
-        } catch (e: Exception) {
-            Log.w("EasySaveSAF", "listBackupDirectory error: ${e.message}", e)
-            result.success(emptyList<Map<String, String>>())
-        }
-    }
-
-    private fun deleteDocuments(uris: List<String>, result: MethodChannel.Result) {
-        val results = mutableMapOf<String, Boolean>()
-        for (uriStr in uris) {
-            var deleted = false
-            try {
-                val uri = Uri.parse(uriStr)
-                deleted = DocumentsContract.deleteDocument(contentResolver, uri)
-            } catch (e: Exception) {
-                try {
-                    val doc = DocumentFile.fromSingleUri(this, Uri.parse(uriStr))
-                    deleted = doc?.delete() ?: false
-                } catch (e2: Exception) {
-                    Log.w("EasySaveSAF", "Failed to delete document $uriStr: ${e2.message}")
-                }
-            }
-            results[uriStr] = deleted
-        }
-        result.success(results)
-    }
-
-    private fun readDocumentContent(uriString: String, result: MethodChannel.Result) {
-        try {
-            val uri = Uri.parse(uriString)
-            val inputStream = contentResolver.openInputStream(uri)
-                ?: throw IOException("Unable to open input stream for $uriString")
-            val content = inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() }
-            result.success(content)
-        } catch (e: SecurityException) {
-            Log.e("EasySaveSAF", "SecurityException reading $uriString: ${e.message}", e)
-            result.error("PERMISSION_LOST", e.message, null)
-        } catch (e: IOException) {
-            Log.e("EasySaveSAF", "IOException reading $uriString: ${e.message}", e)
-            result.error("IO_ERROR", e.message, null)
-        } catch (e: Exception) {
-            Log.e("EasySaveSAF", "Unexpected error reading $uriString: ${e.message}", e)
-            result.error("IO_ERROR", e.message, null)
-        }
-    }
-
-    private fun getDirectoryDisplayName(treeUriString: String, result: MethodChannel.Result) {
-        try {
-            val uri = Uri.parse(treeUriString)
-            val treeDoc = DocumentFile.fromTreeUri(this, uri)
-            result.success(treeDoc?.name)
-        } catch (e: Exception) {
-            Log.w("EasySaveSAF", "getDirectoryDisplayName error: ${e.message}", e)
-            result.success(null)
-        }
-    }
 }

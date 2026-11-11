@@ -13,7 +13,6 @@ import '../services/history_db.dart';
 import '../theme/app_theme.dart';
 import 'shared.dart';
 import 'verified_asset_image.dart';
-import '../services/saver.dart';
 import 'ai_label_badge.dart';
 
 /// Short saved-time label, e.g. "今天 18:24", "昨天 09:10", "10-12 09:10".
@@ -37,14 +36,14 @@ String formatSavedAt(DateTime time) {
 MediaItem? coverItemFor(HistoryRecord record) {
   final post = record.toPost();
   if (post.items.isEmpty) return null;
-  if (record.files.isNotEmpty) {
-    final idx = record.files.first.itemIndex;
-    final is1Based = record.files.every((f) => f.itemIndex > 0);
+  if (record.savedFiles.isNotEmpty) {
+    final idx = record.savedFiles.first.itemIndex;
+    final is1Based = record.savedFiles.every((f) => f.itemIndex > 0);
     final zeroBased = is1Based ? idx - 1 : idx;
     if (zeroBased >= 0 && zeroBased < post.items.length) {
       return post.items[zeroBased];
     }
-    if (idx >= 0 && idx < post.items.length) return post.items[idx];
+    return post.items.where((item) => item.cacheItemIndex == zeroBased).firstOrNull;
   }
   return post.items.first;
 }
@@ -58,7 +57,8 @@ String mediaKindLabel(MediaItem? item) {
 }
 
 /// A post's type bucket (by its cover), used to group the 帖子 view by type.
-String postKindLabel(HistoryRecord record) => mediaKindLabel(coverItemFor(record));
+String postKindLabel(HistoryRecord record) =>
+    mediaKindLabel(coverItemFor(record));
 
 double aspectRatioFor(MediaItem? item) {
   final w = item?.width?.toDouble();
@@ -94,11 +94,17 @@ class HistoryThumb extends StatelessWidget {
   Widget build(BuildContext context) {
     final locator = GalleryLocatorService.instance;
     final items = record.toPost().items;
-    final index = itemIndex == null ? 0 : (record.files.every((f) => f.itemIndex > 0) ? itemIndex! - 1 : itemIndex!);
-    final remote = index >= 0 && index < items.length ? items[index] : coverItemFor(record);
+    final index = itemIndex == null
+        ? 0
+        : (record.savedFiles.every((f) => f.itemIndex > 0)
+              ? itemIndex! - 1
+              : itemIndex!);
+    final remote = itemIndex == null ? coverItemFor(record)
+        : items.where((item) => item.cacheItemIndex == index).firstOrNull ??
+            (index >= 0 && index < items.length ? items[index] : null);
 
     AssetEntity? asset;
-    for (final f in record.files) {
+    for (final f in record.savedFiles) {
       if (itemIndex != null && f.itemIndex != itemIndex) continue;
       asset =
           locator.getAssetById(f.mediaId) ??
@@ -109,7 +115,13 @@ class HistoryThumb extends StatelessWidget {
     if (asset != null) {
       return VerifiedAssetImage(
         asset,
-        fallback: CoverImage(item: remote ?? MediaItem(type: 'image', url: ''), referer: refererFor(record.platform), fit: fit, width: width, height: height),
+        fallback: CoverImage(
+          item: remote ?? MediaItem(type: 'image', url: ''),
+          platform: (record.platform),
+          fit: fit,
+          width: width,
+          height: height,
+        ),
         isOriginal: false,
         thumbnailSize: const ThumbnailSize.square(400),
         fit: fit,
@@ -118,7 +130,15 @@ class HistoryThumb extends StatelessWidget {
       );
     }
 
-    if (remote != null && remote.url.startsWith('http')) return CoverImage(item: remote, referer: refererFor(record.platform), fit: fit, width: width, height: height);
+    if (remote != null && remote.url.startsWith('http')) {
+      return CoverImage(
+        item: remote,
+        platform: (record.platform),
+        fit: fit,
+        width: width,
+        height: height,
+      );
+    }
 
     final isUnlocated = record.files.any(
       (f) =>
@@ -161,6 +181,9 @@ class DownloadingOverlay extends StatelessWidget {
     this.compact = false,
     this.paused = false,
     this.stalled = false,
+    this.failed = false,
+    this.partial = false,
+    this.failureReason,
     this.onTogglePause,
     this.onCancel,
   });
@@ -173,6 +196,11 @@ class DownloadingOverlay extends StatelessWidget {
 
   /// No sign of life for a while: the toggle becomes "retry".
   final bool stalled;
+  final bool failed;
+  final bool partial;
+
+  /// Short failure reason ("存储空间不足", "HTTP 403", ...) shown in the label.
+  final String? failureReason;
 
   /// Pause / resume (retry when [stalled]); null hides the control.
   final VoidCallback? onTogglePause;
@@ -184,11 +212,12 @@ class DownloadingOverlay extends StatelessWidget {
   Widget build(BuildContext context) {
     final pct = (progress.clamp(0.0, 1.0) * 100).round();
     final size = compact ? 28.0 : 44.0;
-    final label = paused ? '已暂停 $pct%' : (stalled ? '已停滞 $pct%' : '下载中 $pct%');
+    final reason = failureReason?.isNotEmpty == true ? '（$failureReason）' : '';
+    final label = failed ? (partial ? '部分保存成功$reason，点击重试' : '下载失败$reason，点击重试') : paused ? '已暂停 $pct%' : (stalled ? '已停滞 $pct%' : '下载中 $pct%');
     final toggleIcon = paused
         ? Icons.play_arrow_rounded
-        : (stalled ? Icons.refresh : Icons.pause_rounded);
-    final toggleTip = paused ? '继续下载' : (stalled ? '重试' : '暂停下载');
+        : (stalled || failed ? Icons.refresh : Icons.pause_rounded);
+    final toggleTip = failed ? '重试' : paused ? '继续下载' : (stalled ? '重试' : '暂停下载');
     final actionSize = compact ? 18.0 : 22.0;
 
     Widget action(IconData icon, String tip, VoidCallback onTap) {
@@ -202,7 +231,8 @@ class DownloadingOverlay extends StatelessWidget {
           width: compact ? 28 : 36,
           height: compact ? 28 : 36,
         ),
-        style: IconButton.styleFrom(backgroundColor: Colors.black38),
+        style: IconButton.styleFrom(backgroundColor: Colors.black38,
+          minimumSize: Size.zero, tapTargetSize: MaterialTapTargetSize.shrinkWrap),
       );
     }
 
@@ -217,7 +247,7 @@ class DownloadingOverlay extends StatelessWidget {
               SizedBox(
                 width: size,
                 height: size,
-                child: CircularProgressIndicator(
+                child: failed ? const Icon(Icons.error_outline, color: Colors.white) : CircularProgressIndicator(
                   // Indeterminate until the first bytes arrive.
                   value: paused || progress > 0
                       ? progress.clamp(0.0, 1.0)
@@ -320,8 +350,24 @@ List<Widget> coverBadges(
   required MediaItem? cover,
   required int fileCount,
   bool showInfo = true,
+  bool notOriginal = false,
 }) {
   final widgets = <Widget>[];
+  if (notOriginal) {
+    // A saved image smaller than the platform's declared size.
+    widgets.add(
+      const Positioned(
+        top: 34,
+        left: 8,
+        child: DarkBadge(
+          child: Text(
+            '非原图',
+            style: TextStyle(color: Colors.white, fontSize: 10),
+          ),
+        ),
+      ),
+    );
+  }
   if (showInfo && cover != null) {
     final kind = mediaKindLabel(cover);
     if (kind == 'LIVE' || kind == 'Live 图') {
@@ -414,6 +460,8 @@ class WaterfallPostCard extends StatelessWidget {
     this.downloadProgress,
     this.downloadPaused = false,
     this.downloadStalled = false,
+    this.downloadFailed = false,
+    this.downloadFailureReason,
     this.onToggleDownload,
     this.onCancelDownload,
   });
@@ -429,6 +477,8 @@ class WaterfallPostCard extends StatelessWidget {
   final double? downloadProgress;
   final bool downloadPaused;
   final bool downloadStalled;
+  final bool downloadFailed;
+  final String? downloadFailureReason;
 
   /// Pause / resume (retry when stalled) and cancel of the running download.
   final VoidCallback? onToggleDownload;
@@ -437,9 +487,7 @@ class WaterfallPostCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final cover = coverItemFor(record);
-    final fileCount = record.files.isNotEmpty
-        ? record.files.length
-        : record.fileCount;
+    final fileCount = record.savedFiles.length;
     final title = (record.title?.isNotEmpty == true) ? record.title! : '无标题';
     final radius = BorderRadius.circular(20);
 
@@ -494,10 +542,19 @@ class WaterfallPostCard extends StatelessWidget {
                           crossAxisAlignment: CrossAxisAlignment.start,
                           mainAxisSize: MainAxisSize.min,
                           children: [
-                            Wrap(crossAxisAlignment: WrapCrossAlignment.center, children: [
-                              PlatformTag(platform: record.platform),
-                              AiLabelBadge(text: record.aiLabel, source: record.aiLabelSource),
-                            ]),
+                            Wrap(
+                              crossAxisAlignment: WrapCrossAlignment.center,
+                              children: [
+                                PlatformTag(
+                                  platform: record.platform,
+                                  savedDisplayName: record.platformDisplayName,
+                                ),
+                                AiLabelBadge(
+                                  text: record.aiLabel,
+                                  source: record.aiLabelSource,
+                                ),
+                              ],
+                            ),
                             const SizedBox(height: 4),
                             Text(
                               title,
@@ -517,6 +574,7 @@ class WaterfallPostCard extends StatelessWidget {
                       context,
                       cover: cover,
                       fileCount: fileCount,
+                      notOriginal: record.savedFiles.any((f) => f.notOriginal),
                     ),
                     if (downloadProgress != null)
                       Positioned.fill(
@@ -524,6 +582,9 @@ class WaterfallPostCard extends StatelessWidget {
                           progress: downloadProgress!,
                           paused: downloadPaused,
                           stalled: downloadStalled,
+                          failed: downloadFailed,
+                          failureReason: downloadFailureReason,
+                          partial: record.savedFiles.isNotEmpty,
                           // Hidden in multi-select so taps keep selecting.
                           onTogglePause: selectionMode
                               ? null
@@ -573,7 +634,9 @@ class _SelectionDot extends StatelessWidget {
       height: 22,
       decoration: BoxDecoration(
         shape: BoxShape.circle,
-        color: selected ? AppTokens.primary : Colors.black.withValues(alpha: 0.35),
+        color: selected
+            ? AppTokens.primary
+            : Colors.black.withValues(alpha: 0.35),
         border: Border.all(color: Colors.white, width: 1.5),
       ),
       child: selected
@@ -633,6 +696,8 @@ class ListPostRow extends StatelessWidget {
     this.downloadProgress,
     this.downloadPaused = false,
     this.downloadStalled = false,
+    this.downloadFailed = false,
+    this.downloadFailureReason,
     this.onToggleDownload,
     this.onCancelDownload,
   });
@@ -650,15 +715,15 @@ class ListPostRow extends StatelessWidget {
   final double? downloadProgress;
   final bool downloadPaused;
   final bool downloadStalled;
+  final bool downloadFailed;
+  final String? downloadFailureReason;
   final VoidCallback? onToggleDownload;
   final VoidCallback? onCancelDownload;
 
   @override
   Widget build(BuildContext context) {
     final cover = coverItemFor(record);
-    final fileCount = record.files.isNotEmpty
-        ? record.files.length
-        : record.fileCount;
+    final fileCount = record.savedFiles.length;
     final title = (record.title?.isNotEmpty == true) ? record.title! : '无标题';
     final badge = listTypeBadge(cover);
 
@@ -692,6 +757,9 @@ class ListPostRow extends StatelessWidget {
                             compact: true,
                             paused: downloadPaused,
                             stalled: downloadStalled,
+                          failed: downloadFailed,
+                          failureReason: downloadFailureReason,
+                          partial: record.savedFiles.isNotEmpty,
                             onTogglePause: selectionMode
                                 ? null
                                 : onToggleDownload,
@@ -736,10 +804,19 @@ class ListPostRow extends StatelessWidget {
                   children: [
                     Row(
                       children: [
-                        Wrap(crossAxisAlignment: WrapCrossAlignment.center, children: [
-                              PlatformTag(platform: record.platform),
-                              AiLabelBadge(text: record.aiLabel, source: record.aiLabelSource),
-                            ]),
+                        Wrap(
+                          crossAxisAlignment: WrapCrossAlignment.center,
+                          children: [
+                            PlatformTag(
+                              platform: record.platform,
+                              savedDisplayName: record.platformDisplayName,
+                            ),
+                            AiLabelBadge(
+                              text: record.aiLabel,
+                              source: record.aiLabelSource,
+                            ),
+                          ],
+                        ),
                         const SizedBox(width: 6),
                         Flexible(
                           child: Text(
@@ -857,13 +934,14 @@ class AllMediaCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final post = record.toPost();
-    final is1Based = record.files.isNotEmpty && record.files.every((f) => f.itemIndex > 0);
+    final is1Based =
+        record.savedFiles.isNotEmpty && record.savedFiles.every((f) => f.itemIndex > 0);
     final zeroBased = is1Based ? itemIndex - 1 : itemIndex;
     final item = (zeroBased >= 0 && zeroBased < post.items.length)
         ? post.items[zeroBased]
         : ((itemIndex >= 0 && itemIndex < post.items.length)
-            ? post.items[itemIndex]
-            : null);
+              ? post.items[itemIndex]
+              : null);
     final radius = BorderRadius.circular(16);
     final badge = listTypeBadge(item);
 
@@ -888,9 +966,23 @@ class AllMediaCard extends StatelessWidget {
                   left: 6,
                   child: _TranslucentBadge(label: badge),
                 ),
+              if (record.savedFiles.any(
+                (f) => f.itemIndex == itemIndex && f.notOriginal,
+              ))
+                const Positioned(
+                  top: 30,
+                  left: 6,
+                  child: _TranslucentBadge(label: '非原图'),
+                ),
               if (record.aiLabel != null)
-                Positioned(bottom: 6, left: 6,
-                  child: AiLabelBadge(text: record.aiLabel, source: record.aiLabelSource)),
+                Positioned(
+                  bottom: 6,
+                  left: 6,
+                  child: AiLabelBadge(
+                    text: record.aiLabel,
+                    source: record.aiLabelSource,
+                  ),
+                ),
               if (selectionMode)
                 Positioned(
                   top: 6,
@@ -903,7 +995,10 @@ class AllMediaCard extends StatelessWidget {
                     child: DecoratedBox(
                       decoration: BoxDecoration(
                         borderRadius: radius,
-                        border: Border.all(color: AppTokens.primary, width: 2.5),
+                        border: Border.all(
+                          color: AppTokens.primary,
+                          width: 2.5,
+                        ),
                       ),
                     ),
                   ),
@@ -922,6 +1017,7 @@ class CreatorCard extends StatelessWidget {
     super.key,
     required this.authorName,
     required this.platform,
+    this.savedDisplayName,
     required this.postCount,
     required this.fileCount,
     required this.thumbs,
@@ -930,6 +1026,7 @@ class CreatorCard extends StatelessWidget {
 
   final String authorName;
   final String platform;
+  final String? savedDisplayName;
   final int postCount;
   final int fileCount;
   final List<HistThumbRef> thumbs;
@@ -966,7 +1063,10 @@ class CreatorCard extends StatelessWidget {
           const SizedBox(height: 4),
           Row(
             children: [
-              PlatformTag(platform: platform),
+              PlatformTag(
+                platform: platform,
+                savedDisplayName: savedDisplayName,
+              ),
               const SizedBox(width: 6),
               Flexible(
                 child: Text(
@@ -1004,4 +1104,3 @@ class _CreatorCell extends StatelessWidget {
     );
   }
 }
-

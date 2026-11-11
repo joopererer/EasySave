@@ -70,34 +70,38 @@ void main() {
       }
     },
   );
-  test(
-    'history lookup expands vm and vt while parsing still leaves them for WebView',
-    () async {
-      for (final host in ['vm.tiktok.com', 'vt.tiktok.com']) {
-        final link = 'https://$host/FAKE/';
-        var calls = 0;
-        Future<String?> redirect(Uri uri) async {
-          calls++;
-          return uri.host == host
-              ? 'https://www.tiktok.com/@someone/photo/$id?tracking=FAKE'
-              : null;
-        }
-
-        expect(await resolveShortLink(link, readRedirect: redirect), link);
-        expect(calls, 0);
-        final resolved = await resolveShortLink(
-          link,
-          forHistoryLookup: true,
-          readRedirect: redirect,
-        );
-        expect(
-          isLinkKnown(link, [
-            (postUrl: canonical, postId: id),
-          ], resolvedUrl: resolved),
-          isTrue,
-        );
-        expect(calls, 2);
+  test('history lookup expands vm and vt; the parse path leaves them alone',
+      () async {
+    for (final host in ['vm.tiktok.com', 'vt.tiktok.com']) {
+      final link = 'https://$host/FAKE/';
+      var calls = 0;
+      Future<String?> redirect(Uri uri) async {
+        calls++;
+        return uri.host == host
+            ? 'https://www.tiktok.com/@someone/photo/$id?tracking=FAKE'
+            : null;
       }
-    },
-  );
+
+      // v1.9.0 parity: only the history lookup may HTTP-expand a TikTok
+      // short link; parsing hands the short link to the WebView.
+      expect(await resolveShortLink(link, readRedirect: redirect), link);
+      expect(calls, 0);
+      final resolved = await resolveShortLink(
+        link,
+        forHistoryLookup: true,
+        readRedirect: redirect,
+      );
+      expect(
+        resolved,
+        'https://www.tiktok.com/@someone/photo/$id?tracking=FAKE',
+      );
+      expect(
+        isLinkKnown(link, [
+          (postUrl: canonical, postId: id),
+        ], resolvedUrl: resolved),
+        isTrue,
+      );
+      expect(calls, 2);
+    }
+  });
 }

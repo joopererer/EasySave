@@ -7,6 +7,7 @@ import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.content.res.Configuration
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
@@ -18,11 +19,13 @@ import android.graphics.drawable.GradientDrawable
 import android.os.Build
 import android.os.IBinder
 import android.util.Log
+import android.util.DisplayMetrics
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
 import android.view.WindowManager
+import android.view.WindowInsets
 import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.LinearLayout
@@ -108,6 +111,8 @@ class OverlayService : Service() {
     private var isHalfHidden = false
     private var isSnappedToLeft = false
     private var autoHideEnabled = true
+    private var lastBubbleBounds: BubbleBounds? = null
+    private var bubbleTouched = false
 
     // Drag-to-close target.
     private var closeView: View? = null
@@ -118,6 +123,7 @@ class OverlayService : Service() {
 
     override fun onCreate() {
         super.onCreate()
+        NativeLog.init(this)
         isRunning = true
         instance = this
         wm = getSystemService(WINDOW_SERVICE) as WindowManager
@@ -153,7 +159,7 @@ class OverlayService : Service() {
                 startForegroundCompat()
                 addBubble()
             } catch (e: Exception) {
-                Log.e(TAG, "restart addBubble failed: $e")
+                NativeLog.e(TAG, "restart addBubble failed: $e")
             }
         }
         return START_STICKY
@@ -173,7 +179,7 @@ class OverlayService : Service() {
             val am = getSystemService(ALARM_SERVICE) as AlarmManager
             am.set(AlarmManager.RTC, System.currentTimeMillis() + 1000, pi)
         } catch (e: Exception) {
-            Log.e(TAG, "onTaskRemoved restart failed: $e")
+            NativeLog.e(TAG, "onTaskRemoved restart failed: $e")
         }
         super.onTaskRemoved(rootIntent)
     }
@@ -203,6 +209,57 @@ class OverlayService : Service() {
     private fun baseFlags(): Int =
         WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
             WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS
+
+    @Suppress("DEPRECATION")
+    private fun bubbleBounds(): BubbleBounds {
+        val manager = wm ?: return BubbleBounds(0, 0, 0, 0)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            val metrics = manager.currentWindowMetrics
+            val insets = metrics.windowInsets.getInsets(
+                WindowInsets.Type.systemBars() or WindowInsets.Type.displayCutout()
+            )
+            return BubbleBounds(insets.left, insets.top, metrics.bounds.width() - insets.right, metrics.bounds.height() - insets.bottom)
+        }
+        val metrics = DisplayMetrics()
+        manager.defaultDisplay.getRealMetrics(metrics)
+        val insets = bubbleContainer?.rootWindowInsets
+        val cutout = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) insets?.displayCutout else null
+        return BubbleBounds(
+            maxOf(insets?.systemWindowInsetLeft ?: 0, cutout?.safeInsetLeft ?: 0),
+            maxOf(insets?.systemWindowInsetTop ?: 0, cutout?.safeInsetTop ?: 0),
+            metrics.widthPixels - maxOf(insets?.systemWindowInsetRight ?: 0, cutout?.safeInsetRight ?: 0),
+            metrics.heightPixels - maxOf(insets?.systemWindowInsetBottom ?: 0, cutout?.safeInsetBottom ?: 0),
+        )
+    }
+
+    override fun onConfigurationChanged(newConfig: Configuration) {
+        super.onConfigurationChanged(newConfig)
+        val view = bubbleContainer ?: return
+        val params = bubbleParams ?: return
+        val previous = lastBubbleBounds ?: return
+        pendingRotationFraction = previous.fraction(params.y, dp(SIZE_DP))
+        removeMenu()
+        removeClose()
+        view.requestApplyInsets()
+    }
+
+    private var pendingRotationFraction: Float? = null
+
+    private fun resnapAfterInsets(view: View, params: WindowManager.LayoutParams) {
+        val previous = lastBubbleBounds ?: return
+        val bounds = bubbleBounds()
+        if (bubbleTouched) return
+        val position = resnappedPosition(previous, bounds, params.y, dp(SIZE_DP), isSnappedToLeft, pendingRotationFraction) ?: return
+        pendingRotationFraction = null
+        params.x = position.first
+        params.y = position.second
+        lastBubbleBounds = bounds
+        try {
+            wm?.updateViewLayout(view, params)
+        } catch (e: Exception) {
+            NativeLog.e(TAG, "insets reposition failed", e)
+        }
+    }
 
     private fun startForegroundCompat() {
         val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
@@ -268,21 +325,30 @@ class OverlayService : Service() {
     }
 
     private fun addBubble() {
-        val screenW = resources.displayMetrics.widthPixels
-        val screenH = resources.displayMetrics.heightPixels
-        val minY = dp(64)
-        val maxY = screenH - dp(SIZE_DP + 84)
+        val bounds = bubbleBounds()
+        lastBubbleBounds = bounds
 
         val params = WindowManager.LayoutParams(
             dp(SIZE_DP), dp(SIZE_DP), overlayType(), baseFlags(), PixelFormat.TRANSLUCENT
         ).apply {
             gravity = Gravity.TOP or Gravity.START
-            x = screenW - dp(SIZE_DP - 6)
-            y = (screenH * 0.33f).roundToInt().coerceIn(minY, maxY)
+            flags = flags or WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) fitInsetsTypes = 0
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+            }
+            x = bounds.snapX(false, dp(SIZE_DP))
+            y = bounds.yAt(0.33f, dp(SIZE_DP))
         }
         val container = FrameLayout(this).apply {
             clipChildren = false
             clipToPadding = false
+        }
+        container.setOnApplyWindowInsetsListener { view, insets ->
+            view.postOnAnimation {
+                if (bubbleContainer === view) resnapAfterInsets(view, params)
+            }
+            insets
         }
         val v = BubbleView(this)
         v.alpha = 0.8f
@@ -295,7 +361,7 @@ class OverlayService : Service() {
         try {
             wm?.addView(container, params)
         } catch (e: Exception) {
-            Log.e(TAG, "addView failed: $e")
+            NativeLog.e(TAG, "addView failed: $e")
         }
         scheduleIdleHide(2500L)
     }
@@ -309,6 +375,7 @@ class OverlayService : Service() {
         container.setOnTouchListener { view, e ->
             when (e.action) {
                 MotionEvent.ACTION_DOWN -> {
+                    bubbleTouched = true
                     startX = params.x
                     startY = params.y
                     touchX = e.rawX
@@ -345,10 +412,12 @@ class OverlayService : Service() {
                     true
                 }
                 MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                    bubbleTouched = false
                     if (dragging) {
                         if (overClose) closeBubble() else snap(params, view)
                         removeClose()
                     } else {
+                        resnapAfterInsets(view, params)
                         onClickBubble()
                     }
                     true
@@ -359,20 +428,19 @@ class OverlayService : Service() {
     }
 
     private fun clampDrag(params: WindowManager.LayoutParams) {
-        val screenW = resources.displayMetrics.widthPixels
-        val screenH = resources.displayMetrics.heightPixels
-        params.x = params.x.coerceIn(-dp(8), screenW - dp(SIZE_DP) + dp(8))
-        params.y = params.y.coerceIn(dp(24), screenH - dp(SIZE_DP + 24))
+        val bounds = bubbleBounds()
+        lastBubbleBounds = bounds
+        params.x = params.x.coerceIn(bounds.left, bounds.maxX(dp(SIZE_DP)))
+        params.y = params.y.coerceIn(bounds.top, bounds.maxY(dp(SIZE_DP)))
     }
 
     private fun snap(params: WindowManager.LayoutParams, view: View) {
-        val screenW = resources.displayMetrics.widthPixels
-        val screenH = resources.displayMetrics.heightPixels
-        isSnappedToLeft = (params.x + dp(SIZE_DP) / 2 < screenW / 2)
-        params.x = if (isSnappedToLeft) -dp(6) else screenW - dp(SIZE_DP - 6)
-        val minY = dp(64)
-        val maxY = screenH - dp(SIZE_DP + 84)
-        params.y = params.y.coerceIn(minY, maxY)
+        val bounds = bubbleBounds()
+        pendingRotationFraction = null
+        lastBubbleBounds = bounds
+        isSnappedToLeft = (params.x + dp(SIZE_DP) / 2 < (bounds.left + bounds.right) / 2)
+        params.x = bounds.snapX(isSnappedToLeft, dp(SIZE_DP))
+        params.y = params.y.coerceIn(bounds.top, bounds.maxY(dp(SIZE_DP)))
         try {
             wm?.updateViewLayout(view, params)
         } catch (_: Exception) {
@@ -404,7 +472,9 @@ class OverlayService : Service() {
         }
         ClipboardReaderActivity.listener = { text ->
             val t = text?.trim().orEmpty()
-            if (SupportedLinks.containsSupportedUrl(t)) {
+            if (ExternalHandlers.handle(this, t)) {
+                scheduleIdleHide(2500L)
+            } else if (SupportedLinks.containsSupportedUrl(t, this)) {
                 pendingText = t
                 showMenu()
             } else {
@@ -418,7 +488,7 @@ class OverlayService : Service() {
         try {
             startActivity(intent)
         } catch (e: Exception) {
-            Log.e(TAG, "startActivity clipboard failed: $e")
+            NativeLog.e(TAG, "startActivity clipboard failed: $e")
             scheduleIdleHide(2500L)
         }
     }
@@ -434,11 +504,10 @@ class OverlayService : Service() {
         root.setOnClickListener { removeMenu() }
 
         val bp = bubbleParams
-        val screenW = resources.displayMetrics.widthPixels
-        val screenH = resources.displayMetrics.heightPixels
+        val bounds = bubbleBounds()
         val bcx = (bp?.x ?: 0).toFloat() + dp(SIZE_DP) / 2f
         val bcy = (bp?.y ?: 0).toFloat() + dp(SIZE_DP) / 2f
-        val onRight = bcx > screenW / 2f
+        val onRight = bcx > (bounds.left + bounds.right) / 2f
         val baseDeg = if (onRight) 180.0 else 0.0
         val spread = 52.0
         val radius = dp(120).toFloat()
@@ -456,8 +525,8 @@ class OverlayService : Service() {
             val cy = bcy + radius * sin(deg).toFloat()
             val item = makeItem(items[i].second, items[i].third) { onMenuAction(items[i].first) }
             val lp = FrameLayout.LayoutParams(dp(72), dp(78)).apply {
-                leftMargin = (cx - dp(36)).roundToInt().coerceIn(0, screenW - dp(72))
-                topMargin = (cy - dp(39)).roundToInt().coerceIn(dp(24), screenH - dp(78))
+                leftMargin = (cx - dp(36)).roundToInt().coerceIn(bounds.left, (bounds.right - dp(72)).coerceAtLeast(bounds.left))
+                topMargin = (cy - dp(39)).roundToInt().coerceIn(bounds.top, (bounds.bottom - dp(78)).coerceAtLeast(bounds.top))
             }
             root.addView(item, lp)
         }
@@ -466,12 +535,17 @@ class OverlayService : Service() {
         val params = WindowManager.LayoutParams(
             WindowManager.LayoutParams.MATCH_PARENT,
             WindowManager.LayoutParams.MATCH_PARENT,
-            overlayType(), baseFlags(), PixelFormat.TRANSLUCENT
-        )
+            overlayType(), baseFlags() or WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN, PixelFormat.TRANSLUCENT
+        ).apply {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) fitInsetsTypes = 0
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+            }
+        }
         try {
             wm?.addView(root, params)
         } catch (e: Exception) {
-            Log.e(TAG, "menu addView failed: $e")
+            NativeLog.e(TAG, "menu addView failed: $e")
         }
     }
 
@@ -538,7 +612,7 @@ class OverlayService : Service() {
             }
             startActivity(i)
         } catch (e: Exception) {
-            Log.e(TAG, "openApp failed: $e")
+            NativeLog.e(TAG, "openApp failed: $e")
         }
     }
 
@@ -556,14 +630,14 @@ class OverlayService : Service() {
             }
             startActivity(i)
         } catch (e: Exception) {
-            Log.e(TAG, "openErrorPage failed: $e")
+            NativeLog.e(TAG, "openErrorPage failed: $e")
         }
     }
 
     // ---------------------------------------------------------------- close
 
-    private fun closeCenterX(): Int = resources.displayMetrics.widthPixels / 2
-    private fun closeCenterY(): Int = resources.displayMetrics.heightPixels - dp(120)
+    private fun closeCenterX(): Int = bubbleBounds().let { (it.left + it.right) / 2 }
+    private fun closeCenterY(): Int = bubbleBounds().bottom - dp(120)
 
     private fun inCloseZone(x: Int, y: Int): Boolean {
         val dx = (x - closeCenterX()).toFloat()
@@ -578,6 +652,11 @@ class OverlayService : Service() {
             dp(60), dp(60), overlayType(), baseFlags(), PixelFormat.TRANSLUCENT
         ).apply {
             gravity = Gravity.TOP or Gravity.START
+            flags = flags or WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) fitInsetsTypes = 0
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+            }
             x = closeCenterX() - dp(30)
             y = closeCenterY() - dp(30)
         }
@@ -587,7 +666,7 @@ class OverlayService : Service() {
         try {
             wm?.addView(cv, params)
         } catch (e: Exception) {
-            Log.e(TAG, "close addView failed: $e")
+            NativeLog.e(TAG, "close addView failed: $e")
         }
     }
 
@@ -610,7 +689,7 @@ class OverlayService : Service() {
                 .putBoolean("flutter.bubbleEnabled", false)
                 .apply()
         } catch (e: Exception) {
-            Log.e(TAG, "persist bubbleEnabled failed: $e")
+            NativeLog.e(TAG, "persist bubbleEnabled failed: $e")
         }
         try {
             bubbleContainer?.let { wm?.removeView(it) }
@@ -621,7 +700,7 @@ class OverlayService : Service() {
         try {
             sendBroadcast(Intent(ACTION_BUBBLE_STATE))
         } catch (e: Exception) {
-            Log.e(TAG, "broadcast bubble state failed: $e")
+            NativeLog.e(TAG, "broadcast bubble state failed: $e")
         }
         stopSelf()
     }
@@ -720,8 +799,19 @@ private class BubbleView(context: Context) : FrameLayout(context) {
                         val frac = if (total > 0) done.toFloat() / total else 0f
                         arc.set(cx - r + 3, cy - r + 3, cx + r - 3, cy + r - 3)
                         canvas.drawArc(arc, -90f, 360f * frac.coerceIn(0f, 1f), false, fg)
-                        val s = if (total > 0) "$done/$total" else "…"
-                        canvas.drawText(s, cx, cy + text.textSize / 3f, text)
+                        if (total > 0) canvas.drawText("$done/$total", cx, cy + text.textSize / 3f, text)
+                        else {
+                            val moving = if (Build.VERSION.SDK_INT >= 26) android.animation.ValueAnimator.areAnimatorsEnabled()
+                                else android.provider.Settings.Global.getFloat(context.contentResolver,
+                                    android.provider.Settings.Global.ANIMATOR_DURATION_SCALE, 1f) > 0f
+                            val offsets = parsingDotOffsets(android.os.SystemClock.uptimeMillis(), moving)
+                            val dot = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.WHITE }
+                            for (index in 0..2) {
+                                val offset = offsets[index] * r * 0.16f
+                                canvas.drawCircle(cx + (index - 1) * r * 0.4f, cy - offset, r * 0.09f, dot)
+                            }
+                            if (moving) postInvalidateOnAnimation()
+                        }
                     }
                     BubbleState.DONE -> {
                         val p = Path().apply {

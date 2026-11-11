@@ -9,7 +9,6 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:flutter_staggered_grid_view/flutter_staggered_grid_view.dart';
 import 'package:photo_manager/photo_manager.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -26,14 +25,34 @@ import '../services/host_bridge.dart';
 import '../services/media_delete_service.dart';
 import '../services/parse_service.dart';
 import '../services/settings.dart';
+import '../services/site_registry.dart';
 import '../theme/app_theme.dart';
 import '../widgets/delete_records_sheet.dart';
 import '../widgets/download_sheet.dart';
 import '../widgets/gallery_browser.dart';
 import '../widgets/history_cards.dart';
+import '../widgets/history_masonry.dart';
 import 'download_queue_page.dart';
 import 'login_page.dart';
 import 'preview_page.dart';
+
+@visibleForTesting
+Widget historyGroupSliver({
+  required String title,
+  required Color background,
+  required Widget content,
+}) {
+  return SliverMainAxisGroup(
+    slivers: [
+      if (title.isNotEmpty)
+        SliverPersistentHeader(
+          pinned: true,
+          delegate: _StickyHeaderDelegate(title: title, background: background),
+        ),
+      content,
+    ],
+  );
+}
 
 class HistoryPage extends StatefulWidget {
   const HistoryPage({
@@ -102,6 +121,14 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
   Map<String, DownloadBatch> _downloadBatches = const {};
 
   bool _isPaused(String postId) => _downloadBatches[postId]?.isPaused ?? false;
+  bool _isFailed(String postId) => _downloadBatches[postId]?.isTerminal == true &&
+      (_downloadBatches[postId]?.failedCount ?? 0) > 0;
+
+  /// A failed post with no download batch in memory (after a restart or a
+  /// backup restore) keeps its failure on the record; its retry re-parses the
+  /// original link.
+  bool _recordFailed(HistoryRecord record) =>
+      _downloadBatches[record.postId] == null && record.downloadError != null;
 
   bool _isStalled(String postId) =>
       _downloadBatches[postId]?.isStalledAt(
@@ -115,7 +142,9 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
     if (batch == null) return;
     final dm = DownloadManager.instance;
     try {
-      if (batch.isPaused) {
+      if (batch.isTerminal && batch.failedCount > 0) {
+        await dm.retryBatch(await dm.forceAdopt(batch));
+      } else if (batch.isPaused) {
         await dm.resumeBatch(batch);
       } else if (batch.isStalledAt(DateTime.now().millisecondsSinceEpoch)) {
         await dm.restartBatch(await dm.forceAdopt(batch));
@@ -171,7 +200,8 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
     try {
       final all = await DownloadManager.instance.liveBatches().timeout(const Duration(seconds: 2));
       if (!mounted) return;
-      final unfinished = [for (final b in all) if (!b.isTerminal) b];
+      final unfinished = [for (final b in all)
+        if (!b.cancelledByDeletion && (!b.isTerminal || b.failedCount > 0)) b];
       final progress = <String, double>{
         for (final b in unfinished) b.postId: b.progress,
       };
@@ -318,20 +348,22 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
       });
     }
     try {
-      final records = await historyStep('refresh-db',
+      final records = await retryHistoryRead(
           () => HistoryDb.instance().then((db) => db.recent(limit: 10000)),
-          timeout: const Duration(seconds: 4), deadline: _historyRefresh.deadline);
+          deadline: _historyRefresh.deadline);
       if (!mounted) return;
       setState(() {
         _records = records;
         _loading = false;
+        _dbError = null;
       });
     } catch (e) {
       if (!mounted) return;
       setState(() {
         _loading = false;
-        _dbError = '$e';
+        _dbError = _records.isEmpty ? '$e' : null;
       });
+      if (e is TimeoutException) HistoryDb.retryPendingOpen();
     }
   }
 
@@ -340,7 +372,7 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
   List<HistoryRecord> get _filtered {
     final q = _query.trim().toLowerCase();
     return _records.where((r) {
-      if (_platform != 'all' && r.platform != _platform) return false;
+      if (_platform != 'all' && !SiteRegistry.current.sameSite(r.platform, _platform)) return false;
       if (_author != null && (r.authorName ?? '') != _author) return false;
       if (q.isNotEmpty) {
         final title = (r.title ?? '').toLowerCase();
@@ -403,7 +435,7 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
     if (_view == HistoryView.all) {
       final keys = <String>{};
       for (final r in _filtered) {
-        for (final f in r.files) {
+        for (final f in r.savedFiles) {
           keys.add(_mediaKey(r, f.itemIndex));
         }
       }
@@ -487,29 +519,25 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
       ),
     );
     try {
-      final outcome = await parsePostOutcome(record.postUrl);
+      final outcome = await parsePostOutcome(record.postUrl, source: 'history_refresh', forceRefresh: true);
       if (!mounted) return;
       ScaffoldMessenger.of(context).hideCurrentSnackBar();
-      Navigator.of(context).push(
-        PreviewPage.route(
+      unawaited(PreviewPage.open(context,
           post: outcome.data,
           rawImages: outcome.rawImages,
-        ),
-      );
+      ));
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).hideCurrentSnackBar();
 
       final isLoginRequired =
-          e is ParseFailure && e.code == ParseErrorCode.loginRequired;
+          e is ParseFailure && e.code == ParseErrorCode.loginRequired && loginSiteIds.contains(platformFromKey(record.platform));
       final cachedPost = record.toPost();
       if (cachedPost.items.isNotEmpty) {
-        Navigator.of(context).push(
-          PreviewPage.route(post: cachedPost),
-        );
+        unawaited(PreviewPage.open(context, post: cachedPost));
         if (isLoginRequired) {
           final platform = platformFromKey(record.platform);
-          LoginExpiredBus.markExpired(platform);
+          LoginExpiredBus.markParseLoginRequired(platform);
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
               content: const Text('已使用本地记录打开预览（重新解析需登录）'),
@@ -532,7 +560,7 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
 
       if (isLoginRequired) {
         final platform = platformFromKey(record.platform);
-        LoginExpiredBus.markExpired(platform);
+        LoginExpiredBus.markParseLoginRequired(platform);
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: const Text('该内容需要登录后查看，请先登录'),
@@ -562,12 +590,23 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
   /// Build the fullscreen browser items for a record and open it.
   Future<void> _openRecord(HistoryRecord record, {int? highlightItemIndex}) async {
     if (_opening) return;
+    if (record.fileCount == 0 && record.savedFiles.isEmpty &&
+        _downloadBatches.containsKey(record.postId)) {
+      _opening = true;
+      try {
+        await Navigator.of(context).push(MaterialPageRoute<void>(
+            builder: (_) => const DownloadQueuePage()));
+      } finally {
+        _opening = false;
+      }
+      return;
+    }
     _opening = true;
 
     try {
       final post = record.toPost();
       final locator = GalleryLocatorService.instance;
-      final files = [...record.files]..sort((a, b) => a.itemIndex.compareTo(b.itemIndex));
+      final files = [...record.savedFiles]..sort((a, b) => a.itemIndex.compareTo(b.itemIndex));
       final items = <GalleryBrowserItem>[];
       var initial = 0;
 
@@ -619,11 +658,14 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
             items.add(
               GalleryBrowserItem(
                 index: zeroBasedIdx,
+                cachePostId: record.postId,
                 type: 'live',
-                url: postItem?.url.isNotEmpty == true ? postItem!.url : imgFile.filename,
-                videoUrl: postItem?.videoUrl?.isNotEmpty == true ? postItem!.videoUrl : vidFile.filename,
+                url: postItem?.url ?? '',
+                videoUrl: postItem?.videoUrl,
                 posterUrl: postItem?.posterUrl,
+                thumbnailUrl: postItem?.thumbnailUrl,
                 fallbacks: postItem?.fallbacks ?? const [],
+                requestResources: postItem?.requestResources,
                 isGif: postItem?.isGif ?? false,
                 asset: imgAsset,
                 liveVideoAsset: vidAsset,
@@ -654,11 +696,14 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
             items.add(
               GalleryBrowserItem(
                 index: zeroBasedIdx,
+                cachePostId: record.postId,
                 type: itemType,
-                url: postItem?.url ?? f.filename,
-                videoUrl: f.isImage ? postItem?.videoUrl : (postItem?.videoUrl ?? f.filename),
+                url: postItem?.url ?? '',
+                videoUrl: postItem?.videoUrl,
                 posterUrl: postItem?.posterUrl,
+                thumbnailUrl: postItem?.thumbnailUrl,
                 fallbacks: postItem?.fallbacks ?? const [],
+                requestResources: postItem?.requestResources,
                 isGif: postItem?.isGif ?? false,
                 asset: asset,
                 status: status,
@@ -666,27 +711,6 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
               ),
             );
           }
-        }
-      }
-
-      if (items.isEmpty && post.items.isNotEmpty) {
-        for (var i = 0; i < post.items.length; i++) {
-          final postItem = post.items[i];
-          if (highlightItemIndex != null && i == highlightItemIndex) {
-            initial = items.length;
-          }
-          items.add(
-            GalleryBrowserItem(
-              index: i,
-              type: postItem.type,
-              url: postItem.url,
-              videoUrl: postItem.videoUrl,
-              posterUrl: postItem.posterUrl,
-              fallbacks: postItem.fallbacks,
-              isGif: postItem.isGif ?? false,
-              status: FileStatus.unknown,
-            ),
-          );
         }
       }
 
@@ -736,7 +760,7 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
     final files = <XFile>[];
     final locator = GalleryLocatorService.instance;
     for (final r in records) {
-      for (final f in r.files) {
+      for (final f in r.savedFiles) {
         final asset =
             locator.getAssetById(f.mediaId) ?? locator.locateAsset(f, r.postId);
         if (asset == null) continue;
@@ -766,7 +790,7 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
       final r = ref.record;
       urls.add(r.postUrl);
       HistoryFile? matched;
-      for (final f in r.files) {
+      for (final f in r.savedFiles) {
         if (f.itemIndex == ref.itemIndex) {
           matched = f;
           break;
@@ -917,8 +941,8 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
       case HistorySort.mostFiles:
         final sorted = [...posts]
           ..sort(
-            (a, b) => (b.files.isNotEmpty ? b.files.length : b.fileCount)
-                .compareTo(a.files.isNotEmpty ? a.files.length : a.fileCount),
+            (a, b) => (b.savedFiles.length)
+                .compareTo(a.savedFiles.length),
           );
         return [_PostGroup('', sorted)];
       case HistorySort.author:
@@ -939,7 +963,7 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
     final all = <HistThumbRef>[];
     for (final r in records) {
       final seenIndices = <int>{};
-      for (final f in r.files) {
+      for (final f in r.savedFiles) {
         if (seenIndices.add(f.itemIndex)) {
           all.add(HistThumbRef(r, f.itemIndex));
         }
@@ -969,7 +993,7 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
         final byKind = <String, List<HistThumbRef>>{};
         for (final ref in all) {
           final post = ref.record.toPost();
-          final is1Based = ref.record.files.isNotEmpty && ref.record.files.every((f) => f.itemIndex > 0);
+          final is1Based = ref.record.savedFiles.isNotEmpty && ref.record.savedFiles.every((f) => f.itemIndex > 0);
           final zeroBased = is1Based ? ref.itemIndex - 1 : ref.itemIndex;
           final item = (zeroBased >= 0 && zeroBased < post.items.length)
               ? post.items[zeroBased]
@@ -986,8 +1010,8 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
         ];
       case HistorySort.mostFiles:
         all.sort((a, b) {
-          final av = a.record.files.length;
-          final bv = b.record.files.length;
+          final av = a.record.savedFiles.length;
+          final bv = b.record.savedFiles.length;
           return bv.compareTo(av);
         });
         return [_MediaGroup('', all)];
@@ -1007,7 +1031,7 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
   }
 
   DateTime _fileSavedAt(HistThumbRef ref) {
-    for (final f in ref.record.files) {
+    for (final f in ref.record.savedFiles) {
       if (f.itemIndex == ref.itemIndex) {
         return DateTime.fromMillisecondsSinceEpoch(f.savedAt);
       }
@@ -1046,7 +1070,7 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
   Widget _queueButton() {
     final count = _unfinished.length;
     return Tooltip(
-      message: count > 0 ? '下载队列（$count 个进行中）' : '下载队列',
+      message: count > 0 ? '下载队列（$count 个待完成）' : '下载队列',
       child: InkWell(
         borderRadius: BorderRadius.circular(999),
         onTap: () async {
@@ -1082,7 +1106,7 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
     final filtered = _filtered;
     final fileCount = filtered.fold<int>(
       0,
-      (sum, r) => sum + (r.files.isNotEmpty ? r.files.length : r.fileCount),
+      (sum, r) => sum + (r.savedFiles.length),
     );
     return AppBar(
       title: Column(
@@ -1535,14 +1559,16 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
 
   Widget _platformMenu() {
     return PopupMenuButton<String>(
+      key: const ValueKey('canonical-platform-filter'),
       tooltip: '平台筛选',
       onSelected: (v) => setState(() => _platform = v),
-      itemBuilder: (_) => const [
-        PopupMenuItem(value: 'all', child: Text('全部')),
-        PopupMenuItem(value: 'xhs', child: Text('小红书')),
-        PopupMenuItem(value: 'instagram', child: Text('Instagram')),
-        PopupMenuItem(value: 'tiktok', child: Text('TikTok')),
-        PopupMenuItem(value: 'x', child: Text('X')),
+      itemBuilder: (_) => [
+        const PopupMenuItem(value: 'all', child: Text('全部')),
+        for (final siteId in {
+          ...SiteRegistry.current.sites.where((s) => s.enabled).map((s) => s.id),
+          ..._records.map((r) => SiteRegistry.current.canonicalId(r.platform)),
+        })
+          PopupMenuItem(value: siteId, child: Text(_platformLabel(siteId))),
       ],
       child: _toolbarButtonInner(
         icon: Icons.filter_list,
@@ -1586,13 +1612,9 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
     );
   }
 
-  String _platformLabel(String key) => switch (key) {
-    'xhs' => '小红书',
-    'instagram' => 'Instagram',
-    'tiktok' => 'TikTok',
-    'x' => 'X',
-    _ => '全部',
-  };
+  String _platformLabel(String key) => key == 'all' ? '全部' : platformLabel(key,
+    savedDisplayName: _records.where((r) => SiteRegistry.current.sameSite(r.platform, key) && r.platformDisplayName?.trim().isNotEmpty == true)
+      .map((r) => r.platformDisplayName).firstOrNull);
 
   Widget _body() {
     if (_loading) {
@@ -1676,39 +1698,19 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
     );
   }
 
-  Widget _stickyHeader(String title) {
-    final title0 = title;
-    if (title0.isEmpty) return const SliverToBoxAdapter(child: SizedBox.shrink());
-    return SliverPersistentHeader(
-      pinned: true,
-      delegate: _StickyHeaderDelegate(
-        title: title0,
-        background: Theme.of(context).scaffoldBackgroundColor,
-      ),
-    );
-  }
-
   /// A masonry block for one group: a shrink-wrapped grid inside a
   /// SliverToBoxAdapter so the sliver reports an exact height (avoids the
   /// sliver-masonry extent estimate that caused the scroll to jump back and
-  /// stop short of the bottom).
+  /// stop short of the bottom). [itemKeys] identify the ordered items so the
+  /// grid lays out again whenever order or membership changes.
   Widget _groupGrid({
-    required int count,
+    required List<String> itemKeys,
     required Widget Function(BuildContext, int) itemBuilder,
   }) {
     return SliverToBoxAdapter(
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 16),
-        child: MasonryGridView.count(
-          crossAxisCount: 2,
-          mainAxisSpacing: 12,
-          crossAxisSpacing: 8,
-          shrinkWrap: true,
-          physics: const NeverScrollableScrollPhysics(),
-          padding: EdgeInsets.zero,
-          itemCount: count,
-          itemBuilder: itemBuilder,
-        ),
+        child: HistoryMasonryGrid(itemKeys: itemKeys, itemBuilder: itemBuilder),
       ),
     );
   }
@@ -1719,10 +1721,12 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
       CustomScrollView(
         slivers: [
           const SliverToBoxAdapter(child: SizedBox(height: 8)),
-          for (final group in groups) ...[
-            _stickyHeader(group.title),
-            _groupGrid(
-              count: group.posts.length,
+          for (final group in groups)
+            historyGroupSliver(
+              title: group.title,
+              background: Theme.of(context).scaffoldBackgroundColor,
+              content: _groupGrid(
+              itemKeys: [for (final record in group.posts) 'wf-${record.id}'],
               itemBuilder: (context, index) {
                 final record = group.posts[index];
                 final key = _postKey(record);
@@ -1731,18 +1735,20 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
                   record: record,
                   selectionMode: _selectionMode,
                   selected: _selected.contains(key),
-                  downloadProgress: _downloadProgress[record.postId],
+                  downloadProgress: _downloadProgress[record.postId] ?? (_recordFailed(record) ? 0 : null),
                   downloadPaused: _isPaused(record.postId),
                   downloadStalled: _isStalled(record.postId),
-                  onToggleDownload: _downloadBatches[record.postId]?.supportsPause == false ? null : () => _toggleDownload(record.postId),
+                  downloadFailed: _isFailed(record.postId) || _recordFailed(record),
+                  downloadFailureReason: _downloadBatches[record.postId]?.failureReason ?? record.downloadError,
+                  onToggleDownload: _recordFailed(record) ? () => _reparse(record) : _downloadBatches[record.postId]?.supportsPause == false && !_isFailed(record.postId) ? null : () => _toggleDownload(record.postId),
                   onCancelDownload: () => _cancelDownload(record.postId),
                   onTap: () => _openRecord(record),
                   onLongPress: () => _enterSelection(key),
                   onToggleSelect: () => _toggleSelection(key),
                 );
               },
+              ),
             ),
-          ],
           const SliverToBoxAdapter(child: SizedBox(height: 96)),
         ],
       ),
@@ -1755,9 +1761,11 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
       CustomScrollView(
         slivers: [
           const SliverToBoxAdapter(child: SizedBox(height: 8)),
-          for (final group in groups) ...[
-            _stickyHeader(group.title),
-            SliverPadding(
+          for (final group in groups)
+            historyGroupSliver(
+              title: group.title,
+              background: Theme.of(context).scaffoldBackgroundColor,
+              content: SliverPadding(
               padding: const EdgeInsets.symmetric(horizontal: 16),
               sliver: SliverList(
                 delegate: SliverChildBuilderDelegate((context, index) {
@@ -1799,10 +1807,12 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
                         record: record,
                         selectionMode: _selectionMode,
                         selected: _selected.contains(key),
-                        downloadProgress: _downloadProgress[record.postId],
+                        downloadProgress: _downloadProgress[record.postId] ?? (_recordFailed(record) ? 0 : null),
                         downloadPaused: _isPaused(record.postId),
                         downloadStalled: _isStalled(record.postId),
-                        onToggleDownload: _downloadBatches[record.postId]?.supportsPause == false ? null : () => _toggleDownload(record.postId),
+                  downloadFailed: _isFailed(record.postId) || _recordFailed(record),
+                  downloadFailureReason: _downloadBatches[record.postId]?.failureReason ?? record.downloadError,
+                        onToggleDownload: _recordFailed(record) ? () => _reparse(record) : _downloadBatches[record.postId]?.supportsPause == false && !_isFailed(record.postId) ? null : () => _toggleDownload(record.postId),
                         onCancelDownload: () =>
                             _cancelDownload(record.postId),
                         onTap: () => _openRecord(record),
@@ -1815,8 +1825,8 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
                   );
                 }, childCount: group.posts.length),
               ),
+              ),
             ),
-          ],
           const SliverToBoxAdapter(child: SizedBox(height: 24)),
         ],
       ),
@@ -1829,10 +1839,14 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
       CustomScrollView(
         slivers: [
           const SliverToBoxAdapter(child: SizedBox(height: 8)),
-          for (final group in groups) ...[
-            _stickyHeader(group.title),
-            _groupGrid(
-              count: group.media.length,
+          for (final group in groups)
+            historyGroupSliver(
+              title: group.title,
+              background: Theme.of(context).scaffoldBackgroundColor,
+              content: _groupGrid(
+              itemKeys: [
+                for (final ref in group.media) 'all-${ref.record.id}-${ref.itemIndex}',
+              ],
               itemBuilder: (context, index) {
                 final ref = group.media[index];
                 final key = _mediaKey(ref.record, ref.itemIndex);
@@ -1848,8 +1862,8 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
                   onToggleSelect: () => _toggleSelection(key),
                 );
               },
+              ),
             ),
-          ],
           const SliverToBoxAdapter(child: SizedBox(height: 96)),
         ],
       ),
@@ -1873,6 +1887,7 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
           return CreatorCard(
             authorName: c.authorName,
             platform: c.platform,
+            savedDisplayName: _platformLabel(c.platform),
             postCount: c.postCount,
             fileCount: c.fileCount,
             thumbs: c.thumbs,
@@ -1891,13 +1906,13 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
     for (final r in records) {
       final author = r.authorName ?? '';
       final group = map.putIfAbsent(
-        author,
-        () => _CreatorGroup(authorName: author, platform: r.platform),
+        '${SiteRegistry.current.canonicalId(r.platform)}:$author',
+        () => _CreatorGroup(authorName: author, platform: SiteRegistry.current.canonicalId(r.platform)),
       );
       group.postCount++;
-      group.fileCount += r.files.isNotEmpty ? r.files.length : r.fileCount;
+      group.fileCount += r.savedFiles.length;
       if (group.thumbs.length < 4) {
-        for (final f in r.files) {
+        for (final f in r.savedFiles) {
           if (group.thumbs.length >= 4) break;
           group.thumbs.add(HistThumbRef(r, f.itemIndex));
         }
@@ -2013,7 +2028,7 @@ class VideoBackfillHintBanner extends StatelessWidget {
       return const SizedBox.shrink();
     }
     final hasVideoWithoutAssetId = records.any(
-      (r) => r.files.any((f) => !f.isImage && (f.assetId == null || f.assetId!.isEmpty)),
+      (r) => r.savedFiles.any((f) => !f.isImage && (f.assetId == null || f.assetId!.isEmpty)),
     );
     if (!hasVideoWithoutAssetId) {
       return const SizedBox.shrink();
@@ -2067,4 +2082,3 @@ class VideoBackfillHintBanner extends StatelessWidget {
     );
   }
 }
-

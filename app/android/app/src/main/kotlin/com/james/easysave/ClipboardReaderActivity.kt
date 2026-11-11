@@ -46,7 +46,7 @@ class ClipboardReaderActivity : Activity() {
     private val timeout = Runnable {
         if (!done) {
             done = true
-            Log.i(TAG, "CLIPBOARD=<timeout: no focus>")
+            NativeLog.i(TAG, "CLIPBOARD=<timeout: no focus>")
             finish()
         }
     }
@@ -75,12 +75,17 @@ class ClipboardReaderActivity : Activity() {
             if (clip != null && clip.itemCount > 0) clip.getItemAt(0).coerceToText(this)?.toString() else null
         // Never log the clipboard content itself (it can contain a share link
         // with tokens) — only its length and the host of the first URL.
-        Log.i(TAG, "CLIPBOARD=${LogSanitizer.summarize(text)}")
+        NativeLog.i(TAG, "CLIPBOARD=${LogSanitizer.summarize(text)}")
+        if (ExternalHandlers.handle(this, text)) {
+            deliver(null)
+            finish()
+            return
+        }
         // Shown from this (foreground) activity so it isn't suppressed the way a
         // background toast would be. This shares the supported-host guard
         // with the share and bubble entry points; Dart resolves short links.
         val emptyMsg = intent?.getStringExtra(EXTRA_EMPTY_MESSAGE)
-        val hasHttp = SupportedLinks.containsSupportedUrl(text)
+        val hasHttp = SupportedLinks.containsSupportedUrl(text, this)
         if (!hasHttp && !emptyMsg.isNullOrBlank()) {
             Toast.makeText(this, emptyMsg, Toast.LENGTH_SHORT).show()
         }

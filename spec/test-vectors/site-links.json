@@ -1,0 +1,142 @@
+[
+  {
+    "text": "https://www.xiaohongshu.com/explore/abc",
+    "siteId": "xhs"
+  },
+  {
+    "text": "https://www.rednote.com/discovery/item/abc?xsec_token=x",
+    "siteId": "xhs"
+  },
+  {
+    "text": "分享 http://xhslink.com/a/abc，看看",
+    "siteId": "xhs"
+  },
+  {
+    "text": "xhslink.cn/o/abc",
+    "siteId": "xhs"
+  },
+  {
+    "text": "https://www.instagram.com/p/AbC123/",
+    "siteId": "instagram"
+  },
+  {
+    "text": "https://www.instagram.com/p/DfE4G_WiP52/?srtk=MXNrMG5zdXl1aWZ0ag==",
+    "siteId": "instagram"
+  },
+  {
+    "text": "www.instagram.com/reels/AbC123/",
+    "siteId": "instagram"
+  },
+  {
+    "text": "https://instagr.am/tv/abc",
+    "siteId": "instagram"
+  },
+  {
+    "text": "https://x.com/user/status/123",
+    "siteId": "x"
+  },
+  {
+    "text": "https://x.com/ysoke145/status/2115654865154191715?a=YT7Ey-dSrpSDPv1hXi8&s=19",
+    "siteId": "x"
+  },
+  {
+    "text": "https://WWW.INSTAGRAM.COM/p/DfE4G_WiP52/",
+    "siteId": "instagram"
+  },
+  {
+    "text": "https://twitter.com/i/status/123",
+    "siteId": "x"
+  },
+  {
+    "text": "t.co/abc",
+    "siteId": "x"
+  },
+  {
+    "text": "https://www.tiktok.com/@user/video/123",
+    "siteId": "tiktok"
+  },
+  {
+    "text": "https://www.tiktok.com/@user/photo/123",
+    "siteId": "tiktok"
+  },
+  {
+    "text": "https://www.tiktok.com/@/video/123",
+    "siteId": "tiktok"
+  },
+  {
+    "text": "vm.tiktok.com/abc",
+    "siteId": "tiktok"
+  },
+  {
+    "text": "https://vt.tiktok.com/abc/。",
+    "siteId": "tiktok"
+  },
+  {
+    "text": "https://www.tiktok.com/t/abc/",
+    "siteId": "tiktok"
+  },
+  {
+    "text": "https://www.tiktok.com/share/video/123",
+    "siteId": "tiktok"
+  },
+  {
+    "text": "https://www.tiktok.com/v/123.html",
+    "siteId": "tiktok"
+  },
+  {
+    "text": "https://x.com/user/status/123?utm_source=x#fragment",
+    "siteId": "x"
+  },
+  {
+    "text": "https://evil-xiaohongshu.com/explore/abc",
+    "siteId": null
+  },
+  {
+    "text": "https://instagram.com.evil.test/p/abc",
+    "siteId": null
+  },
+  {
+    "text": "https://tiktok.com.evil.test/@a/video/123",
+    "siteId": null
+  },
+  {
+    "text": "https://x.com.evil.test/a/status/123",
+    "siteId": null
+  },
+  {
+    "text": "https://user@www.instagram.com/p/abc",
+    "siteId": null
+  },
+  {
+    "text": "user@xhslink.cn/o/abc",
+    "siteId": null
+  },
+  {
+    "text": "ftp://xhslink.cn/o/abc",
+    "siteId": null
+  },
+  {
+    "text": "https://www.instagram.com/accounts/login",
+    "siteId": null
+  },
+  {
+    "text": "https://www.tiktok.com/@a",
+    "siteId": null
+  },
+  {
+    "text": "tiktok.com",
+    "siteId": null
+  },
+  {
+    "text": "https://www.douyin.com/video/123",
+    "siteId": null
+  },
+  {
+    "text": "https://unknown.example/post/123",
+    "siteId": null
+  },
+  {
+    "text": "没有链接",
+    "siteId": null
+  }
+]

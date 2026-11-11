@@ -9,6 +9,13 @@
 # packages, and plugins designed to encourage good coding practices.
 include: package:flutter_lints/flutter.yaml
 
+analyzer:
+  # `build/` holds Flutter test temp copies and the project-local Gradle/pub
+  # caches; analysing those third-party copies drowns the project's own
+  # diagnostics. Source under lib/ and test/ stays fully analysed.
+  exclude:
+    - build/**
+
 linter:
   # The lint rules applied to this project can be customized in the
   # section below to disable rules from the `package:flutter_lints/flutter.yaml`

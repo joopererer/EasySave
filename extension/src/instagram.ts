@@ -4,6 +4,8 @@
 // so the same code works in content scripts and in Vitest.
 // Implements the Instagram section of spec/parsing.md.
 
+import { instagramAiLabel, type AiLabel } from './ai-label';
+
 export type InstagramErrorCode =
   | "LOGIN_REQUIRED"
   | "PRIVATE_OR_UNAVAILABLE"
@@ -26,6 +28,7 @@ export interface InstagramItem {
   type: InstagramItemType;
   url: string;
   videoUrl?: string;
+  thumbnailUrl?: string;
   width?: number;
   height?: number;
   /** Video length in seconds, from `video_duration`. Absent when unknown. */
@@ -40,6 +43,7 @@ export interface InstagramPost {
   caption: string;
   publishedAt?: string;
   items: InstagramItem[];
+  aiLabel?: AiLabel;
 }
 
 export type InstagramResult =
@@ -166,7 +170,7 @@ function bestVideoUrl(media: Record<string, unknown>): Rendition | undefined {
   return undefined;
 }
 
-function mediaItem(media: Record<string, unknown>): InstagramItem | undefined {
+function originalMediaItem(media: Record<string, unknown>): InstagramItem | undefined {
   const image = bestImage(media);
   const video = bestVideoUrl(media);
   if (video) {
@@ -192,7 +196,7 @@ function mediaItem(media: Record<string, unknown>): InstagramItem | undefined {
  * @param html Full page HTML source.
  * @param pageUrl The URL the HTML was fetched from (used to find the shortcode).
  */
-export function parseInstagram(html: string, pageUrl: string): InstagramResult {
+export function parseInstagram(html: string, pageUrl: string, smallThumbnail = false): InstagramResult {
   const shortcodeMatch = SHORTCODE_PATTERN.exec(pageUrl);
   const shortcode = shortcodeMatch ? shortcodeMatch[1] : undefined;
   const mediaId = shortcode ? shortcodeToMediaId(shortcode) : undefined;
@@ -250,7 +254,7 @@ export function parseInstagram(html: string, pageUrl: string): InstagramResult {
     };
   }
 
-  return buildPostFromProduct(product, shortcode);
+  return buildPostFromProduct(product, shortcode, smallThumbnail);
 }
 
 /**
@@ -260,7 +264,9 @@ export function parseInstagram(html: string, pageUrl: string): InstagramResult {
 export function buildPostFromProduct(
   product: Record<string, unknown>,
   shortcode: string,
+  smallThumbnail = false,
 ): InstagramResult {
+  for (const line of probeInstagramAiFields(product)) console.info?.('EasySaveIgAiProbe:' + line);
   const user = isRecord(product["user"])
     ? (product["user"] as Record<string, unknown>)
     : isRecord(product["owner"])
@@ -300,17 +306,17 @@ export function buildPostFromProduct(
   if (Array.isArray(carousel) && carousel.length > 0) {
     for (const child of carousel) {
       if (!isRecord(child)) continue;
-      const item = mediaItem(child);
+      const item = mediaItem(child, smallThumbnail);
       if (item) items.push(item);
     }
   } else if (Array.isArray(sidecar) && sidecar.length > 0) {
     for (const edge of sidecar) {
       if (!isRecord(edge) || !isRecord(edge["node"])) continue;
-      const item = mediaItem(edge["node"] as Record<string, unknown>);
+      const item = mediaItem(edge["node"] as Record<string, unknown>, smallThumbnail);
       if (item) items.push(item);
     }
   } else {
-    const item = mediaItem(product);
+    const item = mediaItem(product, smallThumbnail);
     if (item) items.push(item);
   }
 
@@ -333,5 +339,53 @@ export function buildPostFromProduct(
     items,
   };
   if (publishedAt) data.publishedAt = publishedAt;
+  const aiLabel = instagramAiLabel(product.ai_label_info);
+  if (aiLabel) data.aiLabel = aiLabel;
   return { ok: true, data };
+}
+
+/** Only root platform-generated label and subtitle have bounded prose exceptions. */
+export function probeInstagramAiFields(product: unknown): string[] {
+  const lines: string[] = [];
+  const seen = new Set<object>();
+  let visited = 0;
+  const visit = (node: unknown, path: string, privateTree = false, depth = 0): void => {
+    if (!node || typeof node !== 'object' || seen.has(node) || depth > 24 || visited++ > 10000) return;
+    seen.add(node);
+    if (Array.isArray(node)) {
+      node.forEach((value, i) => visit(value, `${path}[${i}]`, privateTree, depth + 1));
+      return;
+    }
+    for (const [name, value] of Object.entries(node)) {
+      if (!/^[A-Za-z_][A-Za-z0-9_]{0,79}$/.test(name)) continue;
+      const next = path + '.' + name;
+      const sensitive = privateTree || /user|owner|author|caption|text|url|email|phone|account|cookie|token|session|password|secret|authorization/i.test(name);
+      if ((next.startsWith('$.ai_label_info.') || /ai|gen_ai|genai|label|disclosure|c2pa/i.test(name)) && lines.length < 256) {
+        const type = value === null ? 'null' : Array.isArray(value) ? 'array' : typeof value;
+        const record: Record<string, unknown> = { path: next, name, type };
+        if ((next === '$.ai_label_info.attribution_label_text' || next === '$.ai_label_info.subtitle_text') && typeof value === 'string') {
+          const text = value.replace(/[\u0000-\u001f\u007f-\u009f]/g, '');
+          if (!/https?:\/\/|[?&][^\s=]+=/i.test(text)) record.value = Array.from(text).slice(0, name === 'subtitle_text' ? 120 : 60).join('');
+        } else if (!sensitive && (typeof value === 'boolean' ||
+            typeof value === 'number' && Number.isFinite(value) ||
+            typeof value === 'string' && /^[A-Za-z0-9_]{1,40}$/.test(value))) record.value = value;
+        lines.push(JSON.stringify(record));
+      }
+      visit(value, next, sensitive, depth + 1);
+    }
+  };
+  visit(product, '$');
+  return lines;
+}
+
+function mediaItem(media: Record<string, unknown>, smallThumbnail: boolean): InstagramItem | undefined {
+  const item = originalMediaItem(media);
+  const versions = isRecord(media.image_versions2) ? media.image_versions2.candidates : undefined;
+  if (item && smallThumbnail && Array.isArray(versions)) {
+    const candidates = versions.filter(e => isRecord(e) && nonBlank(e.url) &&
+      typeof e.width === 'number' && typeof e.height === 'number' && e.width > 0 && e.height > 0);
+    candidates.sort((a,b) => a.width * a.height - b.width * b.height);
+    if (candidates[0]) item.thumbnailUrl = candidates[0].url;
+  }
+  return item;
 }

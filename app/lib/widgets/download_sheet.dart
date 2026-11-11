@@ -12,6 +12,7 @@ import '../services/download_manager.dart';
 import '../services/saver.dart';
 import '../services/settings.dart';
 import '../services/share_service.dart';
+import '../services/media_request_policy.dart';
 import '../theme/app_theme.dart';
 import 'shared.dart';
 
@@ -32,20 +33,22 @@ class DownloadSheet extends StatefulWidget {
     final settings = await AppSettings.load();
     final author = post.author.name ?? '';
     final manager = DownloadManager.instance;
+    Future<void>? panel;
     final batch = await manager.startBatch(
       post,
       selected,
       album: settings.albumName,
       nameFor: (label, seq, ext) =>
           settings.fileName(postId: post.id, seq: seq, author: author),
+      onBatchReady: (ready) {
+        if (!context.mounted) return;
+        panel = showModalBottomSheet<void>(context: context, isScrollControlled: true,
+            builder: (_) => DownloadSheet(batchId: ready.batchId));
+      },
     );
     if (!context.mounted) return batch;
     ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('已加入下载队列')));
-    await showModalBottomSheet<void>(
-      context: context,
-      isScrollControlled: true,
-      builder: (_) => DownloadSheet(batchId: batch.batchId),
-    );
+    await panel;
     return batch;
   }
 
@@ -292,6 +295,12 @@ class _DownloadSheetState extends State<DownloadSheet> {
     setState(() => _sharing = true);
     try {
       await shareBatch(batch);
+    } on MediaPolicyException {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('该资源地址不在允许范围内')),
+        );
+      }
     } catch (_) {
       if (mounted) {
         ScaffoldMessenger.of(

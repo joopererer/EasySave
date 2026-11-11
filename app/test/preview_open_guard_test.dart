@@ -70,7 +70,7 @@ void main() {
         postUrl: postUrl,
         fileCount: 1,
         createdAt: DateTime.now(),
-        files: [HistoryFile(filename: '___.jpg', savedAt: 0)],
+        files: [HistoryFile(itemIndex: 1, filename: '___.jpg', savedAt: 0)],
       ),
     );
     return (await db.getByPostId(postId))!;

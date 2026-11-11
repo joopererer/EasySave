@@ -8,6 +8,9 @@ import { parseTiktok, isTiktokLink, type TiktokResult } from './tiktok';
 export type ParseErrorCode =
   | 'DELETED' | 'PRIVATE' | 'REGION_RESTRICTED' | 'UNKNOWN'
   | "LOGIN_REQUIRED"
+  | "AGE_NOT_SET"
+  | "AGE_RESTRICTED"
+  | "PROTECTED"
   | "PRIVATE_OR_UNAVAILABLE"
   | "BLOCKED"
   | "INVALID_PAGE"

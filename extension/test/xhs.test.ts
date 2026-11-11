@@ -28,6 +28,12 @@ const cases = readdirSync(fixtureDir)
   .sort();
 
 describe("xhs fixtures", () => {
+  it("extracts a profile-path post from the same fixture on Rednote", () => {
+    const html = readFileSync(join(fixtureDir, "xhs_profile_route.html"), "utf-8");
+    const result = parseXhs(html, "https://www.rednote.com/user/profile/user/670f1a2b000000001e028b12");
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.data.id).toBe("670f1a2b000000001e028b12");
+  });
   if (cases.length === 0) {
     it("has fixtures to test", () => {
       expect(cases.length).toBeGreaterThan(0);
@@ -400,4 +406,3 @@ describe("imageUrlOf fallbacks", () => {
     }
   });
 });
-

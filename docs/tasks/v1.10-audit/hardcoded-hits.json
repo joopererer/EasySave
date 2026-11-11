@@ -1,0 +1,3487 @@
+{
+  "pattern": "xiaohongshu|xhs|instagram|instagr[.]am|tiktok|twitter|rednote|douyin|小红书|抖音|youtube|youtu[.]be|\\bseal\\b|SealMissing|SealInstalled|sendToSeal|sealPackage|sealReleases|SEAL_|twimg|cdninstagram|fbcdn|xhscdn|xsec_token|xsec_source|web_session|sessionid|auth_token|(?<![A-Za-z0-9_])(?:x[.]com|t[.]co)(?![A-Za-z0-9_])|['\"]x['\"]|accounts[.]google[.](?:com|cn)",
+  "scanned": {
+    "app/lib": 80,
+    "app/android/app/src/main": 51,
+    "app/vendor/background_downloader/android/src/main": 36,
+    "extension/src": 17,
+    "extension/entrypoints": 3,
+    "extension/public": 1,
+    ".github/workflows": 1
+  },
+  "extra": [
+    "extension/wxt.config.ts",
+    "extension/scripts/build_release.js",
+    "build_release.js",
+    "config/sites.json",
+    "config/parser-release.json",
+    "app/assets/parser/builtin-manifest.json",
+    "app/assets/parser/sites-manifest.schema.json"
+  ],
+  "exclusions": [
+    "tests/fixtures",
+    "generated parser bundles",
+    "docs prose",
+    "binary/icon assets"
+  ],
+  "hits": [
+    {
+      "file": "app/android/app/src/main/AndroidManifest.xml",
+      "line": 55,
+      "source": "            <!-- Receive shared links/text from XHS, Instagram, browsers, ... -->",
+      "category": "词法候选",
+      "reason": "注释、导入或符号声明；不独立执行站点数据规则。"
+    },
+    {
+      "file": "app/android/app/src/main/AndroidManifest.xml",
+      "line": 137,
+      "source": "        <!-- v1.2: PackageManager visibility for Seal detection on Android 11+. -->",
+      "category": "词法候选",
+      "reason": "注释、导入或符号声明；不独立执行站点数据规则。"
+    },
+    {
+      "file": "app/android/app/src/main/AndroidManifest.xml",
+      "line": 138,
+      "source": "        <package android:name=\"com.junkfood.seal\"/>",
+      "category": "外部转交许可表",
+      "reason": "YouTube 仅交给本地许可包 Seal；包括域/路径许可、包可见性、显式 Intent 及安装指引，不能由远程清单扩展为任意包。"
+    },
+    {
+      "file": "app/android/app/src/main/assets/link-recognition.json",
+      "line": 1,
+      "source": "{\"sites\":[{\"id\":\"xhs\",\"routes\":[{\"hosts\":[{\"domain\":\"xiaohongshu.com\",\"includeSubdomains\":true},{\"domain\":\"rednote.com\",\"includeSubdomains\":true}],\"pathPatterns\":[\"^/(?:explore|discovery/item)/([A-Za-z0-9]+)\"]},{\"hosts\":[{\"domain\":\"xhs.cn\",\"includeSubdomains\":false},{\"domain\":\"xhslink.cn\",\"includeSubdomains\":false},{\"domain\":\"xhslink.com\",\"includeSubdomains\":false}],\"pathPatterns\":[\"^/(?:(?:a|o)/)?[^/]+/?$\"]}]},{\"id\":\"instagram\",\"routes\":[{\"hosts\":[{\"domain\":\"instagram.com\",\"includeSubdomains\":true},{\"domain\":\"instagr.am\",\"includeSubdomains\":true}],\"pathPatterns\":[\"^/(?:p|reels?|tv)/([A-Za-z0-9_-]+)\"]}]},{\"id\":\"x\",\"routes\":[{\"hosts\":[{\"domain\":\"x.com\",\"includeSubdomains\":true},{\"domain\":\"twitter.com\",\"includeSubdomains\":true}],\"pathPatterns\":[\"^/[^/]+/status/([0-9]+)\"]},{\"hosts\":[{\"domain\":\"t.co\",\"includeSubdomains\":false}],\"pathPatterns\":[\"^/[^/]+/?$\"]}]},{\"id\":\"tiktok\",\"routes\":[{\"hosts\":[{\"domain\":\"tiktok.com\",\"includeSubdomains\":true}],\"pathPatterns\":[\"^/(?:@[^/]*/(?:video|photo)/([0-9]+)|share/video/([0-9]+)|v/([0-9]+)\\\\.html)/?$\",\"^/t/[^/]+/?$\"]},{\"hosts\":[{\"domain\":\"vm.tiktok.com\",\"includeSubdomains\":false},{\"domain\":\"vt.tiktok.com\",\"includeSubdomains\":false}],\"pathPatterns\":[\"^/[^/]+/?$\"]}]}]}",
+      "category": "生成配置",
+      "reason": "由 config/sites.json 与构建器生成；不是独立维护的平台表。"
+    },
+    {
+      "file": "app/android/app/src/main/kotlin/com/james/easysave/ExternalHandlers.kt",
+      "line": 9,
+      "source": "    const val SEAL_PACKAGE = \"com.junkfood.seal\"",
+      "category": "外部转交许可表",
+      "reason": "YouTube 仅交给本地许可包 Seal；包括域/路径许可、包可见性、显式 Intent 及安装指引，不能由远程清单扩展为任意包。"
+    },
+    {
+      "file": "app/android/app/src/main/kotlin/com/james/easysave/ExternalHandlers.kt",
+      "line": 22,
+      "source": "        if (h == \"youtu.be\" || h.endsWith(\".youtu.be\")) return !u.path.isNullOrEmpty() && u.path != \"/\"",
+      "category": "外部转交许可表",
+      "reason": "YouTube 仅交给本地许可包 Seal；包括域/路径许可、包可见性、显式 Intent 及安装指引，不能由远程清单扩展为任意包。"
+    },
+    {
+      "file": "app/android/app/src/main/kotlin/com/james/easysave/ExternalHandlers.kt",
+      "line": 23,
+      "source": "        if (listOf(\"youtube.com\", \"youtube-nocookie.com\").none { h == it || h.endsWith(\".$it\") }) return false",
+      "category": "外部转交许可表",
+      "reason": "YouTube 仅交给本地许可包 Seal；包括域/路径许可、包可见性、显式 Intent 及安装指引，不能由远程清单扩展为任意包。"
+    },
+    {
+      "file": "app/android/app/src/main/kotlin/com/james/easysave/ExternalHandlers.kt",
+      "line": 31,
+      "source": "        if (installed(SEAL_PACKAGE)) launch(SEAL_PACKAGE, url) else missing(url)",
+      "category": "外部转交许可表",
+      "reason": "YouTube 仅交给本地许可包 Seal；包括域/路径许可、包可见性、显式 Intent 及安装指引，不能由远程清单扩展为任意包。"
+    },
+    {
+      "file": "app/android/app/src/main/kotlin/com/james/easysave/LogSanitizer.kt",
+      "line": 7,
+      "source": " *  - URLs are reduced to `host + path`, so query parameters (xsec_token,",
+      "category": "词法候选",
+      "reason": "注释、导入或符号声明；不独立执行站点数据规则。"
+    },
+    {
+      "file": "app/android/app/src/main/kotlin/com/james/easysave/MainActivity.kt",
+      "line": 29,
+      "source": "        private const val SEAL_CHANNEL = \"easysave/seal\"",
+      "category": "外部转交许可表",
+      "reason": "YouTube 仅交给本地许可包 Seal；包括域/路径许可、包可见性、显式 Intent 及安装指引，不能由远程清单扩展为任意包。"
+    },
+    {
+      "file": "app/android/app/src/main/kotlin/com/james/easysave/MainActivity.kt",
+      "line": 30,
+      "source": "        private const val SEAL_PACKAGE = \"com.junkfood.seal\"",
+      "category": "外部转交许可表",
+      "reason": "YouTube 仅交给本地许可包 Seal；包括域/路径许可、包可见性、显式 Intent 及安装指引，不能由远程清单扩展为任意包。"
+    },
+    {
+      "file": "app/android/app/src/main/kotlin/com/james/easysave/MainActivity.kt",
+      "line": 166,
+      "source": "        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, SEAL_CHANNEL)",
+      "category": "外部转交许可表",
+      "reason": "YouTube 仅交给本地许可包 Seal；包括域/路径许可、包可见性、显式 Intent 及安装指引，不能由远程清单扩展为任意包。"
+    },
+    {
+      "file": "app/android/app/src/main/kotlin/com/james/easysave/MainActivity.kt",
+      "line": 170,
+      "source": "                        result.success(isSealInstalled())",
+      "category": "外部转交许可表",
+      "reason": "YouTube 仅交给本地许可包 Seal；包括域/路径许可、包可见性、显式 Intent 及安装指引，不能由远程清单扩展为任意包。"
+    },
+    {
+      "file": "app/android/app/src/main/kotlin/com/james/easysave/MainActivity.kt",
+      "line": 177,
+      "source": "                            result.success(sendToSeal(url))",
+      "category": "外部转交许可表",
+      "reason": "YouTube 仅交给本地许可包 Seal；包括域/路径许可、包可见性、显式 Intent 及安装指引，不能由远程清单扩展为任意包。"
+    },
+    {
+      "file": "app/android/app/src/main/kotlin/com/james/easysave/MainActivity.kt",
+      "line": 610,
+      "source": "    private fun isSealInstalled(): Boolean {        return try {",
+      "category": "外部转交许可表",
+      "reason": "YouTube 仅交给本地许可包 Seal；包括域/路径许可、包可见性、显式 Intent 及安装指引，不能由远程清单扩展为任意包。"
+    },
+    {
+      "file": "app/android/app/src/main/kotlin/com/james/easysave/MainActivity.kt",
+      "line": 611,
+      "source": "            packageManager.getPackageInfo(SEAL_PACKAGE, 0)",
+      "category": "外部转交许可表",
+      "reason": "YouTube 仅交给本地许可包 Seal；包括域/路径许可、包可见性、显式 Intent 及安装指引，不能由远程清单扩展为任意包。"
+    },
+    {
+      "file": "app/android/app/src/main/kotlin/com/james/easysave/MainActivity.kt",
+      "line": 618,
+      "source": "    private fun sendToSeal(url: String): Boolean {",
+      "category": "外部转交许可表",
+      "reason": "YouTube 仅交给本地许可包 Seal；包括域/路径许可、包可见性、显式 Intent 及安装指引，不能由远程清单扩展为任意包。"
+    },
+    {
+      "file": "app/android/app/src/main/kotlin/com/james/easysave/MainActivity.kt",
+      "line": 619,
+      "source": "        if (!ExternalHandlers.accepts(url) || !isSealInstalled()) return false",
+      "category": "外部转交许可表",
+      "reason": "YouTube 仅交给本地许可包 Seal；包括域/路径许可、包可见性、显式 Intent 及安装指引，不能由远程清单扩展为任意包。"
+    },
+    {
+      "file": "app/android/app/src/main/kotlin/com/james/easysave/MainActivity.kt",
+      "line": 624,
+      "source": "                setPackage(SEAL_PACKAGE)",
+      "category": "外部转交许可表",
+      "reason": "YouTube 仅交给本地许可包 Seal；包括域/路径许可、包可见性、显式 Intent 及安装指引，不能由远程清单扩展为任意包。"
+    },
+    {
+      "file": "app/assets/parser/builtin-manifest.json",
+      "line": 1,
+      "source": "{\"manifestVersion\":1,\"parserAbi\":1,\"minAppVersion\":\"1.9.0\",\"platforms\":{\"tiktok\":{\"enabled\":true,\"notice\":\"TikTok 解析服务维护中，请稍后再试\"},\"xhs\":{\"enabled\":true,\"notice\":\"小红书解析服务维护中，请稍后再试\"},\"instagram\":{\"enabled\":true,\"notice\":\"Instagram 解析服务维护中，请稍后再试\"},\"x\":{\"enabled\":true,\"notice\":\"X 解析服务维护中，请稍后再试\",\"endpoint\":\"https://cdn.syndication.twimg.com/tweet-result?id={id}&lang=en&token={token}\"}},\"headers\":{\"tiktok\":{\"Referer\":\"https://www.tiktok.com/\"},\"xhs\":{\"User-Agent\":\"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36\"},\"instagram\":{\"User-Agent\":\"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36\"},\"x\":{\"User-Agent\":\"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36\"}},\"parserVersion\":\"1.3.0\",\"parserUrl\":\"https://github.com/joopererer/EasySave/releases/download/parser-v1.3.0/parser.js\",\"sha256\":\"41a859e72e32d161873e76cfdc1c8c5cf62301e40f938ae38544f47c7def8e00\",\"sites\":[{\"id\":\"xhs\",\"platform\":\"xiaohongshu\",\"displayName\":\"小红书\",\"creditName\":\"小红书\",\"enabled\":true,\"notice\":\"服务维护中，请稍后再试\",\"minAppVersion\":\"1.9.0\",\"requiredCapabilities\":[],\"match\":{\"routes\":[{\"hosts\":[{\"domain\":\"xiaohongshu.com\",\"includeSubdomains\":true},{\"domain\":\"rednote.com\",\"includeSubdomains\":true}],\"pathPatterns\":[\"^/(?:explore|discovery/item)/([A-Za-z0-9]+)\"]},{\"hosts\":[{\"domain\":\"xhs.cn\",\"includeSubdomains\":false},{\"domain\":\"xhslink.cn\",\"includeSubdomains\":false},{\"domain\":\"xhslink.com\",\"includeSubdomains\":false}],\"pathPatterns\":[\"^/(?:(?:a|o)/)?[^/]+/?$\"]}]},\"shortLinks\":[{\"host\":{\"domain\":\"xhslink.com\",\"includeSubdomains\":false},\"strategy\":\"webview\",\"maxRedirects\":5},{\"host\":{\"domain\":\"xhslink.cn\",\"includeSubdomains\":false},\"strategy\":\"webview\",\"maxRedirects\":5},{\"host\":{\"domain\":\"xhs.cn\",\"includeSubdomains\":false},\"strategy\":\"webview\",\"maxRedirects\":5}],\"normalize\":{\"sourceId\":{\"source\":\"path\",\"pattern\":\"^/(?:explore|discovery/item)/([A-Za-z0-9]+)\"},\"canonicalTemplate\":\"https://www.xiaohongshu.com/explore/{id}\",\"preserveLoadQuery\":[\"xsec_token\",\"xsec_source\"],\"exampleId\":\"670f1a2b000000001e028b12\"},\"load\":{\"mode\":\"webview\",\"timeoutMs\":30000,\"readyHook\":\"xhs_ready\",\"userAgent\":\"Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36\"},\"auth\":{\"mode\":\"optional\",\"sessionCookieNames\":[\"web_session\",\"customer-sso-sid\",\"galaxy_creator_session_id\",\"login_token\"],\"loginUrl\":\"https://www.xiaohongshu.com/explore\",\"userAgent\":\"Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36\",\"stateHook\":\"account\",\"cookieUrls\":[\"https://www.xiaohongshu.com/\",\"https://www.xiaohongshu.com/explore\",\"https://edith.xiaohongshu.com/\"],\"probeHook\":\"probeSession\",\"loginHint\":\"页面加载后输入手机号获取验证码登录（也可切换密码登录），登录成功会自动返回。登录状态保存在本机，重启 App 依然有效。\"},\"parserModule\":\"xhs\",\"download\":{\"mediaHosts\":[{\"domain\":\"xhscdn.com\",\"includeSubdomains\":true},{\"domain\":\"xhscdn.net\",\"includeSubdomains\":true},{\"domain\":\"xiaohongshu.com\",\"includeSubdomains\":true}],\"headers\":{\"Referer\":\"https://www.xiaohongshu.com/\"},\"cookieDomains\":[],\"transport\":\"background\",\"resumable\":true},\"metadata\":{\"authorIdRule\":\"opaque\"},\"icon\":{\"assetKey\":\"xhs\"},\"tagColor\":\"#EA1C42\"},{\"id\":\"instagram\",\"platform\":\"instagram\",\"displayName\":\"Instagram\",\"creditName\":\"Instagram\",\"enabled\":true,\"notice\":\"服务维护中，请稍后再试\",\"minAppVersion\":\"1.9.0\",\"requiredCapabilities\":[],\"match\":{\"routes\":[{\"hosts\":[{\"domain\":\"instagram.com\",\"includeSubdomains\":true},{\"domain\":\"instagr.am\",\"includeSubdomains\":true}],\"pathPatterns\":[\"^/(?:p|reels?|tv)/([A-Za-z0-9_-]+)\"]}]},\"shortLinks\":[],\"normalize\":{\"sourceId\":{\"source\":\"path\",\"pattern\":\"^/(?:p|reels?|tv)/([A-Za-z0-9_-]+)\"},\"canonicalTemplate\":\"https://www.instagram.com/p/{id}/\",\"preserveLoadQuery\":[],\"exampleId\":\"AbC123\"},\"load\":{\"mode\":\"webview\",\"timeoutMs\":30000,\"readyHook\":\"instagram_ready\",\"userAgent\":\"Mozilla/5.0 (Linux; Android 12; Pixel 6) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Mobile Safari/537.36\"},\"auth\":{\"mode\":\"optional\",\"sessionCookieNames\":[\"sessionid\"],\"loginUrl\":\"https://www.instagram.com/accounts/login/\",\"userAgent\":\"Mozilla/5.0 (Linux; Android 12; Pixel 6) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Mobile Safari/537.36\"},\"parserModule\":\"instagram\",\"download\":{\"mediaHosts\":[{\"domain\":\"cdninstagram.com\",\"includeSubdomains\":true},{\"domain\":\"fbcdn.net\",\"includeSubdomains\":true}],\"headers\":{\"Referer\":\"https://www.instagram.com/\"},\"cookieDomains\":[],\"transport\":\"background\",\"resumable\":true},\"metadata\":{\"authorIdRule\":\"numeric\"},\"icon\":{\"assetKey\":\"instagram\"},\"tagColor\":\"#CE35A8\"},{\"id\":\"x\",\"platform\":\"x\",\"displayName\":\"X\",\"creditName\":\"X\",\"enabled\":true,\"notice\":\"服务维护中，请稍后再试\",\"minAppVersion\":\"1.9.0\",\"requiredCapabilities\":[],\"match\":{\"routes\":[{\"hosts\":[{\"domain\":\"x.com\",\"includeSubdomains\":true},{\"domain\":\"twitter.com\",\"includeSubdomains\":true}],\"pathPatterns\":[\"^/[^/]+/status/([0-9]+)\"]},{\"hosts\":[{\"domain\":\"t.co\",\"includeSubdomains\":false}],\"pathPatterns\":[\"^/[^/]+/?$\"]}]},\"shortLinks\":[{\"host\":{\"domain\":\"t.co\",\"includeSubdomains\":false},\"strategy\":\"http\",\"maxRedirects\":5}],\"normalize\":{\"sourceId\":{\"source\":\"path\",\"pattern\":\"^/[^/]+/status/([0-9]+)\"},\"canonicalTemplate\":\"https://x.com/i/status/{id}\",\"preserveLoadQuery\":[],\"exampleId\":\"1234567890123456789\"},\"load\":{\"mode\":\"json\",\"timeoutMs\":30000,\"endpointTemplate\":\"https://cdn.syndication.twimg.com/tweet-result?id={id}&lang=en&token={token}\",\"prepareHook\":\"x_build_request\",\"headers\":{\"User-Agent\":\"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36\"}},\"auth\":{\"mode\":\"optional\",\"sessionCookieNames\":[\"auth_token\"],\"loginUrl\":\"https://x.com/i/flow/login\"},\"parserModule\":\"x\",\"download\":{\"mediaHosts\":[{\"domain\":\"twimg.com\",\"includeSubdomains\":true}],\"headers\":{},\"cookieDomains\":[],\"transport\":\"background\",\"resumable\":true},\"metadata\":{\"authorIdRule\":\"numeric\"},\"icon\":{\"assetKey\":\"x\"},\"tagColor\":\"#0F1419\"},{\"id\":\"tiktok\",\"platform\":\"tiktok\",\"displayName\":\"TikTok\",\"creditName\":\"TikTok\",\"enabled\":true,\"notice\":\"服务维护中，请稍后再试\",\"minAppVersion\":\"1.9.0\",\"requiredCapabilities\":[],\"match\":{\"routes\":[{\"hosts\":[{\"domain\":\"tiktok.com\",\"includeSubdomains\":true}],\"pathPatterns\":[\"^/(?:@[^/]*/(?:video|photo)/([0-9]+)|share/video/([0-9]+)|v/([0-9]+)\\\\.html)/?$\",\"^/t/[^/]+/?$\"]},{\"hosts\":[{\"domain\":\"vm.tiktok.com\",\"includeSubdomains\":false},{\"domain\":\"vt.tiktok.com\",\"includeSubdomains\":false}],\"pathPatterns\":[\"^/[^/]+/?$\"]}]},\"shortLinks\":[{\"host\":{\"domain\":\"vm.tiktok.com\",\"includeSubdomains\":false},\"strategy\":\"webview\",\"maxRedirects\":5,\"historyStrategy\":\"http\"},{\"host\":{\"domain\":\"vt.tiktok.com\",\"includeSubdomains\":false},\"strategy\":\"webview\",\"maxRedirects\":5,\"historyStrategy\":\"http\"},{\"host\":{\"domain\":\"tiktok.com\",\"includeSubdomains\":true},\"strategy\":\"webview\",\"historyStrategy\":\"http\",\"pathPatterns\":[\"^/t/[^/]+/?$\"],\"maxRedirects\":5}],\"normalize\":{\"sourceId\":{\"source\":\"path\",\"pattern\":\"^/(?:@[^/]*/(?:video|photo)/([0-9]+)|share/video/([0-9]+)|v/([0-9]+)\\\\.html)/?$\"},\"canonicalTemplate\":\"https://www.tiktok.com/@/video/{id}\",\"preserveLoadQuery\":[],\"exampleId\":\"1234567890123456789\"},\"load\":{\"mode\":\"webview\",\"timeoutMs\":30000,\"readyHook\":\"tiktok_ready\",\"userAgent\":\"Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36\"},\"auth\":{\"mode\":\"optional\",\"sessionCookieNames\":[\"sessionid\",\"sessionid_ss\"],\"loginUrl\":\"https://www.tiktok.com/login\",\"externalGoogleNotice\":true,\"loginHint\":\"请选择 TikTok 的手机号 / 邮箱 / 用户名登录。Google 授权暂不支持在此页面完成。成功后点右上角“完成”。\",\"externalGoogleMessage\":\"Google 授权不能在此内嵌登录页完成。请返回 TikTok，选择“手机号 / 邮箱 / 用户名”登录。如果使用 Gmail 地址，请输入 TikTok 账号密码，不是 Google 密码。在外部浏览器登录也不会自动同步到 EasySave。\"},\"parserModule\":\"tiktok\",\"download\":{\"mediaHosts\":[{\"domain\":\"tiktok.com\",\"includeSubdomains\":true},{\"domain\":\"tiktokcdn.com\",\"includeSubdomains\":true},{\"domain\":\"tiktokcdn-eu.com\",\"includeSubdomains\":true},{\"domain\":\"tiktokcdn-us.com\",\"includeSubdomains\":true}],\"headers\":{\"Referer\":\"https://www.tiktok.com/\"},\"cookieDomains\":[\"tiktok.com\"],\"urlOrder\":\"primaryFirst\",\"transport\":\"session\",\"resumable\":false,\"resourceDefaults\":{\"image\":{\"cookieDomains\":[],\"transport\":\"background\",\"resumable\":true},\"poster\":{\"cookieDomains\":[],\"transport\":\"background\",\"resumable\":true}}},\"metadata\":{\"authorIdRule\":\"numeric\"},\"icon\":{\"assetKey\":\"tiktok\"},\"tagColor\":\"#0F1419\",\"previewErrorMessage\":\"TikTok 在线预览可能受平台限制，请下载后观看\"},{\"id\":\"douyin\",\"platform\":\"douyin\",\"displayName\":\"抖音\",\"creditName\":\"抖音\",\"enabled\":false,\"notice\":\"待匿名实测，禁止启用\",\"minAppVersion\":\"1.9.0\",\"requiredCapabilities\":[],\"match\":{\"routes\":[{\"hosts\":[{\"domain\":\"douyin.com\",\"includeSubdomains\":true},{\"domain\":\"iesdouyin.com\",\"includeSubdomains\":true}],\"pathPatterns\":[\"^/(?:video|note|share/video)/([0-9]+)\"]},{\"hosts\":[{\"domain\":\"v.douyin.com\",\"includeSubdomains\":false}],\"pathPatterns\":[\"^/[^/]+/?$\"]}]},\"shortLinks\":[{\"host\":{\"domain\":\"v.douyin.com\",\"includeSubdomains\":false},\"strategy\":\"webview\",\"maxRedirects\":5}],\"normalize\":{\"sourceId\":{\"source\":\"path\",\"pattern\":\"^/(?:video|note|share/video)/([0-9]+)\"},\"canonicalTemplate\":\"https://www.douyin.com/video/{id}\",\"preserveLoadQuery\":[],\"exampleId\":\"1234567890123456789\"},\"load\":{\"mode\":\"webview\",\"timeoutMs\":30000,\"readyHook\":\"douyin_ready\"},\"auth\":{\"mode\":\"none\",\"sessionCookieNames\":[]},\"parserModule\":\"douyin\",\"download\":{\"mediaHosts\":[],\"headers\":{\"Referer\":\"https://www.douyin.com/\"},\"cookieDomains\":[],\"transport\":\"background\",\"resumable\":true},\"metadata\":{\"authorIdRule\":\"numeric\"}}]}",
+      "category": "生成配置",
+      "reason": "由 config/sites.json 与构建器生成；不是独立维护的平台表。"
+    },
+    {
+      "file": "app/lib/background/background_entry.dart",
+      "line": 81,
+      "source": "/// query parameters (xsec_token, share_id, ...) and cookie/token-ish values",
+      "category": "词法候选",
+      "reason": "注释、导入或符号声明；不独立执行站点数据规则。"
+    },
+    {
+      "file": "app/lib/core/dev_log.dart",
+      "line": 6,
+      "source": "//   * URLs are reduced to host + path, so query parameters (xsec_token,",
+      "category": "词法候选",
+      "reason": "注释、导入或符号声明；不独立执行站点数据规则。"
+    },
+    {
+      "file": "app/lib/core/dev_log.dart",
+      "line": 143,
+      "source": "  ///   * `authorization: ...`, `xsec_token=...` -> `<redacted>`",
+      "category": "词法候选",
+      "reason": "注释、导入或符号声明；不独立执行站点数据规则。"
+    },
+    {
+      "file": "app/lib/core/models.dart",
+      "line": 3,
+      "source": "// Unified parsing models shared by the XHS and Instagram parsers.",
+      "category": "词法候选",
+      "reason": "注释、导入或符号声明；不独立执行站点数据规则。"
+    },
+    {
+      "file": "app/lib/core/models.dart",
+      "line": 75,
+      "source": "  /// Still-image cover for a video item (XHS `imageList[0]`). IG video",
+      "category": "词法候选",
+      "reason": "注释、导入或符号声明；不独立执行站点数据规则。"
+    },
+    {
+      "file": "app/lib/core/models.dart",
+      "line": 81,
+      "source": "  /// Video length in seconds, from `video.capa.duration` (XHS) or",
+      "category": "词法候选",
+      "reason": "注释、导入或符号声明；不独立执行站点数据规则。"
+    },
+    {
+      "file": "app/lib/generated/builtin_sites.dart",
+      "line": 2,
+      "source": "const builtinSitesJson = \"[{\\\"id\\\":\\\"xhs\\\",\\\"platform\\\":\\\"xiaohongshu\\\",\\\"displayName\\\":\\\"小红书\\\",\\\"creditName\\\":\\\"小红书\\\",\\\"enabled\\\":true,\\\"notice\\\":\\\"服务维护中，请稍后再试\\\",\\\"minAppVersion\\\":\\\"1.9.0\\\",\\\"requiredCapabilities\\\":[],\\\"match\\\":{\\\"routes\\\":[{\\\"hosts\\\":[{\\\"domain\\\":\\\"xiaohongshu.com\\\",\\\"includeSubdomains\\\":true},{\\\"domain\\\":\\\"rednote.com\\\",\\\"includeSubdomains\\\":true}],\\\"pathPatterns\\\":[\\\"^/(?:explore|discovery/item)/([A-Za-z0-9]+)\\\"]},{\\\"hosts\\\":[{\\\"domain\\\":\\\"xhs.cn\\\",\\\"includeSubdomains\\\":false},{\\\"domain\\\":\\\"xhslink.cn\\\",\\\"includeSubdomains\\\":false},{\\\"domain\\\":\\\"xhslink.com\\\",\\\"includeSubdomains\\\":false}],\\\"pathPatterns\\\":[\\\"^/(?:(?:a|o)/)?[^/]+/?\\$\\\"]}]},\\\"shortLinks\\\":[{\\\"host\\\":{\\\"domain\\\":\\\"xhslink.com\\\",\\\"includeSubdomains\\\":false},\\\"strategy\\\":\\\"webview\\\",\\\"maxRedirects\\\":5},{\\\"host\\\":{\\\"domain\\\":\\\"xhslink.cn\\\",\\\"includeSubdomains\\\":false},\\\"strategy\\\":\\\"webview\\\",\\\"maxRedirects\\\":5},{\\\"host\\\":{\\\"domain\\\":\\\"xhs.cn\\\",\\\"includeSubdomains\\\":false},\\\"strategy\\\":\\\"webview\\\",\\\"maxRedirects\\\":5}],\\\"normalize\\\":{\\\"sourceId\\\":{\\\"source\\\":\\\"path\\\",\\\"pattern\\\":\\\"^/(?:explore|discovery/item)/([A-Za-z0-9]+)\\\"},\\\"canonicalTemplate\\\":\\\"https://www.xiaohongshu.com/explore/{id}\\\",\\\"preserveLoadQuery\\\":[\\\"xsec_token\\\",\\\"xsec_source\\\"],\\\"exampleId\\\":\\\"670f1a2b000000001e028b12\\\"},\\\"load\\\":{\\\"mode\\\":\\\"webview\\\",\\\"timeoutMs\\\":30000,\\\"readyHook\\\":\\\"xhs_ready\\\",\\\"userAgent\\\":\\\"Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36\\\"},\\\"auth\\\":{\\\"mode\\\":\\\"optional\\\",\\\"sessionCookieNames\\\":[\\\"web_session\\\",\\\"customer-sso-sid\\\",\\\"galaxy_creator_session_id\\\",\\\"login_token\\\"],\\\"loginUrl\\\":\\\"https://www.xiaohongshu.com/explore\\\",\\\"userAgent\\\":\\\"Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36\\\",\\\"stateHook\\\":\\\"account\\\",\\\"cookieUrls\\\":[\\\"https://www.xiaohongshu.com/\\\",\\\"https://www.xiaohongshu.com/explore\\\",\\\"https://edith.xiaohongshu.com/\\\"],\\\"probeHook\\\":\\\"probeSession\\\",\\\"loginHint\\\":\\\"页面加载后输入手机号获取验证码登录（也可切换密码登录），登录成功会自动返回。登录状态保存在本机，重启 App 依然有效。\\\"},\\\"parserModule\\\":\\\"xhs\\\",\\\"download\\\":{\\\"mediaHosts\\\":[{\\\"domain\\\":\\\"xhscdn.com\\\",\\\"includeSubdomains\\\":true},{\\\"domain\\\":\\\"xhscdn.net\\\",\\\"includeSubdomains\\\":true},{\\\"domain\\\":\\\"xiaohongshu.com\\\",\\\"includeSubdomains\\\":true}],\\\"headers\\\":{\\\"Referer\\\":\\\"https://www.xiaohongshu.com/\\\"},\\\"cookieDomains\\\":[],\\\"transport\\\":\\\"background\\\",\\\"resumable\\\":true},\\\"metadata\\\":{\\\"authorIdRule\\\":\\\"opaque\\\"},\\\"icon\\\":{\\\"assetKey\\\":\\\"xhs\\\"},\\\"tagColor\\\":\\\"#EA1C42\\\"},{\\\"id\\\":\\\"instagram\\\",\\\"platform\\\":\\\"instagram\\\",\\\"displayName\\\":\\\"Instagram\\\",\\\"creditName\\\":\\\"Instagram\\\",\\\"enabled\\\":true,\\\"notice\\\":\\\"服务维护中，请稍后再试\\\",\\\"minAppVersion\\\":\\\"1.9.0\\\",\\\"requiredCapabilities\\\":[],\\\"match\\\":{\\\"routes\\\":[{\\\"hosts\\\":[{\\\"domain\\\":\\\"instagram.com\\\",\\\"includeSubdomains\\\":true},{\\\"domain\\\":\\\"instagr.am\\\",\\\"includeSubdomains\\\":true}],\\\"pathPatterns\\\":[\\\"^/(?:p|reels?|tv)/([A-Za-z0-9_-]+)\\\"]}]},\\\"shortLinks\\\":[],\\\"normalize\\\":{\\\"sourceId\\\":{\\\"source\\\":\\\"path\\\",\\\"pattern\\\":\\\"^/(?:p|reels?|tv)/([A-Za-z0-9_-]+)\\\"},\\\"canonicalTemplate\\\":\\\"https://www.instagram.com/p/{id}/\\\",\\\"preserveLoadQuery\\\":[],\\\"exampleId\\\":\\\"AbC123\\\"},\\\"load\\\":{\\\"mode\\\":\\\"webview\\\",\\\"timeoutMs\\\":30000,\\\"readyHook\\\":\\\"instagram_ready\\\",\\\"userAgent\\\":\\\"Mozilla/5.0 (Linux; Android 12; Pixel 6) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Mobile Safari/537.36\\\"},\\\"auth\\\":{\\\"mode\\\":\\\"optional\\\",\\\"sessionCookieNames\\\":[\\\"sessionid\\\"],\\\"loginUrl\\\":\\\"https://www.instagram.com/accounts/login/\\\",\\\"userAgent\\\":\\\"Mozilla/5.0 (Linux; Android 12; Pixel 6) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Mobile Safari/537.36\\\"},\\\"parserModule\\\":\\\"instagram\\\",\\\"download\\\":{\\\"mediaHosts\\\":[{\\\"domain\\\":\\\"cdninstagram.com\\\",\\\"includeSubdomains\\\":true},{\\\"domain\\\":\\\"fbcdn.net\\\",\\\"includeSubdomains\\\":true}],\\\"headers\\\":{\\\"Referer\\\":\\\"https://www.instagram.com/\\\"},\\\"cookieDomains\\\":[],\\\"transport\\\":\\\"background\\\",\\\"resumable\\\":true},\\\"metadata\\\":{\\\"authorIdRule\\\":\\\"numeric\\\"},\\\"icon\\\":{\\\"assetKey\\\":\\\"instagram\\\"},\\\"tagColor\\\":\\\"#CE35A8\\\"},{\\\"id\\\":\\\"x\\\",\\\"platform\\\":\\\"x\\\",\\\"displayName\\\":\\\"X\\\",\\\"creditName\\\":\\\"X\\\",\\\"enabled\\\":true,\\\"notice\\\":\\\"服务维护中，请稍后再试\\\",\\\"minAppVersion\\\":\\\"1.9.0\\\",\\\"requiredCapabilities\\\":[],\\\"match\\\":{\\\"routes\\\":[{\\\"hosts\\\":[{\\\"domain\\\":\\\"x.com\\\",\\\"includeSubdomains\\\":true},{\\\"domain\\\":\\\"twitter.com\\\",\\\"includeSubdomains\\\":true}],\\\"pathPatterns\\\":[\\\"^/[^/]+/status/([0-9]+)\\\"]},{\\\"hosts\\\":[{\\\"domain\\\":\\\"t.co\\\",\\\"includeSubdomains\\\":false}],\\\"pathPatterns\\\":[\\\"^/[^/]+/?\\$\\\"]}]},\\\"shortLinks\\\":[{\\\"host\\\":{\\\"domain\\\":\\\"t.co\\\",\\\"includeSubdomains\\\":false},\\\"strategy\\\":\\\"http\\\",\\\"maxRedirects\\\":5}],\\\"normalize\\\":{\\\"sourceId\\\":{\\\"source\\\":\\\"path\\\",\\\"pattern\\\":\\\"^/[^/]+/status/([0-9]+)\\\"},\\\"canonicalTemplate\\\":\\\"https://x.com/i/status/{id}\\\",\\\"preserveLoadQuery\\\":[],\\\"exampleId\\\":\\\"1234567890123456789\\\"},\\\"load\\\":{\\\"mode\\\":\\\"json\\\",\\\"timeoutMs\\\":30000,\\\"endpointTemplate\\\":\\\"https://cdn.syndication.twimg.com/tweet-result?id={id}&lang=en&token={token}\\\",\\\"prepareHook\\\":\\\"x_build_request\\\",\\\"headers\\\":{\\\"User-Agent\\\":\\\"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36\\\"}},\\\"auth\\\":{\\\"mode\\\":\\\"optional\\\",\\\"sessionCookieNames\\\":[\\\"auth_token\\\"],\\\"loginUrl\\\":\\\"https://x.com/i/flow/login\\\"},\\\"parserModule\\\":\\\"x\\\",\\\"download\\\":{\\\"mediaHosts\\\":[{\\\"domain\\\":\\\"twimg.com\\\",\\\"includeSubdomains\\\":true}],\\\"headers\\\":{},\\\"cookieDomains\\\":[],\\\"transport\\\":\\\"background\\\",\\\"resumable\\\":true},\\\"metadata\\\":{\\\"authorIdRule\\\":\\\"numeric\\\"},\\\"icon\\\":{\\\"assetKey\\\":\\\"x\\\"},\\\"tagColor\\\":\\\"#0F1419\\\"},{\\\"id\\\":\\\"tiktok\\\",\\\"platform\\\":\\\"tiktok\\\",\\\"displayName\\\":\\\"TikTok\\\",\\\"creditName\\\":\\\"TikTok\\\",\\\"enabled\\\":true,\\\"notice\\\":\\\"服务维护中，请稍后再试\\\",\\\"minAppVersion\\\":\\\"1.9.0\\\",\\\"requiredCapabilities\\\":[],\\\"match\\\":{\\\"routes\\\":[{\\\"hosts\\\":[{\\\"domain\\\":\\\"tiktok.com\\\",\\\"includeSubdomains\\\":true}],\\\"pathPatterns\\\":[\\\"^/(?:@[^/]*/(?:video|photo)/([0-9]+)|share/video/([0-9]+)|v/([0-9]+)\\\\\\\\.html)/?\\$\\\",\\\"^/t/[^/]+/?\\$\\\"]},{\\\"hosts\\\":[{\\\"domain\\\":\\\"vm.tiktok.com\\\",\\\"includeSubdomains\\\":false},{\\\"domain\\\":\\\"vt.tiktok.com\\\",\\\"includeSubdomains\\\":false}],\\\"pathPatterns\\\":[\\\"^/[^/]+/?\\$\\\"]}]},\\\"shortLinks\\\":[{\\\"host\\\":{\\\"domain\\\":\\\"vm.tiktok.com\\\",\\\"includeSubdomains\\\":false},\\\"strategy\\\":\\\"webview\\\",\\\"maxRedirects\\\":5,\\\"historyStrategy\\\":\\\"http\\\"},{\\\"host\\\":{\\\"domain\\\":\\\"vt.tiktok.com\\\",\\\"includeSubdomains\\\":false},\\\"strategy\\\":\\\"webview\\\",\\\"maxRedirects\\\":5,\\\"historyStrategy\\\":\\\"http\\\"},{\\\"host\\\":{\\\"domain\\\":\\\"tiktok.com\\\",\\\"includeSubdomains\\\":true},\\\"strategy\\\":\\\"webview\\\",\\\"historyStrategy\\\":\\\"http\\\",\\\"pathPatterns\\\":[\\\"^/t/[^/]+/?\\$\\\"],\\\"maxRedirects\\\":5}],\\\"normalize\\\":{\\\"sourceId\\\":{\\\"source\\\":\\\"path\\\",\\\"pattern\\\":\\\"^/(?:@[^/]*/(?:video|photo)/([0-9]+)|share/video/([0-9]+)|v/([0-9]+)\\\\\\\\.html)/?\\$\\\"},\\\"canonicalTemplate\\\":\\\"https://www.tiktok.com/@/video/{id}\\\",\\\"preserveLoadQuery\\\":[],\\\"exampleId\\\":\\\"1234567890123456789\\\"},\\\"load\\\":{\\\"mode\\\":\\\"webview\\\",\\\"timeoutMs\\\":30000,\\\"readyHook\\\":\\\"tiktok_ready\\\",\\\"userAgent\\\":\\\"Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36\\\"},\\\"auth\\\":{\\\"mode\\\":\\\"optional\\\",\\\"sessionCookieNames\\\":[\\\"sessionid\\\",\\\"sessionid_ss\\\"],\\\"loginUrl\\\":\\\"https://www.tiktok.com/login\\\",\\\"externalGoogleNotice\\\":true,\\\"loginHint\\\":\\\"请选择 TikTok 的手机号 / 邮箱 / 用户名登录。Google 授权暂不支持在此页面完成。成功后点右上角“完成”。\\\",\\\"externalGoogleMessage\\\":\\\"Google 授权不能在此内嵌登录页完成。请返回 TikTok，选择“手机号 / 邮箱 / 用户名”登录。如果使用 Gmail 地址，请输入 TikTok 账号密码，不是 Google 密码。在外部浏览器登录也不会自动同步到 EasySave。\\\"},\\\"parserModule\\\":\\\"tiktok\\\",\\\"download\\\":{\\\"mediaHosts\\\":[{\\\"domain\\\":\\\"tiktok.com\\\",\\\"includeSubdomains\\\":true},{\\\"domain\\\":\\\"tiktokcdn.com\\\",\\\"includeSubdomains\\\":true},{\\\"domain\\\":\\\"tiktokcdn-eu.com\\\",\\\"includeSubdomains\\\":true},{\\\"domain\\\":\\\"tiktokcdn-us.com\\\",\\\"includeSubdomains\\\":true}],\\\"headers\\\":{\\\"Referer\\\":\\\"https://www.tiktok.com/\\\"},\\\"cookieDomains\\\":[\\\"tiktok.com\\\"],\\\"urlOrder\\\":\\\"primaryFirst\\\",\\\"transport\\\":\\\"session\\\",\\\"resumable\\\":false,\\\"resourceDefaults\\\":{\\\"image\\\":{\\\"cookieDomains\\\":[],\\\"transport\\\":\\\"background\\\",\\\"resumable\\\":true},\\\"poster\\\":{\\\"cookieDomains\\\":[],\\\"transport\\\":\\\"background\\\",\\\"resumable\\\":true}}},\\\"metadata\\\":{\\\"authorIdRule\\\":\\\"numeric\\\"},\\\"icon\\\":{\\\"assetKey\\\":\\\"tiktok\\\"},\\\"tagColor\\\":\\\"#0F1419\\\",\\\"previewErrorMessage\\\":\\\"TikTok 在线预览可能受平台限制，请下载后观看\\\"},{\\\"id\\\":\\\"douyin\\\",\\\"platform\\\":\\\"douyin\\\",\\\"displayName\\\":\\\"抖音\\\",\\\"creditName\\\":\\\"抖音\\\",\\\"enabled\\\":false,\\\"notice\\\":\\\"待匿名实测，禁止启用\\\",\\\"minAppVersion\\\":\\\"1.9.0\\\",\\\"requiredCapabilities\\\":[],\\\"match\\\":{\\\"routes\\\":[{\\\"hosts\\\":[{\\\"domain\\\":\\\"douyin.com\\\",\\\"includeSubdomains\\\":true},{\\\"domain\\\":\\\"iesdouyin.com\\\",\\\"includeSubdomains\\\":true}],\\\"pathPatterns\\\":[\\\"^/(?:video|note|share/video)/([0-9]+)\\\"]},{\\\"hosts\\\":[{\\\"domain\\\":\\\"v.douyin.com\\\",\\\"includeSubdomains\\\":false}],\\\"pathPatterns\\\":[\\\"^/[^/]+/?\\$\\\"]}]},\\\"shortLinks\\\":[{\\\"host\\\":{\\\"domain\\\":\\\"v.douyin.com\\\",\\\"includeSubdomains\\\":false},\\\"strategy\\\":\\\"webview\\\",\\\"maxRedirects\\\":5}],\\\"normalize\\\":{\\\"sourceId\\\":{\\\"source\\\":\\\"path\\\",\\\"pattern\\\":\\\"^/(?:video|note|share/video)/([0-9]+)\\\"},\\\"canonicalTemplate\\\":\\\"https://www.douyin.com/video/{id}\\\",\\\"preserveLoadQuery\\\":[],\\\"exampleId\\\":\\\"1234567890123456789\\\"},\\\"load\\\":{\\\"mode\\\":\\\"webview\\\",\\\"timeoutMs\\\":30000,\\\"readyHook\\\":\\\"douyin_ready\\\"},\\\"auth\\\":{\\\"mode\\\":\\\"none\\\",\\\"sessionCookieNames\\\":[]},\\\"parserModule\\\":\\\"douyin\\\",\\\"download\\\":{\\\"mediaHosts\\\":[],\\\"headers\\\":{\\\"Referer\\\":\\\"https://www.douyin.com/\\\"},\\\"cookieDomains\\\":[],\\\"transport\\\":\\\"background\\\",\\\"resumable\\\":true},\\\"metadata\\\":{\\\"authorIdRule\\\":\\\"numeric\\\"}}]\";",
+      "category": "生成配置",
+      "reason": "由 config/sites.json 与构建器生成；不是独立维护的平台表。"
+    },
+    {
+      "file": "app/lib/pages/batch_page.dart",
+      "line": 15,
+      "source": "import '../services/seal.dart';",
+      "category": "词法候选",
+      "reason": "注释、导入或符号声明；不独立执行站点数据规则。"
+    },
+    {
+      "file": "app/lib/pages/batch_page.dart",
+      "line": 63,
+      "source": "      if (isYouTubeLink(item.link)) {",
+      "category": "外部转交许可表",
+      "reason": "YouTube 仅交给本地许可包 Seal；包括域/路径许可、包可见性、显式 Intent 及安装指引，不能由远程清单扩展为任意包。"
+    },
+    {
+      "file": "app/lib/pages/batch_page.dart",
+      "line": 69,
+      "source": "        // parsePostOutcome resolves short links itself (and, for XHS, does so",
+      "category": "词法候选",
+      "reason": "注释、导入或符号声明；不独立执行站点数据规则。"
+    },
+    {
+      "file": "app/lib/pages/batch_page.dart",
+      "line": 71,
+      "source": "        // plain HTTP first would drop Xiaohongshu's token and land on /login.",
+      "category": "词法候选",
+      "reason": "注释、导入或符号声明；不独立执行站点数据规则。"
+    },
+    {
+      "file": "app/lib/pages/batch_page.dart",
+      "line": 112,
+      "source": "  Future<void> _sendToSeal(BatchItem item) async {",
+      "category": "外部转交许可表",
+      "reason": "YouTube 仅交给本地许可包 Seal；包括域/路径许可、包可见性、显式 Intent 及安装指引，不能由远程清单扩展为任意包。"
+    },
+    {
+      "file": "app/lib/pages/batch_page.dart",
+      "line": 114,
+      "source": "      await sendToSeal(item.link);",
+      "category": "外部转交许可表",
+      "reason": "YouTube 仅交给本地许可包 Seal；包括域/路径许可、包可见性、显式 Intent 及安装指引，不能由远程清单扩展为任意包。"
+    },
+    {
+      "file": "app/lib/pages/batch_page.dart",
+      "line": 115,
+      "source": "    } on SealMissing {",
+      "category": "外部转交许可表",
+      "reason": "YouTube 仅交给本地许可包 Seal；包括域/路径许可、包可见性、显式 Intent 及安装指引，不能由远程清单扩展为任意包。"
+    },
+    {
+      "file": "app/lib/pages/batch_page.dart",
+      "line": 119,
+      "source": "      ).showSnackBar(const SnackBar(content: Text('未安装 Seal，请先按指引安装')));",
+      "category": "外部转交许可表",
+      "reason": "YouTube 仅交给本地许可包 Seal；包括域/路径许可、包可见性、显式 Intent 及安装指引，不能由远程清单扩展为任意包。"
+    },
+    {
+      "file": "app/lib/pages/batch_page.dart",
+      "line": 187,
+      "source": "        return const Text('YouTube 视频由 Seal 下载');",
+      "category": "外部转交许可表",
+      "reason": "YouTube 仅交给本地许可包 Seal；包括域/路径许可、包可见性、显式 Intent 及安装指引，不能由远程清单扩展为任意包。"
+    },
+    {
+      "file": "app/lib/pages/batch_page.dart",
+      "line": 221,
+      "source": "          onPressed: () => _sendToSeal(item),",
+      "category": "外部转交许可表",
+      "reason": "YouTube 仅交给本地许可包 Seal；包括域/路径许可、包可见性、显式 Intent 及安装指引，不能由远程清单扩展为任意包。"
+    },
+    {
+      "file": "app/lib/pages/batch_page.dart",
+      "line": 222,
+      "source": "          child: const Text('去 Seal'),",
+      "category": "外部转交许可表",
+      "reason": "YouTube 仅交给本地许可包 Seal；包括域/路径许可、包可见性、显式 Intent 及安装指引，不能由远程清单扩展为任意包。"
+    },
+    {
+      "file": "app/lib/pages/login_page.dart",
+      "line": 5,
+      "source": "// same way XHS_Downloader_Android does it: it is authoritative, instant, and",
+      "category": "词法候选",
+      "reason": "注释、导入或符号声明；不独立执行站点数据规则。"
+    },
+    {
+      "file": "app/lib/pages/login_page.dart",
+      "line": 8,
+      "source": "// XHS's login page also probes 127.0.0.1 (to detect its desktop client) and",
+      "category": "词法候选",
+      "reason": "注释、导入或符号声明；不独立执行站点数据规则。"
+    },
+    {
+      "file": "app/lib/pages/login_page.dart",
+      "line": 113,
+      "source": "  /// XHS keeps `__INITIAL_STATE__` in sync with the actual session, so we can",
+      "category": "词法候选",
+      "reason": "注释、导入或符号声明；不独立执行站点数据规则。"
+    },
+    {
+      "file": "app/lib/pages/login_page.dart",
+      "line": 338,
+      "source": "                    // XHS hands the finished login off to a desktop-client",
+      "category": "词法候选",
+      "reason": "注释、导入或符号声明；不独立执行站点数据规则。"
+    },
+    {
+      "file": "app/lib/pages/login_page.dart",
+      "line": 366,
+      "source": "                    // Subresource failures (XHS probes 127.0.0.1 to detect",
+      "category": "词法候选",
+      "reason": "注释、导入或符号声明；不独立执行站点数据规则。"
+    },
+    {
+      "file": "app/lib/pages/parse_page.dart",
+      "line": 26,
+      "source": "import '../services/seal.dart';",
+      "category": "词法候选",
+      "reason": "注释、导入或符号声明；不独立执行站点数据规则。"
+    },
+    {
+      "file": "app/lib/pages/parse_page.dart",
+      "line": 212,
+      "source": "  /// YouTube links detour to Seal, multiple links open the batch queue,",
+      "category": "词法候选",
+      "reason": "注释、导入或符号声明；不独立执行站点数据规则。"
+    },
+    {
+      "file": "app/lib/pages/parse_page.dart",
+      "line": 217,
+      "source": "    if (await routeExternalText(text, present: _showYouTubeSheet)) return;",
+      "category": "外部转交许可表",
+      "reason": "YouTube 仅交给本地许可包 Seal；包括域/路径许可、包可见性、显式 Intent 及安装指引，不能由远程清单扩展为任意包。"
+    },
+    {
+      "file": "app/lib/pages/parse_page.dart",
+      "line": 272,
+      "source": "  Future<void> _showYouTubeSheet(String url) async {",
+      "category": "外部转交许可表",
+      "reason": "YouTube 仅交给本地许可包 Seal；包括域/路径许可、包可见性、显式 Intent 及安装指引，不能由远程清单扩展为任意包。"
+    },
+    {
+      "file": "app/lib/pages/parse_page.dart",
+      "line": 273,
+      "source": "    final installed = await isSealInstalled();",
+      "category": "外部转交许可表",
+      "reason": "YouTube 仅交给本地许可包 Seal；包括域/路径许可、包可见性、显式 Intent 及安装指引，不能由远程清单扩展为任意包。"
+    },
+    {
+      "file": "app/lib/pages/parse_page.dart",
+      "line": 285,
+      "source": "                'YouTube 视频由 Seal 下载',",
+      "category": "外部转交许可表",
+      "reason": "YouTube 仅交给本地许可包 Seal；包括域/路径许可、包可见性、显式 Intent 及安装指引，不能由远程清单扩展为任意包。"
+    },
+    {
+      "file": "app/lib/pages/parse_page.dart",
+      "line": 298,
+      "source": "                  label: '去 Seal 下载',",
+      "category": "外部转交许可表",
+      "reason": "YouTube 仅交给本地许可包 Seal；包括域/路径许可、包可见性、显式 Intent 及安装指引，不能由远程清单扩展为任意包。"
+    },
+    {
+      "file": "app/lib/pages/parse_page.dart",
+      "line": 303,
+      "source": "                      await sendToSeal(url);",
+      "category": "外部转交许可表",
+      "reason": "YouTube 仅交给本地许可包 Seal；包括域/路径许可、包可见性、显式 Intent 及安装指引，不能由远程清单扩展为任意包。"
+    },
+    {
+      "file": "app/lib/pages/parse_page.dart",
+      "line": 313,
+      "source": "                  '手机上没有检测到 Seal，请先安装：\\n'",
+      "category": "外部转交许可表",
+      "reason": "YouTube 仅交给本地许可包 Seal；包括域/路径许可、包可见性、显式 Intent 及安装指引，不能由远程清单扩展为任意包。"
+    },
+    {
+      "file": "app/lib/pages/parse_page.dart",
+      "line": 314,
+      "source": "                  '· F-Droid 搜索 Seal\\n'",
+      "category": "外部转交许可表",
+      "reason": "YouTube 仅交给本地许可包 Seal；包括域/路径许可、包可见性、显式 Intent 及安装指引，不能由远程清单扩展为任意包。"
+    },
+    {
+      "file": "app/lib/pages/parse_page.dart",
+      "line": 315,
+      "source": "                  '· GitHub JunkFood02/Seal Releases 下载 APK',",
+      "category": "外部转交许可表",
+      "reason": "YouTube 仅交给本地许可包 Seal；包括域/路径许可、包可见性、显式 Intent 及安装指引，不能由远程清单扩展为任意包。"
+    },
+    {
+      "file": "app/lib/pages/parse_page.dart",
+      "line": 337,
+      "source": "                            const ClipboardData(text: sealReleasesUrl),",
+      "category": "外部转交许可表",
+      "reason": "YouTube 仅交给本地许可包 Seal；包括域/路径许可、包可见性、显式 Intent 及安装指引，不能由远程清单扩展为任意包。"
+    },
+    {
+      "file": "app/lib/pages/parse_page.dart",
+      "line": 360,
+      "source": "  /// bubble). Matching is done by post id, so a short link (xhslink) still",
+      "category": "词法候选",
+      "reason": "注释、导入或符号声明；不独立执行站点数据规则。"
+    },
+    {
+      "file": "app/lib/pages/parse_page.dart",
+      "line": 402,
+      "source": "    // YouTube detours to Seal before the supported-link check — otherwise",
+      "category": "词法候选",
+      "reason": "注释、导入或符号声明；不独立执行站点数据规则。"
+    },
+    {
+      "file": "app/lib/pages/parse_page.dart",
+      "line": 404,
+      "source": "    final yt = extractYouTubeLink(text);",
+      "category": "外部转交许可表",
+      "reason": "YouTube 仅交给本地许可包 Seal；包括域/路径许可、包可见性、显式 Intent 及安装指引，不能由远程清单扩展为任意包。"
+    },
+    {
+      "file": "app/lib/pages/parse_page.dart",
+      "line": 411,
+      "source": "          title: const Text('检测到 YouTube 链接'),",
+      "category": "外部转交许可表",
+      "reason": "YouTube 仅交给本地许可包 Seal；包括域/路径许可、包可见性、显式 Intent 及安装指引，不能由远程清单扩展为任意包。"
+    },
+    {
+      "file": "app/lib/pages/parse_page.dart",
+      "line": 420,
+      "source": "              child: const Text('去 Seal'),",
+      "category": "外部转交许可表",
+      "reason": "YouTube 仅交给本地许可包 Seal；包括域/路径许可、包可见性、显式 Intent 及安装指引，不能由远程清单扩展为任意包。"
+    },
+    {
+      "file": "app/lib/pages/parse_page.dart",
+      "line": 509,
+      "source": "      if (await routeExternalText(text, present: _showYouTubeSheet)) return;",
+      "category": "外部转交许可表",
+      "reason": "YouTube 仅交给本地许可包 Seal；包括域/路径许可、包可见性、显式 Intent 及安装指引，不能由远程清单扩展为任意包。"
+    },
+    {
+      "file": "app/lib/pages/parse_page.dart",
+      "line": 1085,
+      "source": "          // Not a login problem: the share link lost its `xsec_token` (or it",
+      "category": "词法候选",
+      "reason": "注释、导入或符号声明；不独立执行站点数据规则。"
+    },
+    {
+      "file": "app/lib/pages/parse_page.dart",
+      "line": 1086,
+      "source": "          // expired), so XHS can't serve the note again.",
+      "category": "词法候选",
+      "reason": "注释、导入或符号声明；不独立执行站点数据规则。"
+    },
+    {
+      "file": "app/lib/services/auth.dart",
+      "line": 4,
+      "source": "// Cookies alone are not proof of a live session (XHS also hands cookies to",
+      "category": "词法候选",
+      "reason": "注释、导入或符号声明；不独立执行站点数据规则。"
+    },
+    {
+      "file": "app/lib/services/auth.dart",
+      "line": 7,
+      "source": "// XHS_Downloader_Android reference app uses). That is authoritative and needs",
+      "category": "词法候选",
+      "reason": "注释、导入或符号声明；不独立执行站点数据规则。"
+    },
+    {
+      "file": "app/lib/services/auth.dart",
+      "line": 51,
+      "source": "/// True for loopback URLs used by login hand-offs (e.g. XHS's desktop",
+      "category": "词法候选",
+      "reason": "注释、导入或符号声明；不独立执行站点数据规则。"
+    },
+    {
+      "file": "app/lib/services/auth.dart",
+      "line": 121,
+      "source": "/// Cookie presence, or (for XHS) the page state when a logged-in WebView is",
+      "category": "词法候选",
+      "reason": "注释、导入或符号声明；不独立执行站点数据规则。"
+    },
+    {
+      "file": "app/lib/services/auth.dart",
+      "line": 144,
+      "source": "/// Signed-in XHS user, as read from the page itself.",
+      "category": "词法候选",
+      "reason": "注释、导入或符号声明；不独立执行站点数据规则。"
+    },
+    {
+      "file": "app/lib/services/auth.dart",
+      "line": 183,
+      "source": "/// Per-site account cache. The existing xhs preference keys remain readable.",
+      "category": "词法候选",
+      "reason": "注释、导入或符号声明；不独立执行站点数据规则。"
+    },
+    {
+      "file": "app/lib/services/clipboard_guard.dart",
+      "line": 22,
+      "source": "/// Best-effort post identity for a link: XHS note id (24-hex or alphanumeric),",
+      "category": "词法候选",
+      "reason": "注释、导入或符号声明；不独立执行站点数据规则。"
+    },
+    {
+      "file": "app/lib/services/clipboard_guard.dart",
+      "line": 23,
+      "source": "/// Douyin/TikTok video/note id, Instagram shortcode, X status id, Bilibili BV/av id, Weibo detail id.",
+      "category": "词法候选",
+      "reason": "注释、导入或符号声明；不独立执行站点数据规则。"
+    },
+    {
+      "file": "app/lib/services/clipboard_guard.dart",
+      "line": 32,
+      "source": "/// an xhslink match the record stored under its canonical url.",
+      "category": "词法候选",
+      "reason": "注释、导入或符号声明；不独立执行站点数据规则。"
+    },
+    {
+      "file": "app/lib/services/clipboard_guard.dart",
+      "line": 68,
+      "source": "  final yt = extractYouTubeLink(text);",
+      "category": "外部转交许可表",
+      "reason": "YouTube 仅交给本地许可包 Seal；包括域/路径许可、包可见性、显式 Intent 及安装指引，不能由远程清单扩展为任意包。"
+    },
+    {
+      "file": "app/lib/services/download_manager.dart",
+      "line": 381,
+      "source": "  /// Session-only TikTok videos cannot resume a paused transfer.",
+      "category": "词法候选",
+      "reason": "注释、导入或符号声明；不独立执行站点数据规则。"
+    },
+    {
+      "file": "app/lib/services/links.dart",
+      "line": 55,
+      "source": "/// True for YouTube watch / Shorts / youtu.be links. EasySave never parses",
+      "category": "词法候选",
+      "reason": "注释、导入或符号声明；不独立执行站点数据规则。"
+    },
+    {
+      "file": "app/lib/services/links.dart",
+      "line": 56,
+      "source": "/// these (see roadmap v1.2): they are handed to Seal instead.",
+      "category": "词法候选",
+      "reason": "注释、导入或符号声明；不独立执行站点数据规则。"
+    },
+    {
+      "file": "app/lib/services/links.dart",
+      "line": 57,
+      "source": "bool isYouTubeLink(String url) {",
+      "category": "外部转交许可表",
+      "reason": "YouTube 仅交给本地许可包 Seal；包括域/路径许可、包可见性、显式 Intent 及安装指引，不能由远程清单扩展为任意包。"
+    },
+    {
+      "file": "app/lib/services/links.dart",
+      "line": 67,
+      "source": "      host == 'youtube.com' ||",
+      "category": "外部转交许可表",
+      "reason": "YouTube 仅交给本地许可包 Seal；包括域/路径许可、包可见性、显式 Intent 及安装指引，不能由远程清单扩展为任意包。"
+    },
+    {
+      "file": "app/lib/services/links.dart",
+      "line": 68,
+      "source": "      host.endsWith('.youtube.com') ||",
+      "category": "外部转交许可表",
+      "reason": "YouTube 仅交给本地许可包 Seal；包括域/路径许可、包可见性、显式 Intent 及安装指引，不能由远程清单扩展为任意包。"
+    },
+    {
+      "file": "app/lib/services/links.dart",
+      "line": 69,
+      "source": "      host == 'youtu.be' ||",
+      "category": "外部转交许可表",
+      "reason": "YouTube 仅交给本地许可包 Seal；包括域/路径许可、包可见性、显式 Intent 及安装指引，不能由远程清单扩展为任意包。"
+    },
+    {
+      "file": "app/lib/services/links.dart",
+      "line": 70,
+      "source": "      host == 'youtube-nocookie.com' ||",
+      "category": "外部转交许可表",
+      "reason": "YouTube 仅交给本地许可包 Seal；包括域/路径许可、包可见性、显式 Intent 及安装指引，不能由远程清单扩展为任意包。"
+    },
+    {
+      "file": "app/lib/services/links.dart",
+      "line": 71,
+      "source": "      host.endsWith('.youtube-nocookie.com');",
+      "category": "外部转交许可表",
+      "reason": "YouTube 仅交给本地许可包 Seal；包括域/路径许可、包可见性、显式 Intent 及安装指引，不能由远程清单扩展为任意包。"
+    },
+    {
+      "file": "app/lib/services/links.dart",
+      "line": 73,
+      "source": "  if (host == 'youtu.be' || host.endsWith('.youtu.be')) {",
+      "category": "外部转交许可表",
+      "reason": "YouTube 仅交给本地许可包 Seal；包括域/路径许可、包可见性、显式 Intent 及安装指引，不能由远程清单扩展为任意包。"
+    },
+    {
+      "file": "app/lib/services/links.dart",
+      "line": 82,
+      "source": "/// Extract the first YouTube URL from free text. Separate from extractLink",
+      "category": "词法候选",
+      "reason": "注释、导入或符号声明；不独立执行站点数据规则。"
+    },
+    {
+      "file": "app/lib/services/links.dart",
+      "line": 83,
+      "source": "/// because YouTube links are not \"supported\" — they route to Seal.",
+      "category": "词法候选",
+      "reason": "注释、导入或符号声明；不独立执行站点数据规则。"
+    },
+    {
+      "file": "app/lib/services/links.dart",
+      "line": 84,
+      "source": "String? extractYouTubeLink(String text) {",
+      "category": "外部转交许可表",
+      "reason": "YouTube 仅交给本地许可包 Seal；包括域/路径许可、包可见性、显式 Intent 及安装指引，不能由远程清单扩展为任意包。"
+    },
+    {
+      "file": "app/lib/services/links.dart",
+      "line": 92,
+      "source": "    if (isYouTubeLink(url)) return url;",
+      "category": "外部转交许可表",
+      "reason": "YouTube 仅交给本地许可包 Seal；包括域/路径许可、包可见性、显式 Intent 及安装指引，不能由远程清单扩展为任意包。"
+    },
+    {
+      "file": "app/lib/services/links.dart",
+      "line": 102,
+      "source": "  final url = extractYouTubeLink(text);",
+      "category": "外部转交许可表",
+      "reason": "YouTube 仅交给本地许可包 Seal；包括域/路径许可、包可见性、显式 Intent 及安装指引，不能由远程清单扩展为任意包。"
+    },
+    {
+      "file": "app/lib/services/links.dart",
+      "line": 108,
+      "source": "/// Resolve xhslink short links to the final page URL with plain HTTP",
+      "category": "词法候选",
+      "reason": "注释、导入或符号声明；不独立执行站点数据规则。"
+    },
+    {
+      "file": "app/lib/services/login_navigation.dart",
+      "line": 8,
+      "source": "      'accounts.google.com',",
+      "category": "通用安全规则",
+      "reason": "内嵌 WebView 的 Google OAuth 精确 host 判定，与站点无关；站点专用文案已入清单。"
+    },
+    {
+      "file": "app/lib/services/login_navigation.dart",
+      "line": 9,
+      "source": "      'accounts.google.cn',",
+      "category": "通用安全规则",
+      "reason": "内嵌 WebView 的 Google OAuth 精确 host 判定，与站点无关；站点专用文案已入清单。"
+    },
+    {
+      "file": "app/lib/services/preview_open_guard.dart",
+      "line": 84,
+      "source": "  /// no post id of its own (xhslink.com/...), one resolving request is made so",
+      "category": "词法候选",
+      "reason": "注释、导入或符号声明；不独立执行站点数据规则。"
+    },
+    {
+      "file": "app/lib/services/seal.dart",
+      "line": 1,
+      "source": "// Seal handoff for YouTube links (roadmap v1.2). EasySave never parses or",
+      "category": "词法候选",
+      "reason": "注释、导入或符号声明；不独立执行站点数据规则。"
+    },
+    {
+      "file": "app/lib/services/seal.dart",
+      "line": 2,
+      "source": "// downloads YouTube: the URL is handed to Seal (com.junkfood.seal) via an",
+      "category": "词法候选",
+      "reason": "注释、导入或符号声明；不独立执行站点数据规则。"
+    },
+    {
+      "file": "app/lib/services/seal.dart",
+      "line": 6,
+      "source": "import 'links.dart' show isYouTubeLink;",
+      "category": "词法候选",
+      "reason": "注释、导入或符号声明；不独立执行站点数据规则。"
+    },
+    {
+      "file": "app/lib/services/seal.dart",
+      "line": 8,
+      "source": "class SealMissing implements Exception {",
+      "category": "外部转交许可表",
+      "reason": "YouTube 仅交给本地许可包 Seal；包括域/路径许可、包可见性、显式 Intent 及安装指引，不能由远程清单扩展为任意包。"
+    },
+    {
+      "file": "app/lib/services/seal.dart",
+      "line": 9,
+      "source": "  const SealMissing();",
+      "category": "外部转交许可表",
+      "reason": "YouTube 仅交给本地许可包 Seal；包括域/路径许可、包可见性、显式 Intent 及安装指引，不能由远程清单扩展为任意包。"
+    },
+    {
+      "file": "app/lib/services/seal.dart",
+      "line": 12,
+      "source": "/// Package name of Seal, the YouTube downloader we hand off to.",
+      "category": "词法候选",
+      "reason": "注释、导入或符号声明；不独立执行站点数据规则。"
+    },
+    {
+      "file": "app/lib/services/seal.dart",
+      "line": 13,
+      "source": "const String sealPackage = 'com.junkfood.seal';",
+      "category": "外部转交许可表",
+      "reason": "YouTube 仅交给本地许可包 Seal；包括域/路径许可、包可见性、显式 Intent 及安装指引，不能由远程清单扩展为任意包。"
+    },
+    {
+      "file": "app/lib/services/seal.dart",
+      "line": 15,
+      "source": "/// Seal's GitHub releases, used in the install guidance.",
+      "category": "词法候选",
+      "reason": "注释、导入或符号声明；不独立执行站点数据规则。"
+    },
+    {
+      "file": "app/lib/services/seal.dart",
+      "line": 16,
+      "source": "const String sealReleasesUrl = 'https://github.com/JunkFood02/Seal/releases';",
+      "category": "外部转交许可表",
+      "reason": "YouTube 仅交给本地许可包 Seal；包括域/路径许可、包可见性、显式 Intent 及安装指引，不能由远程清单扩展为任意包。"
+    },
+    {
+      "file": "app/lib/services/seal.dart",
+      "line": 18,
+      "source": "const _channel = MethodChannel('easysave/seal');",
+      "category": "外部转交许可表",
+      "reason": "YouTube 仅交给本地许可包 Seal；包括域/路径许可、包可见性、显式 Intent 及安装指引，不能由远程清单扩展为任意包。"
+    },
+    {
+      "file": "app/lib/services/seal.dart",
+      "line": 20,
+      "source": "/// True when Seal is installed (PackageManager lookup through MainActivity).",
+      "category": "词法候选",
+      "reason": "注释、导入或符号声明；不独立执行站点数据规则。"
+    },
+    {
+      "file": "app/lib/services/seal.dart",
+      "line": 21,
+      "source": "Future<bool> isSealInstalled() async {",
+      "category": "外部转交许可表",
+      "reason": "YouTube 仅交给本地许可包 Seal；包括域/路径许可、包可见性、显式 Intent 及安装指引，不能由远程清单扩展为任意包。"
+    },
+    {
+      "file": "app/lib/services/seal.dart",
+      "line": 29,
+      "source": "/// Send the URL to Seal with an explicit package intent. Throws [SealMissing]",
+      "category": "词法候选",
+      "reason": "注释、导入或符号声明；不独立执行站点数据规则。"
+    },
+    {
+      "file": "app/lib/services/seal.dart",
+      "line": 30,
+      "source": "/// when Seal is not installed so the caller shows install guidance instead.",
+      "category": "词法候选",
+      "reason": "注释、导入或符号声明；不独立执行站点数据规则。"
+    },
+    {
+      "file": "app/lib/services/seal.dart",
+      "line": 31,
+      "source": "Future<void> sendToSeal(String url) async {",
+      "category": "外部转交许可表",
+      "reason": "YouTube 仅交给本地许可包 Seal；包括域/路径许可、包可见性、显式 Intent 及安装指引，不能由远程清单扩展为任意包。"
+    },
+    {
+      "file": "app/lib/services/seal.dart",
+      "line": 32,
+      "source": "  if (!isYouTubeLink(url)) {",
+      "category": "外部转交许可表",
+      "reason": "YouTube 仅交给本地许可包 Seal；包括域/路径许可、包可见性、显式 Intent 及安装指引，不能由远程清单扩展为任意包。"
+    },
+    {
+      "file": "app/lib/services/seal.dart",
+      "line": 37,
+      "source": "    if (sent != true) throw const SealMissing();",
+      "category": "外部转交许可表",
+      "reason": "YouTube 仅交给本地许可包 Seal；包括域/路径许可、包可见性、显式 Intent 及安装指引，不能由远程清单扩展为任意包。"
+    },
+    {
+      "file": "app/lib/services/seal.dart",
+      "line": 38,
+      "source": "  } on SealMissing {",
+      "category": "外部转交许可表",
+      "reason": "YouTube 仅交给本地许可包 Seal；包括域/路径许可、包可见性、显式 Intent 及安装指引，不能由远程清单扩展为任意包。"
+    },
+    {
+      "file": "app/lib/services/seal.dart",
+      "line": 41,
+      "source": "    throw const SealMissing();",
+      "category": "外部转交许可表",
+      "reason": "YouTube 仅交给本地许可包 Seal；包括域/路径许可、包可见性、显式 Intent 及安装指引，不能由远程清单扩展为任意包。"
+    },
+    {
+      "file": "app/lib/services/update_service.dart",
+      "line": 467,
+      "source": "    if (platform == 'x') {",
+      "category": "旧通道兼容代码",
+      "reason": "旧 platforms/headers ABI 的 X 默认 endpoint/UA；v2 解析入口从 site.load 获取数据，本轮保留旧调用契约。"
+    },
+    {
+      "file": "app/lib/services/update_service.dart",
+      "line": 479,
+      "source": "    if (platform == 'x') {",
+      "category": "旧通道兼容代码",
+      "reason": "旧 platforms/headers ABI 的 X 默认 endpoint/UA；v2 解析入口从 site.load 获取数据，本轮保留旧调用契约。"
+    },
+    {
+      "file": "app/lib/services/update_service.dart",
+      "line": 480,
+      "source": "      return 'https://cdn.syndication.twimg.com/tweet-result?id={id}&lang=en&token={token}';",
+      "category": "旧通道兼容代码",
+      "reason": "旧 platforms/headers ABI 的 X 默认 endpoint/UA；v2 解析入口从 site.load 获取数据，本轮保留旧调用契约。"
+    },
+    {
+      "file": "app/lib/widgets/shared.dart",
+      "line": 67,
+      "source": "/// XHS image hosts intermittently blackhole a request (no data, no error)",
+      "category": "词法候选",
+      "reason": "注释、导入或符号声明；不独立执行站点数据规则。"
+    },
+    {
+      "file": "app/lib/widgets/shared.dart",
+      "line": 280,
+      "source": "    'xhs': Icons.menu_book,",
+      "category": "内置图标资源",
+      "reason": "本地 Material assetKey 注册表；清单只能选择已打包字形，不能加载远程图标。"
+    },
+    {
+      "file": "app/lib/widgets/shared.dart",
+      "line": 281,
+      "source": "    'instagram': Icons.photo_camera,",
+      "category": "内置图标资源",
+      "reason": "本地 Material assetKey 注册表；清单只能选择已打包字形，不能加载远程图标。"
+    },
+    {
+      "file": "app/lib/widgets/shared.dart",
+      "line": 282,
+      "source": "    'x': Icons.alternate_email,",
+      "category": "内置图标资源",
+      "reason": "本地 Material assetKey 注册表；清单只能选择已打包字形，不能加载远程图标。"
+    },
+    {
+      "file": "app/lib/widgets/shared.dart",
+      "line": 283,
+      "source": "    'tiktok': Icons.music_note,",
+      "category": "内置图标资源",
+      "reason": "本地 Material assetKey 注册表；清单只能选择已打包字形，不能加载远程图标。"
+    },
+    {
+      "file": "config/parser-release.json",
+      "line": 7,
+      "source": "    \"tiktok\": {",
+      "category": "清单源配置",
+      "reason": "允许维护站点数据的源配置；parser-release 的 platforms/headers 是旧 ABI 兼容投影。"
+    },
+    {
+      "file": "config/parser-release.json",
+      "line": 9,
+      "source": "      \"notice\": \"TikTok 解析服务维护中，请稍后再试\"",
+      "category": "清单源配置",
+      "reason": "允许维护站点数据的源配置；parser-release 的 platforms/headers 是旧 ABI 兼容投影。"
+    },
+    {
+      "file": "config/parser-release.json",
+      "line": 11,
+      "source": "    \"xhs\": {",
+      "category": "清单源配置",
+      "reason": "允许维护站点数据的源配置；parser-release 的 platforms/headers 是旧 ABI 兼容投影。"
+    },
+    {
+      "file": "config/parser-release.json",
+      "line": 13,
+      "source": "      \"notice\": \"小红书解析服务维护中，请稍后再试\"",
+      "category": "清单源配置",
+      "reason": "允许维护站点数据的源配置；parser-release 的 platforms/headers 是旧 ABI 兼容投影。"
+    },
+    {
+      "file": "config/parser-release.json",
+      "line": 15,
+      "source": "    \"instagram\": {",
+      "category": "清单源配置",
+      "reason": "允许维护站点数据的源配置；parser-release 的 platforms/headers 是旧 ABI 兼容投影。"
+    },
+    {
+      "file": "config/parser-release.json",
+      "line": 17,
+      "source": "      \"notice\": \"Instagram 解析服务维护中，请稍后再试\"",
+      "category": "清单源配置",
+      "reason": "允许维护站点数据的源配置；parser-release 的 platforms/headers 是旧 ABI 兼容投影。"
+    },
+    {
+      "file": "config/parser-release.json",
+      "line": 19,
+      "source": "    \"x\": {",
+      "category": "清单源配置",
+      "reason": "允许维护站点数据的源配置；parser-release 的 platforms/headers 是旧 ABI 兼容投影。"
+    },
+    {
+      "file": "config/parser-release.json",
+      "line": 22,
+      "source": "      \"endpoint\": \"https://cdn.syndication.twimg.com/tweet-result?id={id}&lang=en&token={token}\"",
+      "category": "清单源配置",
+      "reason": "允许维护站点数据的源配置；parser-release 的 platforms/headers 是旧 ABI 兼容投影。"
+    },
+    {
+      "file": "config/parser-release.json",
+      "line": 26,
+      "source": "    \"tiktok\": {",
+      "category": "清单源配置",
+      "reason": "允许维护站点数据的源配置；parser-release 的 platforms/headers 是旧 ABI 兼容投影。"
+    },
+    {
+      "file": "config/parser-release.json",
+      "line": 27,
+      "source": "      \"Referer\": \"https://www.tiktok.com/\"",
+      "category": "清单源配置",
+      "reason": "允许维护站点数据的源配置；parser-release 的 platforms/headers 是旧 ABI 兼容投影。"
+    },
+    {
+      "file": "config/parser-release.json",
+      "line": 29,
+      "source": "    \"xhs\": {",
+      "category": "清单源配置",
+      "reason": "允许维护站点数据的源配置；parser-release 的 platforms/headers 是旧 ABI 兼容投影。"
+    },
+    {
+      "file": "config/parser-release.json",
+      "line": 32,
+      "source": "    \"instagram\": {",
+      "category": "清单源配置",
+      "reason": "允许维护站点数据的源配置；parser-release 的 platforms/headers 是旧 ABI 兼容投影。"
+    },
+    {
+      "file": "config/parser-release.json",
+      "line": 35,
+      "source": "    \"x\": {",
+      "category": "清单源配置",
+      "reason": "允许维护站点数据的源配置；parser-release 的 platforms/headers 是旧 ABI 兼容投影。"
+    },
+    {
+      "file": "config/sites.json",
+      "line": 3,
+      "source": "    \"id\": \"xhs\",",
+      "category": "清单源配置",
+      "reason": "允许维护站点数据的源配置；parser-release 的 platforms/headers 是旧 ABI 兼容投影。"
+    },
+    {
+      "file": "config/sites.json",
+      "line": 4,
+      "source": "    \"platform\": \"xiaohongshu\",",
+      "category": "清单源配置",
+      "reason": "允许维护站点数据的源配置；parser-release 的 platforms/headers 是旧 ABI 兼容投影。"
+    },
+    {
+      "file": "config/sites.json",
+      "line": 5,
+      "source": "    \"displayName\": \"小红书\",",
+      "category": "清单源配置",
+      "reason": "允许维护站点数据的源配置；parser-release 的 platforms/headers 是旧 ABI 兼容投影。"
+    },
+    {
+      "file": "config/sites.json",
+      "line": 6,
+      "source": "    \"creditName\": \"小红书\",",
+      "category": "清单源配置",
+      "reason": "允许维护站点数据的源配置；parser-release 的 platforms/headers 是旧 ABI 兼容投影。"
+    },
+    {
+      "file": "config/sites.json",
+      "line": 16,
+      "source": "              \"domain\": \"xiaohongshu.com\",",
+      "category": "清单源配置",
+      "reason": "允许维护站点数据的源配置；parser-release 的 platforms/headers 是旧 ABI 兼容投影。"
+    },
+    {
+      "file": "config/sites.json",
+      "line": 20,
+      "source": "              \"domain\": \"rednote.com\",",
+      "category": "清单源配置",
+      "reason": "允许维护站点数据的源配置；parser-release 的 platforms/headers 是旧 ABI 兼容投影。"
+    },
+    {
+      "file": "config/sites.json",
+      "line": 31,
+      "source": "              \"domain\": \"xhs.cn\",",
+      "category": "清单源配置",
+      "reason": "允许维护站点数据的源配置；parser-release 的 platforms/headers 是旧 ABI 兼容投影。"
+    },
+    {
+      "file": "config/sites.json",
+      "line": 35,
+      "source": "              \"domain\": \"xhslink.cn\",",
+      "category": "清单源配置",
+      "reason": "允许维护站点数据的源配置；parser-release 的 platforms/headers 是旧 ABI 兼容投影。"
+    },
+    {
+      "file": "config/sites.json",
+      "line": 39,
+      "source": "              \"domain\": \"xhslink.com\",",
+      "category": "清单源配置",
+      "reason": "允许维护站点数据的源配置；parser-release 的 platforms/headers 是旧 ABI 兼容投影。"
+    },
+    {
+      "file": "config/sites.json",
+      "line": 52,
+      "source": "          \"domain\": \"xhslink.com\",",
+      "category": "清单源配置",
+      "reason": "允许维护站点数据的源配置；parser-release 的 platforms/headers 是旧 ABI 兼容投影。"
+    },
+    {
+      "file": "config/sites.json",
+      "line": 60,
+      "source": "          \"domain\": \"xhslink.cn\",",
+      "category": "清单源配置",
+      "reason": "允许维护站点数据的源配置；parser-release 的 platforms/headers 是旧 ABI 兼容投影。"
+    },
+    {
+      "file": "config/sites.json",
+      "line": 68,
+      "source": "          \"domain\": \"xhs.cn\",",
+      "category": "清单源配置",
+      "reason": "允许维护站点数据的源配置；parser-release 的 platforms/headers 是旧 ABI 兼容投影。"
+    },
+    {
+      "file": "config/sites.json",
+      "line": 80,
+      "source": "      \"canonicalTemplate\": \"https://www.xiaohongshu.com/explore/{id}\",",
+      "category": "清单源配置",
+      "reason": "允许维护站点数据的源配置；parser-release 的 platforms/headers 是旧 ABI 兼容投影。"
+    },
+    {
+      "file": "config/sites.json",
+      "line": 82,
+      "source": "        \"xsec_token\",",
+      "category": "清单源配置",
+      "reason": "允许维护站点数据的源配置；parser-release 的 platforms/headers 是旧 ABI 兼容投影。"
+    },
+    {
+      "file": "config/sites.json",
+      "line": 83,
+      "source": "        \"xsec_source\"",
+      "category": "清单源配置",
+      "reason": "允许维护站点数据的源配置；parser-release 的 platforms/headers 是旧 ABI 兼容投影。"
+    },
+    {
+      "file": "config/sites.json",
+      "line": 90,
+      "source": "      \"readyHook\": \"xhs_ready\",",
+      "category": "清单源配置",
+      "reason": "允许维护站点数据的源配置；parser-release 的 platforms/headers 是旧 ABI 兼容投影。"
+    },
+    {
+      "file": "config/sites.json",
+      "line": 96,
+      "source": "        \"web_session\",",
+      "category": "清单源配置",
+      "reason": "允许维护站点数据的源配置；parser-release 的 platforms/headers 是旧 ABI 兼容投影。"
+    },
+    {
+      "file": "config/sites.json",
+      "line": 101,
+      "source": "      \"loginUrl\": \"https://www.xiaohongshu.com/explore\",",
+      "category": "清单源配置",
+      "reason": "允许维护站点数据的源配置；parser-release 的 platforms/headers 是旧 ABI 兼容投影。"
+    },
+    {
+      "file": "config/sites.json",
+      "line": 105,
+      "source": "        \"https://www.xiaohongshu.com/\",",
+      "category": "清单源配置",
+      "reason": "允许维护站点数据的源配置；parser-release 的 platforms/headers 是旧 ABI 兼容投影。"
+    },
+    {
+      "file": "config/sites.json",
+      "line": 106,
+      "source": "        \"https://www.xiaohongshu.com/explore\",",
+      "category": "清单源配置",
+      "reason": "允许维护站点数据的源配置；parser-release 的 platforms/headers 是旧 ABI 兼容投影。"
+    },
+    {
+      "file": "config/sites.json",
+      "line": 107,
+      "source": "        \"https://edith.xiaohongshu.com/\"",
+      "category": "清单源配置",
+      "reason": "允许维护站点数据的源配置；parser-release 的 platforms/headers 是旧 ABI 兼容投影。"
+    },
+    {
+      "file": "config/sites.json",
+      "line": 112,
+      "source": "    \"parserModule\": \"xhs\",",
+      "category": "清单源配置",
+      "reason": "允许维护站点数据的源配置；parser-release 的 platforms/headers 是旧 ABI 兼容投影。"
+    },
+    {
+      "file": "config/sites.json",
+      "line": 116,
+      "source": "          \"domain\": \"xhscdn.com\",",
+      "category": "清单源配置",
+      "reason": "允许维护站点数据的源配置；parser-release 的 platforms/headers 是旧 ABI 兼容投影。"
+    },
+    {
+      "file": "config/sites.json",
+      "line": 120,
+      "source": "          \"domain\": \"xhscdn.net\",",
+      "category": "清单源配置",
+      "reason": "允许维护站点数据的源配置；parser-release 的 platforms/headers 是旧 ABI 兼容投影。"
+    },
+    {
+      "file": "config/sites.json",
+      "line": 124,
+      "source": "          \"domain\": \"xiaohongshu.com\",",
+      "category": "清单源配置",
+      "reason": "允许维护站点数据的源配置；parser-release 的 platforms/headers 是旧 ABI 兼容投影。"
+    },
+    {
+      "file": "config/sites.json",
+      "line": 129,
+      "source": "        \"Referer\": \"https://www.xiaohongshu.com/\"",
+      "category": "清单源配置",
+      "reason": "允许维护站点数据的源配置；parser-release 的 platforms/headers 是旧 ABI 兼容投影。"
+    },
+    {
+      "file": "config/sites.json",
+      "line": 139,
+      "source": "      \"assetKey\": \"xhs\"",
+      "category": "清单源配置",
+      "reason": "允许维护站点数据的源配置；parser-release 的 platforms/headers 是旧 ABI 兼容投影。"
+    },
+    {
+      "file": "config/sites.json",
+      "line": 144,
+      "source": "    \"id\": \"instagram\",",
+      "category": "清单源配置",
+      "reason": "允许维护站点数据的源配置；parser-release 的 platforms/headers 是旧 ABI 兼容投影。"
+    },
+    {
+      "file": "config/sites.json",
+      "line": 145,
+      "source": "    \"platform\": \"instagram\",",
+      "category": "清单源配置",
+      "reason": "允许维护站点数据的源配置；parser-release 的 platforms/headers 是旧 ABI 兼容投影。"
+    },
+    {
+      "file": "config/sites.json",
+      "line": 146,
+      "source": "    \"displayName\": \"Instagram\",",
+      "category": "清单源配置",
+      "reason": "允许维护站点数据的源配置；parser-release 的 platforms/headers 是旧 ABI 兼容投影。"
+    },
+    {
+      "file": "config/sites.json",
+      "line": 147,
+      "source": "    \"creditName\": \"Instagram\",",
+      "category": "清单源配置",
+      "reason": "允许维护站点数据的源配置；parser-release 的 platforms/headers 是旧 ABI 兼容投影。"
+    },
+    {
+      "file": "config/sites.json",
+      "line": 157,
+      "source": "              \"domain\": \"instagram.com\",",
+      "category": "清单源配置",
+      "reason": "允许维护站点数据的源配置；parser-release 的 platforms/headers 是旧 ABI 兼容投影。"
+    },
+    {
+      "file": "config/sites.json",
+      "line": 161,
+      "source": "              \"domain\": \"instagr.am\",",
+      "category": "清单源配置",
+      "reason": "允许维护站点数据的源配置；parser-release 的 platforms/headers 是旧 ABI 兼容投影。"
+    },
+    {
+      "file": "config/sites.json",
+      "line": 177,
+      "source": "      \"canonicalTemplate\": \"https://www.instagram.com/p/{id}/\",",
+      "category": "清单源配置",
+      "reason": "允许维护站点数据的源配置；parser-release 的 platforms/headers 是旧 ABI 兼容投影。"
+    },
+    {
+      "file": "config/sites.json",
+      "line": 184,
+      "source": "      \"readyHook\": \"instagram_ready\",",
+      "category": "清单源配置",
+      "reason": "允许维护站点数据的源配置；parser-release 的 platforms/headers 是旧 ABI 兼容投影。"
+    },
+    {
+      "file": "config/sites.json",
+      "line": 190,
+      "source": "        \"sessionid\"",
+      "category": "清单源配置",
+      "reason": "允许维护站点数据的源配置；parser-release 的 platforms/headers 是旧 ABI 兼容投影。"
+    },
+    {
+      "file": "config/sites.json",
+      "line": 192,
+      "source": "      \"loginUrl\": \"https://www.instagram.com/accounts/login/\",",
+      "category": "清单源配置",
+      "reason": "允许维护站点数据的源配置；parser-release 的 platforms/headers 是旧 ABI 兼容投影。"
+    },
+    {
+      "file": "config/sites.json",
+      "line": 195,
+      "source": "    \"parserModule\": \"instagram\",",
+      "category": "清单源配置",
+      "reason": "允许维护站点数据的源配置；parser-release 的 platforms/headers 是旧 ABI 兼容投影。"
+    },
+    {
+      "file": "config/sites.json",
+      "line": 199,
+      "source": "          \"domain\": \"cdninstagram.com\",",
+      "category": "清单源配置",
+      "reason": "允许维护站点数据的源配置；parser-release 的 platforms/headers 是旧 ABI 兼容投影。"
+    },
+    {
+      "file": "config/sites.json",
+      "line": 203,
+      "source": "          \"domain\": \"fbcdn.net\",",
+      "category": "清单源配置",
+      "reason": "允许维护站点数据的源配置；parser-release 的 platforms/headers 是旧 ABI 兼容投影。"
+    },
+    {
+      "file": "config/sites.json",
+      "line": 208,
+      "source": "        \"Referer\": \"https://www.instagram.com/\"",
+      "category": "清单源配置",
+      "reason": "允许维护站点数据的源配置；parser-release 的 platforms/headers 是旧 ABI 兼容投影。"
+    },
+    {
+      "file": "config/sites.json",
+      "line": 218,
+      "source": "      \"assetKey\": \"instagram\"",
+      "category": "清单源配置",
+      "reason": "允许维护站点数据的源配置；parser-release 的 platforms/headers 是旧 ABI 兼容投影。"
+    },
+    {
+      "file": "config/sites.json",
+      "line": 223,
+      "source": "    \"id\": \"x\",",
+      "category": "清单源配置",
+      "reason": "允许维护站点数据的源配置；parser-release 的 platforms/headers 是旧 ABI 兼容投影。"
+    },
+    {
+      "file": "config/sites.json",
+      "line": 224,
+      "source": "    \"platform\": \"x\",",
+      "category": "清单源配置",
+      "reason": "允许维护站点数据的源配置；parser-release 的 platforms/headers 是旧 ABI 兼容投影。"
+    },
+    {
+      "file": "config/sites.json",
+      "line": 225,
+      "source": "    \"displayName\": \"X\",",
+      "category": "清单源配置",
+      "reason": "允许维护站点数据的源配置；parser-release 的 platforms/headers 是旧 ABI 兼容投影。"
+    },
+    {
+      "file": "config/sites.json",
+      "line": 226,
+      "source": "    \"creditName\": \"X\",",
+      "category": "清单源配置",
+      "reason": "允许维护站点数据的源配置；parser-release 的 platforms/headers 是旧 ABI 兼容投影。"
+    },
+    {
+      "file": "config/sites.json",
+      "line": 236,
+      "source": "              \"domain\": \"x.com\",",
+      "category": "清单源配置",
+      "reason": "允许维护站点数据的源配置；parser-release 的 platforms/headers 是旧 ABI 兼容投影。"
+    },
+    {
+      "file": "config/sites.json",
+      "line": 240,
+      "source": "              \"domain\": \"twitter.com\",",
+      "category": "清单源配置",
+      "reason": "允许维护站点数据的源配置；parser-release 的 platforms/headers 是旧 ABI 兼容投影。"
+    },
+    {
+      "file": "config/sites.json",
+      "line": 251,
+      "source": "              \"domain\": \"t.co\",",
+      "category": "清单源配置",
+      "reason": "允许维护站点数据的源配置；parser-release 的 platforms/headers 是旧 ABI 兼容投影。"
+    },
+    {
+      "file": "config/sites.json",
+      "line": 264,
+      "source": "          \"domain\": \"t.co\",",
+      "category": "清单源配置",
+      "reason": "允许维护站点数据的源配置；parser-release 的 platforms/headers 是旧 ABI 兼容投影。"
+    },
+    {
+      "file": "config/sites.json",
+      "line": 276,
+      "source": "      \"canonicalTemplate\": \"https://x.com/i/status/{id}\",",
+      "category": "清单源配置",
+      "reason": "允许维护站点数据的源配置；parser-release 的 platforms/headers 是旧 ABI 兼容投影。"
+    },
+    {
+      "file": "config/sites.json",
+      "line": 283,
+      "source": "      \"endpointTemplate\": \"https://cdn.syndication.twimg.com/tweet-result?id={id}&lang=en&token={token}\",",
+      "category": "清单源配置",
+      "reason": "允许维护站点数据的源配置；parser-release 的 platforms/headers 是旧 ABI 兼容投影。"
+    },
+    {
+      "file": "config/sites.json",
+      "line": 292,
+      "source": "        \"auth_token\"",
+      "category": "清单源配置",
+      "reason": "允许维护站点数据的源配置；parser-release 的 platforms/headers 是旧 ABI 兼容投影。"
+    },
+    {
+      "file": "config/sites.json",
+      "line": 294,
+      "source": "      \"loginUrl\": \"https://x.com/i/flow/login\"",
+      "category": "清单源配置",
+      "reason": "允许维护站点数据的源配置；parser-release 的 platforms/headers 是旧 ABI 兼容投影。"
+    },
+    {
+      "file": "config/sites.json",
+      "line": 296,
+      "source": "    \"parserModule\": \"x\",",
+      "category": "清单源配置",
+      "reason": "允许维护站点数据的源配置；parser-release 的 platforms/headers 是旧 ABI 兼容投影。"
+    },
+    {
+      "file": "config/sites.json",
+      "line": 300,
+      "source": "          \"domain\": \"twimg.com\",",
+      "category": "清单源配置",
+      "reason": "允许维护站点数据的源配置；parser-release 的 platforms/headers 是旧 ABI 兼容投影。"
+    },
+    {
+      "file": "config/sites.json",
+      "line": 313,
+      "source": "      \"assetKey\": \"x\"",
+      "category": "清单源配置",
+      "reason": "允许维护站点数据的源配置；parser-release 的 platforms/headers 是旧 ABI 兼容投影。"
+    },
+    {
+      "file": "config/sites.json",
+      "line": 318,
+      "source": "    \"id\": \"tiktok\",",
+      "category": "清单源配置",
+      "reason": "允许维护站点数据的源配置；parser-release 的 platforms/headers 是旧 ABI 兼容投影。"
+    },
+    {
+      "file": "config/sites.json",
+      "line": 319,
+      "source": "    \"platform\": \"tiktok\",",
+      "category": "清单源配置",
+      "reason": "允许维护站点数据的源配置；parser-release 的 platforms/headers 是旧 ABI 兼容投影。"
+    },
+    {
+      "file": "config/sites.json",
+      "line": 320,
+      "source": "    \"displayName\": \"TikTok\",",
+      "category": "清单源配置",
+      "reason": "允许维护站点数据的源配置；parser-release 的 platforms/headers 是旧 ABI 兼容投影。"
+    },
+    {
+      "file": "config/sites.json",
+      "line": 321,
+      "source": "    \"creditName\": \"TikTok\",",
+      "category": "清单源配置",
+      "reason": "允许维护站点数据的源配置；parser-release 的 platforms/headers 是旧 ABI 兼容投影。"
+    },
+    {
+      "file": "config/sites.json",
+      "line": 331,
+      "source": "              \"domain\": \"tiktok.com\",",
+      "category": "清单源配置",
+      "reason": "允许维护站点数据的源配置；parser-release 的 platforms/headers 是旧 ABI 兼容投影。"
+    },
+    {
+      "file": "config/sites.json",
+      "line": 343,
+      "source": "              \"domain\": \"vm.tiktok.com\",",
+      "category": "清单源配置",
+      "reason": "允许维护站点数据的源配置；parser-release 的 platforms/headers 是旧 ABI 兼容投影。"
+    },
+    {
+      "file": "config/sites.json",
+      "line": 347,
+      "source": "              \"domain\": \"vt.tiktok.com\",",
+      "category": "清单源配置",
+      "reason": "允许维护站点数据的源配置；parser-release 的 platforms/headers 是旧 ABI 兼容投影。"
+    },
+    {
+      "file": "config/sites.json",
+      "line": 360,
+      "source": "          \"domain\": \"vm.tiktok.com\",",
+      "category": "清单源配置",
+      "reason": "允许维护站点数据的源配置；parser-release 的 platforms/headers 是旧 ABI 兼容投影。"
+    },
+    {
+      "file": "config/sites.json",
+      "line": 369,
+      "source": "          \"domain\": \"vt.tiktok.com\",",
+      "category": "清单源配置",
+      "reason": "允许维护站点数据的源配置；parser-release 的 platforms/headers 是旧 ABI 兼容投影。"
+    },
+    {
+      "file": "config/sites.json",
+      "line": 378,
+      "source": "          \"domain\": \"tiktok.com\",",
+      "category": "清单源配置",
+      "reason": "允许维护站点数据的源配置；parser-release 的 platforms/headers 是旧 ABI 兼容投影。"
+    },
+    {
+      "file": "config/sites.json",
+      "line": 394,
+      "source": "      \"canonicalTemplate\": \"https://www.tiktok.com/@/video/{id}\",",
+      "category": "清单源配置",
+      "reason": "允许维护站点数据的源配置；parser-release 的 platforms/headers 是旧 ABI 兼容投影。"
+    },
+    {
+      "file": "config/sites.json",
+      "line": 401,
+      "source": "      \"readyHook\": \"tiktok_ready\",",
+      "category": "清单源配置",
+      "reason": "允许维护站点数据的源配置；parser-release 的 platforms/headers 是旧 ABI 兼容投影。"
+    },
+    {
+      "file": "config/sites.json",
+      "line": 407,
+      "source": "        \"sessionid\",",
+      "category": "清单源配置",
+      "reason": "允许维护站点数据的源配置；parser-release 的 platforms/headers 是旧 ABI 兼容投影。"
+    },
+    {
+      "file": "config/sites.json",
+      "line": 408,
+      "source": "        \"sessionid_ss\"",
+      "category": "清单源配置",
+      "reason": "允许维护站点数据的源配置；parser-release 的 platforms/headers 是旧 ABI 兼容投影。"
+    },
+    {
+      "file": "config/sites.json",
+      "line": 410,
+      "source": "      \"loginUrl\": \"https://www.tiktok.com/login\",",
+      "category": "清单源配置",
+      "reason": "允许维护站点数据的源配置；parser-release 的 platforms/headers 是旧 ABI 兼容投影。"
+    },
+    {
+      "file": "config/sites.json",
+      "line": 412,
+      "source": "      \"loginHint\": \"请选择 TikTok 的手机号 / 邮箱 / 用户名登录。Google 授权暂不支持在此页面完成。成功后点右上角“完成”。\",",
+      "category": "清单源配置",
+      "reason": "允许维护站点数据的源配置；parser-release 的 platforms/headers 是旧 ABI 兼容投影。"
+    },
+    {
+      "file": "config/sites.json",
+      "line": 413,
+      "source": "      \"externalGoogleMessage\": \"Google 授权不能在此内嵌登录页完成。请返回 TikTok，选择“手机号 / 邮箱 / 用户名”登录。如果使用 Gmail 地址，请输入 TikTok 账号密码，不是 Google 密码。在外部浏览器登录也不会自动同步到 EasySave。\"",
+      "category": "清单源配置",
+      "reason": "允许维护站点数据的源配置；parser-release 的 platforms/headers 是旧 ABI 兼容投影。"
+    },
+    {
+      "file": "config/sites.json",
+      "line": 415,
+      "source": "    \"parserModule\": \"tiktok\",",
+      "category": "清单源配置",
+      "reason": "允许维护站点数据的源配置；parser-release 的 platforms/headers 是旧 ABI 兼容投影。"
+    },
+    {
+      "file": "config/sites.json",
+      "line": 419,
+      "source": "          \"domain\": \"tiktok.com\",",
+      "category": "清单源配置",
+      "reason": "允许维护站点数据的源配置；parser-release 的 platforms/headers 是旧 ABI 兼容投影。"
+    },
+    {
+      "file": "config/sites.json",
+      "line": 423,
+      "source": "          \"domain\": \"tiktokcdn.com\",",
+      "category": "清单源配置",
+      "reason": "允许维护站点数据的源配置；parser-release 的 platforms/headers 是旧 ABI 兼容投影。"
+    },
+    {
+      "file": "config/sites.json",
+      "line": 427,
+      "source": "          \"domain\": \"tiktokcdn-eu.com\",",
+      "category": "清单源配置",
+      "reason": "允许维护站点数据的源配置；parser-release 的 platforms/headers 是旧 ABI 兼容投影。"
+    },
+    {
+      "file": "config/sites.json",
+      "line": 431,
+      "source": "          \"domain\": \"tiktokcdn-us.com\",",
+      "category": "清单源配置",
+      "reason": "允许维护站点数据的源配置；parser-release 的 platforms/headers 是旧 ABI 兼容投影。"
+    },
+    {
+      "file": "config/sites.json",
+      "line": 436,
+      "source": "        \"Referer\": \"https://www.tiktok.com/\"",
+      "category": "清单源配置",
+      "reason": "允许维护站点数据的源配置；parser-release 的 platforms/headers 是旧 ABI 兼容投影。"
+    },
+    {
+      "file": "config/sites.json",
+      "line": 439,
+      "source": "        \"tiktok.com\"",
+      "category": "清单源配置",
+      "reason": "允许维护站点数据的源配置；parser-release 的 platforms/headers 是旧 ABI 兼容投影。"
+    },
+    {
+      "file": "config/sites.json",
+      "line": 461,
+      "source": "      \"assetKey\": \"tiktok\"",
+      "category": "清单源配置",
+      "reason": "允许维护站点数据的源配置；parser-release 的 platforms/headers 是旧 ABI 兼容投影。"
+    },
+    {
+      "file": "config/sites.json",
+      "line": 464,
+      "source": "    \"previewErrorMessage\": \"TikTok 在线预览可能受平台限制，请下载后观看\"",
+      "category": "清单源配置",
+      "reason": "允许维护站点数据的源配置；parser-release 的 platforms/headers 是旧 ABI 兼容投影。"
+    },
+    {
+      "file": "config/sites.json",
+      "line": 467,
+      "source": "    \"id\": \"douyin\",",
+      "category": "清单源配置",
+      "reason": "允许维护站点数据的源配置；parser-release 的 platforms/headers 是旧 ABI 兼容投影。"
+    },
+    {
+      "file": "config/sites.json",
+      "line": 468,
+      "source": "    \"platform\": \"douyin\",",
+      "category": "清单源配置",
+      "reason": "允许维护站点数据的源配置；parser-release 的 platforms/headers 是旧 ABI 兼容投影。"
+    },
+    {
+      "file": "config/sites.json",
+      "line": 469,
+      "source": "    \"displayName\": \"抖音\",",
+      "category": "清单源配置",
+      "reason": "允许维护站点数据的源配置；parser-release 的 platforms/headers 是旧 ABI 兼容投影。"
+    },
+    {
+      "file": "config/sites.json",
+      "line": 470,
+      "source": "    \"creditName\": \"抖音\",",
+      "category": "清单源配置",
+      "reason": "允许维护站点数据的源配置；parser-release 的 platforms/headers 是旧 ABI 兼容投影。"
+    },
+    {
+      "file": "config/sites.json",
+      "line": 480,
+      "source": "              \"domain\": \"douyin.com\",",
+      "category": "清单源配置",
+      "reason": "允许维护站点数据的源配置；parser-release 的 platforms/headers 是旧 ABI 兼容投影。"
+    },
+    {
+      "file": "config/sites.json",
+      "line": 484,
+      "source": "              \"domain\": \"iesdouyin.com\",",
+      "category": "清单源配置",
+      "reason": "允许维护站点数据的源配置；parser-release 的 platforms/headers 是旧 ABI 兼容投影。"
+    },
+    {
+      "file": "config/sites.json",
+      "line": 495,
+      "source": "              \"domain\": \"v.douyin.com\",",
+      "category": "清单源配置",
+      "reason": "允许维护站点数据的源配置；parser-release 的 platforms/headers 是旧 ABI 兼容投影。"
+    },
+    {
+      "file": "config/sites.json",
+      "line": 508,
+      "source": "          \"domain\": \"v.douyin.com\",",
+      "category": "清单源配置",
+      "reason": "允许维护站点数据的源配置；parser-release 的 platforms/headers 是旧 ABI 兼容投影。"
+    },
+    {
+      "file": "config/sites.json",
+      "line": 520,
+      "source": "      \"canonicalTemplate\": \"https://www.douyin.com/video/{id}\",",
+      "category": "清单源配置",
+      "reason": "允许维护站点数据的源配置；parser-release 的 platforms/headers 是旧 ABI 兼容投影。"
+    },
+    {
+      "file": "config/sites.json",
+      "line": 527,
+      "source": "      \"readyHook\": \"douyin_ready\"",
+      "category": "清单源配置",
+      "reason": "允许维护站点数据的源配置；parser-release 的 platforms/headers 是旧 ABI 兼容投影。"
+    },
+    {
+      "file": "config/sites.json",
+      "line": 533,
+      "source": "    \"parserModule\": \"douyin\",",
+      "category": "清单源配置",
+      "reason": "允许维护站点数据的源配置；parser-release 的 platforms/headers 是旧 ABI 兼容投影。"
+    },
+    {
+      "file": "config/sites.json",
+      "line": 537,
+      "source": "        \"Referer\": \"https://www.douyin.com/\"",
+      "category": "清单源配置",
+      "reason": "允许维护站点数据的源配置；parser-release 的 platforms/headers 是旧 ABI 兼容投影。"
+    },
+    {
+      "file": "extension/entrypoints/background.ts",
+      "line": 51,
+      "source": "      if (platform === \"xhs\") urlFilter = \"*://*.xiaohongshu.com/*\";",
+      "category": "扩展旧通道与静态权限（超类说明）",
+      "reason": "扩展仍消费冻结 v1 通道；内容脚本注入/host_permissions/DNR 属浏览器打包权限，App 清单不能提升；迁移需单独扩展协议与重新发行，且本轮不改请求策略。"
+    },
+    {
+      "file": "extension/entrypoints/background.ts",
+      "line": 52,
+      "source": "      else if (platform === \"instagram\") urlFilter = \"*://*.instagram.com/*\";",
+      "category": "扩展旧通道与静态权限（超类说明）",
+      "reason": "扩展仍消费冻结 v1 通道；内容脚本注入/host_permissions/DNR 属浏览器打包权限，App 清单不能提升；迁移需单独扩展协议与重新发行，且本轮不改请求策略。"
+    },
+    {
+      "file": "extension/entrypoints/background.ts",
+      "line": 53,
+      "source": "      else if (platform === \"x\") urlFilter = \"*://*.twimg.com/*\";",
+      "category": "扩展旧通道与静态权限（超类说明）",
+      "reason": "扩展仍消费冻结 v1 通道；内容脚本注入/host_permissions/DNR 属浏览器打包权限，App 清单不能提升；迁移需单独扩展协议与重新发行，且本轮不改请求策略。"
+    },
+    {
+      "file": "extension/entrypoints/background.ts",
+      "line": 125,
+      "source": "            \"https://cdn.syndication.twimg.com/tweet-result?id={id}&lang=en&token={token}\";",
+      "category": "扩展旧通道与静态权限（超类说明）",
+      "reason": "扩展仍消费冻结 v1 通道；内容脚本注入/host_permissions/DNR 属浏览器打包权限，App 清单不能提升；迁移需单独扩展协议与重新发行，且本轮不改请求策略。"
+    },
+    {
+      "file": "extension/entrypoints/content.ts",
+      "line": 3,
+      "source": "    \"*://*.xiaohongshu.com/*\",",
+      "category": "扩展旧通道与静态权限（超类说明）",
+      "reason": "扩展仍消费冻结 v1 通道；内容脚本注入/host_permissions/DNR 属浏览器打包权限，App 清单不能提升；迁移需单独扩展协议与重新发行，且本轮不改请求策略。"
+    },
+    {
+      "file": "extension/entrypoints/content.ts",
+      "line": 4,
+      "source": "    \"*://*.instagram.com/*\",",
+      "category": "扩展旧通道与静态权限（超类说明）",
+      "reason": "扩展仍消费冻结 v1 通道；内容脚本注入/host_permissions/DNR 属浏览器打包权限，App 清单不能提升；迁移需单独扩展协议与重新发行，且本轮不改请求策略。"
+    },
+    {
+      "file": "extension/entrypoints/content.ts",
+      "line": 5,
+      "source": "    \"*://*.twitter.com/*\",",
+      "category": "扩展旧通道与静态权限（超类说明）",
+      "reason": "扩展仍消费冻结 v1 通道；内容脚本注入/host_permissions/DNR 属浏览器打包权限，App 清单不能提升；迁移需单独扩展协议与重新发行，且本轮不改请求策略。"
+    },
+    {
+      "file": "extension/entrypoints/content.ts",
+      "line": 6,
+      "source": "    \"*://*.x.com/*\",",
+      "category": "扩展旧通道与静态权限（超类说明）",
+      "reason": "扩展仍消费冻结 v1 通道；内容脚本注入/host_permissions/DNR 属浏览器打包权限，App 清单不能提升；迁移需单独扩展协议与重新发行，且本轮不改请求策略。"
+    },
+    {
+      "file": "extension/entrypoints/content.ts",
+      "line": 10,
+      "source": "    const isXhs = host === \"xiaohongshu.com\" || host.endsWith(\".xiaohongshu.com\");",
+      "category": "扩展旧通道与静态权限（超类说明）",
+      "reason": "扩展仍消费冻结 v1 通道；内容脚本注入/host_permissions/DNR 属浏览器打包权限，App 清单不能提升；迁移需单独扩展协议与重新发行，且本轮不改请求策略。"
+    },
+    {
+      "file": "extension/entrypoints/content.ts",
+      "line": 11,
+      "source": "    const isInstagram = host === \"instagram.com\" || host.endsWith(\".instagram.com\");",
+      "category": "扩展旧通道与静态权限（超类说明）",
+      "reason": "扩展仍消费冻结 v1 通道；内容脚本注入/host_permissions/DNR 属浏览器打包权限，App 清单不能提升；迁移需单独扩展协议与重新发行，且本轮不改请求策略。"
+    },
+    {
+      "file": "extension/entrypoints/content.ts",
+      "line": 12,
+      "source": "    const isX = host === \"x.com\" || host.endsWith(\".x.com\") || host === \"twitter.com\" || host.endsWith(\".twitter.com\");",
+      "category": "扩展旧通道与静态权限（超类说明）",
+      "reason": "扩展仍消费冻结 v1 通道；内容脚本注入/host_permissions/DNR 属浏览器打包权限，App 清单不能提升；迁移需单独扩展协议与重新发行，且本轮不改请求策略。"
+    },
+    {
+      "file": "extension/entrypoints/content.ts",
+      "line": 124,
+      "source": "    async function fetchInstagramPost(shortcode: string): Promise<string | null> {",
+      "category": "扩展旧通道与静态权限（超类说明）",
+      "reason": "扩展仍消费冻结 v1 通道；内容脚本注入/host_permissions/DNR 属浏览器打包权限，App 清单不能提升；迁移需单独扩展协议与重新发行，且本轮不改请求策略。"
+    },
+    {
+      "file": "extension/entrypoints/content.ts",
+      "line": 128,
+      "source": "        const resp = await fetch(`https://www.instagram.com/p/${shortcode}/`, {",
+      "category": "扩展旧通道与静态权限（超类说明）",
+      "reason": "扩展仍消费冻结 v1 通道；内容脚本注入/host_permissions/DNR 属浏览器打包权限，App 清单不能提升；迁移需单独扩展协议与重新发行，且本轮不改请求策略。"
+    },
+    {
+      "file": "extension/entrypoints/content.ts",
+      "line": 153,
+      "source": "    async function parseInstagramCurrent(",
+      "category": "扩展旧通道与静态权限（超类说明）",
+      "reason": "扩展仍消费冻结 v1 通道；内容脚本注入/host_permissions/DNR 属浏览器打包权限，App 清单不能提升；迁移需单独扩展协议与重新发行，且本轮不改请求策略。"
+    },
+    {
+      "file": "extension/entrypoints/content.ts",
+      "line": 158,
+      "source": "      const canonical = `https://www.instagram.com/p/${shortcode}/`;",
+      "category": "扩展旧通道与静态权限（超类说明）",
+      "reason": "扩展仍消费冻结 v1 通道；内容脚本注入/host_permissions/DNR 属浏览器打包权限，App 清单不能提升；迁移需单独扩展协议与重新发行，且本轮不改请求策略。"
+    },
+    {
+      "file": "extension/entrypoints/content.ts",
+      "line": 164,
+      "source": "        const { buildPostFromProduct } = await import(\"../src/instagram\");",
+      "category": "扩展旧通道与静态权限（超类说明）",
+      "reason": "扩展仍消费冻结 v1 通道；内容脚本注入/host_permissions/DNR 属浏览器打包权限，App 清单不能提升；迁移需单独扩展协议与重新发行，且本轮不改请求策略。"
+    },
+    {
+      "file": "extension/entrypoints/content.ts",
+      "line": 168,
+      "source": "      const fetched = await fetchInstagramPost(shortcode);",
+      "category": "扩展旧通道与静态权限（超类说明）",
+      "reason": "扩展仍消费冻结 v1 通道；内容脚本注入/host_permissions/DNR 属浏览器打包权限，App 清单不能提升；迁移需单独扩展协议与重新发行，且本轮不改请求策略。"
+    },
+    {
+      "file": "extension/entrypoints/content.ts",
+      "line": 181,
+      "source": "      if (isXhs) {",
+      "category": "扩展旧通道与静态权限（超类说明）",
+      "reason": "扩展仍消费冻结 v1 通道；内容脚本注入/host_permissions/DNR 属浏览器打包权限，App 清单不能提升；迁移需单独扩展协议与重新发行，且本轮不改请求策略。"
+    },
+    {
+      "file": "extension/entrypoints/content.ts",
+      "line": 182,
+      "source": "        result = await parseXhsCurrent(url, parse);",
+      "category": "扩展旧通道与静态权限（超类说明）",
+      "reason": "扩展仍消费冻结 v1 通道；内容脚本注入/host_permissions/DNR 属浏览器打包权限，App 清单不能提升；迁移需单独扩展协议与重新发行，且本轮不改请求策略。"
+    },
+    {
+      "file": "extension/entrypoints/content.ts",
+      "line": 183,
+      "source": "      } else if (isInstagram) {",
+      "category": "扩展旧通道与静态权限（超类说明）",
+      "reason": "扩展仍消费冻结 v1 通道；内容脚本注入/host_permissions/DNR 属浏览器打包权限，App 清单不能提升；迁移需单独扩展协议与重新发行，且本轮不改请求策略。"
+    },
+    {
+      "file": "extension/entrypoints/content.ts",
+      "line": 186,
+      "source": "          ? await parseInstagramCurrent(url, shortcode, parse)",
+      "category": "扩展旧通道与静态权限（超类说明）",
+      "reason": "扩展仍消费冻结 v1 通道；内容脚本注入/host_permissions/DNR 属浏览器打包权限，App 清单不能提升；迁移需单独扩展协议与重新发行，且本轮不改请求策略。"
+    },
+    {
+      "file": "extension/entrypoints/content.ts",
+      "line": 193,
+      "source": "      if (!result.ok && isXhs && hasPostIdentity(url)) {",
+      "category": "扩展旧通道与静态权限（超类说明）",
+      "reason": "扩展仍消费冻结 v1 通道；内容脚本注入/host_permissions/DNR 属浏览器打包权限，App 清单不能提升；迁移需单独扩展协议与重新发行，且本轮不改请求策略。"
+    },
+    {
+      "file": "extension/entrypoints/content.ts",
+      "line": 203,
+      "source": "      const m = /(?:x|twitter)\\.com\\/(?:[^/]+)\\/status\\/(\\d+)/i.exec(url);",
+      "category": "扩展旧通道与静态权限（超类说明）",
+      "reason": "扩展仍消费冻结 v1 通道；内容脚本注入/host_permissions/DNR 属浏览器打包权限，App 清单不能提升；迁移需单独扩展协议与重新发行，且本轮不改请求策略。"
+    },
+    {
+      "file": "extension/entrypoints/content.ts",
+      "line": 240,
+      "source": "    async function parseXhsCurrent(",
+      "category": "扩展旧通道与静态权限（超类说明）",
+      "reason": "扩展仍消费冻结 v1 通道；内容脚本注入/host_permissions/DNR 属浏览器打包权限，App 清单不能提升；迁移需单独扩展协议与重新发行，且本轮不改请求策略。"
+    },
+    {
+      "file": "extension/entrypoints/content.ts",
+      "line": 244,
+      "source": "      const { findNoteInStates, buildNoteFromRecord } = await import(\"../src/xhs\");",
+      "category": "扩展旧通道与静态权限（超类说明）",
+      "reason": "扩展仍消费冻结 v1 通道；内容脚本注入/host_permissions/DNR 属浏览器打包权限，App 清单不能提升；迁移需单独扩展协议与重新发行，且本轮不改请求策略。"
+    },
+    {
+      "file": "extension/entrypoints/content.ts",
+      "line": 279,
+      "source": "      if (bridgeInstalled || (!isXhs && !isInstagram) || !isExtAlive()) return;",
+      "category": "扩展旧通道与静态权限（超类说明）",
+      "reason": "扩展仍消费冻结 v1 通道；内容脚本注入/host_permissions/DNR 属浏览器打包权限，App 清单不能提升；迁移需单独扩展协议与重新发行，且本轮不改请求策略。"
+    },
+    {
+      "file": "extension/entrypoints/content.ts",
+      "line": 329,
+      "source": "            wantedId: isXhs ? noteIdFromUrl(location.href) : undefined,",
+      "category": "扩展旧通道与静态权限（超类说明）",
+      "reason": "扩展仍消费冻结 v1 通道；内容脚本注入/host_permissions/DNR 属浏览器打包权限，App 清单不能提升；迁移需单独扩展协议与重新发行，且本轮不改请求策略。"
+    },
+    {
+      "file": "extension/entrypoints/content.ts",
+      "line": 330,
+      "source": "            wantedShortcode: isInstagram ? shortcodeFromUrl(location.href) : undefined,",
+      "category": "扩展旧通道与静态权限（超类说明）",
+      "reason": "扩展仍消费冻结 v1 通道；内容脚本注入/host_permissions/DNR 属浏览器打包权限，App 清单不能提升；迁移需单独扩展协议与重新发行，且本轮不改请求策略。"
+    },
+    {
+      "file": "extension/entrypoints/content.ts",
+      "line": 375,
+      "source": "      if (isXhs) return noteIdFromUrl(pageUrl) !== undefined;",
+      "category": "扩展旧通道与静态权限（超类说明）",
+      "reason": "扩展仍消费冻结 v1 通道；内容脚本注入/host_permissions/DNR 属浏览器打包权限，App 清单不能提升；迁移需单独扩展协议与重新发行，且本轮不改请求策略。"
+    },
+    {
+      "file": "extension/entrypoints/content.ts",
+      "line": 376,
+      "source": "      if (isInstagram) return /\\/(?:p|reel|tv)\\/([A-Za-z0-9-_]+)/.test(pageUrl);",
+      "category": "扩展旧通道与静态权限（超类说明）",
+      "reason": "扩展仍消费冻结 v1 通道；内容脚本注入/host_permissions/DNR 属浏览器打包权限，App 清单不能提升；迁移需单独扩展协议与重新发行，且本轮不改请求策略。"
+    },
+    {
+      "file": "extension/entrypoints/content.ts",
+      "line": 385,
+      "source": "      if (isXhs) {",
+      "category": "扩展旧通道与静态权限（超类说明）",
+      "reason": "扩展仍消费冻结 v1 通道；内容脚本注入/host_permissions/DNR 属浏览器打包权限，App 清单不能提升；迁移需单独扩展协议与重新发行，且本轮不改请求策略。"
+    },
+    {
+      "file": "extension/entrypoints/content.ts",
+      "line": 387,
+      "source": "        return id ? `xhs:${id}` : undefined;",
+      "category": "扩展旧通道与静态权限（超类说明）",
+      "reason": "扩展仍消费冻结 v1 通道；内容脚本注入/host_permissions/DNR 属浏览器打包权限，App 清单不能提升；迁移需单独扩展协议与重新发行，且本轮不改请求策略。"
+    },
+    {
+      "file": "extension/entrypoints/content.ts",
+      "line": 389,
+      "source": "      if (isInstagram) {",
+      "category": "扩展旧通道与静态权限（超类说明）",
+      "reason": "扩展仍消费冻结 v1 通道；内容脚本注入/host_permissions/DNR 属浏览器打包权限，App 清单不能提升；迁移需单独扩展协议与重新发行，且本轮不改请求策略。"
+    },
+    {
+      "file": "extension/entrypoints/content.ts",
+      "line": 449,
+      "source": "      const platformKey = isXhs ? \"xhs\" : isInstagram ? \"instagram\" : isX ? \"x\" : \"\";",
+      "category": "扩展旧通道与静态权限（超类说明）",
+      "reason": "扩展仍消费冻结 v1 通道；内容脚本注入/host_permissions/DNR 属浏览器打包权限，App 清单不能提升；迁移需单独扩展协议与重新发行，且本轮不改请求策略。"
+    },
+    {
+      "file": "extension/entrypoints/content.ts",
+      "line": 611,
+      "source": "      } else if (!isXhs && !isInstagram) {",
+      "category": "扩展旧通道与静态权限（超类说明）",
+      "reason": "扩展仍消费冻结 v1 通道；内容脚本注入/host_permissions/DNR 属浏览器打包权限，App 清单不能提升；迁移需单独扩展协议与重新发行，且本轮不改请求策略。"
+    },
+    {
+      "file": "extension/public/rules.json",
+      "line": 8,
+      "source": "        { \"header\": \"Referer\", \"operation\": \"set\", \"value\": \"https://www.xiaohongshu.com/\" }",
+      "category": "扩展旧通道与静态权限（超类说明）",
+      "reason": "扩展仍消费冻结 v1 通道；内容脚本注入/host_permissions/DNR 属浏览器打包权限，App 清单不能提升；迁移需单独扩展协议与重新发行，且本轮不改请求策略。"
+    },
+    {
+      "file": "extension/public/rules.json",
+      "line": 12,
+      "source": "      \"urlFilter\": \"*://*.xhscdn.com/*\",",
+      "category": "扩展旧通道与静态权限（超类说明）",
+      "reason": "扩展仍消费冻结 v1 通道；内容脚本注入/host_permissions/DNR 属浏览器打包权限，App 清单不能提升；迁移需单独扩展协议与重新发行，且本轮不改请求策略。"
+    },
+    {
+      "file": "extension/public/rules.json",
+      "line": 22,
+      "source": "        { \"header\": \"Referer\", \"operation\": \"set\", \"value\": \"https://www.xiaohongshu.com/\" }",
+      "category": "扩展旧通道与静态权限（超类说明）",
+      "reason": "扩展仍消费冻结 v1 通道；内容脚本注入/host_permissions/DNR 属浏览器打包权限，App 清单不能提升；迁移需单独扩展协议与重新发行，且本轮不改请求策略。"
+    },
+    {
+      "file": "extension/public/rules.json",
+      "line": 26,
+      "source": "      \"urlFilter\": \"*://ci.xiaohongshu.com/*\",",
+      "category": "扩展旧通道与静态权限（超类说明）",
+      "reason": "扩展仍消费冻结 v1 通道；内容脚本注入/host_permissions/DNR 属浏览器打包权限，App 清单不能提升；迁移需单独扩展协议与重新发行，且本轮不改请求策略。"
+    },
+    {
+      "file": "extension/public/rules.json",
+      "line": 36,
+      "source": "        { \"header\": \"Referer\", \"operation\": \"set\", \"value\": \"https://www.instagram.com/\" }",
+      "category": "扩展旧通道与静态权限（超类说明）",
+      "reason": "扩展仍消费冻结 v1 通道；内容脚本注入/host_permissions/DNR 属浏览器打包权限，App 清单不能提升；迁移需单独扩展协议与重新发行，且本轮不改请求策略。"
+    },
+    {
+      "file": "extension/public/rules.json",
+      "line": 40,
+      "source": "      \"urlFilter\": \"*://*.cdninstagram.com/*\",",
+      "category": "扩展旧通道与静态权限（超类说明）",
+      "reason": "扩展仍消费冻结 v1 通道；内容脚本注入/host_permissions/DNR 属浏览器打包权限，App 清单不能提升；迁移需单独扩展协议与重新发行，且本轮不改请求策略。"
+    },
+    {
+      "file": "extension/src/_parse_page.ts",
+      "line": 1,
+      "source": "import { parseXhs, findNoteInStates, buildNoteFromRecord } from './xhs';",
+      "category": "词法候选",
+      "reason": "注释、导入或符号声明；不独立执行站点数据规则。"
+    },
+    {
+      "file": "extension/src/_parse_page.ts",
+      "line": 2,
+      "source": "import { parseInstagram, buildPostFromProduct } from './instagram';",
+      "category": "词法候选",
+      "reason": "注释、导入或符号声明；不独立执行站点数据规则。"
+    },
+    {
+      "file": "extension/src/_parse_page.ts",
+      "line": 4,
+      "source": "import { parseTiktok, isTiktokLink } from './tiktok';",
+      "category": "词法候选",
+      "reason": "注释、导入或符号声明；不独立执行站点数据规则。"
+    },
+    {
+      "file": "extension/src/_parse_page.ts",
+      "line": 5,
+      "source": "import { hostnameOf, isXhsHost, isInstagramHost, isXHost } from './_utils';",
+      "category": "词法候选",
+      "reason": "注释、导入或符号声明；不独立执行站点数据规则。"
+    },
+    {
+      "file": "extension/src/_parse_page.ts",
+      "line": 17,
+      "source": "export function parseInstagramFromDom(doc: Document, pageUrl: string): { ok: true; data: any } | undefined {",
+      "category": "签名解析模块算法（超类说明）",
+      "reason": "站点 JSON/DOM 路径、ID/媒体算法、canonical 拼接及模块注册，属于签名 parser 的可执行实现；清单选择 parserModule，不执行任意配置 JS。"
+    },
+    {
+      "file": "extension/src/_parse_page.ts",
+      "line": 89,
+      "source": "      platform: 'instagram',",
+      "category": "签名解析模块算法（超类说明）",
+      "reason": "站点 JSON/DOM 路径、ID/媒体算法、canonical 拼接及模块注册，属于签名 parser 的可执行实现；清单选择 parserModule，不执行任意配置 JS。"
+    },
+    {
+      "file": "extension/src/_parse_page.ts",
+      "line": 91,
+      "source": "      url: `https://www.instagram.com/p/${shortcode}/`,",
+      "category": "签名解析模块算法（超类说明）",
+      "reason": "站点 JSON/DOM 路径、ID/媒体算法、canonical 拼接及模块注册，属于签名 parser 的可执行实现；清单选择 parserModule，不执行任意配置 JS。"
+    },
+    {
+      "file": "extension/src/_parse_page.ts",
+      "line": 101,
+      "source": "  const moduleId = isTiktokLink(url) ? 'tiktok' : isXhsHost(url) ? 'xhs' :",
+      "category": "签名解析模块算法（超类说明）",
+      "reason": "站点 JSON/DOM 路径、ID/媒体算法、canonical 拼接及模块注册，属于签名 parser 的可执行实现；清单选择 parserModule，不执行任意配置 JS。"
+    },
+    {
+      "file": "extension/src/_parse_page.ts",
+      "line": 102,
+      "source": "    isInstagramHost(url) ? 'instagram' : isXHost(url) ? 'x' : '';",
+      "category": "签名解析模块算法（超类说明）",
+      "reason": "站点 JSON/DOM 路径、ID/媒体算法、canonical 拼接及模块注册，属于签名 parser 的可执行实现；清单选择 parserModule，不执行任意配置 JS。"
+    },
+    {
+      "file": "extension/src/_parse_page.ts",
+      "line": 110,
+      "source": "  if (moduleId === 'tiktok') {",
+      "category": "签名解析模块算法（超类说明）",
+      "reason": "站点 JSON/DOM 路径、ID/媒体算法、canonical 拼接及模块注册，属于签名 parser 的可执行实现；清单选择 parserModule，不执行任意配置 JS。"
+    },
+    {
+      "file": "extension/src/_parse_page.ts",
+      "line": 111,
+      "source": "    const result = parseTiktok(html, url);",
+      "category": "签名解析模块算法（超类说明）",
+      "reason": "站点 JSON/DOM 路径、ID/媒体算法、canonical 拼接及模块注册，属于签名 parser 的可执行实现；清单选择 parserModule，不执行任意配置 JS。"
+    },
+    {
+      "file": "extension/src/_parse_page.ts",
+      "line": 115,
+      "source": "      return JSON.stringify(parseTiktok(JSON.stringify(state), url));",
+      "category": "签名解析模块算法（超类说明）",
+      "reason": "站点 JSON/DOM 路径、ID/媒体算法、canonical 拼接及模块注册，属于签名 parser 的可执行实现；清单选择 parserModule，不执行任意配置 JS。"
+    },
+    {
+      "file": "extension/src/_parse_page.ts",
+      "line": 119,
+      "source": "  if (moduleId === 'xhs') {",
+      "category": "签名解析模块算法（超类说明）",
+      "reason": "站点 JSON/DOM 路径、ID/媒体算法、canonical 拼接及模块注册，属于签名 parser 的可执行实现；清单选择 parserModule，不执行任意配置 JS。"
+    },
+    {
+      "file": "extension/src/_parse_page.ts",
+      "line": 138,
+      "source": "    return JSON.stringify(parseXhs(html, url));",
+      "category": "签名解析模块算法（超类说明）",
+      "reason": "站点 JSON/DOM 路径、ID/媒体算法、canonical 拼接及模块注册，属于签名 parser 的可执行实现；清单选择 parserModule，不执行任意配置 JS。"
+    },
+    {
+      "file": "extension/src/_parse_page.ts",
+      "line": 140,
+      "source": "  if (moduleId === 'instagram') {",
+      "category": "签名解析模块算法（超类说明）",
+      "reason": "站点 JSON/DOM 路径、ID/媒体算法、canonical 拼接及模块注册，属于签名 parser 的可执行实现；清单选择 parserModule，不执行任意配置 JS。"
+    },
+    {
+      "file": "extension/src/_parse_page.ts",
+      "line": 147,
+      "source": "    const res = parseInstagram(html, url);",
+      "category": "签名解析模块算法（超类说明）",
+      "reason": "站点 JSON/DOM 路径、ID/媒体算法、canonical 拼接及模块注册，属于签名 parser 的可执行实现；清单选择 parserModule，不执行任意配置 JS。"
+    },
+    {
+      "file": "extension/src/_parse_page.ts",
+      "line": 149,
+      "source": "    const domRes = parseInstagramFromDom(document, url);",
+      "category": "签名解析模块算法（超类说明）",
+      "reason": "站点 JSON/DOM 路径、ID/媒体算法、canonical 拼接及模块注册，属于签名 parser 的可执行实现；清单选择 parserModule，不执行任意配置 JS。"
+    },
+    {
+      "file": "extension/src/_parse_page.ts",
+      "line": 153,
+      "source": "  if (moduleId === 'x') {",
+      "category": "签名解析模块算法（超类说明）",
+      "reason": "站点 JSON/DOM 路径、ID/媒体算法、canonical 拼接及模块注册，属于签名 parser 的可执行实现；清单选择 parserModule，不执行任意配置 JS。"
+    },
+    {
+      "file": "extension/src/_parse_page.ts",
+      "line": 163,
+      "source": "  if (moduleId ? moduleId === 'tiktok' : isTiktokLink(pageUrl)) return JSON.stringify(parseTiktok(input, pageUrl));",
+      "category": "签名解析模块算法（超类说明）",
+      "reason": "站点 JSON/DOM 路径、ID/媒体算法、canonical 拼接及模块注册，属于签名 parser 的可执行实现；清单选择 parserModule，不执行任意配置 JS。"
+    },
+    {
+      "file": "extension/src/_parse_page.ts",
+      "line": 168,
+      "source": "  if (moduleId ? moduleId === 'xhs' : isXhsHost(host)) {",
+      "category": "签名解析模块算法（超类说明）",
+      "reason": "站点 JSON/DOM 路径、ID/媒体算法、canonical 拼接及模块注册，属于签名 parser 的可执行实现；清单选择 parserModule，不执行任意配置 JS。"
+    },
+    {
+      "file": "extension/src/_parse_page.ts",
+      "line": 169,
+      "source": "    return JSON.stringify(parseXhs(input, pageUrl));",
+      "category": "签名解析模块算法（超类说明）",
+      "reason": "站点 JSON/DOM 路径、ID/媒体算法、canonical 拼接及模块注册，属于签名 parser 的可执行实现；清单选择 parserModule，不执行任意配置 JS。"
+    },
+    {
+      "file": "extension/src/_parse_page.ts",
+      "line": 171,
+      "source": "  if (moduleId ? moduleId === 'instagram' : isInstagramHost(host)) {",
+      "category": "签名解析模块算法（超类说明）",
+      "reason": "站点 JSON/DOM 路径、ID/媒体算法、canonical 拼接及模块注册，属于签名 parser 的可执行实现；清单选择 parserModule，不执行任意配置 JS。"
+    },
+    {
+      "file": "extension/src/_parse_page.ts",
+      "line": 172,
+      "source": "    return JSON.stringify(parseInstagram(input, pageUrl));",
+      "category": "签名解析模块算法（超类说明）",
+      "reason": "站点 JSON/DOM 路径、ID/媒体算法、canonical 拼接及模块注册，属于签名 parser 的可执行实现；清单选择 parserModule，不执行任意配置 JS。"
+    },
+    {
+      "file": "extension/src/_parse_page.ts",
+      "line": 174,
+      "source": "  if (moduleId ? moduleId === 'x' : isXHost(host)) {",
+      "category": "签名解析模块算法（超类说明）",
+      "reason": "站点 JSON/DOM 路径、ID/媒体算法、canonical 拼接及模块注册，属于签名 parser 的可执行实现；清单选择 parserModule，不执行任意配置 JS。"
+    },
+    {
+      "file": "extension/src/_parse_page.ts",
+      "line": 180,
+      "source": "export { parseXhs, parseInstagram, parseX, calculateToken, extractTweetId };",
+      "category": "词法候选",
+      "reason": "注释、导入或符号声明；不独立执行站点数据规则。"
+    },
+    {
+      "file": "extension/src/_utils.ts",
+      "line": 10,
+      "source": "export function isXhsHost(host: string): boolean {",
+      "category": "旧通道兼容代码",
+      "reason": "parse(input,pageUrl) 与扩展旧 manifest 协议入口/host 辅助/错误投影；不是 App v2 Registry 分派。"
+    },
+    {
+      "file": "extension/src/_utils.ts",
+      "line": 11,
+      "source": "  return /xiaohongshu\\.com|rednote\\.com|xhslink\\.com|xhslink\\.cn|xhs\\.cn/.test(host);",
+      "category": "旧通道兼容代码",
+      "reason": "parse(input,pageUrl) 与扩展旧 manifest 协议入口/host 辅助/错误投影；不是 App v2 Registry 分派。"
+    },
+    {
+      "file": "extension/src/_utils.ts",
+      "line": 14,
+      "source": "export function isInstagramHost(host: string): boolean {",
+      "category": "旧通道兼容代码",
+      "reason": "parse(input,pageUrl) 与扩展旧 manifest 协议入口/host 辅助/错误投影；不是 App v2 Registry 分派。"
+    },
+    {
+      "file": "extension/src/_utils.ts",
+      "line": 15,
+      "source": "  return /instagram\\.com|instagr\\.am/.test(host);",
+      "category": "旧通道兼容代码",
+      "reason": "parse(input,pageUrl) 与扩展旧 manifest 协议入口/host 辅助/错误投影；不是 App v2 Registry 分派。"
+    },
+    {
+      "file": "extension/src/_utils.ts",
+      "line": 19,
+      "source": "  return /x\\.com|twitter\\.com/.test(host);",
+      "category": "旧通道兼容代码",
+      "reason": "parse(input,pageUrl) 与扩展旧 manifest 协议入口/host 辅助/错误投影；不是 App v2 Registry 分派。"
+    },
+    {
+      "file": "extension/src/ai-label.ts",
+      "line": 11,
+      "source": "export function xhsAiLabel(desc: unknown, id: string): AiLabel | undefined {",
+      "category": "签名解析模块算法（超类说明）",
+      "reason": "站点 JSON/DOM 路径、ID/媒体算法、canonical 拼接及模块注册，属于签名 parser 的可执行实现；清单选择 parserModule，不执行任意配置 JS。"
+    },
+    {
+      "file": "extension/src/ai-label.ts",
+      "line": 18,
+      "source": "export function tiktokAiLabel(value: unknown, id: string): AiLabel | undefined {",
+      "category": "签名解析模块算法（超类说明）",
+      "reason": "站点 JSON/DOM 路径、ID/媒体算法、canonical 拼接及模块注册，属于签名 parser 的可执行实现；清单选择 parserModule，不执行任意配置 JS。"
+    },
+    {
+      "file": "extension/src/errors.ts",
+      "line": 14,
+      "source": "  DELETED: { message: '该 TikTok 帖子已删除或不存在', action: 'backHome' },",
+      "category": "旧通道兼容代码",
+      "reason": "parse(input,pageUrl) 与扩展旧 manifest 协议入口/host 辅助/错误投影；不是 App v2 Registry 分派。"
+    },
+    {
+      "file": "extension/src/errors.ts",
+      "line": 15,
+      "source": "  PRIVATE: { message: '该 TikTok 帖子或账号为私密', action: 'backHome' },",
+      "category": "旧通道兼容代码",
+      "reason": "parse(input,pageUrl) 与扩展旧 manifest 协议入口/host 辅助/错误投影；不是 App v2 Registry 分派。"
+    },
+    {
+      "file": "extension/src/errors.ts",
+      "line": 16,
+      "source": "  REGION_RESTRICTED: { message: '该 TikTok 帖子受地区或 IP 限制', action: 'backHome' },",
+      "category": "旧通道兼容代码",
+      "reason": "parse(input,pageUrl) 与扩展旧 manifest 协议入口/host 辅助/错误投影；不是 App v2 Registry 分派。"
+    },
+    {
+      "file": "extension/src/errors.ts",
+      "line": 17,
+      "source": "  UNKNOWN: { message: '无法读取 TikTok 帖子，请重新解析', action: 'retry' },",
+      "category": "旧通道兼容代码",
+      "reason": "parse(input,pageUrl) 与扩展旧 manifest 协议入口/host 辅助/错误投影；不是 App v2 Registry 分派。"
+    },
+    {
+      "file": "extension/src/errors.ts",
+      "line": 18,
+      "source": "  LOGIN_REQUIRED: { message: \"需要先登录小红书/Instagram\", action: \"goLogin\" },",
+      "category": "旧通道兼容代码",
+      "reason": "parse(input,pageUrl) 与扩展旧 manifest 协议入口/host 辅助/错误投影；不是 App v2 Registry 分派。"
+    },
+    {
+      "file": "extension/src/errors.ts",
+      "line": 23,
+      "source": "    message: \"不支持的链接，请粘贴小红书/Instagram 帖子链接\",",
+      "category": "旧通道兼容代码",
+      "reason": "parse(input,pageUrl) 与扩展旧 manifest 协议入口/host 辅助/错误投影；不是 App v2 Registry 分派。"
+    },
+    {
+      "file": "extension/src/ig-cache.ts",
+      "line": 1,
+      "source": "// Pure helpers for harvesting Instagram products from XHR/fetch JSON",
+      "category": "词法候选",
+      "reason": "注释、导入或符号声明；不独立执行站点数据规则。"
+    },
+    {
+      "file": "extension/src/index.ts",
+      "line": 3,
+      "source": "import { parseInstagram, type InstagramResult } from \"./instagram\";",
+      "category": "词法候选",
+      "reason": "注释、导入或符号声明；不独立执行站点数据规则。"
+    },
+    {
+      "file": "extension/src/index.ts",
+      "line": 4,
+      "source": "import { parseXhs, type XhsResult } from \"./xhs\";",
+      "category": "词法候选",
+      "reason": "注释、导入或符号声明；不独立执行站点数据规则。"
+    },
+    {
+      "file": "extension/src/index.ts",
+      "line": 6,
+      "source": "import { parseTiktok, isTiktokLink, type TiktokResult } from './tiktok';",
+      "category": "词法候选",
+      "reason": "注释、导入或符号声明；不独立执行站点数据规则。"
+    },
+    {
+      "file": "extension/src/index.ts",
+      "line": 23,
+      "source": "  | XhsResult",
+      "category": "旧通道兼容代码",
+      "reason": "parse(input,pageUrl) 与扩展旧 manifest 协议入口/host 辅助/错误投影；不是 App v2 Registry 分派。"
+    },
+    {
+      "file": "extension/src/index.ts",
+      "line": 24,
+      "source": "  | InstagramResult",
+      "category": "旧通道兼容代码",
+      "reason": "parse(input,pageUrl) 与扩展旧 manifest 协议入口/host 辅助/错误投影；不是 App v2 Registry 分派。"
+    },
+    {
+      "file": "extension/src/index.ts",
+      "line": 26,
+      "source": "  | TiktokResult",
+      "category": "旧通道兼容代码",
+      "reason": "parse(input,pageUrl) 与扩展旧 manifest 协议入口/host 辅助/错误投影；不是 App v2 Registry 分派。"
+    },
+    {
+      "file": "extension/src/index.ts",
+      "line": 37,
+      "source": "function isXhsHost(host: string): boolean {",
+      "category": "旧通道兼容代码",
+      "reason": "parse(input,pageUrl) 与扩展旧 manifest 协议入口/host 辅助/错误投影；不是 App v2 Registry 分派。"
+    },
+    {
+      "file": "extension/src/index.ts",
+      "line": 39,
+      "source": "    host === \"xiaohongshu.com\" ||",
+      "category": "旧通道兼容代码",
+      "reason": "parse(input,pageUrl) 与扩展旧 manifest 协议入口/host 辅助/错误投影；不是 App v2 Registry 分派。"
+    },
+    {
+      "file": "extension/src/index.ts",
+      "line": 40,
+      "source": "    host.endsWith(\".xiaohongshu.com\") ||",
+      "category": "旧通道兼容代码",
+      "reason": "parse(input,pageUrl) 与扩展旧 manifest 协议入口/host 辅助/错误投影；不是 App v2 Registry 分派。"
+    },
+    {
+      "file": "extension/src/index.ts",
+      "line": 41,
+      "source": "    host === \"rednote.com\" ||",
+      "category": "旧通道兼容代码",
+      "reason": "parse(input,pageUrl) 与扩展旧 manifest 协议入口/host 辅助/错误投影；不是 App v2 Registry 分派。"
+    },
+    {
+      "file": "extension/src/index.ts",
+      "line": 42,
+      "source": "    host.endsWith(\".rednote.com\") ||",
+      "category": "旧通道兼容代码",
+      "reason": "parse(input,pageUrl) 与扩展旧 manifest 协议入口/host 辅助/错误投影；不是 App v2 Registry 分派。"
+    },
+    {
+      "file": "extension/src/index.ts",
+      "line": 43,
+      "source": "    host === \"xhslink.com\" ||",
+      "category": "旧通道兼容代码",
+      "reason": "parse(input,pageUrl) 与扩展旧 manifest 协议入口/host 辅助/错误投影；不是 App v2 Registry 分派。"
+    },
+    {
+      "file": "extension/src/index.ts",
+      "line": 44,
+      "source": "    host.endsWith(\".xhslink.com\") ||",
+      "category": "旧通道兼容代码",
+      "reason": "parse(input,pageUrl) 与扩展旧 manifest 协议入口/host 辅助/错误投影；不是 App v2 Registry 分派。"
+    },
+    {
+      "file": "extension/src/index.ts",
+      "line": 45,
+      "source": "    host === \"xhslink.cn\" ||",
+      "category": "旧通道兼容代码",
+      "reason": "parse(input,pageUrl) 与扩展旧 manifest 协议入口/host 辅助/错误投影；不是 App v2 Registry 分派。"
+    },
+    {
+      "file": "extension/src/index.ts",
+      "line": 46,
+      "source": "    host.endsWith(\".xhslink.cn\") ||",
+      "category": "旧通道兼容代码",
+      "reason": "parse(input,pageUrl) 与扩展旧 manifest 协议入口/host 辅助/错误投影；不是 App v2 Registry 分派。"
+    },
+    {
+      "file": "extension/src/index.ts",
+      "line": 47,
+      "source": "    host === \"xhs.cn\" ||",
+      "category": "旧通道兼容代码",
+      "reason": "parse(input,pageUrl) 与扩展旧 manifest 协议入口/host 辅助/错误投影；不是 App v2 Registry 分派。"
+    },
+    {
+      "file": "extension/src/index.ts",
+      "line": 48,
+      "source": "    host.endsWith(\".xhs.cn\")",
+      "category": "旧通道兼容代码",
+      "reason": "parse(input,pageUrl) 与扩展旧 manifest 协议入口/host 辅助/错误投影；不是 App v2 Registry 分派。"
+    },
+    {
+      "file": "extension/src/index.ts",
+      "line": 52,
+      "source": "function isInstagramHost(host: string): boolean {",
+      "category": "旧通道兼容代码",
+      "reason": "parse(input,pageUrl) 与扩展旧 manifest 协议入口/host 辅助/错误投影；不是 App v2 Registry 分派。"
+    },
+    {
+      "file": "extension/src/index.ts",
+      "line": 54,
+      "source": "    host === \"instagram.com\" ||",
+      "category": "旧通道兼容代码",
+      "reason": "parse(input,pageUrl) 与扩展旧 manifest 协议入口/host 辅助/错误投影；不是 App v2 Registry 分派。"
+    },
+    {
+      "file": "extension/src/index.ts",
+      "line": 55,
+      "source": "    host.endsWith(\".instagram.com\") ||",
+      "category": "旧通道兼容代码",
+      "reason": "parse(input,pageUrl) 与扩展旧 manifest 协议入口/host 辅助/错误投影；不是 App v2 Registry 分派。"
+    },
+    {
+      "file": "extension/src/index.ts",
+      "line": 56,
+      "source": "    host === \"instagr.am\" ||",
+      "category": "旧通道兼容代码",
+      "reason": "parse(input,pageUrl) 与扩展旧 manifest 协议入口/host 辅助/错误投影；不是 App v2 Registry 分派。"
+    },
+    {
+      "file": "extension/src/index.ts",
+      "line": 57,
+      "source": "    host.endsWith(\".instagr.am\")",
+      "category": "旧通道兼容代码",
+      "reason": "parse(input,pageUrl) 与扩展旧 manifest 协议入口/host 辅助/错误投影；不是 App v2 Registry 分派。"
+    },
+    {
+      "file": "extension/src/index.ts",
+      "line": 63,
+      "source": "    host === \"x.com\" ||",
+      "category": "旧通道兼容代码",
+      "reason": "parse(input,pageUrl) 与扩展旧 manifest 协议入口/host 辅助/错误投影；不是 App v2 Registry 分派。"
+    },
+    {
+      "file": "extension/src/index.ts",
+      "line": 64,
+      "source": "    host.endsWith(\".x.com\") ||",
+      "category": "旧通道兼容代码",
+      "reason": "parse(input,pageUrl) 与扩展旧 manifest 协议入口/host 辅助/错误投影；不是 App v2 Registry 分派。"
+    },
+    {
+      "file": "extension/src/index.ts",
+      "line": 65,
+      "source": "    host === \"twitter.com\" ||",
+      "category": "旧通道兼容代码",
+      "reason": "parse(input,pageUrl) 与扩展旧 manifest 协议入口/host 辅助/错误投影；不是 App v2 Registry 分派。"
+    },
+    {
+      "file": "extension/src/index.ts",
+      "line": 66,
+      "source": "    host.endsWith(\".twitter.com\")",
+      "category": "旧通道兼容代码",
+      "reason": "parse(input,pageUrl) 与扩展旧 manifest 协议入口/host 辅助/错误投影；不是 App v2 Registry 分派。"
+    },
+    {
+      "file": "extension/src/index.ts",
+      "line": 82,
+      "source": "  if (isXhsHost(host)) return parseXhs(input, pageUrl);",
+      "category": "旧通道兼容代码",
+      "reason": "parse(input,pageUrl) 与扩展旧 manifest 协议入口/host 辅助/错误投影；不是 App v2 Registry 分派。"
+    },
+    {
+      "file": "extension/src/index.ts",
+      "line": 83,
+      "source": "  if (isInstagramHost(host)) return parseInstagram(input, pageUrl);",
+      "category": "旧通道兼容代码",
+      "reason": "parse(input,pageUrl) 与扩展旧 manifest 协议入口/host 辅助/错误投影；不是 App v2 Registry 分派。"
+    },
+    {
+      "file": "extension/src/index.ts",
+      "line": 85,
+      "source": "  if (isTiktokLink(pageUrl)) return parseTiktok(input, pageUrl);",
+      "category": "旧通道兼容代码",
+      "reason": "parse(input,pageUrl) 与扩展旧 manifest 协议入口/host 辅助/错误投影；不是 App v2 Registry 分派。"
+    },
+    {
+      "file": "extension/src/index.ts",
+      "line": 92,
+      "source": "export { parseXhs, parseInstagram, parseX };",
+      "category": "词法候选",
+      "reason": "注释、导入或符号声明；不独立执行站点数据规则。"
+    },
+    {
+      "file": "extension/src/instagram.ts",
+      "line": 1,
+      "source": "// Pure-function Instagram post parser.",
+      "category": "词法候选",
+      "reason": "注释、导入或符号声明；不独立执行站点数据规则。"
+    },
+    {
+      "file": "extension/src/instagram.ts",
+      "line": 5,
+      "source": "// Implements the Instagram section of spec/parsing.md.",
+      "category": "词法候选",
+      "reason": "注释、导入或符号声明；不独立执行站点数据规则。"
+    },
+    {
+      "file": "extension/src/instagram.ts",
+      "line": 7,
+      "source": "export type InstagramErrorCode =",
+      "category": "词法候选",
+      "reason": "注释、导入或符号声明；不独立执行站点数据规则。"
+    },
+    {
+      "file": "extension/src/instagram.ts",
+      "line": 13,
+      "source": "export interface InstagramError {",
+      "category": "签名解析模块算法（超类说明）",
+      "reason": "站点 JSON/DOM 路径、ID/媒体算法、canonical 拼接及模块注册，属于签名 parser 的可执行实现；清单选择 parserModule，不执行任意配置 JS。"
+    },
+    {
+      "file": "extension/src/instagram.ts",
+      "line": 14,
+      "source": "  code: InstagramErrorCode;",
+      "category": "签名解析模块算法（超类说明）",
+      "reason": "站点 JSON/DOM 路径、ID/媒体算法、canonical 拼接及模块注册，属于签名 parser 的可执行实现；清单选择 parserModule，不执行任意配置 JS。"
+    },
+    {
+      "file": "extension/src/instagram.ts",
+      "line": 18,
+      "source": "export interface InstagramAuthor {",
+      "category": "签名解析模块算法（超类说明）",
+      "reason": "站点 JSON/DOM 路径、ID/媒体算法、canonical 拼接及模块注册，属于签名 parser 的可执行实现；清单选择 parserModule，不执行任意配置 JS。"
+    },
+    {
+      "file": "extension/src/instagram.ts",
+      "line": 23,
+      "source": "export type InstagramItemType = \"image\" | \"video\" | \"live\";",
+      "category": "词法候选",
+      "reason": "注释、导入或符号声明；不独立执行站点数据规则。"
+    },
+    {
+      "file": "extension/src/instagram.ts",
+      "line": 25,
+      "source": "export interface InstagramItem {",
+      "category": "签名解析模块算法（超类说明）",
+      "reason": "站点 JSON/DOM 路径、ID/媒体算法、canonical 拼接及模块注册，属于签名 parser 的可执行实现；清单选择 parserModule，不执行任意配置 JS。"
+    },
+    {
+      "file": "extension/src/instagram.ts",
+      "line": 26,
+      "source": "  type: InstagramItemType;",
+      "category": "签名解析模块算法（超类说明）",
+      "reason": "站点 JSON/DOM 路径、ID/媒体算法、canonical 拼接及模块注册，属于签名 parser 的可执行实现；清单选择 parserModule，不执行任意配置 JS。"
+    },
+    {
+      "file": "extension/src/instagram.ts",
+      "line": 35,
+      "source": "export interface InstagramPost {",
+      "category": "签名解析模块算法（超类说明）",
+      "reason": "站点 JSON/DOM 路径、ID/媒体算法、canonical 拼接及模块注册，属于签名 parser 的可执行实现；清单选择 parserModule，不执行任意配置 JS。"
+    },
+    {
+      "file": "extension/src/instagram.ts",
+      "line": 36,
+      "source": "  platform: \"instagram\";",
+      "category": "签名解析模块算法（超类说明）",
+      "reason": "站点 JSON/DOM 路径、ID/媒体算法、canonical 拼接及模块注册，属于签名 parser 的可执行实现；清单选择 parserModule，不执行任意配置 JS。"
+    },
+    {
+      "file": "extension/src/instagram.ts",
+      "line": 39,
+      "source": "  author: InstagramAuthor;",
+      "category": "签名解析模块算法（超类说明）",
+      "reason": "站点 JSON/DOM 路径、ID/媒体算法、canonical 拼接及模块注册，属于签名 parser 的可执行实现；清单选择 parserModule，不执行任意配置 JS。"
+    },
+    {
+      "file": "extension/src/instagram.ts",
+      "line": 42,
+      "source": "  items: InstagramItem[];",
+      "category": "签名解析模块算法（超类说明）",
+      "reason": "站点 JSON/DOM 路径、ID/媒体算法、canonical 拼接及模块注册，属于签名 parser 的可执行实现；清单选择 parserModule，不执行任意配置 JS。"
+    },
+    {
+      "file": "extension/src/instagram.ts",
+      "line": 45,
+      "source": "export type InstagramResult =",
+      "category": "词法候选",
+      "reason": "注释、导入或符号声明；不独立执行站点数据规则。"
+    },
+    {
+      "file": "extension/src/instagram.ts",
+      "line": 46,
+      "source": "  | { ok: true; data: InstagramPost }",
+      "category": "签名解析模块算法（超类说明）",
+      "reason": "站点 JSON/DOM 路径、ID/媒体算法、canonical 拼接及模块注册，属于签名 parser 的可执行实现；清单选择 parserModule，不执行任意配置 JS。"
+    },
+    {
+      "file": "extension/src/instagram.ts",
+      "line": 47,
+      "source": "  | { ok: false; error: InstagramError };",
+      "category": "签名解析模块算法（超类说明）",
+      "reason": "站点 JSON/DOM 路径、ID/媒体算法、canonical 拼接及模块注册，属于签名 parser 的可执行实现；清单选择 parserModule，不执行任意配置 JS。"
+    },
+    {
+      "file": "extension/src/instagram.ts",
+      "line": 66,
+      "source": " * Convert an Instagram shortcode to its numeric media id.",
+      "category": "词法候选",
+      "reason": "注释、导入或符号声明；不独立执行站点数据规则。"
+    },
+    {
+      "file": "extension/src/instagram.ts",
+      "line": 169,
+      "source": "function mediaItem(media: Record<string, unknown>): InstagramItem | undefined {",
+      "category": "签名解析模块算法（超类说明）",
+      "reason": "站点 JSON/DOM 路径、ID/媒体算法、canonical 拼接及模块注册，属于签名 parser 的可执行实现；清单选择 parserModule，不执行任意配置 JS。"
+    },
+    {
+      "file": "extension/src/instagram.ts",
+      "line": 173,
+      "source": "    const item: InstagramItem = {",
+      "category": "签名解析模块算法（超类说明）",
+      "reason": "站点 JSON/DOM 路径、ID/媒体算法、canonical 拼接及模块注册，属于签名 parser 的可执行实现；清单选择 parserModule，不执行任意配置 JS。"
+    },
+    {
+      "file": "extension/src/instagram.ts",
+      "line": 191,
+      "source": " * Parse an Instagram post/reel page.",
+      "category": "词法候选",
+      "reason": "注释、导入或符号声明；不独立执行站点数据规则。"
+    },
+    {
+      "file": "extension/src/instagram.ts",
+      "line": 195,
+      "source": "export function parseInstagram(html: string, pageUrl: string): InstagramResult {",
+      "category": "签名解析模块算法（超类说明）",
+      "reason": "站点 JSON/DOM 路径、ID/媒体算法、canonical 拼接及模块注册，属于签名 parser 的可执行实现；清单选择 parserModule，不执行任意配置 JS。"
+    },
+    {
+      "file": "extension/src/instagram.ts",
+      "line": 230,
+      "source": "  const looksLikeInstagram =",
+      "category": "签名解析模块算法（超类说明）",
+      "reason": "站点 JSON/DOM 路径、ID/媒体算法、canonical 拼接及模块注册，属于签名 parser 的可执行实现；清单选择 parserModule，不执行任意配置 JS。"
+    },
+    {
+      "file": "extension/src/instagram.ts",
+      "line": 231,
+      "source": "    /instagram\\.com|instagr\\.am/.test(pageUrl) ||",
+      "category": "签名解析模块算法（超类说明）",
+      "reason": "站点 JSON/DOM 路径、ID/媒体算法、canonical 拼接及模块注册，属于签名 parser 的可执行实现；清单选择 parserModule，不执行任意配置 JS。"
+    },
+    {
+      "file": "extension/src/instagram.ts",
+      "line": 232,
+      "source": "    /instagram\\.com|instagr\\.am|data-sjs/.test(html.slice(0, 20000));",
+      "category": "签名解析模块算法（超类说明）",
+      "reason": "站点 JSON/DOM 路径、ID/媒体算法、canonical 拼接及模块注册，属于签名 parser 的可执行实现；清单选择 parserModule，不执行任意配置 JS。"
+    },
+    {
+      "file": "extension/src/instagram.ts",
+      "line": 234,
+      "source": "    if (looksLikeInstagram) {",
+      "category": "签名解析模块算法（超类说明）",
+      "reason": "站点 JSON/DOM 路径、ID/媒体算法、canonical 拼接及模块注册，属于签名 parser 的可执行实现；清单选择 parserModule，不执行任意配置 JS。"
+    },
+    {
+      "file": "extension/src/instagram.ts",
+      "line": 243,
+      "source": "            : \"Instagram returned a login-gated shell without post data.\",",
+      "category": "签名解析模块算法（超类说明）",
+      "reason": "站点 JSON/DOM 路径、ID/媒体算法、canonical 拼接及模块注册，属于签名 parser 的可执行实现；清单选择 parserModule，不执行任意配置 JS。"
+    },
+    {
+      "file": "extension/src/instagram.ts",
+      "line": 249,
+      "source": "      error: { code: \"INVALID_PAGE\", message: \"Not an Instagram post page.\" },",
+      "category": "签名解析模块算法（超类说明）",
+      "reason": "站点 JSON/DOM 路径、ID/媒体算法、canonical 拼接及模块注册，属于签名 parser 的可执行实现；清单选择 parserModule，不执行任意配置 JS。"
+    },
+    {
+      "file": "extension/src/instagram.ts",
+      "line": 258,
+      "source": " * Shared by parseInstagram (HTML input), DOM extraction, and the network-sniffing fast path.",
+      "category": "词法候选",
+      "reason": "注释、导入或符号声明；不独立执行站点数据规则。"
+    },
+    {
+      "file": "extension/src/instagram.ts",
+      "line": 263,
+      "source": "): InstagramResult {",
+      "category": "签名解析模块算法（超类说明）",
+      "reason": "站点 JSON/DOM 路径、ID/媒体算法、canonical 拼接及模块注册，属于签名 parser 的可执行实现；清单选择 parserModule，不执行任意配置 JS。"
+    },
+    {
+      "file": "extension/src/instagram.ts",
+      "line": 269,
+      "source": "  const author: InstagramAuthor = {};",
+      "category": "签名解析模块算法（超类说明）",
+      "reason": "站点 JSON/DOM 路径、ID/媒体算法、canonical 拼接及模块注册，属于签名 parser 的可执行实现；清单选择 parserModule，不执行任意配置 JS。"
+    },
+    {
+      "file": "extension/src/instagram.ts",
+      "line": 294,
+      "source": "  const items: InstagramItem[] = [];",
+      "category": "签名解析模块算法（超类说明）",
+      "reason": "站点 JSON/DOM 路径、ID/媒体算法、canonical 拼接及模块注册，属于签名 parser 的可执行实现；清单选择 parserModule，不执行任意配置 JS。"
+    },
+    {
+      "file": "extension/src/instagram.ts",
+      "line": 322,
+      "source": "        message: \"Instagram post has no extractable media.\",",
+      "category": "签名解析模块算法（超类说明）",
+      "reason": "站点 JSON/DOM 路径、ID/媒体算法、canonical 拼接及模块注册，属于签名 parser 的可执行实现；清单选择 parserModule，不执行任意配置 JS。"
+    },
+    {
+      "file": "extension/src/instagram.ts",
+      "line": 327,
+      "source": "  const data: InstagramPost = {",
+      "category": "签名解析模块算法（超类说明）",
+      "reason": "站点 JSON/DOM 路径、ID/媒体算法、canonical 拼接及模块注册，属于签名 parser 的可执行实现；清单选择 parserModule，不执行任意配置 JS。"
+    },
+    {
+      "file": "extension/src/instagram.ts",
+      "line": 328,
+      "source": "    platform: \"instagram\",",
+      "category": "签名解析模块算法（超类说明）",
+      "reason": "站点 JSON/DOM 路径、ID/媒体算法、canonical 拼接及模块注册，属于签名 parser 的可执行实现；清单选择 parserModule，不执行任意配置 JS。"
+    },
+    {
+      "file": "extension/src/instagram.ts",
+      "line": 330,
+      "source": "    url: `https://www.instagram.com/p/${shortcode}/`,",
+      "category": "签名解析模块算法（超类说明）",
+      "reason": "站点 JSON/DOM 路径、ID/媒体算法、canonical 拼接及模块注册，属于签名 parser 的可执行实现；清单选择 parserModule，不执行任意配置 JS。"
+    },
+    {
+      "file": "extension/src/page-hooks.d.ts",
+      "line": 2,
+      "source": "export function readXhsAccount(): { state: 'unknown' | 'guest' | 'user'; userId?: string; nickname?: string };",
+      "category": "签名解析模块算法（超类说明）",
+      "reason": "站点 JSON/DOM 路径、ID/媒体算法、canonical 拼接及模块注册，属于签名 parser 的可执行实现；清单选择 parserModule，不执行任意配置 JS。"
+    },
+    {
+      "file": "extension/src/page-hooks.d.ts",
+      "line": 3,
+      "source": "export function tiktokReady(): boolean;",
+      "category": "签名解析模块算法（超类说明）",
+      "reason": "站点 JSON/DOM 路径、ID/媒体算法、canonical 拼接及模块注册，属于签名 parser 的可执行实现；清单选择 parserModule，不执行任意配置 JS。"
+    },
+    {
+      "file": "extension/src/page-hooks.js",
+      "line": 75,
+      "source": "export function readXhsAccount() { return JSON.parse((function () {",
+      "category": "签名解析模块算法（超类说明）",
+      "reason": "站点 JSON/DOM 路径、ID/媒体算法、canonical 拼接及模块注册，属于签名 parser 的可执行实现；清单选择 parserModule，不执行任意配置 JS。"
+    },
+    {
+      "file": "extension/src/page-hooks.js",
+      "line": 97,
+      "source": "export function tiktokReady() { return (() => {",
+      "category": "签名解析模块算法（超类说明）",
+      "reason": "站点 JSON/DOM 路径、ID/媒体算法、canonical 拼接及模块注册，属于签名 parser 的可执行实现；清单选择 parserModule，不执行任意配置 JS。"
+    },
+    {
+      "file": "extension/src/parser-modules.ts",
+      "line": 3,
+      "source": "import { parseTiktok, extractTiktokPostId, tiktokExpiresAt } from './tiktok';",
+      "category": "词法候选",
+      "reason": "注释、导入或符号声明；不独立执行站点数据规则。"
+    },
+    {
+      "file": "extension/src/parser-modules.ts",
+      "line": 5,
+      "source": "import { installIgSniff, readXhsAccount, tiktokReady } from './page-hooks';",
+      "category": "词法候选",
+      "reason": "注释、导入或符号声明；不独立执行站点数据规则。"
+    },
+    {
+      "file": "extension/src/parser-modules.ts",
+      "line": 26,
+      "source": "  xhs: {",
+      "category": "签名解析模块算法（超类说明）",
+      "reason": "站点 JSON/DOM 路径、ID/媒体算法、canonical 拼接及模块注册，属于签名 parser 的可执行实现；清单选择 parserModule，不执行任意配置 JS。"
+    },
+    {
+      "file": "extension/src/parser-modules.ts",
+      "line": 36,
+      "source": "    account: () => readXhsAccount(),",
+      "category": "签名解析模块算法（超类说明）",
+      "reason": "站点 JSON/DOM 路径、ID/媒体算法、canonical 拼接及模块注册，属于签名 parser 的可执行实现；清单选择 parserModule，不执行任意配置 JS。"
+    },
+    {
+      "file": "extension/src/parser-modules.ts",
+      "line": 46,
+      "source": "        : failure('LOGIN_REQUIRED', '需要先登录小红书才能解析该笔记'))",
+      "category": "签名解析模块算法（超类说明）",
+      "reason": "站点 JSON/DOM 路径、ID/媒体算法、canonical 拼接及模块注册，属于签名 parser 的可执行实现；清单选择 parserModule，不执行任意配置 JS。"
+    },
+    {
+      "file": "extension/src/parser-modules.ts",
+      "line": 49,
+      "source": "  instagram: {",
+      "category": "签名解析模块算法（超类说明）",
+      "reason": "站点 JSON/DOM 路径、ID/媒体算法、canonical 拼接及模块注册，属于签名 parser 的可执行实现；清单选择 parserModule，不执行任意配置 JS。"
+    },
+    {
+      "file": "extension/src/parser-modules.ts",
+      "line": 68,
+      "source": "  tiktok: {",
+      "category": "签名解析模块算法（超类说明）",
+      "reason": "站点 JSON/DOM 路径、ID/媒体算法、canonical 拼接及模块注册，属于签名 parser 的可执行实现；清单选择 parserModule，不执行任意配置 JS。"
+    },
+    {
+      "file": "extension/src/parser-modules.ts",
+      "line": 69,
+      "source": "    expiresAt: (c) => tiktokExpiresAt(c.url),",
+      "category": "签名解析模块算法（超类说明）",
+      "reason": "站点 JSON/DOM 路径、ID/媒体算法、canonical 拼接及模块注册，属于签名 parser 的可执行实现；清单选择 parserModule，不执行任意配置 JS。"
+    },
+    {
+      "file": "extension/src/parser-modules.ts",
+      "line": 70,
+      "source": "    ready: () => tiktokReady(),",
+      "category": "签名解析模块算法（超类说明）",
+      "reason": "站点 JSON/DOM 路径、ID/媒体算法、canonical 拼接及模块注册，属于签名 parser 的可执行实现；清单选择 parserModule，不执行任意配置 JS。"
+    },
+    {
+      "file": "extension/src/parser-modules.ts",
+      "line": 72,
+      "source": "      const id = extractTiktokPostId(c.url);",
+      "category": "签名解析模块算法（超类说明）",
+      "reason": "站点 JSON/DOM 路径、ID/媒体算法、canonical 拼接及模块注册，属于签名 parser 的可执行实现；清单选择 parserModule，不执行任意配置 JS。"
+    },
+    {
+      "file": "extension/src/parser-modules.ts",
+      "line": 75,
+      "source": "    parse: (c) => parseTiktok(c.input || '', c.url),",
+      "category": "签名解析模块算法（超类说明）",
+      "reason": "站点 JSON/DOM 路径、ID/媒体算法、canonical 拼接及模块注册，属于签名 parser 的可执行实现；清单选择 parserModule，不执行任意配置 JS。"
+    },
+    {
+      "file": "extension/src/parser-modules.ts",
+      "line": 82,
+      "source": "      context.site.auth.mode !== 'none' && !context.loggedIn && moduleId !== 'x') {",
+      "category": "签名解析模块算法（超类说明）",
+      "reason": "站点 JSON/DOM 路径、ID/媒体算法、canonical 拼接及模块注册，属于签名 parser 的可执行实现；清单选择 parserModule，不执行任意配置 JS。"
+    },
+    {
+      "file": "extension/src/tiktok.ts",
+      "line": 1,
+      "source": "// Pure TikTok parser. Cookies never enter the parser input or output model.",
+      "category": "词法候选",
+      "reason": "注释、导入或符号声明；不独立执行站点数据规则。"
+    },
+    {
+      "file": "extension/src/tiktok.ts",
+      "line": 2,
+      "source": "import { tiktokAiLabel, type AiLabel } from './ai-label';",
+      "category": "词法候选",
+      "reason": "注释、导入或符号声明；不独立执行站点数据规则。"
+    },
+    {
+      "file": "extension/src/tiktok.ts",
+      "line": 9,
+      "source": "export function extractTiktokPostId(url: string): string | undefined {",
+      "category": "签名解析模块算法（超类说明）",
+      "reason": "站点 JSON/DOM 路径、ID/媒体算法、canonical 拼接及模块注册，属于签名 parser 的可执行实现；清单选择 parserModule，不执行任意配置 JS。"
+    },
+    {
+      "file": "extension/src/tiktok.ts",
+      "line": 13,
+      "source": "        !['www.tiktok.com', 'm.tiktok.com', 'tiktok.com'].includes(u.hostname)) return;",
+      "category": "签名解析模块算法（超类说明）",
+      "reason": "站点 JSON/DOM 路径、ID/媒体算法、canonical 拼接及模块注册，属于签名 parser 的可执行实现；清单选择 parserModule，不执行任意配置 JS。"
+    },
+    {
+      "file": "extension/src/tiktok.ts",
+      "line": 20,
+      "source": "export function isTiktokLink(url: string): boolean {",
+      "category": "签名解析模块算法（超类说明）",
+      "reason": "站点 JSON/DOM 路径、ID/媒体算法、canonical 拼接及模块注册，属于签名 parser 的可执行实现；清单选择 parserModule，不执行任意配置 JS。"
+    },
+    {
+      "file": "extension/src/tiktok.ts",
+      "line": 21,
+      "source": "  if (extractTiktokPostId(url)) return true;",
+      "category": "签名解析模块算法（超类说明）",
+      "reason": "站点 JSON/DOM 路径、ID/媒体算法、canonical 拼接及模块注册，属于签名 parser 的可执行实现；清单选择 parserModule，不执行任意配置 JS。"
+    },
+    {
+      "file": "extension/src/tiktok.ts",
+      "line": 25,
+      "source": "      ['vm.tiktok.com', 'vt.tiktok.com'].includes(u.hostname) && /^\\/[^/]+\\/?$/.test(u.pathname);",
+      "category": "签名解析模块算法（超类说明）",
+      "reason": "站点 JSON/DOM 路径、ID/媒体算法、canonical 拼接及模块注册，属于签名 parser 的可执行实现；清单选择 parserModule，不执行任意配置 JS。"
+    },
+    {
+      "file": "extension/src/tiktok.ts",
+      "line": 37,
+      "source": "export interface TiktokItem {",
+      "category": "签名解析模块算法（超类说明）",
+      "reason": "站点 JSON/DOM 路径、ID/媒体算法、canonical 拼接及模块注册，属于签名 parser 的可执行实现；清单选择 parserModule，不执行任意配置 JS。"
+    },
+    {
+      "file": "extension/src/tiktok.ts",
+      "line": 48,
+      "source": "export function selectTiktokVideo(value: unknown): TiktokItem | undefined {",
+      "category": "签名解析模块算法（超类说明）",
+      "reason": "站点 JSON/DOM 路径、ID/媒体算法、canonical 拼接及模块注册，属于签名 parser 的可执行实现；清单选择 parserModule，不执行任意配置 JS。"
+    },
+    {
+      "file": "extension/src/tiktok.ts",
+      "line": 69,
+      "source": "export type TiktokErrorCode = 'DELETED' | 'PRIVATE' | 'REGION_RESTRICTED' | 'UNKNOWN' | 'UNSUPPORTED_URL';",
+      "category": "词法候选",
+      "reason": "注释、导入或符号声明；不独立执行站点数据规则。"
+    },
+    {
+      "file": "extension/src/tiktok.ts",
+      "line": 70,
+      "source": "export type TiktokResult = { ok: false; error: { code: TiktokErrorCode; message: string } } |",
+      "category": "词法候选",
+      "reason": "注释、导入或符号声明；不独立执行站点数据规则。"
+    },
+    {
+      "file": "extension/src/tiktok.ts",
+      "line": 71,
+      "source": "  { ok: true; data: { platform: 'tiktok'; id: string; url: string;",
+      "category": "签名解析模块算法（超类说明）",
+      "reason": "站点 JSON/DOM 路径、ID/媒体算法、canonical 拼接及模块注册，属于签名 parser 的可执行实现；清单选择 parserModule，不执行任意配置 JS。"
+    },
+    {
+      "file": "extension/src/tiktok.ts",
+      "line": 73,
+      "source": "    publishedAt?: string; items: TiktokItem[]; aiLabel?: AiLabel } };",
+      "category": "签名解析模块算法（超类说明）",
+      "reason": "站点 JSON/DOM 路径、ID/媒体算法、canonical 拼接及模块注册，属于签名 parser 的可执行实现；清单选择 parserModule，不执行任意配置 JS。"
+    },
+    {
+      "file": "extension/src/tiktok.ts",
+      "line": 75,
+      "source": "function failure(detail: RecordValue): TiktokResult {",
+      "category": "签名解析模块算法（超类说明）",
+      "reason": "站点 JSON/DOM 路径、ID/媒体算法、canonical 拼接及模块注册，属于签名 parser 的可执行实现；清单选择 parserModule，不执行任意配置 JS。"
+    },
+    {
+      "file": "extension/src/tiktok.ts",
+      "line": 78,
+      "source": "  // Private codes and IP denial are documented by yt-dlp's TikTok extractor.",
+      "category": "词法候选",
+      "reason": "注释、导入或符号声明；不独立执行站点数据规则。"
+    },
+    {
+      "file": "extension/src/tiktok.ts",
+      "line": 81,
+      "source": "    return { ok: false, error: { code: 'PRIVATE', message: '该 TikTok 帖子或账号为私密' } };",
+      "category": "签名解析模块算法（超类说明）",
+      "reason": "站点 JSON/DOM 路径、ID/媒体算法、canonical 拼接及模块注册，属于签名 parser 的可执行实现；清单选择 parserModule，不执行任意配置 JS。"
+    },
+    {
+      "file": "extension/src/tiktok.ts",
+      "line": 83,
+      "source": "    return { ok: false, error: { code: 'REGION_RESTRICTED', message: '该 TikTok 帖子受地区或 IP 限制' } };",
+      "category": "签名解析模块算法（超类说明）",
+      "reason": "站点 JSON/DOM 路径、ID/媒体算法、canonical 拼接及模块注册，属于签名 parser 的可执行实现；清单选择 parserModule，不执行任意配置 JS。"
+    },
+    {
+      "file": "extension/src/tiktok.ts",
+      "line": 85,
+      "source": "    return { ok: false, error: { code: 'DELETED', message: '该 TikTok 帖子已删除或不存在' } };",
+      "category": "签名解析模块算法（超类说明）",
+      "reason": "站点 JSON/DOM 路径、ID/媒体算法、canonical 拼接及模块注册，属于签名 parser 的可执行实现；清单选择 parserModule，不执行任意配置 JS。"
+    },
+    {
+      "file": "extension/src/tiktok.ts",
+      "line": 86,
+      "source": "  return { ok: false, error: { code: 'UNKNOWN', message: '无法读取 TikTok 帖子，请重新解析' } };",
+      "category": "签名解析模块算法（超类说明）",
+      "reason": "站点 JSON/DOM 路径、ID/媒体算法、canonical 拼接及模块注册，属于签名 parser 的可执行实现；清单选择 parserModule，不执行任意配置 JS。"
+    },
+    {
+      "file": "extension/src/tiktok.ts",
+      "line": 89,
+      "source": "export function parseTiktok(input: string, pageUrl: string): TiktokResult {",
+      "category": "签名解析模块算法（超类说明）",
+      "reason": "站点 JSON/DOM 路径、ID/媒体算法、canonical 拼接及模块注册，属于签名 parser 的可执行实现；清单选择 parserModule，不执行任意配置 JS。"
+    },
+    {
+      "file": "extension/src/tiktok.ts",
+      "line": 90,
+      "source": "  const wanted = extractTiktokPostId(pageUrl);",
+      "category": "签名解析模块算法（超类说明）",
+      "reason": "站点 JSON/DOM 路径、ID/媒体算法、canonical 拼接及模块注册，属于签名 parser 的可执行实现；清单选择 parserModule，不执行任意配置 JS。"
+    },
+    {
+      "file": "extension/src/tiktok.ts",
+      "line": 91,
+      "source": "  if (!wanted) return { ok: false, error: { code: 'UNSUPPORTED_URL', message: '请先展开 TikTok 短链' } };",
+      "category": "签名解析模块算法（超类说明）",
+      "reason": "站点 JSON/DOM 路径、ID/媒体算法、canonical 拼接及模块注册，属于签名 parser 的可执行实现；清单选择 parserModule，不执行任意配置 JS。"
+    },
+    {
+      "file": "extension/src/tiktok.ts",
+      "line": 110,
+      "source": "  let items: TiktokItem[];",
+      "category": "签名解析模块算法（超类说明）",
+      "reason": "站点 JSON/DOM 路径、ID/媒体算法、canonical 拼接及模块注册，属于签名 parser 的可执行实现；清单选择 parserModule，不执行任意配置 JS。"
+    },
+    {
+      "file": "extension/src/tiktok.ts",
+      "line": 120,
+      "source": "    const video = selectTiktokVideo(item.video);",
+      "category": "签名解析模块算法（超类说明）",
+      "reason": "站点 JSON/DOM 路径、ID/媒体算法、canonical 拼接及模块注册，属于签名 parser 的可执行实现；清单选择 parserModule，不执行任意配置 JS。"
+    },
+    {
+      "file": "extension/src/tiktok.ts",
+      "line": 127,
+      "source": "  return { ok: true, data: { platform: 'tiktok', id,",
+      "category": "签名解析模块算法（超类说明）",
+      "reason": "站点 JSON/DOM 路径、ID/媒体算法、canonical 拼接及模块注册，属于签名 parser 的可执行实现；清单选择 parserModule，不执行任意配置 JS。"
+    },
+    {
+      "file": "extension/src/tiktok.ts",
+      "line": 128,
+      "source": "    url: `https://www.tiktok.com/@/video/${id}`,",
+      "category": "签名解析模块算法（超类说明）",
+      "reason": "站点 JSON/DOM 路径、ID/媒体算法、canonical 拼接及模块注册，属于签名 parser 的可执行实现；清单选择 parserModule，不执行任意配置 JS。"
+    },
+    {
+      "file": "extension/src/tiktok.ts",
+      "line": 131,
+      "source": "    aiLabel: tiktokAiLabel(item.aigcLabelType, id),",
+      "category": "签名解析模块算法（超类说明）",
+      "reason": "站点 JSON/DOM 路径、ID/媒体算法、canonical 拼接及模块注册，属于签名 parser 的可执行实现；清单选择 parserModule，不执行任意配置 JS。"
+    },
+    {
+      "file": "extension/src/tiktok.ts",
+      "line": 137,
+      "source": "// Known TikTok URL expiry fields, not a generic App query-parameter heuristic.",
+      "category": "词法候选",
+      "reason": "注释、导入或符号声明；不独立执行站点数据规则。"
+    },
+    {
+      "file": "extension/src/tiktok.ts",
+      "line": 139,
+      "source": "export function tiktokExpiresAt(url: string): string | undefined {",
+      "category": "签名解析模块算法（超类说明）",
+      "reason": "站点 JSON/DOM 路径、ID/媒体算法、canonical 拼接及模块注册，属于签名 parser 的可执行实现；清单选择 parserModule，不执行任意配置 JS。"
+    },
+    {
+      "file": "extension/src/x.ts",
+      "line": 1,
+      "source": "// Pure-function X (Twitter) post parser.",
+      "category": "词法候选",
+      "reason": "注释、导入或符号声明；不独立执行站点数据规则。"
+    },
+    {
+      "file": "extension/src/x.ts",
+      "line": 40,
+      "source": "  platform: \"x\";",
+      "category": "签名解析模块算法（超类说明）",
+      "reason": "站点 JSON/DOM 路径、ID/媒体算法、canonical 拼接及模块注册，属于签名 parser 的可执行实现；清单选择 parserModule，不执行任意配置 JS。"
+    },
+    {
+      "file": "extension/src/x.ts",
+      "line": 53,
+      "source": "const TWEET_ID_PATTERN = /(?:x|twitter)\\.com\\/(?:[^/]+)\\/status\\/(\\d+)/i;",
+      "category": "签名解析模块算法（超类说明）",
+      "reason": "站点 JSON/DOM 路径、ID/媒体算法、canonical 拼接及模块注册，属于签名 parser 的可执行实现；清单选择 parserModule，不执行任意配置 JS。"
+    },
+    {
+      "file": "extension/src/x.ts",
+      "line": 198,
+      "source": "    ? `https://x.com/${screenName}/status/${idStr}`",
+      "category": "签名解析模块算法（超类说明）",
+      "reason": "站点 JSON/DOM 路径、ID/媒体算法、canonical 拼接及模块注册，属于签名 parser 的可执行实现；清单选择 parserModule，不执行任意配置 JS。"
+    },
+    {
+      "file": "extension/src/x.ts",
+      "line": 199,
+      "source": "    : `https://x.com/i/status/${idStr}`;",
+      "category": "签名解析模块算法（超类说明）",
+      "reason": "站点 JSON/DOM 路径、ID/媒体算法、canonical 拼接及模块注册，属于签名 parser 的可执行实现；清单选择 parserModule，不执行任意配置 JS。"
+    },
+    {
+      "file": "extension/src/x.ts",
+      "line": 268,
+      "source": "    platform: \"x\",",
+      "category": "签名解析模块算法（超类说明）",
+      "reason": "站点 JSON/DOM 路径、ID/媒体算法、canonical 拼接及模块注册，属于签名 parser 的可执行实现；清单选择 parserModule，不执行任意配置 JS。"
+    },
+    {
+      "file": "extension/src/xhs.ts",
+      "line": 1,
+      "source": "// Pure-function Xiaohongshu note parser.",
+      "category": "词法候选",
+      "reason": "注释、导入或符号声明；不独立执行站点数据规则。"
+    },
+    {
+      "file": "extension/src/xhs.ts",
+      "line": 5,
+      "source": "// Implements the XHS section of spec/parsing.md.",
+      "category": "词法候选",
+      "reason": "注释、导入或符号声明；不独立执行站点数据规则。"
+    },
+    {
+      "file": "extension/src/xhs.ts",
+      "line": 7,
+      "source": "import { xhsAiLabel, type AiLabel, unknownAiLabel } from './ai-label';",
+      "category": "词法候选",
+      "reason": "注释、导入或符号声明；不独立执行站点数据规则。"
+    },
+    {
+      "file": "extension/src/xhs.ts",
+      "line": 9,
+      "source": "export type XhsErrorCode =",
+      "category": "词法候选",
+      "reason": "注释、导入或符号声明；不独立执行站点数据规则。"
+    },
+    {
+      "file": "extension/src/xhs.ts",
+      "line": 15,
+      "source": "export interface XhsError {",
+      "category": "签名解析模块算法（超类说明）",
+      "reason": "站点 JSON/DOM 路径、ID/媒体算法、canonical 拼接及模块注册，属于签名 parser 的可执行实现；清单选择 parserModule，不执行任意配置 JS。"
+    },
+    {
+      "file": "extension/src/xhs.ts",
+      "line": 16,
+      "source": "  code: XhsErrorCode;",
+      "category": "签名解析模块算法（超类说明）",
+      "reason": "站点 JSON/DOM 路径、ID/媒体算法、canonical 拼接及模块注册，属于签名 parser 的可执行实现；清单选择 parserModule，不执行任意配置 JS。"
+    },
+    {
+      "file": "extension/src/xhs.ts",
+      "line": 20,
+      "source": "export interface XhsAuthor {",
+      "category": "签名解析模块算法（超类说明）",
+      "reason": "站点 JSON/DOM 路径、ID/媒体算法、canonical 拼接及模块注册，属于签名 parser 的可执行实现；清单选择 parserModule，不执行任意配置 JS。"
+    },
+    {
+      "file": "extension/src/xhs.ts",
+      "line": 25,
+      "source": "export type XhsItemType = \"image\" | \"video\" | \"live\";",
+      "category": "词法候选",
+      "reason": "注释、导入或符号声明；不独立执行站点数据规则。"
+    },
+    {
+      "file": "extension/src/xhs.ts",
+      "line": 27,
+      "source": "export interface XhsItem {",
+      "category": "签名解析模块算法（超类说明）",
+      "reason": "站点 JSON/DOM 路径、ID/媒体算法、canonical 拼接及模块注册，属于签名 parser 的可执行实现；清单选择 parserModule，不执行任意配置 JS。"
+    },
+    {
+      "file": "extension/src/xhs.ts",
+      "line": 28,
+      "source": "  type: XhsItemType;",
+      "category": "签名解析模块算法（超类说明）",
+      "reason": "站点 JSON/DOM 路径、ID/媒体算法、canonical 拼接及模块注册，属于签名 parser 的可执行实现；清单选择 parserModule，不执行任意配置 JS。"
+    },
+    {
+      "file": "extension/src/xhs.ts",
+      "line": 32,
+      "source": "  /** Still-image cover for a video item (XHS `imageList[0]`). */",
+      "category": "词法候选",
+      "reason": "注释、导入或符号声明；不独立执行站点数据规则。"
+    },
+    {
+      "file": "extension/src/xhs.ts",
+      "line": 40,
+      "source": "export interface XhsNote {",
+      "category": "签名解析模块算法（超类说明）",
+      "reason": "站点 JSON/DOM 路径、ID/媒体算法、canonical 拼接及模块注册，属于签名 parser 的可执行实现；清单选择 parserModule，不执行任意配置 JS。"
+    },
+    {
+      "file": "extension/src/xhs.ts",
+      "line": 42,
+      "source": "  platform: \"xhs\";",
+      "category": "签名解析模块算法（超类说明）",
+      "reason": "站点 JSON/DOM 路径、ID/媒体算法、canonical 拼接及模块注册，属于签名 parser 的可执行实现；清单选择 parserModule，不执行任意配置 JS。"
+    },
+    {
+      "file": "extension/src/xhs.ts",
+      "line": 45,
+      "source": "  author: XhsAuthor;",
+      "category": "签名解析模块算法（超类说明）",
+      "reason": "站点 JSON/DOM 路径、ID/媒体算法、canonical 拼接及模块注册，属于签名 parser 的可执行实现；清单选择 parserModule，不执行任意配置 JS。"
+    },
+    {
+      "file": "extension/src/xhs.ts",
+      "line": 49,
+      "source": "  items: XhsItem[];",
+      "category": "签名解析模块算法（超类说明）",
+      "reason": "站点 JSON/DOM 路径、ID/媒体算法、canonical 拼接及模块注册，属于签名 parser 的可执行实现；清单选择 parserModule，不执行任意配置 JS。"
+    },
+    {
+      "file": "extension/src/xhs.ts",
+      "line": 52,
+      "source": "export type XhsResult =",
+      "category": "词法候选",
+      "reason": "注释、导入或符号声明；不独立执行站点数据规则。"
+    },
+    {
+      "file": "extension/src/xhs.ts",
+      "line": 53,
+      "source": "  | { ok: true; data: XhsNote }",
+      "category": "签名解析模块算法（超类说明）",
+      "reason": "站点 JSON/DOM 路径、ID/媒体算法、canonical 拼接及模块注册，属于签名 parser 的可执行实现；清单选择 parserModule，不执行任意配置 JS。"
+    },
+    {
+      "file": "extension/src/xhs.ts",
+      "line": 54,
+      "source": "  | { ok: false; error: XhsError };",
+      "category": "签名解析模块算法（超类说明）",
+      "reason": "站点 JSON/DOM 路径、ID/媒体算法、canonical 拼接及模块注册，属于签名 parser 的可执行实现；清单选择 parserModule，不执行任意配置 JS。"
+    },
+    {
+      "file": "extension/src/xhs.ts",
+      "line": 71,
+      "source": "const XHS_CDN_SUFFIX = \".xhscdn.com\";",
+      "category": "签名解析模块算法（超类说明）",
+      "reason": "站点 JSON/DOM 路径、ID/媒体算法、canonical 拼接及模块注册，属于签名 parser 的可执行实现；清单选择 parserModule，不执行任意配置 JS。"
+    },
+    {
+      "file": "extension/src/xhs.ts",
+      "line": 72,
+      "source": "const XIAOHONGSHU_SUFFIX = \".xiaohongshu.com\";",
+      "category": "签名解析模块算法（超类说明）",
+      "reason": "站点 JSON/DOM 路径、ID/媒体算法、canonical 拼接及模块注册，属于签名 parser 的可执行实现；清单选择 parserModule，不执行任意配置 JS。"
+    },
+    {
+      "file": "extension/src/xhs.ts",
+      "line": 99,
+      "source": " * Rewrite an XHS CDN image URL to its canonical original form:",
+      "category": "词法候选",
+      "reason": "注释、导入或符号声明；不独立执行站点数据规则。"
+    },
+    {
+      "file": "extension/src/xhs.ts",
+      "line": 100,
+      "source": " * strip the `!style` suffix and serve through ci.xiaohongshu.com.",
+      "category": "词法候选",
+      "reason": "注释、导入或符号声明；不独立执行站点数据规则。"
+    },
+    {
+      "file": "extension/src/xhs.ts",
+      "line": 101,
+      "source": " * Non-XHS hosts are returned with only the scheme upgraded to https.",
+      "category": "词法候选",
+      "reason": "注释、导入或符号声明；不独立执行站点数据规则。"
+    },
+    {
+      "file": "extension/src/xhs.ts",
+      "line": 114,
+      "source": "  if (!host.endsWith(XHS_CDN_SUFFIX) && !host.endsWith(XIAOHONGSHU_SUFFIX)) return https;",
+      "category": "签名解析模块算法（超类说明）",
+      "reason": "站点 JSON/DOM 路径、ID/媒体算法、canonical 拼接及模块注册，属于签名 parser 的可执行实现；清单选择 parserModule，不执行任意配置 JS。"
+    },
+    {
+      "file": "extension/src/xhs.ts",
+      "line": 122,
+      "source": "  return `https://ci.xiaohongshu.com/${token}`;",
+      "category": "签名解析模块算法（超类说明）",
+      "reason": "站点 JSON/DOM 路径、ID/媒体算法、canonical 拼接及模块注册，属于签名 parser 的可执行实现；清单选择 parserModule，不执行任意配置 JS。"
+    },
+    {
+      "file": "extension/src/xhs.ts",
+      "line": 362,
+      "source": "    return { url: `https://sns-video-bd.xhscdn.com/${key.replace(/^\\/+/, \"\")}` };",
+      "category": "签名解析模块算法（超类说明）",
+      "reason": "站点 JSON/DOM 路径、ID/媒体算法、canonical 拼接及模块注册，属于签名 parser 的可执行实现；清单选择 parserModule，不执行任意配置 JS。"
+    },
+    {
+      "file": "extension/src/xhs.ts",
+      "line": 409,
+      "source": "      `https://ci.xiaohongshu.com/${token}`,",
+      "category": "签名解析模块算法（超类说明）",
+      "reason": "站点 JSON/DOM 路径、ID/媒体算法、canonical 拼接及模块注册，属于签名 parser 的可执行实现；清单选择 parserModule，不执行任意配置 JS。"
+    },
+    {
+      "file": "extension/src/xhs.ts",
+      "line": 418,
+      "source": "  if (traceId) return { url: `https://sns-img-qc.xhscdn.com/${traceId}`, fallbacks: [] };",
+      "category": "签名解析模块算法（超类说明）",
+      "reason": "站点 JSON/DOM 路径、ID/媒体算法、canonical 拼接及模块注册，属于签名 parser 的可执行实现；清单选择 parserModule，不执行任意配置 JS。"
+    },
+    {
+      "file": "extension/src/xhs.ts",
+      "line": 477,
+      "source": "  if (!host.endsWith(\".xhscdn.com\") && !host.endsWith(\".xiaohongshu.com\")) {",
+      "category": "签名解析模块算法（超类说明）",
+      "reason": "站点 JSON/DOM 路径、ID/媒体算法、canonical 拼接及模块注册，属于签名 parser 的可执行实现；清单选择 parserModule，不执行任意配置 JS。"
+    },
+    {
+      "file": "extension/src/xhs.ts",
+      "line": 491,
+      "source": "  return `https://sns-img-bd.xhscdn.com/${token}`;",
+      "category": "签名解析模块算法（超类说明）",
+      "reason": "站点 JSON/DOM 路径、ID/媒体算法、canonical 拼接及模块注册，属于签名 parser 的可执行实现；清单选择 parserModule，不执行任意配置 JS。"
+    },
+    {
+      "file": "extension/src/xhs.ts",
+      "line": 496,
+      "source": "  return `https://ci.xiaohongshu.com/${token}?imageView2/format/jpg`;",
+      "category": "签名解析模块算法（超类说明）",
+      "reason": "站点 JSON/DOM 路径、ID/媒体算法、canonical 拼接及模块注册，属于签名 parser 的可执行实现；清单选择 parserModule，不执行任意配置 JS。"
+    },
+    {
+      "file": "extension/src/xhs.ts",
+      "line": 504,
+      "source": " * Parse a Xiaohongshu note page.",
+      "category": "词法候选",
+      "reason": "注释、导入或符号声明；不独立执行站点数据规则。"
+    },
+    {
+      "file": "extension/src/xhs.ts",
+      "line": 508,
+      "source": "export function parseXhs(html: string, pageUrl: string): XhsResult {",
+      "category": "签名解析模块算法（超类说明）",
+      "reason": "站点 JSON/DOM 路径、ID/媒体算法、canonical 拼接及模块注册，属于签名 parser 的可执行实现；清单选择 parserModule，不执行任意配置 JS。"
+    },
+    {
+      "file": "extension/src/xhs.ts",
+      "line": 530,
+      "source": "  const looksLikeXhs =",
+      "category": "签名解析模块算法（超类说明）",
+      "reason": "站点 JSON/DOM 路径、ID/媒体算法、canonical 拼接及模块注册，属于签名 parser 的可执行实现；清单选择 parserModule，不执行任意配置 JS。"
+    },
+    {
+      "file": "extension/src/xhs.ts",
+      "line": 531,
+      "source": "    /xiaohongshu\\.com|rednote\\.com|xhslink/.test(pageUrl) ||",
+      "category": "签名解析模块算法（超类说明）",
+      "reason": "站点 JSON/DOM 路径、ID/媒体算法、canonical 拼接及模块注册，属于签名 parser 的可执行实现；清单选择 parserModule，不执行任意配置 JS。"
+    },
+    {
+      "file": "extension/src/xhs.ts",
+      "line": 532,
+      "source": "    /xiaohongshu\\.com|rednote\\.com|xhslink|__INITIAL_STATE__/.test(html.slice(0, 20000));",
+      "category": "签名解析模块算法（超类说明）",
+      "reason": "站点 JSON/DOM 路径、ID/媒体算法、canonical 拼接及模块注册，属于签名 parser 的可执行实现；清单选择 parserModule，不执行任意配置 JS。"
+    },
+    {
+      "file": "extension/src/xhs.ts",
+      "line": 534,
+      "source": "    if (looksLikeXhs) {",
+      "category": "签名解析模块算法（超类说明）",
+      "reason": "站点 JSON/DOM 路径、ID/媒体算法、canonical 拼接及模块注册，属于签名 parser 的可执行实现；清单选择 parserModule，不执行任意配置 JS。"
+    },
+    {
+      "file": "extension/src/xhs.ts",
+      "line": 539,
+      "source": "          message: \"Xiaohongshu returned an authenticated-only shell without note data.\",",
+      "category": "签名解析模块算法（超类说明）",
+      "reason": "站点 JSON/DOM 路径、ID/媒体算法、canonical 拼接及模块注册，属于签名 parser 的可执行实现；清单选择 parserModule，不执行任意配置 JS。"
+    },
+    {
+      "file": "extension/src/xhs.ts",
+      "line": 545,
+      "source": "      error: { code: \"INVALID_PAGE\", message: \"Not a Xiaohongshu note page.\" },",
+      "category": "签名解析模块算法（超类说明）",
+      "reason": "站点 JSON/DOM 路径、ID/媒体算法、canonical 拼接及模块注册，属于签名 parser 的可执行实现；清单选择 parserModule，不执行任意配置 JS。"
+    },
+    {
+      "file": "extension/src/xhs.ts",
+      "line": 560,
+      "source": " * Keep the share URL byte-for-byte whenever possible: `xsec_token` is bound",
+      "category": "词法候选",
+      "reason": "注释、导入或符号声明；不独立执行站点数据规则。"
+    },
+    {
+      "file": "extension/src/xhs.ts",
+      "line": 564,
+      "source": "function canonicalXhsNoteUrl(noteId: string, pageUrl?: string): string {",
+      "category": "签名解析模块算法（超类说明）",
+      "reason": "站点 JSON/DOM 路径、ID/媒体算法、canonical 拼接及模块注册，属于签名 parser 的可执行实现；清单选择 parserModule，不执行任意配置 JS。"
+    },
+    {
+      "file": "extension/src/xhs.ts",
+      "line": 565,
+      "source": "  const base = `https://www.xiaohongshu.com/explore/${noteId}`;",
+      "category": "签名解析模块算法（超类说明）",
+      "reason": "站点 JSON/DOM 路径、ID/媒体算法、canonical 拼接及模块注册，属于签名 parser 的可执行实现；清单选择 parserModule，不执行任意配置 JS。"
+    },
+    {
+      "file": "extension/src/xhs.ts",
+      "line": 573,
+      "source": "    for (const key of [\"xsec_token\", \"xsec_source\"]) {",
+      "category": "签名解析模块算法（超类说明）",
+      "reason": "站点 JSON/DOM 路径、ID/媒体算法、canonical 拼接及模块注册，属于签名 parser 的可执行实现；清单选择 parserModule，不执行任意配置 JS。"
+    },
+    {
+      "file": "extension/src/xhs.ts",
+      "line": 635,
+      "source": " * Shared by parseXhs (HTML input) and the MAIN-world fast path.",
+      "category": "词法候选",
+      "reason": "注释、导入或符号声明；不独立执行站点数据规则。"
+    },
+    {
+      "file": "extension/src/xhs.ts",
+      "line": 641,
+      "source": "): XhsResult {",
+      "category": "签名解析模块算法（超类说明）",
+      "reason": "站点 JSON/DOM 路径、ID/媒体算法、canonical 拼接及模块注册，属于签名 parser 的可执行实现；清单选择 parserModule，不执行任意配置 JS。"
+    },
+    {
+      "file": "extension/src/xhs.ts",
+      "line": 647,
+      "source": "  const author: XhsAuthor = {};",
+      "category": "签名解析模块算法（超类说明）",
+      "reason": "站点 JSON/DOM 路径、ID/媒体算法、canonical 拼接及模块注册，属于签名 parser 的可执行实现；清单选择 parserModule，不执行任意配置 JS。"
+    },
+    {
+      "file": "extension/src/xhs.ts",
+      "line": 679,
+      "source": "  const items: XhsItem[] = [];",
+      "category": "签名解析模块算法（超类说明）",
+      "reason": "站点 JSON/DOM 路径、ID/媒体算法、canonical 拼接及模块注册，属于签名 parser 的可执行实现；清单选择 parserModule，不执行任意配置 JS。"
+    },
+    {
+      "file": "extension/src/xhs.ts",
+      "line": 684,
+      "source": "      const item: XhsItem = { type: \"video\", url: resolved.url };",
+      "category": "签名解析模块算法（超类说明）",
+      "reason": "站点 JSON/DOM 路径、ID/媒体算法、canonical 拼接及模块注册，属于签名 parser 的可执行实现；清单选择 parserModule，不执行任意配置 JS。"
+    },
+    {
+      "file": "extension/src/xhs.ts",
+      "line": 695,
+      "source": "        const item: XhsItem = { type: \"image\", url: img.url, fallbacks: img.fallbacks };",
+      "category": "签名解析模块算法（超类说明）",
+      "reason": "站点 JSON/DOM 路径、ID/媒体算法、canonical 拼接及模块注册，属于签名 parser 的可执行实现；清单选择 parserModule，不执行任意配置 JS。"
+    },
+    {
+      "file": "extension/src/xhs.ts",
+      "line": 715,
+      "source": "          : `https://sns-video-bd.xhscdn.com/${entryKey.replace(/^\\/+/, \"\")}`",
+      "category": "签名解析模块算法（超类说明）",
+      "reason": "站点 JSON/DOM 路径、ID/媒体算法、canonical 拼接及模块注册，属于签名 parser 的可执行实现；清单选择 parserModule，不执行任意配置 JS。"
+    },
+    {
+      "file": "extension/src/xhs.ts",
+      "line": 727,
+      "source": "        const item: XhsItem = { type: \"live\", url: img.url, videoUrl: own.url, fallbacks: img.fallbacks };",
+      "category": "签名解析模块算法（超类说明）",
+      "reason": "站点 JSON/DOM 路径、ID/媒体算法、canonical 拼接及模块注册，属于签名 parser 的可执行实现；清单选择 parserModule，不执行任意配置 JS。"
+    },
+    {
+      "file": "extension/src/xhs.ts",
+      "line": 740,
+      "source": "        const item: XhsItem = { type: \"image\", url: img.url, fallbacks: img.fallbacks };",
+      "category": "签名解析模块算法（超类说明）",
+      "reason": "站点 JSON/DOM 路径、ID/媒体算法、canonical 拼接及模块注册，属于签名 parser 的可执行实现；清单选择 parserModule，不执行任意配置 JS。"
+    },
+    {
+      "file": "extension/src/xhs.ts",
+      "line": 750,
+      "source": "      const item: XhsItem = { type: \"video\", url: noteVideo.url };",
+      "category": "签名解析模块算法（超类说明）",
+      "reason": "站点 JSON/DOM 路径、ID/媒体算法、canonical 拼接及模块注册，属于签名 parser 的可执行实现；清单选择 parserModule，不执行任意配置 JS。"
+    },
+    {
+      "file": "extension/src/xhs.ts",
+      "line": 764,
+      "source": "        message: \"Xiaohongshu note has no extractable media.\",",
+      "category": "签名解析模块算法（超类说明）",
+      "reason": "站点 JSON/DOM 路径、ID/媒体算法、canonical 拼接及模块注册，属于签名 parser 的可执行实现；清单选择 parserModule，不执行任意配置 JS。"
+    },
+    {
+      "file": "extension/src/xhs.ts",
+      "line": 769,
+      "source": "  const data: XhsNote = {",
+      "category": "签名解析模块算法（超类说明）",
+      "reason": "站点 JSON/DOM 路径、ID/媒体算法、canonical 拼接及模块注册，属于签名 parser 的可执行实现；清单选择 parserModule，不执行任意配置 JS。"
+    },
+    {
+      "file": "extension/src/xhs.ts",
+      "line": 770,
+      "source": "    platform: \"xhs\",",
+      "category": "签名解析模块算法（超类说明）",
+      "reason": "站点 JSON/DOM 路径、ID/媒体算法、canonical 拼接及模块注册，属于签名 parser 的可执行实现；清单选择 parserModule，不执行任意配置 JS。"
+    },
+    {
+      "file": "extension/src/xhs.ts",
+      "line": 772,
+      "source": "    url: canonicalXhsNoteUrl(noteId, pageUrl),",
+      "category": "签名解析模块算法（超类说明）",
+      "reason": "站点 JSON/DOM 路径、ID/媒体算法、canonical 拼接及模块注册，属于签名 parser 的可执行实现；清单选择 parserModule，不执行任意配置 JS。"
+    },
+    {
+      "file": "extension/src/xhs.ts",
+      "line": 776,
+      "source": "  const platformLabel = xhsAiLabel(isRecord(note.illegalInfo) ? note.illegalInfo.desc : undefined, noteId);",
+      "category": "签名解析模块算法（超类说明）",
+      "reason": "站点 JSON/DOM 路径、ID/媒体算法、canonical 拼接及模块注册，属于签名 parser 的可执行实现；清单选择 parserModule，不执行任意配置 JS。"
+    },
+    {
+      "file": "extension/wxt.config.ts",
+      "line": 10,
+      "source": "      \"*://*.xiaohongshu.com/*\",",
+      "category": "扩展旧通道与静态权限（超类说明）",
+      "reason": "扩展仍消费冻结 v1 通道；内容脚本注入/host_permissions/DNR 属浏览器打包权限，App 清单不能提升；迁移需单独扩展协议与重新发行，且本轮不改请求策略。"
+    },
+    {
+      "file": "extension/wxt.config.ts",
+      "line": 11,
+      "source": "      \"*://*.instagram.com/*\",",
+      "category": "扩展旧通道与静态权限（超类说明）",
+      "reason": "扩展仍消费冻结 v1 通道；内容脚本注入/host_permissions/DNR 属浏览器打包权限，App 清单不能提升；迁移需单独扩展协议与重新发行，且本轮不改请求策略。"
+    },
+    {
+      "file": "extension/wxt.config.ts",
+      "line": 12,
+      "source": "      \"*://*.twitter.com/*\",",
+      "category": "扩展旧通道与静态权限（超类说明）",
+      "reason": "扩展仍消费冻结 v1 通道；内容脚本注入/host_permissions/DNR 属浏览器打包权限，App 清单不能提升；迁移需单独扩展协议与重新发行，且本轮不改请求策略。"
+    },
+    {
+      "file": "extension/wxt.config.ts",
+      "line": 13,
+      "source": "      \"*://*.x.com/*\",",
+      "category": "扩展旧通道与静态权限（超类说明）",
+      "reason": "扩展仍消费冻结 v1 通道；内容脚本注入/host_permissions/DNR 属浏览器打包权限，App 清单不能提升；迁移需单独扩展协议与重新发行，且本轮不改请求策略。"
+    },
+    {
+      "file": "extension/wxt.config.ts",
+      "line": 14,
+      "source": "      \"*://*.xhscdn.com/*\",",
+      "category": "扩展旧通道与静态权限（超类说明）",
+      "reason": "扩展仍消费冻结 v1 通道；内容脚本注入/host_permissions/DNR 属浏览器打包权限，App 清单不能提升；迁移需单独扩展协议与重新发行，且本轮不改请求策略。"
+    },
+    {
+      "file": "extension/wxt.config.ts",
+      "line": 15,
+      "source": "      \"*://ci.xiaohongshu.com/*\",",
+      "category": "扩展旧通道与静态权限（超类说明）",
+      "reason": "扩展仍消费冻结 v1 通道；内容脚本注入/host_permissions/DNR 属浏览器打包权限，App 清单不能提升；迁移需单独扩展协议与重新发行，且本轮不改请求策略。"
+    },
+    {
+      "file": "extension/wxt.config.ts",
+      "line": 16,
+      "source": "      \"*://*.cdninstagram.com/*\",",
+      "category": "扩展旧通道与静态权限（超类说明）",
+      "reason": "扩展仍消费冻结 v1 通道；内容脚本注入/host_permissions/DNR 属浏览器打包权限，App 清单不能提升；迁移需单独扩展协议与重新发行，且本轮不改请求策略。"
+    },
+    {
+      "file": "extension/wxt.config.ts",
+      "line": 17,
+      "source": "      \"*://*.twimg.com/*\",",
+      "category": "扩展旧通道与静态权限（超类说明）",
+      "reason": "扩展仍消费冻结 v1 通道；内容脚本注入/host_permissions/DNR 属浏览器打包权限，App 清单不能提升；迁移需单独扩展协议与重新发行，且本轮不改请求策略。"
+    },
+    {
+      "file": "extension/wxt.config.ts",
+      "line": 18,
+      "source": "      \"*://cdn.syndication.twimg.com/*\",",
+      "category": "扩展旧通道与静态权限（超类说明）",
+      "reason": "扩展仍消费冻结 v1 通道；内容脚本注入/host_permissions/DNR 属浏览器打包权限，App 清单不能提升；迁移需单独扩展协议与重新发行，且本轮不改请求策略。"
+    },
+    {
+      "file": "extension/wxt.config.ts",
+      "line": 34,
+      "source": "          \"*://*.xiaohongshu.com/*\",",
+      "category": "扩展旧通道与静态权限（超类说明）",
+      "reason": "扩展仍消费冻结 v1 通道；内容脚本注入/host_permissions/DNR 属浏览器打包权限，App 清单不能提升；迁移需单独扩展协议与重新发行，且本轮不改请求策略。"
+    },
+    {
+      "file": "extension/wxt.config.ts",
+      "line": 35,
+      "source": "          \"*://*.instagram.com/*\",",
+      "category": "扩展旧通道与静态权限（超类说明）",
+      "reason": "扩展仍消费冻结 v1 通道；内容脚本注入/host_permissions/DNR 属浏览器打包权限，App 清单不能提升；迁移需单独扩展协议与重新发行，且本轮不改请求策略。"
+    },
+    {
+      "file": "extension/wxt.config.ts",
+      "line": 36,
+      "source": "          \"*://*.twitter.com/*\",",
+      "category": "扩展旧通道与静态权限（超类说明）",
+      "reason": "扩展仍消费冻结 v1 通道；内容脚本注入/host_permissions/DNR 属浏览器打包权限，App 清单不能提升；迁移需单独扩展协议与重新发行，且本轮不改请求策略。"
+    },
+    {
+      "file": "extension/wxt.config.ts",
+      "line": 37,
+      "source": "          \"*://*.x.com/*\",",
+      "category": "扩展旧通道与静态权限（超类说明）",
+      "reason": "扩展仍消费冻结 v1 通道；内容脚本注入/host_permissions/DNR 属浏览器打包权限，App 清单不能提升；迁移需单独扩展协议与重新发行，且本轮不改请求策略。"
+    }
+  ]
+}

@@ -1,0 +1,14 @@
+{
+  "code": "AIPlatform149",
+  "media_type": 2,
+  "user": { "username": "fixture_author", "pk": "149" },
+  "caption": { "text": "Fixture caption" },
+  "video_versions": [{ "url": "https://video.cdninstagram.com/fixture.mp4", "width": 1080, "height": 1920 }],
+  "image_versions2": { "candidates": [{ "url": "https://scontent.cdninstagram.com/fixture.jpg", "width": 1080, "height": 1920 }] },
+  "ai_label_info": {
+    "attribution_label_text": "Made with AI",
+    "method": "AUTHOR_DISCLOSURE",
+    "confidence": 0.98,
+    "enabled": true
+  }
+}

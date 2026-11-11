@@ -1,8 +1,9 @@
 // Pure decisions behind the parse tab's clipboard prompt and stale-input
 // handling. Kept free of Flutter / database imports so they are unit-tested.
 
+import '../metadata/url_normalizer.dart';
 import 'links.dart';
-import 'tiktok_links.dart';
+import 'site_registry.dart';
 
 /// A history entry reduced to what link matching needs.
 typedef KnownPost = ({String postUrl, String postId});
@@ -22,29 +23,9 @@ String linkKey(String url) {
 /// Best-effort post identity for a link: XHS note id (24-hex or alphanumeric),
 /// Douyin/TikTok video/note id, Instagram shortcode, X status id, Bilibili BV/av id, Weibo detail id.
 String? postIdOfUrl(String url) {
-  final tiktok = canonicalTiktokUrl(url);
-  if (tiktok != null) return Uri.parse(tiktok).pathSegments.last;
+  final site = SiteRegistry.current.match(url.trim());
   final uri = Uri.tryParse(url.trim());
-  if (uri == null) return null;
-  final hex = RegExp(r'[0-9a-fA-F]{24}').firstMatch(uri.path)?.group(0);
-  if (hex != null) return hex.toLowerCase();
-  final segs = uri.pathSegments;
-  for (var i = 0; i + 1 < segs.length; i++) {
-    final s = segs[i].toLowerCase();
-    if (s == 'p' ||
-        s == 'reel' ||
-        s == 'tv' ||
-        s == 'status' ||
-        s == 'item' ||
-        s == 'explore' ||
-        s == 'video' ||
-        s == 'note' ||
-        s == 'detail') {
-      final next = segs[i + 1].trim();
-      if (next.isNotEmpty) return next;
-    }
-  }
-  return null;
+  return site == null || uri == null ? null : site.sourceId(uri);
 }
 
 /// True when [link] matches a history entry by canonical url or post id.
@@ -56,10 +37,16 @@ bool isLinkKnown(
   String? resolvedUrl,
 }) {
   final key = linkKey(link);
-  if (records.any((r) => linkKey(r.postUrl) == key)) return true;
+  if (records.any((r) => linkKey(r.postUrl) == key ||
+      sameCanonicalUrl(r.postUrl, link))) {
+    return true;
+  }
   if (resolvedUrl != null && resolvedUrl.trim().isNotEmpty) {
     final resKey = linkKey(resolvedUrl);
-    if (records.any((r) => linkKey(r.postUrl) == resKey)) return true;
+    if (records.any((r) => linkKey(r.postUrl) == resKey ||
+        sameCanonicalUrl(r.postUrl, resolvedUrl))) {
+      return true;
+    }
   }
   final id =
       postIdOfUrl(link) ??
@@ -123,7 +110,8 @@ BubbleAction decideBubbleAction(
   String? resolvedUrl,
 }) {
   // Extract post ID from the link (try both the original and resolved URL)
-  final linkId = postIdOfUrl(link) ??
+  final linkId =
+      postIdOfUrl(link) ??
       (resolvedUrl == null ? null : postIdOfUrl(resolvedUrl));
 
   // 1. If we're already on this post's preview page, skip navigation

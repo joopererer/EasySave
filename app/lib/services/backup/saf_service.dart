@@ -9,6 +9,7 @@ import 'package:flutter/services.dart';
 import '../../core/dev_log.dart';
 import '../history_db.dart';
 import '../settings.dart';
+import 'backup_model.dart';
 import 'backup_service.dart';
 
 /// Base exception for all SAF (Storage Access Framework) operations.
@@ -520,9 +521,11 @@ abstract final class SafService {
         "Invalid format in read-back backup: ${readBackData['format']}",
       );
     }
-    if (readBackData['formatVersion'] != 1) {
+    // Only the schema this App writes is accepted back.
+    if (readBackData['schemaVersion'] != BackupData.currentSchemaVersion ||
+        readBackData['formatVersion'] != BackupData.currentSchemaVersion) {
       throw SafVerificationException(
-        "Invalid formatVersion in read-back backup: ${readBackData['formatVersion']}",
+        "Invalid schemaVersion in read-back backup: ${readBackData['schemaVersion']}",
       );
     }
     final readPosts = readBackData['posts'] as List?;

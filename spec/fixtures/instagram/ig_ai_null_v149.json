@@ -1,0 +1,8 @@
+{
+  "code": "AINull149",
+  "media_type": 1,
+  "user": { "username": "fixture_author", "pk": "149" },
+  "caption": { "text": "Ordinary fixture" },
+  "image_versions2": { "candidates": [{ "url": "https://scontent.cdninstagram.com/ordinary.jpg", "width": 1080, "height": 1080 }] },
+  "ai_label_info": null
+}

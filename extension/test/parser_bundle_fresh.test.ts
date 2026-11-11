@@ -34,7 +34,10 @@ describe('Parser bundle freshness check', () => {
     } finally {
       rmSync(tempDir, { recursive: true, force: true });
     }
-  });
+  // This starts the native esbuild service and writes a temporary bundle. Under
+  // concurrent Flutter/Gradle builds on Windows, process startup and disk I/O can
+  // exceed Vitest's 5s default; keep the real build comparison with a bounded wait.
+  }, 30_000);
 
   it('generated parser_version.dart matches spec/PARSER_VERSION', () => {
     const versionPath = resolve(__dirname, '../../spec/PARSER_VERSION');

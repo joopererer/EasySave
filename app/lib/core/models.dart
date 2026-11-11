@@ -1,3 +1,5 @@
+import 'media_request.dart';
+
 // Unified parsing models shared by the XHS and Instagram parsers.
 // Mirrors extension/src/*.ts; serialized forms match spec/fixtures expected
 // JSON exactly (absent optional fields are omitted, like TS `undefined`).
@@ -5,9 +7,16 @@
 /// Error codes from the spec error model.
 abstract final class ParseErrorCode {
   static const loginRequired = 'LOGIN_REQUIRED';
+  static const ageNotSet = 'AGE_NOT_SET';
+  static const ageRestricted = 'AGE_RESTRICTED';
+  static const protectedAccount = 'PROTECTED';
   static const privateOrUnavailable = 'PRIVATE_OR_UNAVAILABLE';
   static const blocked = 'BLOCKED';
   static const invalidPage = 'INVALID_PAGE';
+  static const postNotFound = 'POST_NOT_FOUND';
+  /// The address carried no access token (`xsec_token`), so a 404 says nothing
+  /// about whether the post exists.
+  static const tokenRequired = 'TOKEN_REQUIRED';
   static const unsupportedUrl = 'UNSUPPORTED_URL';
   static const timeout = 'TIMEOUT';
 }
@@ -15,10 +24,8 @@ abstract final class ParseErrorCode {
 class PostAuthor {
   PostAuthor({this.name, this.id});
 
-  factory PostAuthor.fromJson(Map<String, dynamic> json) => PostAuthor(
-    name: json['name'] as String?,
-    id: json['id'] as String?,
-  );
+  factory PostAuthor.fromJson(Map<String, dynamic> json) =>
+      PostAuthor(name: json['name'] as String?, id: json['id'] as String?);
 
   final String? name;
   final String? id;
@@ -38,23 +45,40 @@ class MediaItem {
     this.isGif,
     this.videoUrl,
     this.posterUrl,
+    this.thumbnailUrl,
     this.width,
     this.height,
     this.duration,
     this.fallbacks = const [],
+    this.downloadOrder = const [],
+    this.requestResources,
+    this.localFilename,
+    this.localVideoFilename,
   });
 
   factory MediaItem.fromJson(Map<String, dynamic> json) => MediaItem(
+    requestResources: json['resources'] == null
+        ? null
+        : (json['resources'] as List)
+              .map(
+                (r) => MediaRequestResource.fromJson(
+                  (r as Map).cast<String, dynamic>(),
+                ),
+              )
+              .toList(),
     type: json['type'] as String? ?? 'image',
     url: json['url'] as String? ?? '',
     isGif: json['isGif'] as bool?,
     videoUrl: json['videoUrl'] as String?,
     posterUrl: json['posterUrl'] as String?,
+    thumbnailUrl: json['thumbnailUrl'] as String?,
     width: json['width'] as num?,
     height: json['height'] as num?,
     duration: json['duration'] as num?,
     fallbacks:
-        (json['fallbacks'] as List?)?.whereType<String>().toList() ??
+        (json['fallbacks'] as List?)?.whereType<String>().toList() ?? const [],
+    downloadOrder:
+        (json['downloadOrder'] as List?)?.whereType<String>().toList() ??
         const [],
   );
 
@@ -63,9 +87,14 @@ class MediaItem {
   final bool? isGif;
   final String? videoUrl;
 
+  /// Local history identifiers, never used as network request URLs.
+  final String? localFilename;
+  final String? localVideoFilename;
+
   /// Still-image cover for a video item (XHS `imageList[0]`). IG video
   /// items already carry the preview in `url`, so this stays null there.
   final String? posterUrl;
+  final String? thumbnailUrl;
   final num? width;
   final num? height;
 
@@ -78,19 +107,36 @@ class MediaItem {
   /// Never serialized: toJson must keep matching the spec fixtures exactly.
   final List<String> fallbacks;
 
+  /// URLs to download, best first, when the parser ranks them (XHS images:
+  /// original resolution first, preview variants never). Empty means the
+  /// site's url/fallbacks order applies.
+  final List<String> downloadOrder;
+
+  /// v2 request declarations. Deliberately excluded from legacy/history/backup
+  /// JSON; step 2 will persist task requirements separately, never Cookie values.
+  final List<MediaRequestResource>? requestResources;
+
+  /// Runtime-only stable thumbnail identity. Never part of parser/backup JSON.
+  String? cachePostId;
+  int? cacheItemIndex;
+
   Map<String, Object?> toJson() {
     final map = <String, Object?>{'type': type};
     if (isGif == true) map['isGif'] = true;
     map['url'] = url;
     if (videoUrl != null) map['videoUrl'] = videoUrl;
     if (posterUrl != null) map['posterUrl'] = posterUrl;
+    if (thumbnailUrl != null) map['thumbnailUrl'] = thumbnailUrl;
     if (width != null) map['width'] = width;
     if (height != null) map['height'] = height;
     if (duration != null) map['duration'] = duration;
     // Fallbacks must survive the history round-trip: posts reopened from
     // history rebuild their items from this JSON, and without the backup
     // URLs a single slow CDN host hangs every cell.
-    if (fallbacks.isNotEmpty) map['fallbacks'] = fallbacks;
+    if (fallbacks.isNotEmpty) {
+      map['fallbacks'] = fallbacks;
+    }
+    if (downloadOrder.isNotEmpty) map['downloadOrder'] = downloadOrder;
     return map;
   }
 }
@@ -106,8 +152,10 @@ class AiLabel {
     if (value is! Map) return null;
     final text = value['text'];
     final source = value['source'];
-    if (text is! String || text.trim().isEmpty ||
-        (source != 'platform' && source != 'author')) return null;
+    if (text is! String ||
+        text.trim().isEmpty ||
+        (source != 'platform' && source != 'author'))
+      return null;
     return AiLabel(text: text, source: source as String);
   }
 
@@ -117,6 +165,7 @@ class AiLabel {
 class ParsedPost {
   ParsedPost({
     required this.platform,
+    this.platformDisplayName,
     required this.id,
     required this.url,
     required this.author,
@@ -125,7 +174,12 @@ class ParsedPost {
     this.caption,
     this.publishedAt,
     this.aiLabel,
-  });
+  }) {
+    for (var index = 0; index < items.length; index++) {
+      items[index].cachePostId = id;
+      items[index].cacheItemIndex ??= index;
+    }
+  }
 
   factory ParsedPost.fromJson(Map<String, dynamic> json) => ParsedPost(
     platform: json['platform'] as String,
@@ -137,8 +191,7 @@ class ParsedPost {
     items: [
       if (json['items'] is List)
         for (final item in json['items'] as List)
-          if (item is Map)
-            MediaItem.fromJson(item.cast<String, dynamic>()),
+          if (item is Map) MediaItem.fromJson(item.cast<String, dynamic>()),
     ],
     title: json['title'] as String?,
     caption: json['caption'] as String?,
@@ -147,6 +200,9 @@ class ParsedPost {
   );
 
   final String platform;
+
+  /// Local display snapshot; excluded from parser/backup JSON.
+  final String? platformDisplayName;
   final String id;
   final String url;
   final PostAuthor author;

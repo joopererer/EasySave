@@ -1,484 +1,955 @@
-// Headless parsing: load a post URL in a real (headless) WebView — which
-// follows short links and clears Xiaohongshu's anti-bot the same way a user's
-// browser does — inject parser.js and execute EasySaveParser.
-// Throws [ParseFailure] so callers can distinguish login walls.
-
+// Platform behavior lives in the verified parser bundle and site manifest.
 import 'dart:async';
 import 'dart:collection';
 import 'dart:convert';
-import 'dart:math' as math;
+import 'dart:io';
+import 'package:flutter/foundation.dart' show visibleForTesting;
+import 'package:flutter/services.dart';
+import 'shared_preview_cache.dart';
+import 'media_request_policy.dart';
 
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 import 'package:http/http.dart' as http;
 
+import '../core/dev_log.dart';
 import '../core/models.dart';
-import '../core/parse.dart';
-import 'auth.dart';
+import 'auth.dart'
+    show
+        SessionStatus,
+        isLoopbackHost,
+        logXhsWebViewCookies,
+        selectXhsPostUrl,
+        sessionCookieState;
 import 'ai_label_log.dart';
-import 'links.dart';
-import 'update_service.dart';
-import 'tiktok_links.dart';
 import 'history_db.dart';
+import 'links.dart';
+import 'site_registry.dart';
+import 'parser_hooks.dart';
+export 'parser_hooks.dart';
+import 'update_service.dart';
 
 class ParseFailure implements Exception {
   ParseFailure(this.code, this.message);
   final String code;
   final String message;
-
   @override
-  String toString() => message.isNotEmpty ? message : '解析失败 ($code)';
-}
-
-Future<T> _withTimeout<T>(Future<T> Function() run, String what) {
-  return run().timeout(
-    const Duration(seconds: 20),
-    onTimeout: () =>
-        throw ParseFailure(ParseErrorCode.timeout, '$what超时（20秒），请重试'),
-  );
-}
-
-void _checkPlatform(String url) {
-  final host = Uri.tryParse(url)?.host.toLowerCase() ?? '';
-  String platform = '';
-  if (isXhsHost(host)) {
-    platform = 'xhs';
-  } else if (isInstagramHost(host)) {
-    platform = 'instagram';
-  } else if (isXHost(host)) {
-    platform = 'x';
-  } else if (isTiktokHost(host)) {
-    platform = 'tiktok';
-  }
-
-  if (platform.isNotEmpty && !ParserManager.instance.isPlatformEnabled(platform)) {
-    final notice = ParserManager.instance.getMaintenanceNotice(platform) ??
-        '该平台解析服务维护中，请稍后再试';
-    throw ParseFailure(ParseErrorCode.blocked, notice);
-  }
-}
-
-String? extractTweetId(String url) {
-  final match = RegExp(
-    r'(?:x|twitter)\.com/(?:[^/]+)/status/(\d+)',
-    caseSensitive: false,
-  ).firstMatch(url);
-  if (match != null) return match.group(1);
-  final fallback = RegExp(r'/status/(\d+)').firstMatch(url);
-  return fallback?.group(1);
-}
-
-String calculateXToken(String id) {
-  final numId = double.tryParse(id) ?? 0.0;
-  final val = (numId / 1e15) * math.pi;
-  final intPart = val.floor();
-  var fracPart = val - intPart;
-  var res = intPart.toRadixString(36);
-  if (fracPart > 0) {
-    var fracStr = '';
-    for (var i = 0; i < 8; i++) {
-      fracPart *= 36;
-      var d = fracPart.floor();
-      if (i == 7) {
-        final remainder = fracPart - d;
-        if (remainder >= 0.5) d += 1;
-      }
-      fracStr += d.toRadixString(36);
-      fracPart -= d;
-    }
-    res += '.$fracStr';
-  }
-  return res.replaceAll(RegExp(r'(0+|\.)'), '');
-}
-
-/// Load [url] and parse the post it resolves to.
-Future<ParsedPost> parsePostUrl(String url) {
-  return parsePostOutcome(url).then((result) => result.data);
-}
-
-/// Same as [parsePostUrl] but keeps the raw image entries for diagnostics.
-Future<ParseOutcome> parsePostOutcome(String url) {
-  _checkPlatform(url);
-  return _withTimeout(() async {
-    final resolved = await _resolveForParse(url);
-    try {
-      final result = await _parseInner(resolved);
-      final host = Uri.tryParse(url)?.host.toLowerCase();
-      if (result.data.platform == 'tiktok' && {'vm.tiktok.com', 'vt.tiktok.com'}.contains(host)) {
-        try {
-          await HistoryDb.instance().then((db) => db.rememberParsedLink(url, result.data)).timeout(const Duration(seconds: 2));
-        } catch (_) { /* Optional local shortcut must not fail a successful parse. */ }
-      }
-      return result;
-    } on ParseFailure catch (e) {
-      throw await _reclassifyFailure(resolved, e);
-    }
-  }, '加载页面');
-}
-
-/// App-side reclassification: when a platform we are NOT logged into reports
-/// PRIVATE_OR_UNAVAILABLE, the real cause is usually "needs login" (e.g. XHS
-/// serves a login-gated note as unavailable). The parser and spec/fixtures are
-/// untouched — this only re-labels the error for the user. Applies to every
-/// parse path, including the background engine.
-Future<ParseFailure> _reclassifyFailure(String url, ParseFailure e) async {
-  final platform = platformFromUrl(url);
-  if (platform == null) return e;
-
-  if (e.code == ParseErrorCode.privateOrUnavailable) {
-    try {
-      if (!await isLoggedIn(platform)) {
-        return ParseFailure(
-          ParseErrorCode.loginRequired,
-          '可能需要登录${platformLabel(platform)}',
-        );
-      }
-    } catch (_) {
-      // Fall through to the original failure.
-    }
-  } else if (e.code == ParseErrorCode.loginRequired && platform == PlatformKind.instagram) {
-    try {
-      if (await isLoggedIn(platform)) {
-        // User has a valid session cookie, but post media was unavailable or restricted.
-        // Reclassify so we don't falsely expire their active session.
-        return ParseFailure(
-          ParseErrorCode.privateOrUnavailable,
-          e.message.contains('敏感内容') || e.message.contains('年龄限制')
-              ? e.message
-              : '未能读取帖子内容（可能包含受限内容或已被删除）',
-        );
-      }
-    } catch (_) {}
-  }
-  return e;
-}
-
-/// Resolve short links to their final URL, except for Xiaohongshu.
-///
-/// XHS's anti-bot bounces plain-HTTP clients (even with a mobile UA) to
-/// /login, so HTTP resolution throws away the real note URL and its
-/// `xsec_token`. For XHS we hand the short link to the WebView untouched —
-/// a real browser engine follows the redirect to the actual note page.
-/// Resolve short links to their final URL.
-Future<String> _resolveForParse(String url) async {
-  if (isTiktokLink(url)) return canonicalTiktokUrl(url) ?? url;
-  try {
-    return await resolveShortLink(
-      url,
-    ).timeout(const Duration(seconds: 10), onTimeout: () => url);
-  } catch (_) {
-    return url;
-  }
+  String toString() => message.isEmpty ? '解析失败 ($code)' : message;
 }
 
 class ParseOutcome {
   ParseOutcome({required this.data, required this.rawImages});
-
   final ParsedPost data;
   final List<RawImageEntry> rawImages;
 }
 
-
-
-/// Poll the page until `__INITIAL_STATE__` carries this note, instead of
-/// guessing with a fixed delay. Gives up quietly so the parser can still
-/// produce a proper error afterwards.
-Future<void> _waitForNoteState(
-  InAppWebViewController controller,
-  String targetUrl, {
+/// Polling tolerates transient document replacement; parsing supplies the final error.
+Future<void> waitForParserState(
+  Future<bool> Function() ready, {
   Duration timeout = const Duration(seconds: 6),
+  Duration interval = const Duration(milliseconds: 250),
 }) async {
-  final noteId = RegExp(
-    r'/([a-f0-9]{24})',
-    caseSensitive: false,
-  ).firstMatch(targetUrl)?.group(1);
-  final deadline = DateTime.now().add(timeout);
-  while (DateTime.now().isBefore(deadline)) {
+  final watch = Stopwatch()..start();
+  while (watch.elapsed < timeout) {
     try {
-      final ready = await controller.evaluateJavascript(
-        source: '''
-(() => {
-  try {
-    const state = window.__INITIAL_STATE__;
-    if (!state) return false;
-    const wanted = ${jsonEncode(noteId)};
-    if (state.note && state.note.noteDetailMap) {
-      const map = state.note.noteDetailMap;
-      if (!wanted) return Object.keys(map).length > 0;
-      return Object.prototype.hasOwnProperty.call(map, wanted);
-    }
-    if (state.noteData && state.noteData.data) {
-      const note = state.noteData.data.noteData || state.noteData.data;
-      if (note) {
-        if (!wanted) return true;
-        const id = note.noteId || note.id;
-        return !id || id === wanted;
-      }
-    }
-    return false;
-  } catch (_) {
-    return false;
+      if (await ready()) return;
+    } catch (_) {}
+    await Future<void>.delayed(interval);
   }
-})()
-''',
+}
+
+Future<ParsedPost> parsePostUrl(String url) async =>
+    (await parsePostOutcome(url)).data;
+
+/// Only a validated host and a fixed path category may be logged.
+String _hostPathOf(String url) {
+  final uri = Uri.tryParse(url);
+  if (uri == null || uri.host.isEmpty) return '-';
+  final host = uri.host.toLowerCase();
+  if (!RegExp(r'^[a-z0-9.:-]{1,253}$').hasMatch(host)) return '-';
+  return 'host=$host path=${parsePathCategory(uri)}';
+}
+
+/// Log one result check so a device failure names the check and both sides.
+/// Only platforms, ids, types, indices and host+path are ever written.
+void _logParseCheck(
+  String check,
+  SiteDefinition site, {
+  String? postId,
+  String expected = '',
+  String actual = '',
+}) {
+  final parts = [
+    'check=$check',
+    'site=${site.id}',
+    'post=${postId ?? '-'}',
+    if (expected.isNotEmpty) 'expected=$expected',
+    if (actual.isNotEmpty) 'actual=$actual',
+  ];
+  unawaited(DevLog.write('ParseMismatch', parts.join(' ')));
+}
+
+/// `strategy` decides who follows a declared short link. v1.9.0 expands
+/// xhslink/t.co over plain HTTP but hands TikTok short links to the WebView
+/// (its landing hop sets the cookies the reflow route needs); the manifest
+/// must keep that split, so only `http` is expanded here.
+String _shortLinkStrategy(Map rule) => rule['strategy'] as String? ?? 'http';
+
+/// Apply account-domain policy at every boundary that can load a post page.
+Future<String> chooseFinalParseUrl(
+  String url,
+  SiteDefinition site, {
+  String entry = 'app_input',
+}) async {
+  final uri = Uri.tryParse(url);
+  if (site.id != 'xhs' || uri == null || !site.hasHost(uri.host)) return url;
+  final id = site.sourceId(uri);
+  if (id == null) return url;
+  final selected = await selectXhsPostUrl(url, id, entry: entry);
+  unawaited(DevLog.write('ParseWebView', 'event=domain source=${safeCacheLabel(entry)} '
+      'site=xhs selected=${Uri.parse(selected).host} result=${selected == url ? 'original' : 'alternate'}'));
+  return selected;
+}
+
+/// Terminal page check for [uri].
+///
+/// [requestedUri] is the post URL the App asked the page to load. The token
+/// rule must look at that URL: xiaohongshu sends a page without `xsec_token` to
+/// its own 404 route, which drops the original query string.
+ParseFailure? terminalPageFailure(
+  SiteDefinition site,
+  Uri? uri, {
+  Uri? requestedUri,
+}) {
+  if (uri == null || !site.hasHost(uri.host)) return null;
+  final category = terminalPathCategory(uri);
+  for (final rule in site.terminalPages) {
+    if (rule is! Map || rule['category'] != category) continue;
+    // A site can name the query parameters that carry its access token. When
+    // the addressed page has none of them, the page being unavailable says
+    // nothing about the post: xiaohongshu returns 404 for a link that was not
+    // produced by its own share sheet, while the same post opens fine in a
+    // browser. Report the missing token instead of "post does not exist".
+    final tokens = site.accessTokenParams;
+    final altCode = rule['missingTokenCode'];
+    final altMessage = rule['missingTokenMessage'];
+    final tokenSource = requestedUri ?? uri;
+    final hasToken = tokens.any(
+      (name) => (tokenSource.queryParameters[name] ?? '').trim().isNotEmpty,
+    );
+    if (tokens.isNotEmpty &&
+        altCode is String &&
+        altMessage is String &&
+        !hasToken) {
+      return ParseFailure(altCode, altMessage);
+    }
+    return ParseFailure(rule['code'] as String, rule['message'] as String);
+  }
+  return null;
+}
+
+/// Resolve a declared short link, validate the final route, then enter parsing.
+/// The load URL keeps tokens; canonicalization is for identity, not navigation.
+/// [enter] receives a null canonical URL when the WebView resolves the link.
+Future<T> resolveAndEnterParse<T>(
+  String url,
+  SiteDefinition site,
+  Future<T> Function(String loadUrl, String? canonicalUrl) enter, {
+  Future<String?> Function(Uri)? readRedirect,
+  Duration? timeout,
+  String entry = 'app_input',
+}) async {
+  final uri = Uri.parse(url);
+  final rule = site.shortLink(uri);
+  if (rule != null && _shortLinkStrategy(rule) != 'http') {
+    // WebView strategy: the browser engine follows the short link and the
+    // parser hook canonicalizes what it lands on, exactly as in v1.9.0.
+    return enter(url, SiteRegistry.current.canonicalUrl(url));
+  }
+  var resolved = url;
+  if (rule != null) {
+    final fallback = site.shortLinkFallback(uri, rule) == 'webview';
+    try {
+      resolved = await resolveShortLink(
+        url,
+        readRedirect: readRedirect,
+        timeout:
+            fallback &&
+                (timeout == null || timeout > const Duration(seconds: 5))
+            ? const Duration(seconds: 5)
+            : timeout,
       );
-      if (ready == true) return;
-    } catch (_) {
-      // Controller may not be ready yet; keep polling until the deadline.
-    }
-    await Future<void>.delayed(const Duration(milliseconds: 400));
-  }
-}
-
-Future<ParseOutcome> _runParserJs(String input, String pageUrl) async {
-  final loaded = Completer<void>();
-  InAppWebViewController? readyController;
-  HeadlessInAppWebView? headless;
-  try {
-    headless = HeadlessInAppWebView(
-      initialData: InAppWebViewInitialData(data: '<html><body></body></html>'),
-      onConsoleMessage: (_, message) => logUnknownAiLabel(message.message),
-      onLoadStop: (controller, uri) {
-        readyController ??= controller;
-        if (!loaded.isCompleted) loaded.complete();
-      },
-      onReceivedError: (controller, request, error) {
-        readyController ??= controller;
-        if (!loaded.isCompleted) loaded.complete();
-      },
-    );
-    await headless.run();
-    await loaded.future.timeout(const Duration(seconds: 5));
-    final controller = readyController ?? headless.webViewController;
-    if (controller == null) {
-      throw ParseFailure(ParseErrorCode.invalidPage, 'JS 引擎未能初始化');
-    }
-
-    final parserJs = await ParserManager.instance.getActiveScript();
-    await controller.evaluateJavascript(source: parserJs);
-    final jsResult = await controller.evaluateJavascript(
-      source:
-          'EasySaveParser.parse(${jsonEncode(input)}, ${jsonEncode(pageUrl)})',
-    );
-
-    if (jsResult == null) {
-      throw ParseFailure(ParseErrorCode.invalidPage, '解析结果为空');
-    }
-
-    Map<String, dynamic> resultJson;
-    try {
-      if (jsResult is String) {
-        resultJson = (jsonDecode(jsResult) as Map).cast<String, dynamic>();
-      } else if (jsResult is Map) {
-        resultJson = jsResult.cast<String, dynamic>();
-      } else {
-        throw ParseFailure(ParseErrorCode.invalidPage, '解析器返回非 JSON 结果');
-      }
-    } catch (e) {
-      if (e is ParseFailure) rethrow;
-      throw ParseFailure(ParseErrorCode.invalidPage, '解析器结果格式错误: $e');
-    }
-
-    final ok = resultJson['ok'] == true;
-    if (!ok) {
-      final error = resultJson['error'] as Map?;
-      final code = error?['code']?.toString() ?? ParseErrorCode.invalidPage;
-      final message = error?['message']?.toString() ?? '解析失败';
-      throw ParseFailure(code, message);
-    }
-
-    final dataMap = resultJson['data'] as Map?;
-    if (dataMap == null) {
-      throw ParseFailure(ParseErrorCode.invalidPage, '解析结果中没有数据');
-    }
-
-    final post = ParsedPost.fromJson(dataMap.cast<String, dynamic>());
-    return ParseOutcome(data: post, rawImages: const []);
-  } finally {
-    await headless?.dispose();
-  }
-}
-
-Future<ParseOutcome> _parseXPost(String url) async {
-  final tweetId = extractTweetId(url);
-  if (tweetId == null) {
-    throw ParseFailure(ParseErrorCode.unsupportedUrl, '无法识别推文链接: $url');
-  }
-
-  final token = calculateXToken(tweetId);
-  final endpointTpl = ParserManager.instance.getPlatformEndpoint('x');
-  final endpointUrl = endpointTpl
-      .replaceAll('{id}', tweetId)
-      .replaceAll('{token}', token);
-
-  final headers = ParserManager.instance.getPlatformHeaders('x') ??
-      const {
-        'User-Agent':
-            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36',
-      };
-
-  http.Response response;
-  try {
-    response = await http
-        .get(Uri.parse(endpointUrl), headers: headers)
-        .timeout(const Duration(seconds: 15));
-  } catch (e) {
-    throw ParseFailure(ParseErrorCode.timeout, '请求 X 接口超时，请重试');
-  }
-
-  if (response.statusCode == 404) {
-    throw ParseFailure(ParseErrorCode.privateOrUnavailable, '该帖子不存在、私密或已删除');
-  }
-
-  final jsonStr = utf8.decode(response.bodyBytes);
-  return _runParserJs(jsonStr, url);
-}
-
-Future<ParseOutcome> _parseInner(String url) async {
-  // Remote platform switch check: do not start WebView or make requests if disabled
-  _checkPlatform(url);
-
-  final host = Uri.tryParse(url)?.host.toLowerCase() ?? '';
-  if (isXHost(host)) {
-    return _parseXPost(url);
-  }
-
-  var targetUrl = url;
-  final isXhs = isXhsHost(host);
-  if (isXhs) {
-    if (targetUrl.startsWith('http://')) {
-      targetUrl = targetUrl.replaceFirst('http://', 'https://');
-    }
-    // Do NOT rewrite the URL: `xsec_token` is bound to the exact path the
-    // share link points at (usually /discovery/item/...), and a short link
-    // (xhslink) must be followed by a real browser engine. Rewriting to
-    // /explore/<id>, decoding %3D, or HTTP-resolving all break the token.
-    //
-    // XHS always goes through the WebView: its anti-bot 302s *any* plain
-    // HTTP client (valid token or not) to /login or a captcha wall, so the
-    // HTTP fast path can never succeed here and only adds latency. A real
-    // browser engine follows short links and keeps the token, exactly like
-    // the user's own browser (verified: xhslink -> /explore/<id>?xsec_token=...).
-    return _parseXhsViaWebView(targetUrl);
-  }
-
-  return _headlessParse(targetUrl, isXhs: false);
-}
-
-/// Loads the note in a real WebView and reads `__INITIAL_STATE__`. This is
-/// what XHS_Downloader_Android does, and it mirrors exactly what the user sees
-/// in their own browser, so `xsec_token` handling and anti-bot behave the same.
-Future<ParseOutcome> _parseXhsViaWebView(String targetUrl) async {
-  try {
-    return await _headlessParse(targetUrl, isXhs: true);
-  } on ParseFailure catch (e) {
-    if (e.code != ParseErrorCode.loginRequired &&
-        e.code != ParseErrorCode.invalidPage) {
+    } on FormatException {
+      if (fallback) return enter(url, null);
+      _logParseCheck('SHORT_TARGET_REJECTED', site, actual: _hostPathOf(url));
+      throw ParseFailure(ParseErrorCode.invalidPage, '短链跳转目标不受支持');
+    } on TimeoutException {
+      if (fallback) return enter(url, null);
+      rethrow;
+    } on IOException {
+      if (fallback) return enter(url, null);
       rethrow;
     }
-    // The generic parser failed. Ask the page itself why: a guest session and
-    // a dead share link look identical in the parser output but need very
-    // different messages and actions. `_headlessParse` already ran
-    // `_waitForNoteState`, so a stale `loginRequired` here means the note
-    // genuinely wasn't served.
-    final loggedIn = await checkLogin(PlatformKind.xhs);
-    throw ParseFailure(
-      loggedIn
-          ? ParseErrorCode.privateOrUnavailable
-          : ParseErrorCode.loginRequired,
-      loggedIn
-          ? '未能读取笔记内容（分享链接可能已过期，请重新粘贴原分享链接再试）'
-          : '需要先登录小红书才能解析该笔记',
+    final terminal = terminalPageFailure(site, Uri.tryParse(resolved));
+    if (terminal != null) {
+      if (fallback && terminal.code != ParseErrorCode.unsupportedUrl) {
+        return enter(url, null);
+      }
+      throw terminal;
+    }
+    if (resolved == url) {
+      if (fallback) return enter(url, null);
+      _logParseCheck('SHORT_NOT_EXPANDED', site, actual: _hostPathOf(url));
+      throw ParseFailure(ParseErrorCode.invalidPage, '短链未能展开，请重试');
+    }
+  }
+  final target = SiteRegistry.current.match(resolved);
+  if (target?.id != site.id) {
+    if (rule != null && site.shortLinkFallback(uri, rule) == 'webview') {
+      return enter(url, null);
+    }
+    _logParseCheck(
+      'SHORT_TARGET_SITE',
+      site,
+      expected: site.id,
+      actual: target?.id ?? _hostPathOf(resolved),
     );
+    throw ParseFailure(ParseErrorCode.invalidPage, '短链跳转目标不受支持');
+  }
+  final canonical = SiteRegistry.current.canonicalUrl(resolved);
+  if (canonical == null) {
+    if (rule != null && site.shortLinkFallback(uri, rule) == 'webview') {
+      return enter(url, null);
+    }
+    _logParseCheck(
+      'SHORT_TARGET_NOT_POST',
+      site,
+      actual: _hostPathOf(resolved),
+    );
+    throw ParseFailure(ParseErrorCode.invalidPage, '短链跳转目标不是作品页面');
+  }
+  final selected = await chooseFinalParseUrl(resolved, site, entry: entry);
+  return enter(selected, canonical);
+}
+
+ParseOutcome _decodeSharedOutcome(Map value) => ParseOutcome(
+  data: ParsedPost.fromJson(Map<String, dynamic>.from(value['post'] as Map)),
+  rawImages: [
+    for (final raw in value['rawImages'] as List? ?? const [])
+      RawImageEntry(
+        keys: (raw['keys'] as List).cast<String>(),
+        scenes: [
+          for (final scene in raw['scenes'] as List)
+            RawScene(
+              scene: scene['scene'] as String,
+              url: scene['url'] as String,
+            ),
+        ],
+      ),
+  ],
+);
+
+/// All entry points share this read-through/write-through native RAM store.
+class CachedPostParser {
+  CachedPostParser({
+    required this.parseNetwork,
+    this.resolveIdentityUrl,
+    this.channel = sharedPreviewChannel,
+    DateTime Function()? now,
+  }) : now = now ?? DateTime.now;
+  final Future<ParseOutcome> Function(String url, String entry) parseNetwork;
+  final Future<String> Function(String url)? resolveIdentityUrl;
+  final MethodChannel channel;
+  final DateTime Function() now;
+  final _fallback = SharedParseCache<Map<String, dynamic>>();
+  final _running = <String, Future<ParseOutcome>>{};
+
+  String keyFor(String url) {
+    final site = SiteRegistry.current.match(url);
+    final id = site?.sourceId(Uri.parse(url));
+    return id == null ? opaquePreviewKey(url) : '${site!.id}:$id';
+  }
+
+  Future<Map<String, dynamic>?> lookup(String key) async {
+    try {
+      return await channel.invokeMapMethod<String, dynamic>('lookupParsed', {
+        'key': key,
+      });
+    } on MissingPluginException {
+      final value = _fallback.get(key);
+      return {'status': value == null ? 'miss' : 'hit', 'value': value};
+    } on PlatformException {
+      return {'status': 'miss'};
+    }
+  }
+
+  Future<ParseOutcome> parse(
+    String url, {
+    String entry = 'app_input',
+    bool forceRefresh = false,
+    FutureOr<void> Function()? onCacheMiss,
+    void Function()? onCacheHit,
+  }) {
+    final key = keyFor(url);
+    final existing = _running[key];
+    if (existing != null) return existing;
+    final task = _parse(url, entry: entry, forceRefresh: forceRefresh,
+        onCacheMiss: onCacheMiss, onCacheHit: onCacheHit);
+    _running[key] = task;
+    unawaited(task.then<void>((_) {
+      if (identical(_running[key], task)) _running.remove(key);
+    }, onError: (Object _, StackTrace __) {
+      if (identical(_running[key], task)) _running.remove(key);
+    }));
+    return task;
+  }
+
+  Future<ParseOutcome> _parse(
+    String url, {
+    required String entry,
+    required bool forceRefresh,
+    FutureOr<void> Function()? onCacheMiss,
+    void Function()? onCacheHit,
+  }) async {
+    final site = SiteRegistry.current.match(url);
+    if (site == null || !site.enabled) return parseNetwork(url, entry);
+    final originalKey = keyFor(url);
+    var key = originalKey;
+    var postId = site.sourceId(Uri.parse(url)) ?? '-';
+    Future<void> log(String event) => DevLog.write(
+      'ParseCache',
+      'event=$event entry=${safeCacheLabel(entry)} post=${safeCacheLabel(postId)}',
+    );
+    if (!forceRefresh) {
+      var response = await lookup(key);
+      if (response?['status'] == 'miss' &&
+          site.sourceId(Uri.parse(url)) == null &&
+          resolveIdentityUrl != null) {
+        try {
+          final resolved = await resolveIdentityUrl!(url);
+          if (SiteRegistry.current.match(resolved)?.id == site.id) {
+            key = keyFor(resolved);
+            postId = site.sourceId(Uri.parse(resolved)) ?? postId;
+            if (key != originalKey) response = await lookup(key);
+          }
+        } catch (_) {
+          /* Preserve the existing parser's short-link fallback. */
+        }
+      }
+      final value = response?['value'];
+      if (value is Map) {
+        try {
+          final cached = _decodeSharedOutcome(value);
+          postId = cached.data.id;
+          if (response?['status'] == 'expired' ||
+              (value['expires'] as int) <= now().millisecondsSinceEpoch)
+            throw StateError('EXPIRED');
+          final policy = MediaRequestPolicy(site);
+          for (final item in cached.data.items) {
+            for (final resource in policy.resourcesFor(item)) {
+              policy.validate(resource);
+              if (resource.request.expiresAt != null &&
+                  !resource.request.expiresAt!.isAfter(now()))
+                throw StateError('EXPIRED');
+              final expiry = mediaUrlExpiry(resource.url);
+              if (expiry != null && !expiry.isAfter(now()))
+                throw StateError('EXPIRED');
+            }
+          }
+          onCacheHit?.call();
+          unawaited(log('hit'));
+          return cached;
+        } catch (_) {
+          await log('expired');
+        }
+      } else if (response?['status'] == 'expired') {
+        await log('expired');
+      }
+    }
+    unawaited(log('miss'));
+    await onCacheMiss?.call();
+    final outcome = await parseNetwork(url, entry);
+    postId = outcome.data.id;
+    final canonical =
+        '${SiteRegistry.current.canonicalId(outcome.data.platform)}:$postId';
+    final post = outcome.data.toJson();
+    // Legacy parser/backup JSON intentionally omits these fields. RAM must not.
+    post['items'] = [
+      for (final item in outcome.data.items)
+        {
+          ...item.toJson(),
+          'fallbacks': item.fallbacks,
+          if (item.requestResources != null)
+            'resources': [
+              for (final resource in item.requestResources!) resource.toJson(),
+            ],
+        },
+    ];
+    final value = <String, dynamic>{
+      'canonical': canonical,
+      'keys': [canonical, key, originalKey, opaquePreviewKey(url)],
+      'expires': now().add(const Duration(minutes: 10)).millisecondsSinceEpoch,
+      'post': post,
+      'rawImages': [
+        for (final raw in outcome.rawImages)
+          {
+            'keys': raw.keys,
+            'scenes': [
+              for (final scene in raw.scenes)
+                {'scene': scene.scene, 'url': scene.url},
+            ],
+          },
+      ],
+    };
+    _fallback.put(canonical, value, aliases: [key, opaquePreviewKey(url)]);
+    try {
+      await channel.invokeMethod<void>('putParsed', value);
+    } on MissingPluginException {
+      /* Local RAM fallback on other hosts. */
+    } on PlatformException {
+      /* A cache failure does not discard parsed content. */
+    }
+    await log('store');
+    return outcome;
   }
 }
 
-const String _kNetworkSniffScript = '''
-(() => {
-  if (window.__easysaveSniffInstalled) return;
-  window.__easysaveSniffInstalled = true;
-  window.__easysaveIgProducts = window.__easysaveIgProducts || {};
+final cachedPostParser = CachedPostParser(
+  parseNetwork: (url, entry) => _parsePostOutcomeUncached(url, source: entry),
+  resolveIdentityUrl: (url) async {
+    final site = SiteRegistry.current.match(url);
+    final rule = site?.shortLink(Uri.parse(url));
+    if (rule == null || rule['strategy'] != 'http') return url;
+    return resolveShortLink(url);
+  },
+);
+Future<ParseOutcome> parsePostOutcome(
+  String url, {
+  String source = 'app_input',
+  bool forceRefresh = false,
+  FutureOr<void> Function()? onCacheMiss,
+  void Function()? onCacheHit,
+}) async {
+  final outcome = await cachedPostParser.parse(
+    url,
+    entry: source,
+    forceRefresh: forceRefresh,
+    onCacheMiss: onCacheMiss,
+    onCacheHit: onCacheHit,
+  );
+  unawaited(SharedThumbnailCache.instance.prefetch(outcome.data));
+  return outcome;
+}
 
-  function isProductShaped(obj) {
-    if (!obj || typeof obj !== 'object') return false;
-    const sc = typeof obj.shortcode === 'string' ? obj.shortcode : (typeof obj.code === 'string' ? obj.code : null);
-    if (!sc) return false;
-    return ('video_versions' in obj || 'carousel_media' in obj || 'image_versions2' in obj || 'display_url' in obj || 'video_url' in obj || 'edge_sidecar_to_children' in obj);
+Future<ParseOutcome> _parsePostOutcomeUncached(
+  String url, {
+  String source = 'app',
+}) async {
+  final preSite = SiteRegistry.current.match(url, includeDisabled: true);
+  if (preSite == null) {
+    throw ParseFailure(ParseErrorCode.unsupportedUrl, '无法识别链接');
   }
-
-  function extractProducts(payload) {
-    const seen = new Set();
-    function visit(node) {
-      if (!node || typeof node !== 'object') return;
-      if (seen.has(node)) return;
-      seen.add(node);
-      if (isProductShaped(node)) {
-        const sc = typeof node.shortcode === 'string' ? node.shortcode : node.code;
-        window.__easysaveIgProducts[sc] = node;
+  final budget = Duration(milliseconds: preSite.load['timeoutMs'] as int);
+  final watch = Stopwatch()..start();
+  Duration remaining() => Duration(
+    milliseconds: (budget.inMilliseconds - watch.elapsedMilliseconds).clamp(
+      1,
+      budget.inMilliseconds,
+    ),
+  );
+  // Loading also validates the cached script and activates the matching registry.
+  final script = await ParserManager.instance.getActiveScript().timeout(
+    budget,
+    onTimeout: () {
+      DevLog.write(
+        'ParseWebView',
+        'event=failure source=$source site=${preSite.id} condition=script_timeout code=TIMEOUT',
+      );
+      throw ParseFailure(ParseErrorCode.timeout, '加载页面超时，请重试');
+    },
+  );
+  final site = SiteRegistry.current.match(url, includeDisabled: true);
+  if (site == null) {
+    throw ParseFailure(ParseErrorCode.unsupportedUrl, '无法识别链接');
+  }
+  if (!site.enabled || !ParserManager.instance.isPlatformEnabled(site.id)) {
+    throw ParseFailure(
+      ParseErrorCode.blocked,
+      ParserManager.instance.getMaintenanceNotice(site.id) ?? '解析服务维护中',
+    );
+  }
+  final hooks = ParserHooks(script, site);
+  try {
+    return await (() async {
+      final result = await resolveAndEnterParse(
+        url,
+        site,
+        (loadUrl, _) => _run(hooks, loadUrl, source: source),
+        timeout: remaining(),
+        entry: source,
+      );
+      // Diagnostics only: retweets and quote tweets may answer with a payload
+      // id that differs from the one in the link (v1.9.0 kept parsing).
+      final linkId = site.sourceId(Uri.parse(url));
+      if (linkId != null && linkId != result.data.id) {
+        _logParseCheck(
+          'ID_DIFFERS_LINK',
+          site,
+          postId: result.data.id,
+          expected: linkId,
+          actual: result.data.id,
+        );
       }
-      if (Array.isArray(node)) {
-        for (const item of node) visit(item);
-      } else {
-        for (const key of Object.keys(node)) visit(node[key]);
+      if (site.shortLink(Uri.parse(url)) != null) {
+        try {
+          unawaited(HistoryDb.instance().then((db) => db.rememberParsedLink(url, result.data))
+              .catchError((Object _) {}));
+        } catch (_) {}
       }
-    }
-    try { visit(payload); } catch (_) {}
+      return result;
+    })().timeout(
+      remaining(),
+      onTimeout: () {
+        DevLog.write(
+          'ParseWebView',
+          'event=failure source=$source site=${site.id} condition=budget code=TIMEOUT',
+        );
+        throw ParseFailure(ParseErrorCode.timeout, '加载页面超时，请重试');
+      },
+    );
+  } on TimeoutException {
+    throw ParseFailure(ParseErrorCode.timeout, '加载页面超时，请重试');
   }
+}
 
-  function sniffText(text) {
-    if (!text || text.length < 10) return;
-    if (!text.includes('shortcode') && !text.includes('xdt_shortcode_media') && !text.includes('edge_sidecar_to_children') && !text.includes('display_url')) return;
-    try {
-      const json = JSON.parse(text);
-      extractProducts(json);
-    } catch (_) {}
+Future<bool> _loggedIn(
+  ParserHooks hooks,
+  InAppWebViewController controller,
+  String url,
+) async {
+  final account = await hooks.call(controller, 'account', url);
+  if (account is Map && {'user', 'guest'}.contains(account['state'])) {
+    return account['state'] == 'user';
   }
+  if (hooks.site.id == 'xhs') return false;
+  final loginUrl = hooks.site.auth['loginUrl'];
+  if (loginUrl is! String) return false;
+  final names = (hooks.site.auth['sessionCookieNames'] as List).cast<String>();
+  final cookies = await CookieManager.instance().getCookies(
+    url: WebUri(loginUrl),
+  );
+  return cookies.any(
+    (c) => names.contains(c.name) && c.value.toString().isNotEmpty,
+  );
+}
 
-  try {
-    const originalFetch = window.fetch;
-    if (originalFetch) {
-      window.fetch = async function(...args) {
-        const response = await originalFetch.apply(this, args);
-        try {
-          const clone = response.clone();
-          clone.text().then(sniffText).catch(() => {});
-        } catch (_) {}
-        return response;
-      };
+/// Identity comparison happens on normalized values: a module reports the
+/// app platform key (`xhs`) while a manifest may carry the spec/export name
+/// (`xiaohongshu`), and an id may arrive as a number. v1.9.0 never compared a
+/// result id with the link's id, so retweets/quotes whose payload id differs
+/// from the URL keep parsing; the difference is only logged.
+String? _normalizedPostId(dynamic value) {
+  if (value is String) {
+    final trimmed = value.trim();
+    return trimmed.isEmpty ? null : trimmed;
+  }
+  if (value is num && value.isFinite) return value.toInt().toString();
+  return null;
+}
+
+/// Why an item cannot be requested; no URL or query ever leaves this function.
+String _mediaProblem(dynamic item) {
+  if (item is! Map) return 'not_object';
+  if (!{'image', 'video', 'live'}.contains(item['type'])) return 'type';
+  final uri = Uri.tryParse(item['url']?.toString() ?? '');
+  if (uri == null) return 'url_unparsable';
+  if (!{'http', 'https'}.contains(uri.scheme)) return 'scheme';
+  if (uri.host.isEmpty) return 'host';
+  if (uri.userInfo.isNotEmpty) return 'userinfo';
+  return '';
+}
+
+/// Validate module results before creating application records.
+ParseOutcome validateParserResult(dynamic value, SiteDefinition site) {
+  if (value is! Map) {
+    _logParseCheck(
+      'RESULT_NOT_OBJECT',
+      site,
+      expected: 'object',
+      actual: value.runtimeType.toString(),
+    );
+    throw ParseFailure(ParseErrorCode.invalidPage, '解析结果不是对象');
+  }
+  if (value['ok'] != true) {
+    final error = value['error'];
+    final code = error is Map
+        ? error['code']?.toString() ?? 'INVALID_PAGE'
+        : 'INVALID_PAGE';
+    _logParseCheck('MODULE_ERROR', site, expected: 'ok', actual: code);
+    throw ParseFailure(
+      code,
+      error is Map ? error['message']?.toString() ?? '解析失败' : '解析失败',
+    );
+  }
+  final data = value['data'];
+  if (data is! Map) {
+    _logParseCheck(
+      'DATA_NOT_OBJECT',
+      site,
+      expected: 'object',
+      actual: value['data'].runtimeType.toString(),
+    );
+    throw ParseFailure(ParseErrorCode.invalidPage, '解析模块返回不匹配的内容');
+  }
+  final platform = (data['platform']?.toString() ?? '').trim().toLowerCase();
+  final accepted = {site.id.toLowerCase(), site.platform.toLowerCase()};
+  if (!accepted.contains(platform)) {
+    _logParseCheck(
+      'PLATFORM',
+      site,
+      expected: accepted.join('|'),
+      actual: platform.isEmpty ? '-' : platform,
+    );
+    throw ParseFailure(ParseErrorCode.invalidPage, '解析模块返回不匹配的内容');
+  }
+  final id = _normalizedPostId(data['id']);
+  if (id == null) {
+    final raw = data['id'];
+    _logParseCheck(
+      'POST_ID',
+      site,
+      expected: 'non-empty string',
+      actual: raw == null
+          ? 'null'
+          : (raw is String ? 'empty_string' : raw.runtimeType.toString()),
+    );
+    throw ParseFailure(ParseErrorCode.invalidPage, '解析模块返回不匹配的内容');
+  }
+  final items = data['items'];
+  if (items is! List) {
+    _logParseCheck(
+      'ITEMS_TYPE',
+      site,
+      postId: id,
+      expected: 'list',
+      actual: items.runtimeType.toString(),
+    );
+    throw ParseFailure(ParseErrorCode.invalidPage, '解析模块返回不匹配的内容');
+  }
+  // An empty list is a real result (a text-only X post); v1.9.0 accepted it
+  // and the save entries already explain "该帖子没有可保存的内容".
+  for (var index = 0; index < items.length; index++) {
+    final problem = _mediaProblem(items[index]);
+    if (problem.isEmpty) continue;
+    final item = items[index];
+    final keys = item is Map
+        ? item.keys
+              .whereType<String>()
+              .where(
+                (key) => RegExp(r'^[A-Za-z][A-Za-z0-9_]{0,40}$').hasMatch(key),
+              )
+              .take(12)
+              .join(',')
+        : '-';
+    final mediaType =
+        item is Map &&
+            item['type'] is String &&
+            RegExp(r'^[A-Za-z]{1,20}$').hasMatch(item['type'] as String)
+        ? item['type'] as String
+        : item.runtimeType.toString();
+    _logParseCheck(
+      'ITEM_MEDIA',
+      site,
+      postId: id,
+      expected: 'http(s) media url',
+      actual: 'index=$index reason=$problem type=$mediaType keys=$keys',
+    );
+    throw ParseFailure(ParseErrorCode.invalidPage, '解析模块返回无效媒体');
+  }
+  final canonical = site.canonical(id);
+  // Tokens in the actual load URL must survive; only metadata uses canonical paths.
+  final source = Uri.tryParse(data['url']?.toString() ?? '');
+  final preserved = <String, String>{};
+  for (final key
+      in (site.normalization['preserveLoadQuery'] as List).cast<String>()) {
+    final value = source?.queryParameters[key];
+    if (value != null) preserved[key] = value;
+  }
+  final normalized = Uri.parse(canonical);
+  final postUrl = preserved.isEmpty
+      ? canonical
+      : normalized
+            .replace(
+              queryParameters: {...normalized.queryParameters, ...preserved},
+            )
+            .toString();
+  return ParseOutcome(
+    data: ParsedPost.fromJson({
+      ...data.cast<String, dynamic>(),
+      'platform': site.id,
+      'id': id,
+      'url': postUrl,
+    }),
+    rawImages: const [],
+  );
+}
+
+/// What one page load should do after the `navigate` hook answered.
+enum NavigateKind {
+  /// The page is a landing/redirect page: keep waiting for the next load.
+  wait,
+
+  /// The hook named a different URL inside the site: load it once.
+  load,
+
+  /// The page is where it should be: start parsing.
+  parse,
+
+  /// The hook named something outside the site: a real mismatch.
+  invalid,
+}
+
+/// Result of [navigateStep]: the kind plus the URL to load for [NavigateKind.load]
+/// (or the offending target for [NavigateKind.invalid]).
+class NavigateStep {
+  const NavigateStep(this.kind, [this.url]);
+  final NavigateKind kind;
+  final String? url;
+}
+
+/// Apply the `navigate` hook answer for one page load.
+///
+/// Mirrors v1.9.0's `onLoadStop`: when the current address already is a post
+/// page the canonical URL compares equal and parsing starts; when it is a
+/// landing page (`{wait: true}`, or no answer at all) the load is ignored and
+/// the redirect is awaited. An empty answer is therefore "nothing to do", not a
+/// format error — which is what used to abort every TikTok retry.
+Future<NavigateStep> navigateStep({
+  required SiteDefinition site,
+  required String currentUrl,
+  required bool alreadyNavigated,
+  required Future<dynamic> Function() navigate,
+  String? requestedUrl,
+}) async {
+  final uri = Uri.tryParse(currentUrl);
+  final terminal = terminalPageFailure(
+    site,
+    uri,
+    requestedUri: requestedUrl == null ? null : Uri.tryParse(requestedUrl),
+  );
+  if (terminal != null) throw terminal;
+  final action = await navigate();
+  if (action is Map) {
+    if (action['wait'] == true) return const NavigateStep(NavigateKind.wait);
+    final next = action['url'];
+    if (next is String && next != currentUrl && !alreadyNavigated) {
+      final nextUri = Uri.parse(next);
+      if (nextUri.scheme != 'https' || !site.hasHost(nextUri.host)) {
+        return NavigateStep(NavigateKind.invalid, next);
+      }
+      return NavigateStep(NavigateKind.load, next);
     }
-  } catch (_) {}
+    return const NavigateStep(NavigateKind.parse);
+  }
+  if (action == null) {
+    final isPostPage =
+        uri != null && site.sourceId(uri) != null && site.hasHost(uri.host);
+    return NavigateStep(isPostPage ? NavigateKind.parse : NavigateKind.wait);
+  }
+  return const NavigateStep(NavigateKind.parse);
+}
 
-  try {
-    const originalOpen = XMLHttpRequest.prototype.open;
-    const originalSend = XMLHttpRequest.prototype.send;
-    XMLHttpRequest.prototype.open = function(method, url, ...rest) {
-      this.__url = url;
-      return originalOpen.apply(this, [method, url, ...rest]);
-    };
-    XMLHttpRequest.prototype.send = function(...args) {
-      this.addEventListener('load', function() {
-        try {
-          sniffText(this.responseText);
-        } catch (_) {}
-      });
-      return originalSend.apply(this, args);
-    };
-  } catch (_) {}
-})();
-''';
+/// Guest answers that a logged-in session may resolve.
+const _sessionRetryCodes = {
+  ParseErrorCode.loginRequired,
+  ParseErrorCode.ageRestricted,
+  ParseErrorCode.protectedAccount,
+  ParseErrorCode.privateOrUnavailable,
+};
 
-Future<ParseOutcome> _headlessParse(String targetUrl, {required bool isXhs}) async {
-  final loaded = Completer<void>();
-  final isTiktok = isTiktokLink(targetUrl);
-  var canonicalNavigationStarted = false;
-  InAppWebViewController? readyController;
-  HeadlessInAppWebView? headless;
+/// Session answers that settle the outcome; anything else keeps the guest one.
+const _sessionDefinitiveCodes = {
+  ParseErrorCode.loginRequired,
+  ParseErrorCode.ageNotSet,
+  ParseErrorCode.ageRestricted,
+  ParseErrorCode.protectedAccount,
+  ParseErrorCode.privateOrUnavailable,
+};
+
+/// The logged-in entry page for [targetUrl] when a guest JSON answer failed
+/// with a code a session may resolve. A site opts in with `load.entryTemplate`;
+/// the page runs in the shared cookie store, so the App never handles cookies.
+@visibleForTesting
+String? sessionEntryUrl(SiteDefinition site, String targetUrl, dynamic guest) {
+  final template = site.load['entryTemplate'];
+  if (template is! String || guest is! Map || guest['ok'] == true) return null;
+  final error = guest['error'];
+  if (error is! Map || !_sessionRetryCodes.contains(error['code'])) return null;
+  final uri = Uri.tryParse(targetUrl);
+  final id = uri == null ? null : site.sourceId(uri);
+  if (id == null || !RegExp(r'^[A-Za-z0-9_-]{1,64}$').hasMatch(id)) return null;
+  final entry = Uri.tryParse(template.replaceAll('{id}', id));
+  if (entry == null ||
+      entry.scheme != 'https' ||
+      entry.userInfo.isNotEmpty ||
+      !site.hasHost(entry.host)) {
+    return null;
+  }
+  return entry.toString();
+}
+
+/// Retry a restricted guest answer through the logged-in entry page. Returns
+/// the session outcome, rethrows a definitive session failure, or null to keep
+/// the guest answer (not logged in, page gave no post data, timeout).
+Future<ParseOutcome?> _sessionEntryRetry(
+  ParserHooks hooks,
+  String targetUrl,
+  dynamic guest, {
+  required String source,
+}) async {
+  final entryUrl = sessionEntryUrl(hooks.site, targetUrl, guest);
+  if (entryUrl == null) return null;
+  final login = await sessionCookieState(hooks.site, entry: source);
+  if (login != SessionStatus.valid) {
+    unawaited(DevLog.write('XLogin',
+        'event=decision site=${hooks.site.id} source=guest_only status=${login.name}'));
+    return null;
+  }
+  unawaited(DevLog.write('XLogin',
+      'event=decision site=${hooks.site.id} source=session_page '
+      'guestRequestCookies=none sessionRequestCookies=webview_managed'));
   try {
-    headless = HeadlessInAppWebView(
-      initialUrlRequest: URLRequest(url: WebUri.uri(Uri.parse(targetUrl))),
+    return await _run(hooks, entryUrl, source: source, entryPage: true);
+  } on ParseFailure catch (e) {
+    if (_sessionDefinitiveCodes.contains(e.code)) rethrow;
+    return null;
+  } catch (_) {
+    return null;
+  }
+}
+
+const _probeTags = {'XProbe', 'XhsStreamProbe'};
+
+String _probeValue(Object? value) {
+  if (value == null) return '-';
+  if (value is bool) return value ? '1' : '0';
+  if (value is num) return value.isFinite ? value.round().toString() : '-';
+  if (value is List) return value.map(_probeValue).join('|');
+  final text = value.toString();
+  return RegExp(r'^[A-Za-z0-9_.:-]{0,48}$').hasMatch(text) ? text : 'x';
+}
+
+/// Log lines for a parser `probe` hook value: whitelisted tags, short tokens
+/// and field names only, plus at most 40 sanitized tombstone characters.
+@visibleForTesting
+List<(String, String)> formatParserProbe(dynamic probe) {
+  if (probe is! Map || !_probeTags.contains(probe['tag'])) return const [];
+  final tag = probe['tag'] as String;
+  if (tag == 'XhsStreamProbe') {
+    final rawStreams = probe['streams'];
+    final streams = rawStreams is List ? rawStreams : const [];
+    final rawImages = probe['images'];
+    final images = rawImages is List ? rawImages : const [];
+    return [
+      for (final (index, image) in images.indexed)
+        if (image is Map)
+          (
+            'XhsImageProbe',
+            'image=${index + 1}/${images.length} '
+                'declared=${_probeValue(image['width'])}x${_probeValue(image['height'])} '
+                'fields=${_probeValue(image['fields'])} '
+                'scenes=${_probeValue(image['scenes'])} '
+                'candidates=${_probeValue(image['candidates'])} '
+                'selected=${_probeValue(image['selected'])}',
+          ),
+      for (final (index, stream) in streams.indexed)
+        if (stream is Map)
+          (
+            tag,
+            'candidate=${index + 1}/${streams.length} '
+                'bucket=${_probeValue(stream['bucket'])} '
+                'streamType=${_probeValue(stream['streamType'])} '
+                'codec=${_probeValue(stream['codec'])} '
+                'size=${_probeValue(stream['width'])}x${_probeValue(stream['height'])} '
+                'bitrate=${_probeValue(stream['bitrate'])} '
+                'audio=${_probeValue(stream['audio'])} '
+                'audioCodec=${_probeValue(stream['audioCodec'])} '
+                'audioChannels=${_probeValue(stream['audioChannels'])} '
+                'audioBitrate=${_probeValue(stream['audioBitrate'])} '
+                'audioFields=${_probeValue(stream['audioFields'])} '
+                'watermarked=${_probeValue(stream['watermarked'])} '
+                'selected=${_probeValue(stream['selected'])}',
+          ),
+    ];
+  }
+  final tombstone = probe['tombstone'];
+  final text = tombstone is String
+      ? '"${tombstone.replaceAll(RegExp(r"[^A-Za-z0-9 .,'!?()-]"), '_').substring(0, tombstone.length < 40 ? tombstone.length : 40)}"'
+      : '-';
+  return [
+    (
+      tag,
+      'source=${_probeValue(probe['source'])} shape=${_probeValue(probe['shape'])} '
+          'typename=${_probeValue(probe['typename'])} '
+          'wrapped=${_probeValue(probe['wrapped'] ?? false)} '
+          'reason=${_probeValue(probe['reason'])} tombstone=$text '
+          'fields=${_probeValue(probe['fields'])} '
+          'mediaCount=${_probeValue(probe['mediaCount'])}',
+    ),
+  ];
+}
+
+Future<void> _logParserProbe(
+  ParserHooks hooks,
+  InAppWebViewController controller,
+  String url, [
+  Map<String, Object?> extra = const {},
+]) async {
+  try {
+    final probe = await hooks.call(controller, 'probe', url, extra);
+    for (final (tag, line) in formatParserProbe(probe)) {
+      unawaited(DevLog.write(tag, 'site=${hooks.site.id} $line'));
+    }
+  } catch (_) {
+    // Parser modules without a probe hook have nothing to report.
+  }
+}
+
+Future<ParseOutcome> _run(
+  ParserHooks hooks,
+  String targetUrl, {
+  required String source,
+  bool entryPage = false,
+}) async {
+  targetUrl = await chooseFinalParseUrl(targetUrl, hooks.site, entry: source);
+  // A logged-in entry page is a WebView page load even for a JSON site.
+  final jsonMode = hooks.site.load['mode'] == 'json' && !entryPage;
+  final target = Uri.tryParse(targetUrl);
+  DevLog.write(
+    'ParseWebView',
+    'event=start source=$source site=${hooks.site.id} hasQuery=${target?.hasQuery == true ? 1 : 0}${entryPage ? ' entry=session_page' : ''}',
+  );
+  final loaded = Completer<InAppWebViewController>();
+  var navigated = false;
+  var loads = 0;
+  var mainNavigations = 0;
+  var path = parsePathCategory(target);
+  var stage = 'load_wait';
+  var checkingReady = false;
+  HeadlessInAppWebView? view;
+  try {
+    view = HeadlessInAppWebView(
+      initialUrlRequest: jsonMode
+          ? null
+          : URLRequest(
+              url: WebUri(targetUrl.replaceFirst(RegExp(r'^http:'), 'https:')),
+            ),
+      initialData: jsonMode
+          ? InAppWebViewInitialData(data: '<html></html>')
+          : null,
       onConsoleMessage: (_, message) => logUnknownAiLabel(message.message),
-      initialUserScripts: UnmodifiableListView<UserScript>([
+      initialUserScripts: UnmodifiableListView([
         UserScript(
-          source: _kNetworkSniffScript,
+          source: '${hooks.script};${hooks.expression('install', targetUrl)}',
           injectionTime: UserScriptInjectionTime.AT_DOCUMENT_START,
         ),
       ]),
@@ -489,178 +960,271 @@ Future<ParseOutcome> _headlessParse(String targetUrl, {required bool isXhs}) asy
         thirdPartyCookiesEnabled: true,
         sharedCookiesEnabled: true,
         cacheEnabled: true,
+        userAgent: hooks.site.load['userAgent'] as String?,
         mixedContentMode: MixedContentMode.MIXED_CONTENT_ALWAYS_ALLOW,
-        userAgent: isTiktok ? tiktokParserUserAgent : isXhs
-            ? loginUserAgent(PlatformKind.xhs)
-            : (isInstagramHost(Uri.tryParse(targetUrl)?.host ?? '')
-                ? loginUserAgent(PlatformKind.instagram)
-                : null),
+        useShouldOverrideUrlLoading: true,
       ),
-      // XHS pages auto-navigate to xhsdiscover:// (app-open scheme) after
-      // load, and probe 127.0.0.1 to detect its desktop client. Cancel every
-      // non-http(s) navigation and every loopback target (main frame and
-      // subframes) so the WebView stays on the note page, whose DOM/state
-      // holds the data we parse.
-      shouldOverrideUrlLoading: (controller, navigationAction) async {
-        final uri = navigationAction.request.url;
-        if (uri != null && isLoopbackHost(uri.host)) {
-          return NavigationActionPolicy.CANCEL;
+      onLoadStart: (_, uri) {
+        path = parsePathCategory(uri);
+        if (hooks.site.id == 'xhs') {
+          unawaited(logXhsWebViewCookies(uri));
         }
-        final scheme = uri?.scheme.toLowerCase() ?? '';
-        if (scheme == 'http') {
-          // Only upgrade main-frame navigations; rewriting subframe URLs can
-          // send the WebView into a reload loop.
-          if (navigationAction.isForMainFrame == true) {
-            final httpsUri = uri!.replace(scheme: 'https');
-            controller.loadUrl(
-              urlRequest: URLRequest(url: WebUri.uri(httpsUri)),
-            );
+      },
+      onProgressChanged: (controller, progress) async {
+        if (hooks.site.id != 'xhs' || progress < 40 || loaded.isCompleted || checkingReady) return;
+        checkingReady = true;
+        try {
+          final current = (await controller.getUrl())?.toString();
+          if (current != null && current == await chooseFinalParseUrl(current, hooks.site, entry: source) &&
+              hooks.site.sourceId(Uri.parse(current)) != null &&
+              await hooks.call(controller, 'ready', current) == true && !loaded.isCompleted) {
+            stage = 'document_ready';
+            loaded.complete(controller);
           }
+        } catch (_) { /* Full load callback remains available. */ }
+        finally { checkingReady = false; }
+      },
+      shouldOverrideUrlLoading: (controller, action) async {
+        final uri = action.request.url;
+        if (action.isForMainFrame == true) mainNavigations++;
+        if (uri == null || isLoopbackHost(uri.host)) {
           return NavigationActionPolicy.CANCEL;
         }
-        if (scheme == 'https') {
-          return NavigationActionPolicy.ALLOW;
+        if (action.isForMainFrame == true) {
+          final selected = await chooseFinalParseUrl(
+            uri.toString(),
+            hooks.site,
+            entry: source,
+          );
+          if (selected != uri.toString()) {
+            await controller.loadUrl(
+              urlRequest: URLRequest(url: WebUri(selected)),
+            );
+            return NavigationActionPolicy.CANCEL;
+          }
         }
-        return NavigationActionPolicy.CANCEL;
+        if (uri.scheme == 'http' && action.isForMainFrame == true) {
+          await controller.loadUrl(
+            urlRequest: URLRequest(
+              url: WebUri.uri(uri.replace(scheme: 'https')),
+            ),
+          );
+        }
+        return uri.scheme == 'https'
+            ? NavigationActionPolicy.ALLOW
+            : NavigationActionPolicy.CANCEL;
       },
       onLoadStop: (controller, uri) async {
-        if (isTiktok && !loaded.isCompleted) {
-          final canonical = canonicalTiktokUrl(uri?.toString() ?? '');
-          if (canonical == null) return;
-          if (!canonicalNavigationStarted && targetUrl != canonical) {
-            canonicalNavigationStarted = true;
-            await controller.loadUrl(urlRequest: URLRequest(url: WebUri(canonical)));
-            return;
-          }
-        }
-        readyController ??= controller;
-        if (!loaded.isCompleted) loaded.complete();
-      },
-      onReceivedError: (controller, request, error) {
-        // Subresource failures (e.g. the 127.0.0.1 desktop-client probe)
-        // say nothing about the main document.
-        if (request.isForMainFrame != true) return;
-        readyController ??= controller;
-        if (!loaded.isCompleted) loaded.complete();
-      },
-    );
-    await headless.run();
-    await loaded.future.timeout(const Duration(seconds: 12));
-    final controller = readyController ?? headless.webViewController;
-    if (controller == null) {
-      throw ParseFailure('INVALID_PAGE', '页面未能加载');
-    }
-    // The note data lives in `__INITIAL_STATE__`, which the SPA fills in after
-    // fetch. A fixed sleep is a coin flip on slow networks, so poll instead.
-    // Resolve the *real* URL first: a short link has no note id, and following
-    // it in the WebView lands us on the tokenized note page.
-    String currentUrl = targetUrl;
-    try {
-      final live = await controller.getUrl();
-      final liveStr = live?.toString();
-      if (liveStr != null && liveStr.isNotEmpty) currentUrl = liveStr;
-    } catch (_) {}
-    if (isTiktok) {
-      await waitForTiktokState(() async =>
-        await controller.evaluateJavascript(source: tiktokStateReadyScript) == true);
-    } else {
-      await _waitForNoteState(controller, currentUrl);
-    }
-
-    // For Instagram: auto-dismiss age-gated / sensitive content warnings if present
-    final isIg = isInstagramHost(Uri.tryParse(currentUrl)?.host ?? '');
-    if (isIg) {
-      try {
-        final clicked = await controller.evaluateJavascript(source: '''
-(() => {
-  const keywords = ['see post', 'view post', '查看帖子', '查看貼文', '了解详情', 'continue', 'i understand', '确认'];
-  const buttons = document.querySelectorAll('button, [role="button"], a[role="button"]');
-  for (const b of buttons) {
-    const text = (b.innerText || b.textContent || '').trim().toLowerCase();
-    if (keywords.some(k => text.includes(k))) {
-      b.click();
-      return true;
-    }
-  }
-  return false;
-})()
-''');
-        if (clicked == true) {
-          final shortcodeMatch = RegExp(r'/(?:p|reels?|tv)/([A-Za-z0-9-_]+)').firstMatch(currentUrl);
-          final shortcode = shortcodeMatch?.group(1);
-          if (shortcode != null) {
-            final deadline = DateTime.now().add(const Duration(seconds: 3));
-            while (DateTime.now().isBefore(deadline)) {
-              final hasProduct = await controller.evaluateJavascript(
-                source: '!!((window.__easysaveIgProducts || {})[${jsonEncode(shortcode)}])',
+        if (loaded.isCompleted) return;
+        loads++;
+        path = parsePathCategory(uri);
+        DevLog.write(
+          'ParseWebView',
+          'event=loadStop source=$source site=${hooks.site.id} hasQuery=${uri?.hasQuery == true ? 1 : 0} path=$path loads=$loads navigations=$mainNavigations',
+        );
+        try {
+          if (!jsonMode) {
+            stage = 'navigate';
+            final current = uri?.toString() ?? targetUrl;
+            // Android may omit shouldOverrideUrlLoading for redirect navigations.
+            final selected = await chooseFinalParseUrl(
+              current,
+              hooks.site,
+              entry: source,
+            );
+            if (selected != current) {
+              await controller.loadUrl(
+                urlRequest: URLRequest(url: WebUri(selected)),
               );
-              if (hasProduct == true) break;
-              await Future<void>.delayed(const Duration(milliseconds: 300));
+              return;
+            }
+            final step = await navigateStep(
+              site: hooks.site,
+              currentUrl: current,
+              alreadyNavigated: navigated,
+              navigate: () => hooks.call(controller, 'navigate', current),
+              // The token rule has to look at the post URL the App requested,
+              // not at the 404 route the site redirected to.
+              requestedUrl: targetUrl,
+            );
+            DevLog.write(
+              'ParseWebView',
+              'event=navigate source=$source site=${hooks.site.id} path=$path loads=$loads navigations=$mainNavigations condition=${step.kind.name}',
+            );
+            switch (step.kind) {
+              case NavigateKind.wait:
+                stage = 'load_wait';
+                return;
+              case NavigateKind.load:
+                navigated = true;
+                final next = await chooseFinalParseUrl(
+                  step.url!,
+                  hooks.site,
+                  entry: source,
+                );
+                await controller.loadUrl(
+                  urlRequest: URLRequest(url: WebUri(next)),
+                );
+                stage = 'load_wait';
+                return;
+              case NavigateKind.invalid:
+                _logParseCheck(
+                  'NAVIGATE',
+                  hooks.site,
+                  expected: 'https within site',
+                  actual: _hostPathOf(step.url ?? ''),
+                );
+                throw ParseFailure(ParseErrorCode.invalidPage, '解析模块返回无效导航');
+              case NavigateKind.parse:
+                break;
             }
           }
+          loaded.complete(controller);
+        } catch (error, stack) {
+          if (!loaded.isCompleted) loaded.completeError(error, stack);
         }
+      },
+      onReceivedError: (controller, request, error) {
+        if (request.isForMainFrame == true && !loaded.isCompleted) {
+          DevLog.write(
+            'ParseWebView',
+            'event=mainFrameError source=$source site=${hooks.site.id} type=${error.type}',
+          );
+          loaded.complete(controller);
+        }
+      },
+      onReceivedHttpError: (controller, request, response) {
+        if (request.isForMainFrame == true) {
+          DevLog.write(
+            'ParseWebView',
+            'event=httpError source=$source site=${hooks.site.id} status=${response.statusCode ?? 0}',
+          );
+        }
+      },
+    );
+    await view.run();
+    final controller = await loaded.future.timeout(const Duration(seconds: 12));
+    var currentUrl = jsonMode
+        ? targetUrl
+        : (await controller.getUrl())?.toString() ?? targetUrl;
+    dynamic result;
+    if (jsonMode) {
+      final request = await hooks.call(controller, 'request', targetUrl);
+      if (request is! Map || request['url'] is! String) {
+        _logParseCheck(
+          'REQUEST_SHAPE',
+          hooks.site,
+          expected: '{url, headers}',
+          actual: request is Map ? 'url_missing' : 'not_object',
+        );
+        throw ParseFailure(ParseErrorCode.invalidPage, '解析模块返回无效请求');
+      }
+      final endpoint = Uri.parse(hooks.site.load['endpointTemplate'] as String);
+      final uri = Uri.parse(request['url'] as String);
+      if (uri.scheme != 'https' ||
+          uri.host != endpoint.host ||
+          uri.userInfo.isNotEmpty) {
+        _logParseCheck(
+          'REQUEST_HOST',
+          hooks.site,
+          expected: endpoint.host,
+          actual: _hostPathOf(request['url'] as String),
+        );
+        throw ParseFailure(ParseErrorCode.invalidPage, '解析模块请求超出声明范围');
+      }
+      final headers = (request['headers'] as Map? ?? {}).cast<String, String>();
+      if (headers.keys.any(
+        (key) => !{
+          'user-agent',
+          'accept',
+          'accept-language',
+          'referer',
+        }.contains(key.toLowerCase()),
+      )) {
+        _logParseCheck(
+          'REQUEST_HEADER',
+          hooks.site,
+          expected: 'user-agent|accept|accept-language|referer',
+          actual: headers.keys
+              .where(
+                (key) => !{
+                  'user-agent',
+                  'accept',
+                  'accept-language',
+                  'referer',
+                }.contains(key.toLowerCase()),
+              )
+              .map((key) => key.toLowerCase())
+              .join(','),
+        );
+        throw ParseFailure(ParseErrorCode.invalidPage, '解析模块请求头超出许可范围');
+      }
+      // The guest request carries no cookies: only the declared headers.
+      final response = await http
+          .get(uri, headers: headers)
+          .timeout(const Duration(seconds: 15));
+      final body = utf8.decode(response.bodyBytes);
+      result = await hooks.call(controller, 'parse', targetUrl, {
+        'input': body,
+      });
+      await _logParserProbe(hooks, controller, targetUrl, {'input': body});
+      stage = 'session';
+      final session = await _sessionEntryRetry(
+        hooks,
+        targetUrl,
+        result,
+        source: source,
+      );
+      if (session != null) {
+        DevLog.write(
+          'ParseWebView',
+          'event=success source=$source site=${hooks.site.id} path=$path loads=$loads navigations=$mainNavigations entry=session_page',
+        );
+        return session;
+      }
+    } else {
+      stage = 'prepare';
+      await hooks.call(controller, 'prepare', currentUrl);
+      stage = 'ready';
+      await waitForParserState(
+        () async => await hooks.call(controller, 'ready', currentUrl) == true,
+        // A logged-in entry page fetches its post data after the document.
+        timeout: Duration(seconds: entryPage ? 15 : 6),
+      );
+      stage = 'parse';
+      result = await hooks.call(controller, 'parsePage', currentUrl);
+      await _logParserProbe(hooks, controller, currentUrl);
+    }
+    if (result is Map && result['ok'] != true && result['error'] is Map) {
+      try {
+        final loggedIn = await _loggedIn(hooks, controller, currentUrl);
+        final error = await hooks.call(controller, 'classify', currentUrl, {
+          'error': result['error'],
+          'loggedIn': loggedIn,
+        });
+        result = {...result, 'error': error};
       } catch (_) {}
     }
-
-    final parserJs = await ParserManager.instance.getActiveScript();
-    dynamic jsResult;
-    try {
-      await controller.evaluateJavascript(source: parserJs);
-      final pageUrlJson = jsonEncode(currentUrl);
-      jsResult = await controller.evaluateJavascript(
-        source: '''
-(() => {
-  try {
-    const res = JSON.parse(EasySaveParser.parsePage());
-    if (res && res.ok) return JSON.stringify(res);
-  } catch (_) {}
-  try {
-    return EasySaveParser.parse(document.documentElement.outerHTML, $pageUrlJson);
-  } catch (e) {
-    return JSON.stringify({ ok: false, error: { code: 'INVALID_PAGE', message: String(e) } });
-  }
-})()
-''',
-      );
-    } catch (e) {
-      throw ParseFailure(ParseErrorCode.invalidPage, 'JS 执行异常: $e');
-    }
-
-    if (jsResult == null) {
-      throw ParseFailure(ParseErrorCode.invalidPage, '解析结果为空');
-    }
-
-    Map<String, dynamic> resultJson;
-    try {
-      if (jsResult is String) {
-        resultJson = (jsonDecode(jsResult) as Map).cast<String, dynamic>();
-      } else if (jsResult is Map) {
-        resultJson = jsResult.cast<String, dynamic>();
-      } else {
-        throw ParseFailure(ParseErrorCode.invalidPage, '解析器返回非 JSON 结果');
-      }
-    } catch (e) {
-      if (e is ParseFailure) rethrow;
-      throw ParseFailure(ParseErrorCode.invalidPage, '解析器结果格式错误: $e');
-    }
-
-    final ok = resultJson['ok'] == true;
-    if (!ok) {
-      final error = resultJson['error'] as Map?;
-      final code =
-          error?['code']?.toString() ?? ParseErrorCode.invalidPage;
-      final message = error?['message']?.toString() ?? '解析失败';
-      throw ParseFailure(code, message);
-    }
-
-    final dataMap = resultJson['data'] as Map?;
-    if (dataMap == null) {
-      throw ParseFailure(ParseErrorCode.invalidPage, '解析结果中没有数据');
-    }
-
-    final post = ParsedPost.fromJson(dataMap.cast<String, dynamic>());
-    return ParseOutcome(data: post, rawImages: const []);
+    stage = 'validate';
+    final outcome = validateParserResult(result, hooks.site);
+    DevLog.write(
+      'ParseWebView',
+      'event=success source=$source site=${hooks.site.id} path=$path loads=$loads navigations=$mainNavigations',
+    );
+    return outcome;
+  } catch (error) {
+    final code = error is ParseFailure
+        ? error.code
+        : error is TimeoutException
+        ? 'TIMEOUT'
+        : 'UNEXPECTED';
+    final safeCode = RegExp(r'^[A-Z_]{1,40}$').hasMatch(code) ? code : 'OTHER';
+    DevLog.write(
+      'ParseWebView',
+      'event=failure source=$source site=${hooks.site.id} path=$path domain=${target?.host ?? 'none'} loads=$loads navigations=$mainNavigations condition=$stage code=$safeCode',
+    );
+    rethrow;
   } finally {
-    await headless?.dispose();
+    await view?.dispose();
   }
 }

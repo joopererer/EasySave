@@ -3,6 +3,12 @@ export interface AiLabel {
   source: 'platform' | 'author';
 }
 
+export function instagramAiLabel(info: unknown): AiLabel | undefined {
+  if (!info || typeof info !== 'object' || Array.isArray(info)) return;
+  const text = (info as Record<string, unknown>).attribution_label_text;
+  if (typeof text === 'string' && text.trim()) return { text: 'AI content', source: 'platform' };
+}
+
 // Dedicated bridge to App DevLog; never log the surrounding post payload.
 export function unknownAiLabel(id: string, value: string | number | boolean): void {
   console.info('EasySaveAiLabel:' + JSON.stringify({ id, value }));

@@ -14,15 +14,6 @@ import 'media_header_service.dart';
 import '../metadata/metadata_service.dart';
 import 'export_names.dart';
 
-String refererFor(String platform) {
-  if (platform == 'tiktok') return 'https://www.tiktok.com/';
-  if (platform == 'xhs') return 'https://www.xiaohongshu.com/';
-  if (platform == 'instagram') return 'https://www.instagram.com/';
-  if (platform == 'x') return 'https://x.com/';
-  return '';
-}
-
-
 /// Import a finished temp download into the album, then delete the temp file.
 ///
 /// Returns the saved asset's real MediaStore id, on-disk title, and relativePath
@@ -33,20 +24,31 @@ String refererFor(String platform) {
 Future<({String? mediaId, String? title, String? relativePath})> saveToGallery(
   String path,
   bool isImage,
-  String album,
-  {String? finalName, bool? nativeAndroid}
-) async {
+  String album, {
+  String? finalName,
+  bool? nativeAndroid,
+}) async {
   final basename = finalName ?? File(path).uri.pathSegments.last;
   final expectedName = _stripExtension(basename);
   File? exportCopy;
   try {
     if (nativeAndroid ?? Platform.isAndroid) {
       final mime = exportMime(await MetadataService.detectFormat(path));
-      final result = await const MethodChannel('easysave/provenance_pair').invokeMapMethod<String, String>('saveMedia', {
-        'path': path, 'mime': mime, 'album': album, 'filename': basename,
-      });
-      if (result?['mediaId'] == null || result?['title'] != basename) throw StateError('最终文件名校验失败');
-      return (mediaId: result!['mediaId'], title: result['title'], relativePath: result['relativePath']);
+      final result = await const MethodChannel('easysave/provenance_pair')
+          .invokeMapMethod<String, String>('saveMedia', {
+            'path': path,
+            'mime': mime,
+            'album': album,
+            'filename': basename,
+          });
+      if (result?['mediaId'] == null || result?['title'] != basename) {
+        throw StateError('最终文件名校验失败');
+      }
+      return (
+        mediaId: result!['mediaId'],
+        title: result['title'],
+        relativePath: result['relativePath'],
+      );
     }
     var source = path;
     if (File(path).uri.pathSegments.last != basename) {
@@ -63,7 +65,11 @@ Future<({String? mediaId, String? title, String? relativePath})> saveToGallery(
     final saved = await _locateJustSaved(expectedName, isImage, album);
     return saved;
   } finally {
-    if (exportCopy != null) { try { await exportCopy.delete(); } catch (_) {} }
+    if (exportCopy != null) {
+      try {
+        await exportCopy.delete();
+      } catch (_) {}
+    }
     try {
       await File(path).delete();
     } catch (_) {
@@ -81,11 +87,8 @@ String _stripExtension(String name) {
 /// title matches the planned base name, falling back to the newest asset in
 /// the album (the file we just saved is the most recent). MediaStore indexing
 /// can lag a beat behind the write, so a couple of short retries help.
-Future<({String? mediaId, String? title, String? relativePath})> _locateJustSaved(
-  String expectedName,
-  bool isImage,
-  String album,
-) async {
+Future<({String? mediaId, String? title, String? relativePath})>
+_locateJustSaved(String expectedName, bool isImage, String album) async {
   // MediaStore can lag a beat behind the write, and the title match may only
   // appear once indexing catches up. Retry a few times before giving up so a
   // rapid multi-file import doesn't grab the wrong (previous) asset.
@@ -99,11 +102,8 @@ Future<({String? mediaId, String? title, String? relativePath})> _locateJustSave
   return (mediaId: null, title: null, relativePath: null);
 }
 
-Future<({String? mediaId, String? title, String? relativePath})> _locateJustSavedOnce(
-  String expectedName,
-  bool isImage,
-  String album,
-) async {
+Future<({String? mediaId, String? title, String? relativePath})>
+_locateJustSavedOnce(String expectedName, bool isImage, String album) async {
   try {
     final paths = await PhotoManager.getAssetPathList(
       type: RequestType.common,

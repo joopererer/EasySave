@@ -8,6 +8,7 @@ import 'package:video_player/video_player.dart';
 
 import '../core/models.dart';
 import '../services/preview_video.dart';
+import '../services/media_request_policy.dart';
 import '../widgets/shared.dart';
 
 /// Fullscreen video with a control bar. Pauses on backgrounding and
@@ -41,8 +42,14 @@ class _VideoPlayerPageState extends State<VideoPlayerPage>
   Future<void> _initialize() async {
     VideoPlayerController? controller;
     try {
-      controller = await networkPreviewController(widget.item.videoUrl ?? widget.item.url, widget.platform);
-      if (!mounted) { await controller.dispose(); return; }
+      controller = await networkPreviewController(
+        widget.item.videoUrl ?? widget.item.url,
+        widget.platform,
+      );
+      if (!mounted) {
+        await controller.dispose();
+        return;
+      }
       _controller = controller;
       final active = controller;
       active.addListener(() {
@@ -54,9 +61,14 @@ class _VideoPlayerPageState extends State<VideoPlayerPage>
       if (!mounted) return;
       setState(() {});
       await controller.play();
-    } catch (_) {
+    } catch (error) {
       await controller?.dispose();
-      if (mounted) setState(() { _controller = null; _error = previewPlaybackError(widget.platform); });
+      if (mounted) {
+        setState(() {
+          _controller = null;
+          _error = previewFailureMessage(error, widget.platform);
+        });
+      }
     }
   }
 
@@ -200,6 +212,7 @@ class _LivePlayerPageState extends State<LivePlayerPage>
   bool _playing = false;
   bool _starting = false;
   bool _failed = false;
+  bool _policyRejected = false;
 
   @override
   void initState() {
@@ -217,7 +230,10 @@ class _LivePlayerPageState extends State<LivePlayerPage>
     if (videoUrl == null || _playing || _starting) return;
     setState(() => _starting = true);
     try {
-      final controller = await networkPreviewController(videoUrl, widget.platform);
+      final controller = await networkPreviewController(
+        videoUrl,
+        widget.platform,
+      );
       await controller.initialize();
       await controller.setVolume(0);
       await controller.setLooping(true);
@@ -231,9 +247,10 @@ class _LivePlayerPageState extends State<LivePlayerPage>
         _starting = false;
       });
       await controller.play();
-    } catch (_) {
+    } catch (error) {
       if (mounted) {
         setState(() {
+          _policyRejected = error is MediaPolicyException;
           _failed = true;
           _starting = false;
         });
@@ -291,7 +308,7 @@ class _LivePlayerPageState extends State<LivePlayerPage>
                   children: [
                     CoverImage(
                       item: widget.item,
-                      referer: refererFor(widget.platform),
+                      platform: (widget.platform),
                       fit: BoxFit.contain,
                       cacheWidth: 1080,
                     ),
@@ -301,7 +318,7 @@ class _LivePlayerPageState extends State<LivePlayerPage>
                       Positioned(
                         bottom: 24,
                         child: Text(
-                          _failed ? '播放失败，请重试' : '长按播放实况',
+                          _failed ? (_policyRejected ? '该资源地址不在允许范围内' : '播放失败，请重试') : '长按播放实况',
                           style: const TextStyle(color: Colors.white70),
                         ),
                       ),

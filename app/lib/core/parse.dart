@@ -2,28 +2,7 @@
 // In v1.3a+, parsing is handled by parser.js injected into the WebView.
 
 import 'models.dart';
-
-bool isXhsHost(String host) =>
-    host == 'xiaohongshu.com' ||
-    host.endsWith('.xiaohongshu.com') ||
-    host == 'rednote.com' ||
-    host.endsWith('.rednote.com') ||
-    host == 'xhslink.com' ||
-    host.endsWith('.xhslink.com') ||
-    host == 'xhslink.cn' ||
-    host.endsWith('.xhslink.cn');
-
-bool isInstagramHost(String host) =>
-    host == 'instagram.com' ||
-    host.endsWith('.instagram.com') ||
-    host == 'instagr.am' ||
-    host.endsWith('.instagr.am');
-
-bool isXHost(String host) =>
-    host == 'x.com' ||
-    host.endsWith('.x.com') ||
-    host == 'twitter.com' ||
-    host.endsWith('.twitter.com');
+import '../services/site_registry.dart';
 
 /// Parse a supported post page. Dart platform parsers were replaced by
 /// the unified JS parser bundle in v1.3a.
@@ -37,7 +16,7 @@ ParseResult parse(String html, String pageUrl) {
       ),
     );
   }
-  if (!isXhsHost(host) && !isInstagramHost(host) && !isXHost(host)) {
+  if (SiteRegistry.current.match(pageUrl) == null) {
     return ParseResult.err(
       ParseError(
         code: ParseErrorCode.unsupportedUrl,

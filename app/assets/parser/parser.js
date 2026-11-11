@@ -23,15 +23,22 @@ var EasySaveParser = (() => {
   __export(parse_page_exports, {
     calculateToken: () => calculateToken,
     extractTweetId: () => extractTweetId,
+    moduleCall: () => moduleCall,
     parse: () => parse,
     parseInstagram: () => parseInstagram,
     parseInstagramFromDom: () => parseInstagramFromDom,
     parsePage: () => parsePage,
+    parsePageForModule: () => parsePageForModule,
     parseX: () => parseX,
     parseXhs: () => parseXhs
   });
 
   // src/ai-label.ts
+  function instagramAiLabel(info) {
+    if (!info || typeof info !== "object" || Array.isArray(info)) return;
+    const text2 = info.attribution_label_text;
+    if (typeof text2 === "string" && text2.trim()) return { text: "AI content", source: "platform" };
+  }
   function unknownAiLabel(id, value) {
     console.info("EasySaveAiLabel:" + JSON.stringify({ id, value }));
   }
@@ -240,16 +247,27 @@ var EasySaveParser = (() => {
     return fallback;
   }
   function streamEntries(stream) {
+    return bucketedStreamEntries(stream).map(([, entry]) => entry);
+  }
+  function bucketedStreamEntries(stream) {
     if (!isRecord(stream)) return [];
     const out = [];
-    for (const arr of Object.values(stream)) {
+    for (const [bucket, arr] of Object.entries(stream)) {
       if (Array.isArray(arr)) {
         for (const entry of arr) {
-          if (isRecord(entry)) out.push(entry);
+          if (isRecord(entry)) out.push([bucket, entry]);
         }
       }
     }
     return out;
+  }
+  function audioStateOf(entry) {
+    const codec = entry["audioCodec"] ?? entry["audio_codec"];
+    const channels = num(entry["audioChannels"] ?? entry["audio_channels"]);
+    const bitrate = num(entry["audioBitrate"] ?? entry["audio_bitrate"]);
+    if (codec === void 0 && channels === void 0 && bitrate === void 0) return "unknown";
+    const namedCodec = typeof codec === "string" && codec.trim() !== "" && !/^(?:none|null|unknown|0)$/i.test(codec.trim());
+    return namedCodec || (channels ?? 0) > 0 || (bitrate ?? 0) > 0 ? "yes" : "no";
   }
   function candidateFromEntry(entry) {
     const type = entry["streamType"] ?? entry["stream_type"];
@@ -264,7 +282,8 @@ var EasySaveParser = (() => {
     if (urls2.length === 0) return void 0;
     const width = typeof entry["width"] === "number" ? entry["width"] : 0;
     const height = typeof entry["height"] === "number" ? entry["height"] : 0;
-    return { url: toHttps(urls2[0]), watermarked, width, height };
+    const bitrate = num(entry["avgBitrate"]) ?? num(entry["videoBitrate"]) ?? 0;
+    return { url: toHttps(urls2[0]), watermarked, width, height, audio: audioStateOf(entry), bitrate };
   }
   function collectStreamCandidates(container) {
     if (!isRecord(container)) return [];
@@ -272,39 +291,111 @@ var EasySaveParser = (() => {
     return streamEntries(streamObj).map(candidateFromEntry).filter((c) => c !== void 0);
   }
   function resolveVideoUrl(video) {
-    if (!isRecord(video)) return void 0;
-    const key = (isRecord(video["consumer"]) ? pickString(video["consumer"], ["originVideoKey"]) : void 0) ?? pickString(video, ["originVideoKey"]);
-    if (key) {
-      if (/^https?:\/\//i.test(key)) return { url: toHttps(key) };
-      return { url: `https://sns-video-bd.xhscdn.com/${key.replace(/^\/+/, "")}` };
-    }
-    const candidates = [];
-    if (isRecord(video["media"])) {
-      const media = video["media"];
-      if (media["stream"] !== void 0) candidates.push(...collectStreamCandidates(media["stream"]));
-    }
-    if (video["stream"] !== void 0) candidates.push(...collectStreamCandidates(video["stream"]));
-    if (typeof video["mediaV2"] === "string") {
-      try {
-        const parsed = JSON.parse(video["mediaV2"]);
-        if (isRecord(parsed) && parsed["stream"] !== void 0) {
-          candidates.push(...collectStreamCandidates(parsed["stream"]));
-        }
-      } catch {
-      }
-    }
-    const best = bestVideo(candidates);
+    const ranked = rankVideoCandidates(videoCandidates(video));
+    const best = ranked[0];
     if (!best) return void 0;
     const resolved = { url: best.url };
     if (best.width > 0) resolved.width = best.width;
     if (best.height > 0) resolved.height = best.height;
+    const alternates = [...new Set(ranked.slice(1).filter((c) => !c.watermarked && c.audio !== "no").map((c) => c.url))].filter((url) => url !== best.url);
+    if (alternates.length > 0) resolved.alternates = alternates;
     return resolved;
   }
-  function bestVideo(candidates) {
+  function originVideoUrl(video) {
+    const key = (isRecord(video["consumer"]) ? pickString(video["consumer"], ["originVideoKey"]) : void 0) ?? pickString(video, ["originVideoKey"]);
+    if (!key) return void 0;
+    if (/^https?:\/\//i.test(key)) return toHttps(key);
+    return `https://sns-video-bd.xhscdn.com/${key.replace(/^\/+/, "")}`;
+  }
+  function videoStreamEntries(video) {
+    const out = [];
+    const add = (prefix, container) => {
+      if (!isRecord(container)) return;
+      const stream = container["stream"] !== void 0 ? container["stream"] : container;
+      for (const [bucket, entry] of bucketedStreamEntries(stream)) out.push([`${prefix}.${bucket}`, entry]);
+    };
+    if (isRecord(video["media"]) && video["media"]["stream"] !== void 0) {
+      add("media", video["media"]["stream"]);
+    }
+    if (video["stream"] !== void 0) add("video", video["stream"]);
+    if (typeof video["mediaV2"] === "string") {
+      try {
+        const parsed = JSON.parse(video["mediaV2"]);
+        if (isRecord(parsed) && parsed["stream"] !== void 0) add("mediaV2", parsed["stream"]);
+      } catch {
+      }
+    }
+    return out;
+  }
+  function videoCandidates(video) {
+    if (!isRecord(video)) return [];
+    const candidates = [];
+    const origin = originVideoUrl(video);
+    if (origin) {
+      candidates.push({ url: origin, watermarked: false, width: 0, height: 0, audio: "unknown", bitrate: 0, origin: true });
+    }
+    for (const [, entry] of videoStreamEntries(video)) {
+      const candidate = candidateFromEntry(entry);
+      if (candidate) candidates.push(candidate);
+    }
+    return candidates;
+  }
+  var AUDIO_RANK = { yes: 0, unknown: 1, no: 2 };
+  function rankVideoCandidates(candidates) {
     return [...candidates].sort((a, b) => {
       if (a.watermarked !== b.watermarked) return a.watermarked ? 1 : -1;
-      return b.width * b.height - a.width * a.height;
-    })[0];
+      if (a.audio !== b.audio) return AUDIO_RANK[a.audio] - AUDIO_RANK[b.audio];
+      if (!!a.origin !== !!b.origin) return a.origin ? -1 : 1;
+      const area = b.width * b.height - a.width * a.height;
+      return area !== 0 ? area : b.bitrate - a.bitrate;
+    });
+  }
+  function bestVideo(candidates) {
+    return rankVideoCandidates(candidates)[0];
+  }
+  function xhsStreamProbe(video) {
+    if (!isRecord(video)) return [];
+    const selected = resolveVideoUrl(video)?.url;
+    const out = [];
+    const origin = originVideoUrl(video);
+    if (origin) {
+      out.push({
+        bucket: "origin",
+        width: 0,
+        height: 0,
+        bitrate: 0,
+        audio: "unknown",
+        audioFields: [],
+        watermarked: false,
+        selected: origin === selected
+      });
+    }
+    for (const [bucket, entry] of videoStreamEntries(video)) {
+      const candidate = candidateFromEntry(entry);
+      if (!candidate) continue;
+      const codec = entry["videoCodec"] ?? entry["video_codec"];
+      const audioCodec = entry["audioCodec"] ?? entry["audio_codec"];
+      const probe = {
+        bucket,
+        width: candidate.width,
+        height: candidate.height,
+        bitrate: candidate.bitrate,
+        audio: candidate.audio,
+        audioFields: Object.keys(entry).filter((key) => /audio/i.test(key)).sort(),
+        watermarked: candidate.watermarked,
+        selected: candidate.url === selected
+      };
+      const streamType = num(entry["streamType"] ?? entry["stream_type"]);
+      if (streamType !== void 0) probe.streamType = streamType;
+      if (typeof codec === "string") probe.codec = codec;
+      if (typeof audioCodec === "string") probe.audioCodec = audioCodec;
+      const channels = num(entry["audioChannels"] ?? entry["audio_channels"]);
+      if (channels !== void 0) probe.audioChannels = channels;
+      const audioBitrate = num(entry["audioBitrate"] ?? entry["audio_bitrate"]);
+      if (audioBitrate !== void 0) probe.audioBitrate = audioBitrate;
+      out.push(probe);
+    }
+    return out;
   }
   function imageUrlOf(entry) {
     const token = entryToken(entry);
@@ -391,7 +482,7 @@ var EasySaveParser = (() => {
   function num(value) {
     return typeof value === "number" && Number.isFinite(value) ? value : void 0;
   }
-  function parseXhs(html, pageUrl) {
+  function parseXhs(html, pageUrl, thumbnailScenes = []) {
     const idMatch = NOTE_ID_PATTERN.exec(pageUrl);
     const wantedId = idMatch ? idMatch[1].toLowerCase() : void 0;
     const states = [];
@@ -426,7 +517,7 @@ var EasySaveParser = (() => {
         error: { code: "INVALID_PAGE", message: "Could not determine the note id." }
       };
     }
-    return buildNoteFromRecord(note, noteId, pageUrl);
+    return buildNoteFromRecord(note, noteId, pageUrl, thumbnailScenes);
   }
   function canonicalXhsNoteUrl(noteId, pageUrl) {
     const base = `https://www.xiaohongshu.com/explore/${noteId}`;
@@ -466,7 +557,7 @@ var EasySaveParser = (() => {
     }
     return void 0;
   }
-  function buildNoteFromRecord(note, noteId, pageUrl) {
+  function buildNoteFromRecord(note, noteId, pageUrl, thumbnailScenes = []) {
     const user = isRecord(note["user"]) ? note["user"] : isRecord(note["author"]) ? note["author"] : {};
     const author = {};
     const authorName = pickString(user, ["nickname", "nickName", "name", "userName"]);
@@ -486,8 +577,13 @@ var EasySaveParser = (() => {
       const resolved = resolveVideoUrl(note["video"]);
       if (resolved) {
         const item = { type: "video", url: resolved.url };
+        if (resolved.alternates) item.fallbacks = resolved.alternates;
         const cover = images.length > 0 ? imageUrlOf(images[0]) : void 0;
         if (cover) item.posterUrl = cover.url;
+        if (images[0]) {
+          const thumbnail = thumbnailOf(images[0], thumbnailScenes);
+          if (thumbnail) item.thumbnailUrl = thumbnail;
+        }
         if (resolved.width !== void 0) item.width = resolved.width;
         if (resolved.height !== void 0) item.height = resolved.height;
         const duration = videoDuration(note["video"]);
@@ -497,6 +593,8 @@ var EasySaveParser = (() => {
         const img = imageUrlOf(images[0]);
         if (img) {
           const item = { type: "image", url: img.url, fallbacks: img.fallbacks };
+          const thumbnail = thumbnailOf(images[0], thumbnailScenes);
+          if (thumbnail) item.thumbnailUrl = thumbnail;
           const w = num(images[0]["width"]);
           const h = num(images[0]["height"]);
           if (w !== void 0) item.width = w;
@@ -516,9 +614,11 @@ var EasySaveParser = (() => {
           ...collectStreamCandidates(entry["stream"]),
           ...isRecord(livePhoto) && livePhoto["stream"] !== void 0 ? collectStreamCandidates(livePhoto["stream"]) : []
         ];
-        const own = entryKeyUrl ? { url: entryKeyUrl, watermarked: false, width: 0, height: 0 } : bestVideo(ownCandidates);
+        const own = entryKeyUrl ? { url: entryKeyUrl } : bestVideo(ownCandidates);
         if (own && img) {
           const item = { type: "live", url: img.url, videoUrl: own.url, fallbacks: img.fallbacks };
+          const thumbnail = thumbnailOf(entry, thumbnailScenes);
+          if (thumbnail) item.thumbnailUrl = thumbnail;
           const w = num(entry["width"]);
           const h = num(entry["height"]);
           if (w !== void 0) item.width = w;
@@ -532,6 +632,8 @@ var EasySaveParser = (() => {
         }
         if (img) {
           const item = { type: "image", url: img.url, fallbacks: img.fallbacks };
+          const thumbnail = thumbnailOf(entry, thumbnailScenes);
+          if (thumbnail) item.thumbnailUrl = thumbnail;
           const w = num(entry["width"]);
           const h = num(entry["height"]);
           if (w !== void 0) item.width = w;
@@ -542,6 +644,7 @@ var EasySaveParser = (() => {
       if (noteVideo && !noteVideoEmitted && images.length !== 1) {
         noteVideoEmitted = true;
         const item = { type: "video", url: noteVideo.url };
+        if (noteVideo.alternates) item.fallbacks = noteVideo.alternates;
         if (noteVideo.width !== void 0) item.width = noteVideo.width;
         if (noteVideo.height !== void 0) item.height = noteVideo.height;
         const duration = videoDuration(note["video"]);
@@ -579,6 +682,69 @@ var EasySaveParser = (() => {
       data.publishedAt = toIsoUtc(note["time"]);
     }
     return { ok: true, data };
+  }
+  function thumbnailOf(entry, scenes) {
+    const info = entry.infoList;
+    if (!Array.isArray(info)) return void 0;
+    for (const scene of scenes) {
+      const candidate = info.find((e) => isRecord(e) && e.imageScene === scene && nonBlank(e.url));
+      if (candidate) return toHttps(candidate.url);
+    }
+    return void 0;
+  }
+  function xhsImageVariant(url) {
+    let parsed;
+    try {
+      parsed = new URL(url);
+    } catch {
+      return "other";
+    }
+    const host = parsed.hostname.toLowerCase();
+    const bang = parsed.pathname.indexOf("!");
+    const style = bang >= 0 ? parsed.pathname.slice(bang + 1).toLowerCase() : "";
+    if (/prv/.test(style) || /(?:^|[^a-z])prv(?:[^a-z]|$)/i.test(parsed.search)) return "preview";
+    if (host === "ci.xiaohongshu.com") {
+      if (/imageView2/i.test(parsed.search) && !/thumbnail|\/w\/|\/h\//i.test(parsed.search)) return "jpeg";
+      return parsed.search || style ? "other" : "original_ci";
+    }
+    if (host.endsWith(".xhscdn.com") && !style && !parsed.search && host.startsWith("sns-img-")) return "original";
+    if (/dft/.test(style)) return "default";
+    return "other";
+  }
+  var VARIANT_RANK = {
+    jpeg: 0,
+    original: 1,
+    original_ci: 2,
+    default: 3,
+    other: 4
+  };
+  function xhsImageDownloadOrder(url, fallbacks = []) {
+    const unique = [...new Set([url, ...fallbacks].filter((u) => typeof u === "string" && u.length > 0))];
+    return unique.map((u, index) => ({ u, index, variant: xhsImageVariant(u) })).filter((c) => c.variant !== "preview").sort((a, b) => VARIANT_RANK[a.variant] - VARIANT_RANK[b.variant] || a.index - b.index).map((c) => c.u);
+  }
+  var IMAGE_FIELDS = ["urlDefault", "urlPre", "url", "infoList", "traceId", "fileId", "livePhoto", "stream"];
+  function xhsImageProbe(note) {
+    if (!isRecord(note)) return [];
+    const list = note["imageList"] ?? note["images"];
+    if (!Array.isArray(list)) return [];
+    return list.flatMap((entry, index) => {
+      if (!isRecord(entry)) return [];
+      const resolved = imageUrlOf(entry);
+      const order = resolved ? xhsImageDownloadOrder(resolved.url, resolved.fallbacks) : [];
+      const info = Array.isArray(entry["infoList"]) ? entry["infoList"] : [];
+      const probe = {
+        index: index + 1,
+        fields: IMAGE_FIELDS.filter((key) => entry[key] !== void 0 && entry[key] !== null && entry[key] !== ""),
+        scenes: info.flatMap((e) => isRecord(e) && typeof e["imageScene"] === "string" ? [e["imageScene"]] : []),
+        candidates: order.map(xhsImageVariant)
+      };
+      const width = num(entry["width"]);
+      const height = num(entry["height"]);
+      if (width !== void 0) probe.width = width;
+      if (height !== void 0) probe.height = height;
+      if (probe.candidates.length > 0) probe.selected = probe.candidates[0];
+      return [probe];
+    });
   }
 
   // src/instagram.ts
@@ -667,7 +833,7 @@ var EasySaveParser = (() => {
     }
     return void 0;
   }
-  function mediaItem(media) {
+  function originalMediaItem(media) {
     const image = bestImage(media);
     const video = bestVideoUrl(media);
     if (video) {
@@ -687,7 +853,7 @@ var EasySaveParser = (() => {
     if (image) return { type: "image", url: image.url, width: image.width, height: image.height };
     return void 0;
   }
-  function parseInstagram(html, pageUrl) {
+  function parseInstagram(html, pageUrl, smallThumbnail = false) {
     const shortcodeMatch = SHORTCODE_PATTERN.exec(pageUrl);
     const shortcode = shortcodeMatch ? shortcodeMatch[1] : void 0;
     const mediaId = shortcode ? shortcodeToMediaId(shortcode) : void 0;
@@ -733,9 +899,10 @@ var EasySaveParser = (() => {
         error: { code: "INVALID_PAGE", message: "Not an Instagram post page." }
       };
     }
-    return buildPostFromProduct(product, shortcode);
+    return buildPostFromProduct(product, shortcode, smallThumbnail);
   }
-  function buildPostFromProduct(product, shortcode) {
+  function buildPostFromProduct(product, shortcode, smallThumbnail = false) {
+    for (const line of probeInstagramAiFields(product)) console.info?.("EasySaveIgAiProbe:" + line);
     const user = isRecord2(product["user"]) ? product["user"] : isRecord2(product["owner"]) ? product["owner"] : {};
     const author = {};
     if (nonBlank2(user["username"])) author.name = user["username"];
@@ -764,17 +931,17 @@ var EasySaveParser = (() => {
     if (Array.isArray(carousel) && carousel.length > 0) {
       for (const child of carousel) {
         if (!isRecord2(child)) continue;
-        const item = mediaItem(child);
+        const item = mediaItem(child, smallThumbnail);
         if (item) items.push(item);
       }
     } else if (Array.isArray(sidecar) && sidecar.length > 0) {
       for (const edge of sidecar) {
         if (!isRecord2(edge) || !isRecord2(edge["node"])) continue;
-        const item = mediaItem(edge["node"]);
+        const item = mediaItem(edge["node"], smallThumbnail);
         if (item) items.push(item);
       }
     } else {
-      const item = mediaItem(product);
+      const item = mediaItem(product, smallThumbnail);
       if (item) items.push(item);
     }
     if (items.length === 0) {
@@ -795,11 +962,117 @@ var EasySaveParser = (() => {
       items
     };
     if (publishedAt) data.publishedAt = publishedAt;
+    const aiLabel = instagramAiLabel(product.ai_label_info);
+    if (aiLabel) data.aiLabel = aiLabel;
     return { ok: true, data };
+  }
+  function probeInstagramAiFields(product) {
+    const lines = [];
+    const seen = /* @__PURE__ */ new Set();
+    let visited = 0;
+    const visit = (node, path, privateTree = false, depth = 0) => {
+      if (!node || typeof node !== "object" || seen.has(node) || depth > 24 || visited++ > 1e4) return;
+      seen.add(node);
+      if (Array.isArray(node)) {
+        node.forEach((value, i) => visit(value, `${path}[${i}]`, privateTree, depth + 1));
+        return;
+      }
+      for (const [name, value] of Object.entries(node)) {
+        if (!/^[A-Za-z_][A-Za-z0-9_]{0,79}$/.test(name)) continue;
+        const next = path + "." + name;
+        const sensitive = privateTree || /user|owner|author|caption|text|url|email|phone|account|cookie|token|session|password|secret|authorization/i.test(name);
+        if ((next.startsWith("$.ai_label_info.") || /ai|gen_ai|genai|label|disclosure|c2pa/i.test(name)) && lines.length < 256) {
+          const type = value === null ? "null" : Array.isArray(value) ? "array" : typeof value;
+          const record2 = { path: next, name, type };
+          if ((next === "$.ai_label_info.attribution_label_text" || next === "$.ai_label_info.subtitle_text") && typeof value === "string") {
+            const text2 = value.replace(/[\u0000-\u001f\u007f-\u009f]/g, "");
+            if (!/https?:\/\/|[?&][^\s=]+=/i.test(text2)) record2.value = Array.from(text2).slice(0, name === "subtitle_text" ? 120 : 60).join("");
+          } else if (!sensitive && (typeof value === "boolean" || typeof value === "number" && Number.isFinite(value) || typeof value === "string" && /^[A-Za-z0-9_]{1,40}$/.test(value))) record2.value = value;
+          lines.push(JSON.stringify(record2));
+        }
+        visit(value, next, sensitive, depth + 1);
+      }
+    };
+    visit(product, "$");
+    return lines;
+  }
+  function mediaItem(media, smallThumbnail) {
+    const item = originalMediaItem(media);
+    const versions = isRecord2(media.image_versions2) ? media.image_versions2.candidates : void 0;
+    if (item && smallThumbnail && Array.isArray(versions)) {
+      const candidates = versions.filter((e) => isRecord2(e) && nonBlank2(e.url) && typeof e.width === "number" && typeof e.height === "number" && e.width > 0 && e.height > 0);
+      candidates.sort((a, b) => a.width * a.height - b.width * b.height);
+      if (candidates[0]) item.thumbnailUrl = candidates[0].url;
+    }
+    return item;
   }
 
   // src/x.ts
   var TWEET_ID_PATTERN = /(?:x|twitter)\.com\/(?:[^/]+)\/status\/(\d+)/i;
+  var X_ERROR_COPY = {
+    LOGIN_REQUIRED: {
+      zh: "\u8BE5\u5185\u5BB9\u9700\u8981\u767B\u5F55 X \u624D\u80FD\u67E5\u770B",
+      en: "Log in to X to view this post."
+    },
+    AGE_NOT_SET: {
+      zh: "\u8BE5\u5185\u5BB9\u9700\u8981\u4F60\u7684 X \u8D26\u53F7\u5148\u8BBE\u7F6E\u51FA\u751F\u65E5\u671F\uFF08\u5E74\u9F84\uFF09\u540E\u624D\u80FD\u67E5\u770B",
+      en: "Add your date of birth to your X account to view this post."
+    },
+    AGE_RESTRICTED: {
+      zh: "\u8BE5\u5E16\u5B50\u6709\u5E74\u9F84\u9650\u5236\uFF0C\u9700\u8981\u767B\u5F55\u5DF2\u5B8C\u6210\u5E74\u9F84\u9A8C\u8BC1\u7684 X \u8D26\u53F7\u624D\u80FD\u67E5\u770B",
+      en: "This post is age-restricted. Log in with an age-verified X account to view it."
+    },
+    PROTECTED: {
+      zh: "\u8BE5\u5E16\u5B50\u6765\u81EA\u53D7\u4FDD\u62A4\u7684\u8D26\u53F7\uFF0C\u53EA\u6709\u83B7\u51C6\u7684\u5173\u6CE8\u8005\u53EF\u4EE5\u67E5\u770B",
+      en: "This post is from a protected account; only approved followers can view it."
+    },
+    PRIVATE_OR_UNAVAILABLE: {
+      zh: "\u5E16\u5B50\u4E0D\u53EF\u7528\uFF1A\u53EF\u80FD\u5DF2\u5220\u9664\u3001\u8BBE\u4E3A\u79C1\u5BC6\uFF0C\u6216\u9700\u8981\u767B\u5F55 X \u624D\u80FD\u67E5\u770B",
+      en: "Post unavailable: it may be deleted, private, or require logging in to X."
+    }
+  };
+  var X_SENSITIVE_MEDIA_HINT = {
+    zh: "\u8BE5\u5E16\u5B50\u6709\u5E74\u9F84\u9650\u5236\u3002\u5DF2\u767B\u5F55 X \u4ECD\u65E0\u6CD5\u67E5\u770B\u65F6\uFF0C\u8BF7\u5728 X \u7684\u201C\u8BBE\u7F6E \u2192 \u9690\u79C1\u548C\u5B89\u5168 \u2192 \u4F60\u770B\u5230\u7684\u5185\u5BB9\u201D\u4E2D\u5F00\u542F\u201C\u663E\u793A\u53EF\u80FD\u5305\u542B\u654F\u611F\u5185\u5BB9\u7684\u5A92\u4F53\u201D\uFF0C\u5E76\u786E\u8BA4\u8D26\u53F7\u5DF2\u5B8C\u6210\u5E74\u9F84\u9A8C\u8BC1",
+    en: `This post is age-restricted. If it stays unavailable while logged in, turn on "Display media that may contain sensitive content" under X Settings \u2192 Privacy and safety \u2192 Content you see, and confirm your account's age.`
+  };
+  var X_SESSION_EXPIRED = {
+    zh: "X \u767B\u5F55\u72B6\u6001\u5DF2\u5931\u6548\uFF0C\u8BF7\u5728 EasySave \u4E2D\u91CD\u65B0\u767B\u5F55 X \u540E\u91CD\u8BD5",
+    en: "Your X session has expired. Log in to X again in EasySave and retry."
+  };
+  function xFailure(code) {
+    return { ok: false, error: { code, message: X_ERROR_COPY[code].zh } };
+  }
+  function classifyXUnavailable(result) {
+    const typename = result["__typename"];
+    const reason = typeof result["reason"] === "string" ? result["reason"] : "";
+    if (typename === "TweetUnavailable" || typename === void 0 && reason) {
+      switch (reason) {
+        case "NsfwLoggedOut":
+          return xFailure("LOGIN_REQUIRED");
+        case "NsfwViewerHasNoStatedAge":
+          return xFailure("AGE_NOT_SET");
+        case "NsfwViewerIsUnderage":
+          return xFailure("AGE_RESTRICTED");
+        case "Protected":
+          return xFailure("PROTECTED");
+      }
+      if (/log.?in|sign.?in|authentication/i.test(reason)) return xFailure("LOGIN_REQUIRED");
+      if (/age/i.test(reason)) return xFailure("AGE_RESTRICTED");
+      return typename === "TweetUnavailable" ? xFailure("PRIVATE_OR_UNAVAILABLE") : void 0;
+    }
+    if (typename === "TweetTombstone") {
+      const text2 = tombstoneText(result);
+      if (/^age.restricted/i.test(text2.trim())) return xFailure("AGE_RESTRICTED");
+      if (/(?:log|sign)\s*in\b/i.test(text2)) return xFailure("LOGIN_REQUIRED");
+      return xFailure("PRIVATE_OR_UNAVAILABLE");
+    }
+    return void 0;
+  }
+  function tombstoneText(result) {
+    const tombstone = result["tombstone"];
+    const textObj = isRecord3(tombstone) ? tombstone["text"] : void 0;
+    return isRecord3(textObj) && typeof textObj["text"] === "string" ? textObj["text"] : "";
+  }
   function isRecord3(value) {
     return typeof value === "object" && value !== null && !Array.isArray(value);
   }
@@ -835,67 +1108,33 @@ var EasySaveParser = (() => {
     let root;
     if (typeof input === "string") {
       const trimmed = input.trim();
-      if (trimmed.length === 0) {
-        return {
-          ok: false,
-          error: {
-            code: "PRIVATE_OR_UNAVAILABLE",
-            message: "This post is private, deleted, or unavailable."
-          }
-        };
+      if (trimmed.startsWith("<")) {
+        const visible = trimmed.replace(/<(script|style)\b[^>]*>[\s\S]*?<\/\1>/gi, "").replace(/<[^>]+>/g, " ").replace(/\s+/g, " ");
+        if (/(?:sign|log)\s*in\s+to\s+(?:view|see|access)\s+(?:this\s+)?(?:post|content)|(?:age.restricted|verify\s+your\s+age)|登录.{0,8}(?:查看|浏览)(?:此|该)|年龄验证/i.test(visible)) {
+          return xFailure("LOGIN_REQUIRED");
+        }
       }
+      if (trimmed.length === 0) return xFailure("PRIVATE_OR_UNAVAILABLE");
       try {
         root = JSON.parse(trimmed);
       } catch {
-        return {
-          ok: false,
-          error: {
-            code: "PRIVATE_OR_UNAVAILABLE",
-            message: "This post is private, deleted, or unavailable."
-          }
-        };
+        return xFailure("PRIVATE_OR_UNAVAILABLE");
       }
     } else {
       root = input;
     }
     if (!isRecord3(root) || Object.keys(root).length === 0) {
-      return {
-        ok: false,
-        error: {
-          code: "PRIVATE_OR_UNAVAILABLE",
-          message: "This post is private, deleted, or unavailable."
-        }
-      };
+      return xFailure("PRIVATE_OR_UNAVAILABLE");
     }
-    if (root["__typename"] === "TweetTombstone") {
-      const tombstone = root["tombstone"];
-      const textObj = isRecord3(tombstone) ? tombstone["text"] : void 0;
-      const tombstoneText = isRecord3(textObj) && typeof textObj["text"] === "string" ? textObj["text"].toLowerCase() : "";
-      if (tombstoneText.includes("limit") || tombstoneText.includes("view") || tombstoneText.includes("age") || tombstoneText.includes("sensitive") || tombstoneText.includes("login")) {
-        return {
-          ok: false,
-          error: {
-            code: "LOGIN_REQUIRED",
-            message: "This post requires authentication or has viewer restrictions."
-          }
-        };
-      }
-      return {
-        ok: false,
-        error: {
-          code: "PRIVATE_OR_UNAVAILABLE",
-          message: "This post is private, deleted, or unavailable."
-        }
-      };
+    const errors = Array.isArray(root["errors"]) ? root["errors"] : [];
+    const restricted = /nsfwloggedout|age.?restrict|age.?verif|log.?in|sign.?in|authentication/i;
+    if (errors.some((error) => isRecord3(error) && ([32, 215, 239].includes(Number(error["code"])) || restricted.test(typeof error["message"] === "string" ? error["message"] : "")))) {
+      return xFailure("LOGIN_REQUIRED");
     }
+    const unavailable = classifyXUnavailable(root);
+    if (unavailable) return unavailable;
     if (Array.isArray(root["errors"]) && root["errors"].length > 0) {
-      return {
-        ok: false,
-        error: {
-          code: "PRIVATE_OR_UNAVAILABLE",
-          message: "This post is private, deleted, or unavailable."
-        }
-      };
+      return xFailure("PRIVATE_OR_UNAVAILABLE");
     }
     const idStr = typeof root["id_str"] === "string" ? root["id_str"] : typeof root["id"] === "number" || typeof root["id"] === "string" ? String(root["id"]) : extractTweetId(pageUrl);
     if (!idStr) {
@@ -981,6 +1220,119 @@ var EasySaveParser = (() => {
     };
     return { ok: true, data: post };
   }
+  function graphqlTweetResult(responses, id) {
+    for (const response of responses) {
+      if (!isRecord3(response) || !isRecord3(response["data"])) continue;
+      const data = response["data"];
+      const byRestId = isRecord3(data["tweetResult"]) ? data["tweetResult"]["result"] : void 0;
+      if (isRecord3(byRestId)) return byRestId;
+      const thread = data["threaded_conversation_with_injections_v2"];
+      const instructions = isRecord3(thread) && Array.isArray(thread["instructions"]) ? thread["instructions"] : [];
+      for (const instruction of instructions) {
+        const entries = isRecord3(instruction) && Array.isArray(instruction["entries"]) ? instruction["entries"] : [];
+        for (const entry of entries) {
+          if (!isRecord3(entry) || entry["entryId"] !== `tweet-${id}`) continue;
+          const content = entry["content"];
+          const itemContent = isRecord3(content) ? content["itemContent"] : void 0;
+          const results = isRecord3(itemContent) ? itemContent["tweet_results"] : void 0;
+          const result = isRecord3(results) ? results["result"] : void 0;
+          if (isRecord3(result)) return result;
+        }
+      }
+    }
+    return void 0;
+  }
+  function unwrapVisibility(result) {
+    return result["__typename"] === "TweetWithVisibilityResults" && isRecord3(result["tweet"]) ? result["tweet"] : result;
+  }
+  function parseXGraphql(responses, pageUrl) {
+    const id = extractTweetId(pageUrl);
+    if (!id) return { ok: false, error: { code: "UNSUPPORTED_URL", message: "Unable to extract tweet ID." } };
+    const found = graphqlTweetResult(responses, id);
+    if (!found) {
+      return { ok: false, error: { code: "INVALID_PAGE", message: "X page returned no post data." } };
+    }
+    const result = unwrapVisibility(found);
+    const unavailable = classifyXUnavailable(result);
+    if (unavailable) return unavailable;
+    const legacy = isRecord3(result["legacy"]) ? result["legacy"] : void 0;
+    if (!legacy) return xFailure("PRIVATE_OR_UNAVAILABLE");
+    const core = isRecord3(result["core"]) ? result["core"] : void 0;
+    const userResults = core && isRecord3(core["user_results"]) ? core["user_results"] : void 0;
+    const user = userResults && isRecord3(userResults["result"]) ? userResults["result"] : void 0;
+    const userLegacy = user && isRecord3(user["legacy"]) ? user["legacy"] : {};
+    const userCore = user && isRecord3(user["core"]) ? user["core"] : {};
+    const pick = (key) => typeof userLegacy[key] === "string" ? userLegacy[key] : typeof userCore[key] === "string" ? userCore[key] : void 0;
+    const entities = isRecord3(legacy["extended_entities"]) ? legacy["extended_entities"] : isRecord3(legacy["entities"]) ? legacy["entities"] : {};
+    const media = Array.isArray(entities["media"]) ? entities["media"] : [];
+    const noteTweet = isRecord3(result["note_tweet"]) ? result["note_tweet"] : void 0;
+    const noteResults = noteTweet && isRecord3(noteTweet["note_tweet_results"]) ? noteTweet["note_tweet_results"] : void 0;
+    const noteResult = noteResults && isRecord3(noteResults["result"]) ? noteResults["result"] : void 0;
+    let text2 = typeof noteResult?.["text"] === "string" ? noteResult["text"] : typeof legacy["full_text"] === "string" ? legacy["full_text"] : "";
+    for (const item of media) {
+      const link = isRecord3(item) && typeof item["url"] === "string" ? item["url"] : "";
+      if (link && text2.endsWith(link)) text2 = text2.slice(0, -link.length).trimEnd();
+    }
+    const restId = typeof result["rest_id"] === "string" ? result["rest_id"] : id;
+    return parseX({
+      id_str: restId,
+      user: { screen_name: pick("screen_name"), name: pick("name") },
+      text: text2,
+      created_at: legacy["created_at"],
+      mediaDetails: media
+    }, pageUrl);
+  }
+  var SHORT_TOKEN = /^[A-Za-z0-9_]{1,48}$/;
+  function shortToken(value) {
+    return typeof value === "string" && SHORT_TOKEN.test(value) ? value : void 0;
+  }
+  function xProbe(input, source, pageUrl) {
+    let root = input;
+    if (source === "syndication") {
+      if (typeof input !== "string" || input.trim() === "") return { source, shape: "empty", fields: [] };
+      try {
+        root = JSON.parse(input);
+      } catch {
+        return { source, shape: "unknown", fields: [] };
+      }
+    }
+    let result;
+    let fields = [];
+    if (source === "graphql") {
+      const responses = Array.isArray(root) ? root : [];
+      const id = extractTweetId(pageUrl) ?? "";
+      result = graphqlTweetResult(responses, id);
+      if (!result) return { source, shape: "none", fields: [] };
+    } else {
+      if (!isRecord3(root)) return { source, shape: "unknown", fields: [] };
+      if (Object.keys(root).length === 0) return { source, shape: "empty", fields: [] };
+      result = root;
+    }
+    fields = Object.keys(result).filter((key) => SHORT_TOKEN.test(key)).sort().slice(0, 24);
+    const wrapped = result["__typename"] === "TweetWithVisibilityResults";
+    const inner = unwrapVisibility(result);
+    const typename = shortToken(inner["__typename"]);
+    const probe = { source, shape: "unknown", fields };
+    if (typename) probe.typename = typename;
+    if (wrapped) probe.wrapped = true;
+    const reason = shortToken(inner["reason"]);
+    if (reason) probe.reason = reason;
+    if (typename === "TweetTombstone") {
+      probe.shape = "tombstone";
+      probe.tombstone = tombstoneText(inner).slice(0, 40);
+    } else if (typename === "TweetUnavailable" || !typename && reason) {
+      probe.shape = "unavailable";
+    } else if (Array.isArray(inner["errors"]) && !isRecord3(inner["legacy"]) && !inner["id_str"]) {
+      probe.shape = "errors";
+    } else if (isRecord3(inner["legacy"]) || inner["id_str"] !== void 0) {
+      probe.shape = "tweet";
+      const legacy = isRecord3(inner["legacy"]) ? inner["legacy"] : void 0;
+      const entities = legacy && isRecord3(legacy["extended_entities"]) ? legacy["extended_entities"] : void 0;
+      const media = entities ? entities["media"] : inner["mediaDetails"];
+      probe.mediaCount = Array.isArray(media) ? media.length : 0;
+    }
+    return probe;
+  }
 
   // src/tiktok.ts
   var record = (v) => v !== null && typeof v === "object" && !Array.isArray(v) ? v : {};
@@ -1014,6 +1366,24 @@ var EasySaveParser = (() => {
         return false;
       }
     }))];
+  }
+  function selectTiktokPoster(value) {
+    const candidates = [];
+    const push = (raw) => {
+      candidates.push(...urls(raw));
+      if (raw !== null && typeof raw === "object") {
+        const holder = record(raw);
+        candidates.push(...urls(record(holder.imageURL).urlList), ...urls(holder.urlList));
+      }
+    };
+    const source = record(value);
+    push(source.originCover);
+    push(source.cover);
+    push(source.dynamicCover);
+    push(record(source.video).originCover);
+    push(record(source.video).cover);
+    push(record(source.video).dynamicCover);
+    return candidates[0];
   }
   function selectTiktokVideo(value) {
     const video = record(value);
@@ -1085,9 +1455,12 @@ var EasySaveParser = (() => {
         };
       });
       if (items.some((i) => !i.url)) return failure({});
+      const cover = selectTiktokPoster({ cover: imagePost.cover });
+      if (cover && items.length) items[0] = { ...items[0], posterUrl: cover };
     } else {
       const video = selectTiktokVideo(item.video);
-      items = video ? [video] : [];
+      const poster = selectTiktokPoster({ video: item.video });
+      items = video ? [{ ...video, posterUrl: poster }] : [];
     }
     if (!items.length) return failure({});
     const author = record(item.author), authorId = text(author.id);
@@ -1104,6 +1477,19 @@ var EasySaveParser = (() => {
       publishedAt: created > 0 && !isNaN(date.getTime()) ? date.toISOString().replace(".000Z", "Z") : void 0,
       items
     } };
+  }
+  function tiktokExpiresAt(url) {
+    try {
+      let earliest = Infinity;
+      new URL(url).searchParams.forEach((value, key) => {
+        if (!["expire", "x-expires"].includes(key.toLowerCase()) || !/^[0-9]+$/.test(value)) return;
+        const seconds = Number(value), ms = seconds * 1e3;
+        if (Number.isSafeInteger(seconds) && Number.isSafeInteger(ms) && !Number.isNaN(new Date(ms).getTime())) earliest = Math.min(earliest, ms);
+      });
+      return Number.isFinite(earliest) ? new Date(earliest).toISOString() : void 0;
+    } catch {
+      return void 0;
+    }
   }
 
   // src/_utils.ts
@@ -1123,6 +1509,358 @@ var EasySaveParser = (() => {
   }
   function isXHost(host) {
     return /x\.com|twitter\.com/.test(host);
+  }
+
+  // src/media-resources.ts
+  function withMediaResources(result, site, expiry = () => void 0) {
+    if (!result?.ok || !Array.isArray(result.data?.items)) return result;
+    const defaults = site.download;
+    const request = (role, url) => {
+      const extra = defaults.resourceDefaults?.[role] ?? {};
+      return {
+        headers: { ...defaults.headers, ...extra.headers },
+        cookieDomains: [...extra.cookieDomains ?? defaults.cookieDomains],
+        expiresAt: expiry(url),
+        transport: extra.transport ?? defaults.transport,
+        resumable: extra.resumable ?? defaults.resumable
+      };
+    };
+    return { ...result, data: { ...result.data, items: result.data.items.map((item) => {
+      const video = item.type === "video";
+      const primary = video ? item.videoUrl && item.videoUrl !== item.url ? "poster" : "video" : "image";
+      const resources = [{ role: primary, url: item.url, request: request(primary, item.url) }];
+      if (item.videoUrl && (!video || item.videoUrl !== item.url)) {
+        const role = video ? "video" : "motion";
+        resources.push({ role, url: item.videoUrl, request: request(role, item.videoUrl) });
+      }
+      if (item.posterUrl) resources.push({
+        role: "poster",
+        url: item.posterUrl,
+        request: request("poster", item.posterUrl)
+      });
+      if (item.thumbnailUrl) resources.push({
+        role: "poster",
+        url: item.thumbnailUrl,
+        request: request("poster", item.thumbnailUrl)
+      });
+      for (const url of item.fallbacks ?? []) resources.push({
+        role: "fallback",
+        fallbackFor: primary,
+        url,
+        request: request(primary, url)
+      });
+      return { ...item, resources };
+    }) } };
+  }
+
+  // src/page-hooks.js
+  function installIgSniff() {
+    (() => {
+      if (window.__easysaveSniffInstalled) return;
+      window.__easysaveSniffInstalled = true;
+      window.__easysaveIgProducts = window.__easysaveIgProducts || {};
+      function isProductShaped2(obj) {
+        if (!obj || typeof obj !== "object") return false;
+        const sc = typeof obj.shortcode === "string" ? obj.shortcode : typeof obj.code === "string" ? obj.code : null;
+        if (!sc) return false;
+        return "video_versions" in obj || "carousel_media" in obj || "image_versions2" in obj || "display_url" in obj || "video_url" in obj || "edge_sidecar_to_children" in obj;
+      }
+      function extractProducts(payload) {
+        const seen = /* @__PURE__ */ new Set();
+        function visit(node) {
+          if (!node || typeof node !== "object") return;
+          if (seen.has(node)) return;
+          seen.add(node);
+          if (isProductShaped2(node)) {
+            const sc = typeof node.shortcode === "string" ? node.shortcode : node.code;
+            window.__easysaveIgProducts[sc] = node;
+          }
+          if (Array.isArray(node)) {
+            for (const item of node) visit(item);
+          } else {
+            for (const key of Object.keys(node)) visit(node[key]);
+          }
+        }
+        try {
+          visit(payload);
+        } catch (_) {
+        }
+      }
+      function sniffText(text2) {
+        if (!text2 || text2.length < 10) return;
+        if (!text2.includes("shortcode") && !text2.includes("xdt_shortcode_media") && !text2.includes("edge_sidecar_to_children") && !text2.includes("display_url")) return;
+        try {
+          const json = JSON.parse(text2);
+          extractProducts(json);
+        } catch (_) {
+        }
+      }
+      try {
+        const originalFetch = window.fetch;
+        if (originalFetch) {
+          window.fetch = async function(...args) {
+            const response = await originalFetch.apply(this, args);
+            try {
+              const clone = response.clone();
+              clone.text().then(sniffText).catch(() => {
+              });
+            } catch (_) {
+            }
+            return response;
+          };
+        }
+      } catch (_) {
+      }
+      try {
+        const originalOpen = XMLHttpRequest.prototype.open;
+        const originalSend = XMLHttpRequest.prototype.send;
+        XMLHttpRequest.prototype.open = function(method, url, ...rest) {
+          this.__url = url;
+          return originalOpen.apply(this, [method, url, ...rest]);
+        };
+        XMLHttpRequest.prototype.send = function(...args) {
+          this.addEventListener("load", function() {
+            try {
+              sniffText(this.responseText);
+            } catch (_) {
+            }
+          });
+          return originalSend.apply(this, args);
+        };
+      } catch (_) {
+      }
+    })();
+  }
+  function readXhsAccount() {
+    return JSON.parse(function() {
+      try {
+        var unwrap = function(v) {
+          return v && v.__v_isRef ? v.value : v;
+        };
+        var state = window.__INITIAL_STATE__;
+        var user = state && unwrap(state.user);
+        if (!user) return JSON.stringify({ state: "unknown" });
+        var loggedIn = unwrap(user.loggedIn);
+        if (typeof loggedIn !== "boolean") return JSON.stringify({ state: "unknown" });
+        if (!loggedIn) return JSON.stringify({ state: "guest" });
+        var info = unwrap(user.userInfo);
+        var result = { state: "user" };
+        if (info && info.userId) result.userId = String(info.userId);
+        if (info && info.nickname) result.nickname = String(info.nickname);
+        return JSON.stringify(result);
+      } catch (e) {
+        return JSON.stringify({ state: "unknown" });
+      }
+    }());
+  }
+  function tiktokReady() {
+    return (() => {
+      try {
+        const node = document.getElementById("__UNIVERSAL_DATA_FOR_REHYDRATION__");
+        const root = window.__UNIVERSAL_DATA_FOR_REHYDRATION__ || node && JSON.parse(node.textContent);
+        const scope = root && root.__DEFAULT_SCOPE__;
+        return !!(scope && ["webapp.video-detail", "webapp.reflow.video.detail"].some((key) => {
+          const detail = scope[key];
+          return detail && (detail.itemInfo && detail.itemInfo.itemStruct && detail.itemInfo.itemStruct.id || detail.statusCode != null && Number(detail.statusCode) !== 0);
+        }));
+      } catch (_) {
+        return false;
+      }
+    })();
+  }
+  function installXGraphqlSniff() {
+    (() => {
+      if (window.__easysaveXSniffInstalled) return;
+      window.__easysaveXSniffInstalled = true;
+      window.__easysaveXGraphql = window.__easysaveXGraphql || [];
+      const pattern = /\/graphql\/[^/?#]+\/(TweetResultByRestId|TweetDetail)(?:[?#]|$)/;
+      function keep(url, text2) {
+        const match = pattern.exec(String(url || ""));
+        if (!match || typeof text2 !== "string" || text2.length > 4e6) return;
+        const list = window.__easysaveXGraphql;
+        list.push({ op: match[1], text: text2 });
+        while (list.length > 8) list.shift();
+      }
+      try {
+        const originalFetch = window.fetch;
+        if (originalFetch) {
+          window.fetch = async function(...args) {
+            const response = await originalFetch.apply(this, args);
+            try {
+              const input = args[0];
+              const url = typeof input === "string" ? input : input && input.url || "";
+              if (pattern.test(String(url))) response.clone().text().then((text2) => keep(url, text2)).catch(() => {
+              });
+            } catch (_) {
+            }
+            return response;
+          };
+        }
+      } catch (_) {
+      }
+      try {
+        const originalOpen = XMLHttpRequest.prototype.open;
+        const originalSend = XMLHttpRequest.prototype.send;
+        XMLHttpRequest.prototype.open = function(method, url, ...rest) {
+          this.__easysaveXUrl = url;
+          return originalOpen.apply(this, [method, url, ...rest]);
+        };
+        XMLHttpRequest.prototype.send = function(...args) {
+          if (pattern.test(String(this.__easysaveXUrl || ""))) {
+            this.addEventListener("load", function() {
+              try {
+                if (this.responseType === "" || this.responseType === "text") keep(this.__easysaveXUrl, this.responseText);
+                else if (this.responseType === "json") keep(this.__easysaveXUrl, JSON.stringify(this.response));
+              } catch (_) {
+              }
+            });
+          }
+          return originalSend.apply(this, args);
+        };
+      } catch (_) {
+      }
+    })();
+  }
+
+  // src/parser-modules.ts
+  var page = () => window;
+  var failure2 = (code, message) => ({ code, message });
+  var onXPage = () => {
+    try {
+      return /(?:^|\.)(?:x|twitter)\.com$/i.test(location.hostname);
+    } catch (_) {
+      return false;
+    }
+  };
+  var xCaptured = () => (page().__easysaveXGraphql || []).flatMap((entry) => {
+    try {
+      return [JSON.parse(entry.text)];
+    } catch (_) {
+      return [];
+    }
+  });
+  var modules = {
+    x: {
+      // The logged-in entry page (load.entryTemplate) is read from the page's own
+      // GraphQL responses; the guest JSON endpoint path never runs these hooks.
+      install: () => {
+        if (onXPage()) installXGraphqlSniff();
+      },
+      ready: (c) => {
+        const id = extractTweetId(c.url);
+        return !onXPage() || (page().__easysaveXGraphql || []).some((entry) => entry.op === "TweetResultByRestId" || !!id && typeof entry.text === "string" && entry.text.includes(`"tweet-${id}"`));
+      },
+      parsePage: (c) => parseXGraphql(xCaptured(), c.url),
+      probe: (c) => onXPage() ? { tag: "XProbe", ...xProbe(xCaptured(), "graphql", c.url) } : { tag: "XProbe", ...xProbe(c.input ?? "", "syndication", c.url) },
+      classify: (c) => {
+        if (!c.loggedIn) return c.error;
+        if (!onXPage()) return c.error;
+        if (c.error?.code === "AGE_RESTRICTED") return failure2("AGE_RESTRICTED", X_SENSITIVE_MEDIA_HINT.zh);
+        if (c.error?.code === "LOGIN_REQUIRED") return failure2("LOGIN_REQUIRED", X_SESSION_EXPIRED.zh);
+        return c.error;
+      },
+      request: (c) => {
+        const id = extractTweetId(c.url);
+        if (!id) throw new Error("UNSUPPORTED_URL");
+        const template = c.site.load.endpointTemplate;
+        return {
+          url: template.replaceAll("{id}", id).replaceAll("{token}", calculateToken(id)),
+          headers: c.site.load.headers || {}
+        };
+      },
+      parse: (c) => c.statusCode === 404 ? { ok: false, error: failure2("PRIVATE_OR_UNAVAILABLE", "Post is unavailable or private") } : parseX(c.input || "", c.url)
+    },
+    xhs: {
+      // App-only download order: original resolution first, preview scenes
+      // (WB_PRV / H5_PRV / !nd_prv) never. The legacy url/fallbacks stay as-is.
+      decorate: (result) => !result?.ok || !Array.isArray(result.data?.items) ? result : { ...result, data: { ...result.data, items: result.data.items.map((item) => item.type === "video" ? item : { ...item, downloadOrder: xhsImageDownloadOrder(item.url, item.fallbacks ?? []) }) } },
+      ready: (c) => {
+        const state = page().__INITIAL_STATE__;
+        if (!state) return false;
+        const wanted = /\/(?:explore|discovery\/item|user\/profile\/[^/]+)\/([a-zA-Z0-9]+)/.exec(c.url)?.[1];
+        const map = state.note?.noteDetailMap;
+        if (map) return wanted ? Object.hasOwn(map, wanted) : Object.keys(map).length > 0;
+        const note = state.noteData?.data?.noteData || state.noteData?.data;
+        return !!note && (!wanted || !(note.noteId || note.id) || (note.noteId || note.id) === wanted);
+      },
+      account: () => readXhsAccount(),
+      probe: (c) => {
+        const id = /\/(?:explore|discovery\/item|user\/profile\/[^/]+)\/([a-zA-Z0-9]+)/.exec(c.url)?.[1];
+        const note = findNoteInStates([page().__INITIAL_STATE__], id);
+        return { tag: "XhsStreamProbe", streams: xhsStreamProbe(note?.["video"]), images: xhsImageProbe(note) };
+      },
+      probeSession: (c) => {
+        if ((c.statusCode || 0) >= 300 && (c.statusCode || 0) < 400) return !(c.location || "").includes("/login");
+        if (c.statusCode !== 200) return true;
+        if ((c.input || "").includes('"loggedIn":false')) return false;
+        return true;
+      },
+      classify: (c) => ["LOGIN_REQUIRED", "INVALID_PAGE"].includes(c.error?.code) ? c.loggedIn ? failure2("PRIVATE_OR_UNAVAILABLE", "\u672A\u80FD\u8BFB\u53D6\u7B14\u8BB0\u5185\u5BB9\uFF08\u5206\u4EAB\u94FE\u63A5\u53EF\u80FD\u5DF2\u8FC7\u671F\uFF0C\u8BF7\u91CD\u65B0\u7C98\u8D34\u539F\u5206\u4EAB\u94FE\u63A5\u518D\u8BD5\uFF09") : failure2("LOGIN_REQUIRED", "\u9700\u8981\u5148\u767B\u5F55\u5C0F\u7EA2\u4E66\u624D\u80FD\u89E3\u6790\u8BE5\u7B14\u8BB0") : c.error
+    },
+    instagram: {
+      install: () => installIgSniff(),
+      ready: (c) => {
+        const id = /\/(?:p|reels?|tv)\/([A-Za-z0-9_-]+)/.exec(c.url)?.[1];
+        return !!(id && page().__easysaveIgProducts?.[id]) || !!document.querySelector("article video, main video, article img, main img");
+      },
+      prepare: () => {
+        const words = ["see post", "view post", "\u67E5\u770B\u5E16\u5B50", "\u67E5\u770B\u8CBC\u6587", "\u4E86\u89E3\u8BE6\u60C5", "continue", "i understand", "\u786E\u8BA4"];
+        for (const node of Array.from(document.querySelectorAll('button, [role="button"], a[role="button"]'))) {
+          const text2 = (node.innerText || node.textContent || "").trim().toLowerCase();
+          if (words.some((word) => text2.includes(word))) {
+            node.click();
+            return true;
+          }
+        }
+        return false;
+      },
+      classify: (c) => c.error?.code === "LOGIN_REQUIRED" && c.loggedIn ? failure2("PRIVATE_OR_UNAVAILABLE", /敏感内容|年龄限制/.test(c.error.message || "") ? c.error.message : "\u672A\u80FD\u8BFB\u53D6\u5E16\u5B50\u5185\u5BB9\uFF08\u53EF\u80FD\u5305\u542B\u53D7\u9650\u5185\u5BB9\u6216\u5DF2\u88AB\u5220\u9664\uFF09") : c.error
+    },
+    tiktok: {
+      expiresAt: (c) => tiktokExpiresAt(c.url),
+      ready: () => tiktokReady(),
+      navigate: (c) => {
+        const id = extractTiktokPostId(c.url);
+        return id ? { url: c.site.normalize.canonicalTemplate.replaceAll("{id}", id) } : { wait: true };
+      },
+      parse: (c) => parseTiktok(c.input || "", c.url)
+    }
+  };
+  function moduleCall(moduleId, hook, context) {
+    if (!Object.hasOwn(modules, moduleId)) throw new Error("UNSUPPORTED_MODULE");
+    if (hook === "decorate") throw new Error("UNSUPPORTED_HOOK");
+    if (hook === "classify" && context.error?.code === "PRIVATE_OR_UNAVAILABLE" && context.site.auth.mode !== "none" && !context.loggedIn && moduleId !== "x") {
+      context = { ...context, error: failure2("LOGIN_REQUIRED", "\u53EF\u80FD\u9700\u8981\u767B\u5F55" + context.site.displayName) };
+    }
+    const module = modules[moduleId];
+    const output = (value) => JSON.stringify({ value: hook === "parse" || hook === "parsePage" ? withMediaResources(module.decorate ? module.decorate(value) : value, context.site, (url) => module.expiresAt?.({ ...context, url })) : value });
+    if (Object.hasOwn(module, hook)) return output(module[hook](context) ?? null);
+    switch (hook) {
+      case "install":
+      case "navigate":
+      case "account":
+        return JSON.stringify({ value: null });
+      case "prepare":
+        return JSON.stringify({ value: false });
+      case "ready":
+        return JSON.stringify({ value: true });
+      case "parsePage": {
+        try {
+          const result = JSON.parse(parsePageForModule(moduleId, context.site.download?.thumbnailScenes, context.site.download?.thumbnailVariant === "smallestCandidate"));
+          if (result.ok) return output(result);
+        } catch (_) {
+        }
+        return output(JSON.parse(parse(document.documentElement.outerHTML, context.url, moduleId, context.site.download?.thumbnailScenes, context.site.download?.thumbnailVariant === "smallestCandidate")));
+      }
+      case "parse":
+        return output(JSON.parse(parse(context.input || "", context.url, moduleId, context.site.download?.thumbnailScenes, context.site.download?.thumbnailVariant === "smallestCandidate")));
+      case "classify": {
+        const error = context.error;
+        return JSON.stringify({ value: error?.code === "PRIVATE_OR_UNAVAILABLE" && context.site.auth.mode !== "none" && !context.loggedIn ? failure2("LOGIN_REQUIRED", "\u53EF\u80FD\u9700\u8981\u767B\u5F55" + context.site.displayName) : error });
+      }
+      default:
+        throw new Error("UNSUPPORTED_HOOK");
+    }
   }
 
   // src/_parse_page.ts
@@ -1207,8 +1945,13 @@ var EasySaveParser = (() => {
   }
   function parsePage() {
     const url = window.location.href;
+    const moduleId = isTiktokLink(url) ? "tiktok" : isXhsHost(url) ? "xhs" : isInstagramHost(url) ? "instagram" : isXHost(url) ? "x" : "";
+    return parsePageForModule(moduleId);
+  }
+  function parsePageForModule(moduleId, thumbnailScenes = [], smallThumbnail = false) {
+    const url = window.location.href;
     const html = document.documentElement.outerHTML;
-    if (isTiktokLink(url)) {
+    if (moduleId === "tiktok") {
       const result = parseTiktok(html, url);
       if (result.ok) return JSON.stringify(result);
       const state = window.__UNIVERSAL_DATA_FOR_REHYDRATION__;
@@ -1217,7 +1960,7 @@ var EasySaveParser = (() => {
       }
       return JSON.stringify(result);
     }
-    if (isXhsHost(url)) {
+    if (moduleId === "xhs") {
       const state = window.__INITIAL_STATE__;
       if (state !== void 0) {
         try {
@@ -1226,28 +1969,28 @@ var EasySaveParser = (() => {
           if (note) {
             const noteId = typeof note["noteId"] === "string" && note["noteId"].length > 0 ? note["noteId"] : wantedId ?? "";
             if (noteId) {
-              return JSON.stringify(buildNoteFromRecord(note, noteId, url));
+              return JSON.stringify(buildNoteFromRecord(note, noteId, url, thumbnailScenes));
             }
           }
         } catch (_) {
         }
       }
-      return JSON.stringify(parseXhs(html, url));
+      return JSON.stringify(parseXhs(html, url, thumbnailScenes));
     }
-    if (isInstagramHost(url)) {
+    if (moduleId === "instagram") {
       const shortcode = shortcodeFromUrl(url);
       if (shortcode && window.__easysaveIgProducts?.[shortcode]) {
         return JSON.stringify(
-          buildPostFromProduct(window.__easysaveIgProducts[shortcode], shortcode)
+          buildPostFromProduct(window.__easysaveIgProducts[shortcode], shortcode, smallThumbnail)
         );
       }
-      const res = parseInstagram(html, url);
+      const res = parseInstagram(html, url, smallThumbnail);
       if (res.ok) return JSON.stringify(res);
       const domRes = parseInstagramFromDom(document, url);
       if (domRes && domRes.ok) return JSON.stringify(domRes);
       return JSON.stringify(res);
     }
-    if (isXHost(url)) {
+    if (moduleId === "x") {
       return JSON.stringify({
         ok: false,
         error: { code: "UNSUPPORTED_URL", message: "X posts require syndication JSON input to parse(input, pageUrl)" }
@@ -1255,19 +1998,19 @@ var EasySaveParser = (() => {
     }
     return JSON.stringify({ ok: false, error: { code: "UNSUPPORTED_URL", message: `Unsupported host: ${url}` } });
   }
-  function parse(input, pageUrl) {
-    if (isTiktokLink(pageUrl)) return JSON.stringify(parseTiktok(input, pageUrl));
+  function parse(input, pageUrl, moduleId, thumbnailScenes = [], smallThumbnail = false) {
+    if (moduleId ? moduleId === "tiktok" : isTiktokLink(pageUrl)) return JSON.stringify(parseTiktok(input, pageUrl));
     const host = hostnameOf(pageUrl);
     if (!host) {
       return JSON.stringify({ ok: false, error: { code: "UNSUPPORTED_URL", message: `Cannot parse URL: ${pageUrl}` } });
     }
-    if (isXhsHost(host)) {
-      return JSON.stringify(parseXhs(input, pageUrl));
+    if (moduleId ? moduleId === "xhs" : isXhsHost(host)) {
+      return JSON.stringify(parseXhs(input, pageUrl, thumbnailScenes));
     }
-    if (isInstagramHost(host)) {
-      return JSON.stringify(parseInstagram(input, pageUrl));
+    if (moduleId ? moduleId === "instagram" : isInstagramHost(host)) {
+      return JSON.stringify(parseInstagram(input, pageUrl, smallThumbnail));
     }
-    if (isXHost(host)) {
+    if (moduleId ? moduleId === "x" : isXHost(host)) {
       return JSON.stringify(parseX(input, pageUrl));
     }
     return JSON.stringify({ ok: false, error: { code: "UNSUPPORTED_URL", message: `Unsupported host: ${host}` } });

@@ -19,6 +19,21 @@ class PreviewRouteObserver extends NavigatorObserver {
   /// Number of routes currently tracked (for tests).
   int get depth => _stack.length;
 
+  /// Reuse an existing preview anywhere in this navigator, including when
+  /// another page or a sheet was pushed over it.
+  bool revealPreview(String? postId) {
+    if (postId == null) return false;
+    for (final route in _stack.reversed) {
+      if (route.settings.name == kPreviewRouteName &&
+          route.settings.arguments is String &&
+          (route.settings.arguments as String).toLowerCase() == postId.toLowerCase()) {
+        navigator?.popUntil((candidate) => identical(candidate, route));
+        return true;
+      }
+    }
+    return false;
+  }
+
   /// Drop everything tracked so far (tests only: the singleton outlives a
   /// single test case).
   @visibleForTesting

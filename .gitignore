@@ -12,3 +12,9 @@ node_modules/
 spec/fixtures/_raw/
 
 pulled*/
+
+# Signing material must never be committed.
+*.jks
+*.keystore
+key.properties
+

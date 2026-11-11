@@ -8,6 +8,8 @@ import 'package:package_info_plus/package_info_plus.dart';
 import '../core/dev_log.dart';
 import '../services/album_name_registry.dart';
 import '../services/auth.dart';
+import '../widgets/shared.dart';
+import '../widgets/xhs_login_choices.dart';
 import '../services/bubble_service.dart';
 import '../services/gallery_locator_service.dart';
 import '../services/history_backfill_service.dart';
@@ -21,21 +23,25 @@ import 'backup_restore_page.dart';
 import 'login_page.dart';
 
 class MinePage extends StatefulWidget {
-  const MinePage({super.key});
+  const MinePage({super.key, this.xhsSessionProbe = probeXhsSessions});
+
+  final Future<SessionStatus> Function({String entry}) xhsSessionProbe;
 
   @override
   State<MinePage> createState() => _MinePageState();
 }
 
 class _MinePageState extends State<MinePage> with WidgetsBindingObserver {
-  final Map<PlatformKind, bool> _loggedIn = {
-    for (final p in PlatformKind.values) p: false,
-  };
+  final Map<String, bool> _loggedIn = {for (final p in loginSiteIds) p: false};
+  SessionStatus? _xhsStatus;
+
+  /// Platforms being re-checked individually (the initial load checks all).
+  final Set<String> _checking = {};
   bool _checkingLogin = true;
   AppSettings _settings = AppSettings();
   String _version = '';
-  String _nickname = '';
-  Set<PlatformKind> _lastExpired = const {};
+  final _nicknames = <String, String>{};
+  Set<String> _lastExpired = const {};
   bool _pendingBubbleEnable = false;
 
   @override
@@ -180,48 +186,48 @@ class _MinePageState extends State<MinePage> with WidgetsBindingObserver {
     }
   }
 
-  Future<void> _refreshPlatform(PlatformKind platform) async {
-    final ok = await checkLogin(platform);
+  Future<void> _refreshPlatform(String platform) async {
+    final status = platform == 'xhs'
+        ? await widget.xhsSessionProbe(entry: 'mine_refresh')
+        : null;
+    final ok = status == null
+        ? await checkLogin(platform, entry: 'mine_refresh')
+        : status == SessionStatus.valid;
     if (!mounted) return;
     if (ok) LoginExpiredBus.clear(platform);
-    final account = platform == PlatformKind.xhs
-        ? XhsAccountCache.value ?? await XhsAccountCache.load()
+    final account = hasAccountHook(platform)
+        ? AccountCache.value(platform) ?? await AccountCache.load(platform)
         : null;
     setState(() {
       _loggedIn[platform] = ok;
-      if (account != null) _nickname = account.nickname ?? '';
+      if (platform == 'xhs') _xhsStatus = status;
+      if (account != null) _nicknames[platform] = account.nickname ?? '';
     });
   }
 
   Future<void> _load() async {
     final settings = await AppSettings.load();
-    // Cached page-state answer first: instant, and it survives app restarts.
-    final cachedXhs = await XhsAccountCache.load();
-    final ig = await isLoggedIn(PlatformKind.instagram);
-    final x = await isLoggedIn(PlatformKind.x);
-    final tiktok = await isLoggedIn(PlatformKind.tiktok);
+    final states = <String, bool>{};
+    SessionStatus? xhsStatus;
+    for (final platform in loginSiteIds) {
+      if (platform == 'xhs') {
+        xhsStatus = await widget.xhsSessionProbe(entry: 'mine_load');
+        states[platform] = xhsStatus == SessionStatus.valid;
+      } else {
+        states[platform] = await checkLogin(platform, entry: 'mine_load');
+      }
+      _nicknames[platform] = AccountCache.value(platform)?.nickname ?? '';
+    }
     final info = await PackageInfo.fromPlatform();
     if (!mounted) return;
     setState(() {
       _settings = settings;
-      _loggedIn[PlatformKind.xhs] = cachedXhs?.loggedIn ?? false;
-      _loggedIn[PlatformKind.instagram] = ig;
-      _loggedIn[PlatformKind.x] = x;
-      _loggedIn[PlatformKind.tiktok] = tiktok;
-      _nickname = cachedXhs?.nickname ?? '';
+      _loggedIn.addAll(states);
+      _xhsStatus = xhsStatus;
       _checkingLogin = false;
       _version = '${info.version}+${info.buildNumber}';
     });
-    // No cached answer (never logged in through the login page, or the cache
-    // was cleared): fall back to the cookie jar plus a network probe. This
-    // runs after the first paint, so the tab still renders instantly.
-    if (cachedXhs == null) {
-      final cookieLogin = await checkLogin(PlatformKind.xhs);
-      if (!mounted) return;
-      setState(() => _loggedIn[PlatformKind.xhs] = cookieLogin);
-    }
   }
-
 
   Future<void> _saveSettings() => _settings.save();
 
@@ -229,9 +235,9 @@ class _MinePageState extends State<MinePage> with WidgetsBindingObserver {
     final added = await TileService.addTile();
     if (!mounted) return;
     if (added) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('已添加到控制中心')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('已添加到控制中心')));
       return;
     }
     // Android 12 and below (or a cancelled dialog): show manual steps.
@@ -255,32 +261,53 @@ class _MinePageState extends State<MinePage> with WidgetsBindingObserver {
     );
   }
 
-  Future<void> _openLogin(PlatformKind platform) async {
+  Future<void> _openLogin(String platform) async {
+    String? entryUrl;
+    if (platform == 'xhs') {
+      entryUrl = await showDialog<String>(
+        context: context,
+        builder: (context) => SimpleDialog(
+          title: const Text('选择登录站点'),
+          children: [
+            XhsLoginChoices(onSelected: (url) => Navigator.pop(context, url)),
+          ],
+        ),
+      );
+      if (entryUrl == null || !mounted) return;
+    }
     final ok = await Navigator.of(context).push<bool>(
-      MaterialPageRoute<bool>(builder: (_) => LoginPage(platform: platform)),
+      MaterialPageRoute<bool>(
+        builder: (_) => LoginPage(platform: platform, entryUrl: entryUrl),
+      ),
     );
     if (!mounted) return;
     setState(() => _checkingLogin = true);
     // Trust the login page result after a successful flow (it verified the
     // session end-to-end); otherwise re-check the cookie store.
-    final loggedIn = ok == true ? true : await checkLogin(platform);
+    final status = platform == 'xhs'
+        ? await widget.xhsSessionProbe(entry: 'login_return')
+        : null;
+    final loggedIn = status == null
+        ? (ok == true ? true : await checkLogin(platform))
+        : status == SessionStatus.valid;
     if (!mounted) return;
     if (loggedIn) {
       LoginExpiredBus.clear(platform);
-    } else {
+    } else if (platform != 'xhs') {
       LoginExpiredBus.markExpired(platform);
     }
-    final account = platform == PlatformKind.xhs
-        ? XhsAccountCache.value ?? await XhsAccountCache.load()
+    final account = hasAccountHook(platform)
+        ? AccountCache.value(platform) ?? await AccountCache.load(platform)
         : null;
     setState(() {
       _loggedIn[platform] = loggedIn;
-      if (account != null) _nickname = account.nickname ?? '';
+      if (platform == 'xhs') _xhsStatus = status;
+      if (account != null) _nicknames[platform] = account.nickname ?? '';
       _checkingLogin = false;
     });
   }
 
-  Future<void> _logout(PlatformKind platform) async {
+  Future<void> _logout(String platform) async {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
@@ -303,7 +330,8 @@ class _MinePageState extends State<MinePage> with WidgetsBindingObserver {
       if (!mounted) return;
       setState(() {
         _loggedIn[platform] = false;
-        if (platform == PlatformKind.xhs) _nickname = '';
+        if (platform == 'xhs') _xhsStatus = SessionStatus.invalid;
+        _nicknames.remove(platform);
       });
     }
   }
@@ -393,7 +421,9 @@ class _MinePageState extends State<MinePage> with WidgetsBindingObserver {
       );
     }
     for (final album in used) {
-      if (!options.any((option) => option.name.toLowerCase() == album.toLowerCase())) {
+      if (!options.any(
+        (option) => option.name.toLowerCase() == album.toLowerCase(),
+      )) {
         options = [...options, (name: album, count: 0)];
       }
     }
@@ -417,12 +447,16 @@ class _MinePageState extends State<MinePage> with WidgetsBindingObserver {
                   value: true,
                   onChanged: null,
                   title: Text('Download/EasySave'),
-                  subtitle: Text(fixedAuthorized ? '已授权文件夹，始终扫描' : '内容凭证图片，始终扫描'),
+                  subtitle: Text(
+                    fixedAuthorized ? '已授权文件夹，始终扫描' : '内容凭证图片，始终扫描',
+                  ),
                 ),
                 TextButton(
                   onPressed: () async {
                     final granted = await _authorizeFixedDirectory();
-                    if (dialogContext.mounted && granted) setLocal(() => fixedAuthorized = true);
+                    if (dialogContext.mounted && granted) {
+                      setLocal(() => fixedAuthorized = true);
+                    }
                   },
                   child: const Text('授权 Download/EasySave 文件夹（清除数据后恢复边车）'),
                 ),
@@ -455,9 +489,9 @@ class _MinePageState extends State<MinePage> with WidgetsBindingObserver {
               child: const Text('取消'),
             ),
             TextButton(
-              onPressed: () => Navigator.of(dialogContext).pop(
-                (albums: selected, allAlbums: allAlbums),
-              ),
+              onPressed: () => Navigator.of(
+                dialogContext,
+              ).pop((albums: selected, allAlbums: allAlbums)),
               child: const Text('开始重建'),
             ),
           ],
@@ -517,9 +551,9 @@ class _MinePageState extends State<MinePage> with WidgetsBindingObserver {
     } catch (e) {
       if (!mounted) return;
       Navigator.of(context).pop(); // Close progress dialog
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('重建失败：$e')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('重建失败：$e')));
     }
   }
 
@@ -529,8 +563,15 @@ class _MinePageState extends State<MinePage> with WidgetsBindingObserver {
       if (uri == null) return false;
       return await authorizeFixedRebuildDirectory(uri);
     } catch (e) {
-      DevLog.write('HistoryRebuild', 'file=<directory> path=$c2paRelativePath stage=directory-authorization exception=${e.runtimeType}');
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('请选择 Download/EasySave 文件夹，其他目录不会被读取')));
+      DevLog.write(
+        'HistoryRebuild',
+        'file=<directory> path=$c2paRelativePath stage=directory-authorization exception=${e.runtimeType}',
+      );
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('请选择 Download/EasySave 文件夹，其他目录不会被读取')),
+        );
+      }
       return false;
     }
   }
@@ -598,9 +639,9 @@ class _MinePageState extends State<MinePage> with WidgetsBindingObserver {
     } catch (e) {
       if (!mounted) return;
       Navigator.of(context).pop(); // Close progress dialog
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('写入失败：$e')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('写入失败：$e')));
     }
   }
 
@@ -621,30 +662,68 @@ class _MinePageState extends State<MinePage> with WidgetsBindingObserver {
     final path = await DevLog.exportToExternal();
     if (!mounted) return;
     messenger.showSnackBar(
-      SnackBar(
-        content: Text(
-          path == null ? '没有可导出的日志' : '日志已导出：$path',
-        ),
+      SnackBar(content: Text(path == null ? '没有可导出的日志' : '日志已导出：$path')),
+    );
+  }
+
+  Future<void> _clearLog() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('清空日志'),
+        content: const Text('确定清空运行日志？此操作不会退出账号或删除下载记录。'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('确认清空'),
+          ),
+        ],
       ),
     );
+    if (confirmed != true) return;
+    await DevLog.clear();
+    if (mounted)
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('日志已清空')));
   }
 
   /// Subtitle for a platform row: "已登录" / "未登录", plus a hint when a
   /// parse recently proved the stored session is dead.
-  Widget _loginSubtitle(PlatformKind platform) {
-    final loggedIn = _loggedIn[platform]!;
-    final expired = LoginExpiredBus.expired.value.contains(platform);
+  Widget _loginSubtitle(String platform) {
+    if (platform == 'xhs' && _xhsStatus == SessionStatus.unknown) {
+      return const Text('无法确认登录状态，请检查网络后重试');
+    }
+    final loggedIn = _loggedIn[platform] ?? false;
+    final expired =
+        platform != 'xhs' && LoginExpiredBus.expired.value.contains(platform);
     if (expired) {
-      return const Text(
-        '登录已失效，请重新登录',
-        style: TextStyle(color: Colors.orange),
+      return const Text('登录已失效，请重新登录', style: TextStyle(color: Colors.orange));
+    }
+    if (platform == 'xhs' && loggedIn) {
+      return FutureBuilder<Map<String, SessionStatus>>(
+        future: loadXhsDomainStatuses(),
+        builder: (context, snapshot) {
+          final domains =
+              snapshot.data?.entries
+                  .where((entry) => entry.value == SessionStatus.valid)
+                  .map((entry) => entry.key)
+                  .join('、') ??
+              '';
+          return Text(
+            domains.isEmpty ? '已登录' : '已登录（$domains）',
+            style: const TextStyle(color: Colors.green),
+          );
+        },
       );
     }
-    if (loggedIn &&
-        platform == PlatformKind.xhs &&
-        _nickname.trim().isNotEmpty) {
+    if (loggedIn && (_nicknames[platform] ?? '').trim().isNotEmpty) {
       return Text(
-        '已登录（${_nickname.trim()}）',
+        '已登录（${_nicknames[platform]!.trim()}）',
         style: const TextStyle(color: Colors.green),
       );
     }
@@ -665,9 +744,10 @@ class _MinePageState extends State<MinePage> with WidgetsBindingObserver {
           Card(
             child: Column(
               children: [
-                for (final platform in PlatformKind.values)
-                  if (_checkingLogin)
+                for (final platform in loginSiteIds)
+                  if (_checkingLogin || _checking.contains(platform))
                     ListTile(
+                      leading: PlatformIcon(platform: platform),
                       title: Text(platformLabel(platform)),
                       subtitle: const Text('检查中…'),
                       trailing: const SizedBox(
@@ -678,9 +758,43 @@ class _MinePageState extends State<MinePage> with WidgetsBindingObserver {
                     )
                   else
                     ListTile(
+                      leading: PlatformIcon(platform: platform),
                       title: Text(platformLabel(platform)),
                       subtitle: _loginSubtitle(platform),
-                      trailing: _loggedIn[platform]!
+                      trailing:
+                          platform == 'xhs' && _xhsStatus == SessionStatus.unknown
+                          // A session cookie exists but its page state could
+                          // not be read: re-check this platform only, or log in.
+                          ? Wrap(
+                              children: [
+                                TextButton(
+                                  onPressed: () async {
+                                    setState(() => _checking.add(platform));
+                                    try { await _refreshPlatform(platform); }
+                                    finally { if (mounted) setState(() => _checking.remove(platform)); }
+                                  },
+                                  child: const Text('重新检查'),
+                                ),
+                                TextButton(
+                                  onPressed: () => _openLogin(platform),
+                                  child: const Text('去登录'),
+                                ),
+                              ],
+                            )
+                          : platform == 'xhs' && (_loggedIn[platform] ?? false)
+                          ? Wrap(
+                              children: [
+                                TextButton(
+                                  onPressed: () => _openLogin(platform),
+                                  child: const Text('登录站点'),
+                                ),
+                                TextButton(
+                                  onPressed: () => _logout(platform),
+                                  child: const Text('退出登录'),
+                                ),
+                              ],
+                            )
+                          : (_loggedIn[platform] ?? false)
                           ? TextButton(
                               onPressed: () => _logout(platform),
                               child: const Text('退出登录'),
@@ -699,9 +813,7 @@ class _MinePageState extends State<MinePage> with WidgetsBindingObserver {
               children: [
                 ListTile(
                   title: const Text('相册名称'),
-                  subtitle: Text(
-                    _settings.effectiveAlbumNames.join(' / '),
-                  ),
+                  subtitle: Text(_settings.effectiveAlbumNames.join(' / ')),
                   onTap: () => _editText(
                     title: '相册名称',
                     initial: _settings.albumName,
@@ -720,9 +832,7 @@ class _MinePageState extends State<MinePage> with WidgetsBindingObserver {
                 ),
                 SwitchListTile(
                   title: const Text('保存来源信息（图片和视频）'),
-                  subtitle: const Text(
-                    '下载的图片和视频中会记录来源链接、作者和标题，方便以后整理和溯源',
-                  ),
+                  subtitle: const Text('下载的图片和视频中会记录来源链接、作者和标题，方便以后整理和溯源'),
                   value: _settings.saveProvenanceInImages,
                   onChanged: (v) async {
                     setState(() => _settings.saveProvenanceInImages = v);
@@ -830,7 +940,9 @@ class _MinePageState extends State<MinePage> with WidgetsBindingObserver {
                   subtitle: Text(
                     _settings.lastBackupTime != null
                         ? '上次备份：${_formatBackupTime(_settings.lastBackupTime!)}'
-                        : (_settings.backupTreeUri != null ? '已设置备份目录' : '未设置备份目录'),
+                        : (_settings.backupTreeUri != null
+                              ? '已设置备份目录'
+                              : '未设置备份目录'),
                   ),
                   trailing: const Icon(Icons.chevron_right),
                   onTap: () async {
@@ -858,6 +970,7 @@ class _MinePageState extends State<MinePage> with WidgetsBindingObserver {
                   subtitle: const Text('调试用：把脱敏后的运行日志复制到可读取目录'),
                   onTap: _exportLog,
                 ),
+                ListTile(title: const Text('清空日志'), onTap: _clearLog),
                 ListTile(title: const Text('版本号'), subtitle: Text(_version)),
                 ListTile(
                   title: const Text('解析器版本'),
@@ -872,14 +985,13 @@ class _MinePageState extends State<MinePage> with WidgetsBindingObserver {
                       messenger.showSnackBar(
                         const SnackBar(content: Text('正在检查解析器更新…')),
                       );
-                      final updated = await ParserManager.instance.checkForUpdates(force: true);
+                      final updated = await ParserManager.instance
+                          .checkForUpdates(force: true, trigger: 'manual');
                       if (!mounted) return;
                       setState(() {});
                       messenger.showSnackBar(
                         SnackBar(
-                          content: Text(
-                            updated ? '解析器已更新到最新版本' : '当前已是最新解析器',
-                          ),
+                          content: Text(updated ? '解析器已更新到最新版本' : '当前已是最新解析器'),
                         ),
                       );
                     },

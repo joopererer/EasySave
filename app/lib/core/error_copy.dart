@@ -3,6 +3,7 @@
 // with the browser extension.
 
 import 'models.dart';
+import '../services/site_registry.dart';
 
 /// UI action attached to an error code.
 enum ErrorAction { goLogin, backHome, retry, repaste }
@@ -25,14 +26,46 @@ String displayErrorMessage(String code, String? message) =>
 ErrorCopy errorCopyFor(String code) {
   switch (code) {
     case ParseErrorCode.loginRequired:
-      return const ErrorCopy(
-        message: '需要先登录小红书/Instagram',
+      final names = SiteRegistry.current.sites
+          .where(
+            (s) =>
+                s.enabled && {'optional', 'required'}.contains(s.auth['mode']),
+          )
+          .map((s) => s.displayName)
+          .join('/');
+      return ErrorCopy(
+        message: names.isEmpty ? '需要先登录' : '需要先登录$names',
         action: ErrorAction.goLogin,
+      );
+    case ParseErrorCode.ageNotSet:
+      return const ErrorCopy(
+        message: '该内容需要你的 X 账号先设置出生日期（年龄）后才能查看',
+        action: ErrorAction.backHome,
+      );
+    case ParseErrorCode.ageRestricted:
+      return const ErrorCopy(
+        message: '该帖子有年龄限制，需要登录已完成年龄验证的 X 账号才能查看',
+        action: ErrorAction.goLogin,
+      );
+    case ParseErrorCode.protectedAccount:
+      return const ErrorCopy(
+        message: '该帖子来自受保护的账号，只有获准的关注者可以查看',
+        action: ErrorAction.backHome,
       );
     case ParseErrorCode.privateOrUnavailable:
       return const ErrorCopy(
         message: '该帖子不存在、私密或已删除',
         action: ErrorAction.backHome,
+      );
+    case ParseErrorCode.postNotFound:
+      return const ErrorCopy(
+        message: '帖子不存在，或链接已失效',
+        action: ErrorAction.backHome,
+      );
+    case ParseErrorCode.tokenRequired:
+      return const ErrorCopy(
+        message: '链接缺少访问令牌，请使用小红书 App 内“分享”得到的链接，或登录后重试',
+        action: ErrorAction.repaste,
       );
     case ParseErrorCode.blocked:
       return const ErrorCopy(
@@ -45,8 +78,12 @@ ErrorCopy errorCopyFor(String code) {
         action: ErrorAction.retry,
       );
     case ParseErrorCode.unsupportedUrl:
-      return const ErrorCopy(
-        message: '不支持的链接，请粘贴小红书/Instagram 帖子链接',
+      final names = SiteRegistry.current.sites
+          .where((s) => s.enabled)
+          .map((s) => s.displayName)
+          .join('/');
+      return ErrorCopy(
+        message: names.isEmpty ? '不支持的链接，请粘贴帖子链接' : '不支持的链接，请粘贴$names 帖子链接',
         action: ErrorAction.repaste,
       );
     case ParseErrorCode.timeout:

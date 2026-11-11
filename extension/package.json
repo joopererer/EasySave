@@ -9,9 +9,12 @@
     "postinstall": "wxt prepare",
     "typecheck": "tsc --noEmit",
     "pretest": "wxt prepare && npm run typecheck",
-    "test": "vitest run",
-    "build:parser": "node scripts/build_parser.js",
-    "build:release": "node scripts/build_release.js"
+    "test": "vitest run && node --test scripts/build_release.check.js scripts/builtin_versions.check.js",
+    "check:builtin": "node scripts/check_builtin_versions.js",
+    "build:parser": "node scripts/build_parser.js && npm run build:builtin",
+    "build:release": "node scripts/build_release.js",
+    "build:candidate": "node scripts/build_release.js --candidate",
+    "build:builtin": "node scripts/build_builtin.js"
   },
   "devDependencies": {
     "@types/chrome": "^0.3.5",

@@ -13,7 +13,7 @@ import '../core/app_version.dart';
 import '../core/dev_log.dart';
 import '../core/models.dart';
 import '../metadata/metadata_service.dart';
-import '../metadata/url_normalizer.dart';
+import '../metadata/site_provenance.dart';
 import 'gallery_locator_service.dart';
 import 'history_db.dart';
 import 'media_delete_service.dart';
@@ -272,7 +272,7 @@ class HistoryBackfillService {
     final asset = item.asset;
 
     // Build provenance from history record, using savedAt from files_json as capturedAt
-    final provenance = _buildProvenance(record, file, asset);
+    final provenance = provenanceForHistoryFile(record, file, asset);
     if (provenance == null) {
       DevLog.write(_logTag, 'Failed to build provenance for ${asset.title}');
       return _BackfillStatusResult(_BackfillStatus.otherError);
@@ -440,67 +440,6 @@ class HistoryBackfillService {
     }
   }
 
-  XmpProvenance? _buildProvenance(
-    HistoryRecord record,
-    HistoryFile file,
-    AssetEntity asset,
-  ) {
-    // Parse items from record
-    List<MediaItem>? items;
-    if (record.itemsJson != null) {
-      try {
-        final decoded = jsonDecode(record.itemsJson!);
-        if (decoded is List) {
-          items = decoded
-              .map((raw) => MediaItem.fromJson(
-                    (raw as Map).cast<String, dynamic>(),
-                  ))
-              .toList();
-        }
-      } catch (_) {}
-    }
-
-    // Fallback: create minimal item list
-    items ??= [
-      MediaItem(
-        type: asset.type == AssetType.video ? 'video' : 'image',
-        url: '',
-      ),
-    ];
-
-    // Calculate itemCount
-    final itemCount = items.where((it) => it.type != 'video' || it.videoUrl != null).length;
-    final itemIndex = file.itemIndex;
-
-    // Live Photo pairId check: only Live Photos write pairId
-    final isLivePhoto = (items.length > itemIndex && items[itemIndex].videoUrl != null) ||
-        (record.files.any((f) => f.itemIndex == itemIndex && f.isImage) &&
-            record.files.any((f) => f.itemIndex == itemIndex && !f.isImage));
-    final pairId = isLivePhoto ? '${record.postId}#$itemIndex' : null;
-
-    // Use savedAt from files_json as capturedAt (spec §7.2)
-    final capturedAt = DateTime.fromMillisecondsSinceEpoch(file.savedAt);
-
-    return ProvenanceBuilder(
-      platform: toSpecPlatform(record.platform),
-      capturedBy: AppVersion.capturedBy,
-      sourceId: record.postId,
-      sourceUrl: record.postUrl,
-      authorName: record.authorName,
-      title: record.title,
-      caption: record.caption,
-      aiLabel: record.aiLabel,
-      aiLabelSource: record.aiLabelSource,
-      authorId: null, // Don't have authorId from history
-      creditPlatformName: platformDisplayName(record.platform),
-      publishedAt: null, // Don't have from history
-      itemIndex: itemIndex,
-      itemCount: itemCount > 1 ? itemCount : 1,
-      existingAssetId: file.assetId,
-      capturedAt: capturedAt,
-    ).build().copyWith(pairId: pairId);
-  }
-
   Future<void> _updateAssetId(
     HistoryRecord record,
     HistoryFile file,
@@ -514,7 +453,7 @@ class HistoryBackfillService {
 
     if (record.id != null) {
       final db = await HistoryDb.instance();
-      await db.updateFiles(record.id!, updatedFiles);
+      await db.updateFiles(record.id!, updatedFiles, source: 'backfill');
     }
   }
 }
@@ -546,4 +485,65 @@ class _BackfillItem {
     required this.record,
     required this.file,
   });
+}
+
+/// Builds the metadata passed to the old-file writer, preserving history evidence.
+XmpProvenance? provenanceForHistoryFile(
+  HistoryRecord record,
+  HistoryFile file,
+  AssetEntity asset,
+) {
+  // Parse items from record
+  List<MediaItem>? items;
+  if (record.itemsJson != null) {
+    try {
+      final decoded = jsonDecode(record.itemsJson!);
+      if (decoded is List) {
+        items = decoded
+            .map((raw) => MediaItem.fromJson(
+                  (raw as Map).cast<String, dynamic>(),
+                ))
+            .toList();
+      }
+    } catch (_) {}
+  }
+
+  // Fallback: create minimal item list
+  items ??= [
+    MediaItem(
+      type: asset.type == AssetType.video ? 'video' : 'image',
+      url: '',
+    ),
+  ];
+
+  // Calculate itemCount
+  final itemCount = items.where((it) => it.type != 'video' || it.videoUrl != null).length;
+  final itemIndex = file.itemIndex;
+
+  // Live Photo pairId check: only Live Photos write pairId
+  final isLivePhoto = (items.length > itemIndex && items[itemIndex].videoUrl != null) ||
+      (record.files.any((f) => f.itemIndex == itemIndex && f.isImage) &&
+          record.files.any((f) => f.itemIndex == itemIndex && !f.isImage));
+  final pairId = isLivePhoto ? '${record.postId}#$itemIndex' : null;
+
+  // Use savedAt from files_json as capturedAt (spec §7.2)
+  final capturedAt = DateTime.fromMillisecondsSinceEpoch(file.savedAt);
+
+  return buildSiteProvenance(
+    platform: record.platform,
+    capturedBy: AppVersion.capturedBy,
+    sourceId: record.postId,
+    sourceUrl: record.postUrl,
+    authorName: record.authorName,
+    title: record.title,
+    caption: record.caption,
+    aiLabel: record.aiLabel,
+    aiLabelSource: record.aiLabelSource,
+    authorId: null, // Don't have authorId from history
+    publishedAt: null, // Don't have from history
+    itemIndex: itemIndex,
+    itemCount: itemCount > 1 ? itemCount : 1,
+    existingAssetId: file.assetId,
+    capturedAt: capturedAt,
+  ).copyWith(pairId: pairId);
 }

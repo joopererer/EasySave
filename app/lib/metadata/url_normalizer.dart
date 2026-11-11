@@ -1,54 +1,40 @@
 // Copyright 2026 EasySave. All rights reserved.
 
+import 'package:provenance_dart/provenance_dart.dart' show normalizeUrl;
+
+import '../services/site_registry.dart';
+
 export 'package:provenance_dart/provenance_dart.dart' show normalizeUrl;
 
-/// Primary canonical mapping from internal app identifiers to spec platform names.
-/// See SPEC §2: prov:platform must be "xiaohongshu", "instagram", or "x".
-const internalPlatformToSpec = <String, String>{
-  'xhs': 'xiaohongshu',
-  'instagram': 'instagram',
-  'x': 'x',
-  'tiktok': 'tiktok',
-};
-
-/// Map of platform identifiers to spec-compliant names.
-/// Automatically includes idempotent mappings (spec -> spec).
-final Map<String, String> appPlatformToSpecPlatform = {
-  ...internalPlatformToSpec,
-  for (final spec in internalPlatformToSpec.values) spec: spec,
-};
-
-/// Returns the spec-compliant platform name for an app internal identifier.
-String toSpecPlatform(String platform) {
-  return appPlatformToSpecPlatform[platform] ?? platform;
+/// Canonical URL used to compare stored and new links. Values written under an
+/// older spec (e.g. a rednote.com canonical before provenance-spec 0.1.8) are
+/// normalized again for the comparison only; stored values are never rewritten.
+String canonicalForComparison(String url) {
+  final trimmed = url.trim();
+  try {
+    return normalizeUrl(trimmed);
+  } catch (_) {
+    return trimmed;
+  }
 }
 
-/// Map of spec-compliant platform names to internal app identifiers.
-/// Derived automatically by inverting [internalPlatformToSpec].
-final Map<String, String> specPlatformToAppPlatform = {
-  for (final entry in internalPlatformToSpec.entries) entry.value: entry.key,
-  for (final internal in internalPlatformToSpec.keys) internal: internal,
-};
+/// Whether two links name the same post under the current spec.
+bool sameCanonicalUrl(String? left, String? right) =>
+    left != null &&
+    right != null &&
+    left.trim().isNotEmpty &&
+    canonicalForComparison(left) == canonicalForComparison(right);
 
-/// Returns the app internal identifier for a spec platform name.
-String toAppPlatform(String platform) {
-  return specPlatformToAppPlatform[platform] ?? platform;
-}
+/// Accept app IDs and provenance platform names, including disabled sites.
+/// Unknown historical platforms keep their original identity.
+String toSpecPlatform(String platform) =>
+    (SiteRegistry.current.byId(platform) ?? SiteRegistry.builtinById(platform))
+        ?.platform ??
+    platform;
 
-/// Platform display names for photoshop:Credit field.
-/// Maps app internal identifiers to localized display names.
-/// Also accepts spec platform names (xiaohongshu, instagram, x) as input.
-const appPlatformToDisplayName = {
-  'xhs': '小红书',
-  'xiaohongshu': '小红书',
-  'instagram': 'Instagram',
-  'x': 'X',
-  'tiktok': 'TikTok',
-};
+String toAppPlatform(String platform) =>
+    SiteRegistry.current.canonicalId(platform);
 
-/// Returns the localized display name for a platform.
-/// Accepts both app internal identifiers (xhs, instagram, x) and 
-/// spec platform names (xiaohongshu, instagram, x).
-String platformDisplayName(String platform) {
-  return appPlatformToDisplayName[platform] ?? platform;
-}
+/// Metadata Credit uses creditName rather than the UI display name.
+String platformDisplayName(String platform) =>
+    SiteRegistry.current.byId(platform)?.creditName ?? platform;

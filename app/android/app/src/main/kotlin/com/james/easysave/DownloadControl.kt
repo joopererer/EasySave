@@ -6,7 +6,9 @@ import io.flutter.plugin.common.MethodChannel
 object DownloadControl {
     private val claims = DownloadClaims()
     fun register(messenger: BinaryMessenger) {
-        MethodChannel(messenger, "easysave/download_control").setMethodCallHandler { call, result ->
+        MethodChannel(messenger, "easysave/download_control",
+            io.flutter.plugin.common.StandardMethodCodec.INSTANCE,
+            messenger.makeBackgroundTaskQueue()).setMethodCallHandler { call, result ->
             when (call.method) {
                 "reserve" -> result.success(claims.reserve(call.argument<String>("batch")!!,
                     call.argument<List<String>>("keys")!!, call.argument<Map<String, String>>("existing") ?: emptyMap()))

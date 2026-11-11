@@ -26,7 +26,7 @@ describe('minimal real TikTok video fixture', () => {
       else if (typeof value === 'string' && value.startsWith('https://')) {
         const url = new URL(value);
         expect(url.hostname).toBe('media.example');
-        expect(url.pathname).toMatch(/^\/FAKE_\d+\.mp4$/);
+        expect(url.pathname).toMatch(/^\/FAKE_\d+\.(mp4|jpg|jpeg|png)$/);
         url.searchParams.forEach(v => expect(v).toBe('FAKE'));
       }
     }

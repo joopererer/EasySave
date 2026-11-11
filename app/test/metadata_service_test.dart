@@ -89,12 +89,13 @@ void main() {
       expect(prov.authorId, '1234567890');
     });
 
-    test('preserves authorId for non-X platforms', () {
+    test('preserves opaque XHS IDs and omits nonnumeric Instagram IDs', () {
       final xhsBatch = createBatch(platform: 'xhs', authorId: 'user_str_id');
       expect(provenanceForBatchItem(xhsBatch, itemIndex: 1).authorId, 'user_str_id');
 
       final igBatch = createBatch(platform: 'instagram', authorId: 'ig_user_123');
-      expect(provenanceForBatchItem(igBatch, itemIndex: 1).authorId, 'ig_user_123');
+      // Intentional v1.10 correction; the frozen legacy comparison covers this exception.
+      expect(provenanceForBatchItem(igBatch, itemIndex: 1).authorId, isNull);
     });
   });
 }

@@ -9,7 +9,6 @@ import 'package:flutter/material.dart';
 
 import '../core/models.dart';
 import '../services/download_manager.dart';
-import '../services/saver.dart';
 import '../theme/app_theme.dart';
 import '../widgets/shared.dart';
 
@@ -21,10 +20,15 @@ List<MediaItem> batchItems(DownloadBatch batch) {
   try {
     final decoded = jsonDecode(raw);
     if (decoded is! List) return const [];
-    return [
+    final items = [
       for (final e in decoded)
         if (e is Map) MediaItem.fromJson(e.cast<String, dynamic>()),
     ];
+    for (var index = 0; index < items.length; index++) {
+      items[index].cachePostId = batch.postId;
+      items[index].cacheItemIndex = index;
+    }
+    return items;
   } catch (_) {
     return const [];
   }
@@ -57,7 +61,7 @@ class _QueueThumb extends StatelessWidget {
               )
             : CoverImage(
                 item: it,
-                referer: refererFor(platform),
+                platform: (platform),
                 cacheWidth: (size * 3).round(),
                 width: size,
                 height: size,
@@ -102,7 +106,10 @@ class _DownloadQueuePageState extends State<DownloadQueuePage> {
     setState(() {
       // Only what is still downloading (or paused); finished batches belong
       // to the history.
-      _batches = [for (final b in list) if (!b.isTerminal) b];
+      _batches = [
+        for (final b in list)
+          if (!b.cancelledByDeletion && (!b.isTerminal || b.failedCount > 0)) b,
+      ];
       _loading = false;
     });
   }
@@ -114,9 +121,9 @@ class _DownloadQueuePageState extends State<DownloadQueuePage> {
       await action();
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('操作失败：$e')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('操作失败：$e')));
       }
     } finally {
       if (mounted) setState(() => _busy = false);
@@ -170,49 +177,53 @@ class _DownloadQueuePageState extends State<DownloadQueuePage> {
       body: _loading
           ? const Center(child: CircularProgressIndicator())
           : _batches.isEmpty
-              ? const Center(
-                  child: Text(
-                    '没有正在下载的任务',
-                    style: TextStyle(color: AppTokens.textSecondary),
-                  ),
-                )
-              : ListView.separated(
-                  padding: const EdgeInsets.all(12),
-                  itemCount: _batches.length,
-                  separatorBuilder: (_, _) => const SizedBox(height: 10),
-                  itemBuilder: (_, i) => _BatchCard(
-                    batch: _batches[i],
-                    stalled: _batches[i].isStalledAt(now),
-                    busy: _busy,
-                    onCancelJob: (j) => _run(
-                      () => DownloadManager.instance.cancelJob(_batches[i], j),
-                    ),
-                    onRetryJob: (j) => _run(() async {
-                      final owned = await DownloadManager.instance
-                          .forceAdopt(_batches[i]);
-                      final job = owned.jobs.firstWhere((x) => x.key == j.key);
-                      await DownloadManager.instance.retryJob(owned, job);
-                    }),
-                    onRetryAll: () => _run(() async {
-                      final owned = await DownloadManager.instance
-                          .forceAdopt(_batches[i]);
-                      await DownloadManager.instance.retryBatch(owned);
-                    }),
-                    onToggle: () => _run(() async {
-                      final b = _batches[i];
-                      final dm = DownloadManager.instance;
-                      if (b.isPaused) {
-                        await dm.resumeBatch(b);
-                      } else if (b.isStalledAt(now)) {
-                        final owned = await dm.forceAdopt(b);
-                        await dm.restartBatch(owned);
-                      } else {
-                        await dm.pauseBatch(b);
-                      }
-                    }),
-                    onRemove: () => _confirmRemove(_batches[i]),
-                  ),
+          ? const Center(
+              child: Text(
+                '没有正在下载的任务',
+                style: TextStyle(color: AppTokens.textSecondary),
+              ),
+            )
+          : ListView.separated(
+              padding: const EdgeInsets.all(12),
+              itemCount: _batches.length,
+              separatorBuilder: (_, _) => const SizedBox(height: 10),
+              itemBuilder: (_, i) => _BatchCard(
+                batch: _batches[i],
+                stalled: _batches[i].isStalledAt(now),
+                busy: _busy,
+                onCancelJob: (j) => _run(
+                  () => DownloadManager.instance.cancelJob(_batches[i], j),
                 ),
+                onRetryJob: (j) => _run(() async {
+                  final owned = await DownloadManager.instance.forceAdopt(
+                    _batches[i],
+                  );
+                  final job = owned.jobs.firstWhere((x) => x.key == j.key);
+                  await DownloadManager.instance.retryJob(owned, job);
+                }),
+                onRetryAll: () => _run(() async {
+                  final owned = await DownloadManager.instance.forceAdopt(
+                    _batches[i],
+                  );
+                  await DownloadManager.instance.retryBatch(owned);
+                }),
+                onToggle: () => _run(() async {
+                  final b = _batches[i];
+                  final dm = DownloadManager.instance;
+                  if (b.isTerminal && b.failedCount > 0) {
+                    await dm.retryBatch(await dm.forceAdopt(b));
+                  } else if (b.isPaused) {
+                    await dm.resumeBatch(b);
+                  } else if (b.isStalledAt(now)) {
+                    final owned = await dm.forceAdopt(b);
+                    await dm.restartBatch(owned);
+                  } else {
+                    await dm.pauseBatch(b);
+                  }
+                }),
+                onRemove: () => _confirmRemove(_batches[i]),
+              ),
+            ),
     );
   }
 }
@@ -239,6 +250,7 @@ class _BatchCard extends StatelessWidget {
   final VoidCallback onRemove;
 
   String get _status {
+    if (batch.isTerminal && batch.failedCount > 0) return '下载失败，点击重试';
     if (batch.isPaused) return '已暂停';
     return stalled ? '已停滞' : '下载中';
   }
@@ -249,10 +261,11 @@ class _BatchCard extends StatelessWidget {
     final pct = (batch.progress * 100).round();
     final items = batchItems(batch);
     final paused = batch.isPaused;
-    final toggleTip = paused ? '继续下载' : (stalled ? '重试' : '暂停下载');
+    final failed = batch.isTerminal && batch.failedCount > 0;
+    final toggleTip = failed ? '重试' : paused ? '继续下载' : (stalled ? '重试' : '暂停下载');
     final toggleIcon = paused
         ? Icons.play_arrow_rounded
-        : (stalled ? Icons.refresh : Icons.pause_rounded);
+        : (stalled || failed ? Icons.refresh : Icons.pause_rounded);
     return Card(
       margin: EdgeInsets.zero,
       child: ExpansionTile(
@@ -291,11 +304,12 @@ class _BatchCard extends StatelessWidget {
         trailing: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            if (batch.supportsPause) IconButton(
-              tooltip: toggleTip,
-              icon: Icon(toggleIcon),
-              onPressed: busy ? null : onToggle,
-            ),
+            if (batch.supportsPause)
+              IconButton(
+                tooltip: toggleTip,
+                icon: Icon(toggleIcon),
+                onPressed: busy ? null : onToggle,
+              ),
             IconButton(
               tooltip: batch.supportsPause ? '删除任务' : '取消',
               icon: const Icon(Icons.delete_outline),

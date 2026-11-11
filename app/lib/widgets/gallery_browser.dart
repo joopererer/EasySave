@@ -13,11 +13,13 @@ import 'package:url_launcher/url_launcher.dart';
 import 'package:video_player/video_player.dart';
 
 import '../core/models.dart';
+import '../core/media_request.dart';
 import '../services/gallery_locator_service.dart';
 import '../services/history_db.dart';
-import '../services/saver.dart';
 import '../services/preview_video.dart';
+import '../services/media_request_policy.dart';
 import 'shared.dart';
+import 'decoded_image_keeper.dart';
 import 'verified_asset_image.dart';
 import 'ai_label_badge.dart';
 
@@ -28,38 +30,78 @@ class GalleryBrowserItem {
     required this.url,
     this.videoUrl,
     this.posterUrl,
+    this.thumbnailUrl,
     this.fallbacks = const [],
+    this.requestResources,
     this.isGif = false,
     this.asset,
     this.liveVideoAsset,
     this.status = FileStatus.found,
     this.filename,
+    this.cachePostId,
+    this.cacheItemIndex,
   });
+
+  factory GalleryBrowserItem.fromMediaItem(
+    MediaItem item, {
+    required int index,
+    String? cachePostId,
+    AssetEntity? asset,
+    AssetEntity? liveVideoAsset,
+    FileStatus status = FileStatus.found,
+    String? filename,
+  }) => GalleryBrowserItem(
+    index: index,
+    type: item.type,
+    url: item.url,
+    videoUrl: item.videoUrl,
+    posterUrl: item.posterUrl,
+    thumbnailUrl: item.thumbnailUrl,
+    fallbacks: item.fallbacks,
+    requestResources: item.requestResources,
+    isGif: item.isGif ?? false,
+    cachePostId: cachePostId ?? item.cachePostId,
+    cacheItemIndex: item.cacheItemIndex ?? index,
+    asset: asset,
+    liveVideoAsset: liveVideoAsset,
+    status: status,
+    filename: filename ?? item.localFilename,
+  );
 
   final int index;
   final String type; // 'image', 'video', 'live'
   final String url;
   final String? videoUrl;
   final String? posterUrl;
+  final String? thumbnailUrl;
 
   /// Alternative image URLs (mirrors [MediaItem.fallbacks]); without these the
   /// fullscreen viewer and bottom strip fall back to a single URL and show a
   /// broken image whenever the primary CDN host drops the request.
   final List<String> fallbacks;
+  final List<MediaRequestResource>? requestResources;
   final bool isGif;
   final AssetEntity? asset;
   final AssetEntity? liveVideoAsset;
   final FileStatus status;
   final String? filename;
+  final String? cachePostId;
+  final int? cacheItemIndex;
 
   /// Build the [MediaItem] that drives [CoverImage] with the full URL set.
-  MediaItem toMediaItem() => MediaItem(
-    type: type,
-    url: url,
-    videoUrl: videoUrl,
-    posterUrl: posterUrl,
-    fallbacks: fallbacks,
-  );
+  MediaItem toMediaItem() =>
+      MediaItem(
+          type: type,
+          url: url,
+          videoUrl: videoUrl,
+          posterUrl: posterUrl,
+          thumbnailUrl: thumbnailUrl,
+          isGif: isGif,
+          fallbacks: fallbacks,
+          requestResources: requestResources,
+        )
+        ..cachePostId = cachePostId
+        ..cacheItemIndex = cacheItemIndex ?? index;
 }
 
 /// Initial selection of the browser. [selectedIndices] holds original post
@@ -108,8 +150,9 @@ class GalleryBrowserPage extends StatefulWidget {
 
 class _GalleryBrowserPageState extends State<GalleryBrowserPage> {
   late int _currentIndex = widget.initialIndex;
-  late final PageController _pageController =
-      PageController(initialPage: widget.initialIndex);
+  late final PageController _pageController = PageController(
+    initialPage: widget.initialIndex,
+  );
   late final ScrollController _thumbController = ScrollController();
   // Selection is keyed by GalleryBrowserItem.index (the original post item
   // index), never by list position. Viewers that do not drive a selection
@@ -124,8 +167,32 @@ class _GalleryBrowserPageState extends State<GalleryBrowserPage> {
   Offset? _dragStart;
   bool _isPullDownActive = false;
 
+  /// Decoded local originals of this session: the current page, its
+  /// neighbours and the last pages seen.
+  final _decoded = DecodedImageKeeper(capacity: 5);
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _keepDecodedAround(_currentIndex);
+  }
+
+  /// Decode the current local image and the one or two next to it, and keep
+  /// them, so swiping back and forth never decodes a seen image again.
+  void _keepDecodedAround(int index) {
+    final configuration = createLocalImageConfiguration(context);
+    for (final i in [index, index + 1, index - 1]) {
+      if (i < 0 || i >= widget.items.length) continue;
+      final item = widget.items[i];
+      final asset = item.asset;
+      if (asset == null || item.type == 'video' || item.isGif) continue;
+      _decoded.keep(VerifiedAssetImage.providerFor(asset, isOriginal: true), configuration);
+    }
+  }
+
   @override
   void dispose() {
+    _decoded.dispose();
     _pageController.dispose();
     _thumbController.dispose();
     super.dispose();
@@ -149,10 +216,7 @@ class _GalleryBrowserPageState extends State<GalleryBrowserPage> {
         final file = await item.asset!.file;
         if (file != null && await file.exists()) {
           await SharePlus.instance.share(
-            ShareParams(
-              text: widget.postUrl,
-              files: [XFile(file.path)],
-            ),
+            ShareParams(text: widget.postUrl, files: [XFile(file.path)]),
           );
           return;
         }
@@ -173,7 +237,8 @@ class _GalleryBrowserPageState extends State<GalleryBrowserPage> {
     final currentItem = widget.items.isNotEmpty
         ? widget.items[_currentIndex.clamp(0, widget.items.length - 1)]
         : null;
-    final isSelected = currentItem != null && _selected.contains(currentItem.index);
+    final isSelected =
+        currentItem != null && _selected.contains(currentItem.index);
 
     final opacity = (1.0 - (_dragOffset.abs() / 300)).clamp(0.0, 1.0);
 
@@ -262,6 +327,7 @@ class _GalleryBrowserPageState extends State<GalleryBrowserPage> {
                       _currentIndex = idx;
                       _isZoomed = false;
                     });
+                    _keepDecodedAround(idx);
                     // Scroll thumbnail into view
                     if (_thumbController.hasClients) {
                       _thumbController.animateTo(
@@ -295,7 +361,10 @@ class _GalleryBrowserPageState extends State<GalleryBrowserPage> {
                   left: 0,
                   right: 0,
                   child: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 16,
+                      vertical: 8,
+                    ),
                     decoration: BoxDecoration(
                       gradient: LinearGradient(
                         begin: Alignment.topCenter,
@@ -310,7 +379,11 @@ class _GalleryBrowserPageState extends State<GalleryBrowserPage> {
                       children: [
                         // Close button
                         IconButton(
-                          icon: const Icon(Icons.close, color: Colors.white, size: 24),
+                          icon: const Icon(
+                            Icons.close,
+                            color: Colors.white,
+                            size: 24,
+                          ),
                           onPressed: () => Navigator.of(context).pop(),
                         ),
                         const SizedBox(width: 8),
@@ -328,10 +401,12 @@ class _GalleryBrowserPageState extends State<GalleryBrowserPage> {
                                   fontWeight: FontWeight.bold,
                                 ),
                               ),
-                              if (widget.authorName.isNotEmpty || widget.title.isNotEmpty)
+                              if (widget.authorName.isNotEmpty ||
+                                  widget.title.isNotEmpty)
                                 Text(
                                   [
-                                    if (widget.authorName.isNotEmpty) widget.authorName,
+                                    if (widget.authorName.isNotEmpty)
+                                      widget.authorName,
                                     if (widget.title.isNotEmpty) widget.title,
                                   ].join(' · '),
                                   maxLines: 1,
@@ -345,7 +420,10 @@ class _GalleryBrowserPageState extends State<GalleryBrowserPage> {
                           ),
                         ),
                         const SizedBox(width: 8),
-                        AiLabelBadge(text: widget.aiLabel, source: widget.aiLabelSource),
+                        AiLabelBadge(
+                          text: widget.aiLabel,
+                          source: widget.aiLabelSource,
+                        ),
                         // Checkbox
                         GestureDetector(
                           onTap: currentItem != null
@@ -360,12 +438,18 @@ class _GalleryBrowserPageState extends State<GalleryBrowserPage> {
                                   ? const Color(0xFFFF2442)
                                   : Colors.white.withValues(alpha: 0.2),
                               border: Border.all(
-                                color: isSelected ? Colors.transparent : Colors.white70,
+                                color: isSelected
+                                    ? Colors.transparent
+                                    : Colors.white70,
                                 width: 2,
                               ),
                             ),
                             child: isSelected
-                                ? const Icon(Icons.check, color: Colors.white, size: 18)
+                                ? const Icon(
+                                    Icons.check,
+                                    color: Colors.white,
+                                    size: 18,
+                                  )
                                 : null,
                           ),
                         ),
@@ -408,7 +492,9 @@ class _GalleryBrowserPageState extends State<GalleryBrowserPage> {
                             child: ListView.builder(
                               controller: _thumbController,
                               scrollDirection: Axis.horizontal,
-                              padding: const EdgeInsets.symmetric(horizontal: 16),
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 16,
+                              ),
                               itemCount: widget.items.length,
                               itemBuilder: (context, idx) {
                                 final it = widget.items[idx];
@@ -419,18 +505,25 @@ class _GalleryBrowserPageState extends State<GalleryBrowserPage> {
                                   onTap: () {
                                     _pageController.animateToPage(
                                       idx,
-                                      duration: const Duration(milliseconds: 250),
+                                      duration: const Duration(
+                                        milliseconds: 250,
+                                      ),
                                       curve: Curves.easeInOut,
                                     );
                                   },
                                   child: Container(
                                     width: 44,
                                     height: 44,
-                                    margin: const EdgeInsets.symmetric(horizontal: 4, vertical: 6),
+                                    margin: const EdgeInsets.symmetric(
+                                      horizontal: 4,
+                                      vertical: 6,
+                                    ),
                                     decoration: BoxDecoration(
                                       borderRadius: BorderRadius.circular(8),
                                       border: Border.all(
-                                        color: isCur ? Colors.white : Colors.transparent,
+                                        color: isCur
+                                            ? Colors.white
+                                            : Colors.transparent,
                                         width: 2,
                                       ),
                                     ),
@@ -485,12 +578,14 @@ class _GalleryBrowserPageState extends State<GalleryBrowserPage> {
                               ),
                               const Spacer(),
                               // Actions
-                              if (widget.onRedownload != null && currentItem != null)
+                              if (widget.onRedownload != null &&
+                                  currentItem != null)
                                 IconButton(
                                   tooltip: '重新下载',
                                   color: Colors.white,
                                   icon: const Icon(Icons.download_outlined),
-                                  onPressed: () => widget.onRedownload!(currentItem.index),
+                                  onPressed: () =>
+                                      widget.onRedownload!(currentItem.index),
                                 ),
                               if (!widget.showSave && widget.onReparse != null)
                                 Padding(
@@ -507,7 +602,10 @@ class _GalleryBrowserPageState extends State<GalleryBrowserPage> {
                                     ),
                                     onPressed: widget.onReparse,
                                     icon: const Icon(Icons.refresh, size: 16),
-                                    label: const Text('重新解析', style: TextStyle(fontSize: 12)),
+                                    label: const Text(
+                                      '重新解析',
+                                      style: TextStyle(fontSize: 12),
+                                    ),
                                   ),
                                 ),
                               if (!widget.showSave)
@@ -537,7 +635,10 @@ class _GalleryBrowserPageState extends State<GalleryBrowserPage> {
                                   onPressed: () =>
                                       Navigator.of(context).pop(true),
                                   icon: const Icon(Icons.download, size: 16),
-                                  label: const Text('保存', style: TextStyle(fontSize: 13)),
+                                  label: const Text(
+                                    '保存',
+                                    style: TextStyle(fontSize: 13),
+                                  ),
                                 )
                               else
                                 ElevatedButton.icon(
@@ -552,7 +653,10 @@ class _GalleryBrowserPageState extends State<GalleryBrowserPage> {
                                   ),
                                   onPressed: _shareCurrent,
                                   icon: const Icon(Icons.share, size: 16),
-                                  label: const Text('分享', style: TextStyle(fontSize: 13)),
+                                  label: const Text(
+                                    '分享',
+                                    style: TextStyle(fontSize: 13),
+                                  ),
                                 ),
                             ],
                           ),
@@ -624,8 +728,13 @@ class _ThumbnailImage extends StatelessWidget {
       );
     }
     if (item.asset != null) {
-      return VerifiedAssetImage(item.asset!,
- fallback: CoverImage(item: item.toMediaItem(), referer: refererFor(platform), fit: BoxFit.contain),
+      return VerifiedAssetImage(
+        item.asset!,
+        fallback: CoverImage(
+          item: item.toMediaItem(),
+          platform: (platform),
+          fit: BoxFit.contain,
+        ),
         isOriginal: false,
         thumbnailSize: const ThumbnailSize.square(120),
         fit: BoxFit.cover,
@@ -633,7 +742,7 @@ class _ThumbnailImage extends StatelessWidget {
     }
     return CoverImage(
       item: item.toMediaItem(),
-      referer: refererFor(platform),
+      platform: (platform),
       fit: BoxFit.cover,
       cacheWidth: 400,
     );
@@ -678,7 +787,8 @@ class _BrowserItemViewState extends State<_BrowserItemView> {
       _checkAssetExistence();
     }
 
-    if (widget.item.status == FileStatus.found || widget.item.url.startsWith('http')) {
+    if (widget.item.status == FileStatus.found ||
+        widget.item.url.startsWith('http')) {
       if (widget.item.isGif || widget.item.type == 'video') {
         _initVideo();
       }
@@ -748,11 +858,19 @@ class _BrowserItemViewState extends State<_BrowserItemView> {
           controller = VideoPlayerController.file(f);
         } else {
           final targetUrl = it.videoUrl ?? it.url;
-          controller = await networkPreviewController(targetUrl, widget.platform);
+          controller = await networkPreviewController(
+            targetUrl,
+            widget.platform,
+            item: it.toMediaItem(),
+          );
         }
       } else {
         final targetUrl = it.videoUrl ?? it.url;
-        controller = await networkPreviewController(targetUrl, widget.platform);
+        controller = await networkPreviewController(
+          targetUrl,
+          widget.platform,
+          item: it.toMediaItem(),
+        );
       }
 
       await controller.initialize();
@@ -777,7 +895,9 @@ class _BrowserItemViewState extends State<_BrowserItemView> {
       setState(() => _videoController = controller);
       _attachVideoListener(controller);
     } catch (e) {
-      if (mounted) setState(() => _error = previewPlaybackError(widget.platform));
+      if (mounted) {
+        setState(() => _error = previewFailureMessage(e, widget.platform));
+      }
     }
   }
 
@@ -814,14 +934,25 @@ class _BrowserItemViewState extends State<_BrowserItemView> {
       _videoController = controller;
       await controller.play();
       setState(() {});
-    } catch (_) {
-      if (mounted) setState(() => _isLiveHolding = false);
+    } catch (error) {
+      if (mounted) {
+        setState(() => _isLiveHolding = false);
+        if (error is MediaPolicyException) {
+          ScaffoldMessenger.maybeOf(
+            context,
+          )?.showSnackBar(const SnackBar(content: Text('该资源地址不在允许范围内')));
+        }
+      }
     }
   }
 
   Future<VideoPlayerController> _createPlayerController(String target) async {
     if (target.startsWith('http://') || target.startsWith('https://')) {
-      return await networkPreviewController(target, widget.platform);
+      return await networkPreviewController(
+        target,
+        widget.platform,
+        item: widget.item.toMediaItem(),
+      );
     } else if (target.startsWith('content://')) {
       return VideoPlayerController.contentUri(Uri.parse(target));
     } else {
@@ -845,7 +976,8 @@ class _BrowserItemViewState extends State<_BrowserItemView> {
     final it = widget.item;
 
     // 1. Missing file: "已从相册删除" placeholder + [重新下载]
-    if ((it.status == FileStatus.notFound || _isNotFound) && !it.url.startsWith('http')) {
+    if ((it.status == FileStatus.notFound || _isNotFound) &&
+        !it.url.startsWith('http')) {
       return Center(
         child: Column(
           mainAxisSize: MainAxisSize.min,
@@ -883,7 +1015,10 @@ class _BrowserItemViewState extends State<_BrowserItemView> {
                   backgroundColor: const Color(0xFFFF2442),
                   foregroundColor: Colors.white,
                   shape: const StadiumBorder(),
-                  padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 20,
+                    vertical: 10,
+                  ),
                 ),
                 onPressed: _redownloading
                     ? null
@@ -945,10 +1080,15 @@ class _BrowserItemViewState extends State<_BrowserItemView> {
               )
             else if (_error != null)
               Center(
-                child: Text('播放失败：$_error', style: const TextStyle(color: Colors.white)),
+                child: Text(
+                  '播放失败：$_error',
+                  style: const TextStyle(color: Colors.white),
+                ),
               )
             else
-              const Center(child: CircularProgressIndicator(color: Colors.white)),
+              const Center(
+                child: CircularProgressIndicator(color: Colors.white),
+              ),
 
             // "GIF" Badge top-left
             Positioned(
@@ -980,7 +1120,11 @@ class _BrowserItemViewState extends State<_BrowserItemView> {
                   color: Colors.black.withValues(alpha: 0.5),
                   shape: BoxShape.circle,
                 ),
-                child: const Icon(Icons.play_arrow, color: Colors.white, size: 36),
+                child: const Icon(
+                  Icons.play_arrow,
+                  color: Colors.white,
+                  size: 36,
+                ),
               ),
           ],
         ),
@@ -1009,16 +1153,23 @@ class _BrowserItemViewState extends State<_BrowserItemView> {
             if (c != null && c.value.isInitialized)
               Center(
                 child: AspectRatio(
-                  aspectRatio: c.value.aspectRatio == 0 ? 16 / 9 : c.value.aspectRatio,
+                  aspectRatio: c.value.aspectRatio == 0
+                      ? 16 / 9
+                      : c.value.aspectRatio,
                   child: VideoPlayer(c),
                 ),
               )
             else if (_error != null)
               Center(
-                child: Text('播放失败：$_error', style: const TextStyle(color: Colors.white)),
+                child: Text(
+                  '播放失败：$_error',
+                  style: const TextStyle(color: Colors.white),
+                ),
               )
             else
-              const Center(child: CircularProgressIndicator(color: Colors.white)),
+              const Center(
+                child: CircularProgressIndicator(color: Colors.white),
+              ),
 
             // Tap-to-play overlay: videos don't autoplay.
             if (c != null && c.value.isInitialized && !_isPlaying)
@@ -1048,7 +1199,10 @@ class _BrowserItemViewState extends State<_BrowserItemView> {
                 left: 16,
                 right: 16,
                 child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 12,
+                    vertical: 6,
+                  ),
                   decoration: BoxDecoration(
                     color: Colors.black54,
                     borderRadius: BorderRadius.circular(20),
@@ -1119,7 +1273,9 @@ class _BrowserItemViewState extends State<_BrowserItemView> {
             if (showVideo)
               Center(
                 child: AspectRatio(
-                  aspectRatio: c.value.aspectRatio == 0 ? 1 : c.value.aspectRatio,
+                  aspectRatio: c.value.aspectRatio == 0
+                      ? 1
+                      : c.value.aspectRatio,
                   child: VideoPlayer(c),
                 ),
               )
@@ -1129,8 +1285,14 @@ class _BrowserItemViewState extends State<_BrowserItemView> {
                 maxScale: 4.0,
                 child: Center(
                   child: it.asset != null
-                      ? VerifiedAssetImage(it.asset!,
- fallback: CoverImage(item: it.toMediaItem(), referer: refererFor(widget.platform), fit: BoxFit.contain),
+                      ? VerifiedAssetImage(
+                          it.asset!,
+                          fallback: CoverImage(
+                            item: it.toMediaItem(),
+                            platform: (widget.platform),
+                            fit: BoxFit.contain,
+                            fullResolution: true,
+                          ),
                           isOriginal: true,
                           fit: BoxFit.contain,
                         )
@@ -1140,16 +1302,16 @@ class _BrowserItemViewState extends State<_BrowserItemView> {
                           children: [
                             CoverImage(
                               item: it.toMediaItem(),
-                              referer: refererFor(widget.platform),
+                              platform: (widget.platform),
                               fit: BoxFit.contain,
                               cacheWidth: 400,
                             ),
                             CoverImage(
                               item: it.toMediaItem(),
-                              referer: refererFor(widget.platform),
+                              platform: (widget.platform),
                               fit: BoxFit.contain,
-                              cacheWidth: 1080,
-                              placeholder: const SizedBox.shrink(),
+                              fullResolution: true,
+                              placeholder: const Center(child: CircularProgressIndicator()),
                             ),
                           ],
                         ),
@@ -1182,7 +1344,10 @@ class _BrowserItemViewState extends State<_BrowserItemView> {
               Positioned(
                 bottom: 110,
                 child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 14,
+                    vertical: 6,
+                  ),
                   decoration: BoxDecoration(
                     color: Colors.black54,
                     borderRadius: BorderRadius.circular(16),
@@ -1230,14 +1395,15 @@ class _ZoomableImageViewState extends State<_ZoomableImageView>
   late final TransformationController _transformationController =
       TransformationController();
   TapDownDetails? _doubleTapDetails;
-  late final AnimationController _animController = AnimationController(
-    vsync: this,
-    duration: const Duration(milliseconds: 250),
-  );
+  late final AnimationController _animController;
 
   @override
   void initState() {
     super.initState();
+    _animController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 250),
+    );
     _transformationController.addListener(_handleTransform);
   }
 
@@ -1269,10 +1435,13 @@ class _ZoomableImageViewState extends State<_ZoomableImageView>
       target = Matrix4.identity();
     }
 
-    final animation = Matrix4Tween(
-      begin: _transformationController.value,
-      end: target,
-    ).animate(CurvedAnimation(parent: _animController, curve: Curves.easeOutCubic));
+    final animation =
+        Matrix4Tween(
+          begin: _transformationController.value,
+          end: target,
+        ).animate(
+          CurvedAnimation(parent: _animController, curve: Curves.easeOutCubic),
+        );
 
     void listener() {
       _transformationController.value = animation.value;
@@ -1297,8 +1466,14 @@ class _ZoomableImageViewState extends State<_ZoomableImageView>
         clipBehavior: Clip.none,
         child: Center(
           child: widget.item.asset != null
-              ? VerifiedAssetImage(widget.item.asset!,
- fallback: CoverImage(item: widget.item.toMediaItem(), referer: refererFor(widget.platform), fit: BoxFit.contain),
+              ? VerifiedAssetImage(
+                  widget.item.asset!,
+                  fallback: CoverImage(
+                    item: widget.item.toMediaItem(),
+                    platform: (widget.platform),
+                    fit: BoxFit.contain,
+                    fullResolution: true,
+                  ),
                   isOriginal: true,
                   fit: BoxFit.contain,
                 )
@@ -1308,16 +1483,16 @@ class _ZoomableImageViewState extends State<_ZoomableImageView>
                   children: [
                     CoverImage(
                       item: widget.item.toMediaItem(),
-                      referer: refererFor(widget.platform),
+                      platform: (widget.platform),
                       fit: BoxFit.contain,
                       cacheWidth: 400,
                     ),
                     CoverImage(
                       item: widget.item.toMediaItem(),
-                      referer: refererFor(widget.platform),
+                      platform: (widget.platform),
                       fit: BoxFit.contain,
-                      cacheWidth: 1080,
-                      placeholder: const SizedBox.shrink(),
+                      fullResolution: true,
+                      placeholder: const Center(child: CircularProgressIndicator()),
                     ),
                   ],
                 ),
@@ -1326,4 +1501,3 @@ class _ZoomableImageViewState extends State<_ZoomableImageView>
     );
   }
 }
-

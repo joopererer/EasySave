@@ -15,6 +15,7 @@
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
 import 'package:path_provider/path_provider.dart';
 
 /// Severity of a log line.
@@ -28,6 +29,15 @@ enum DevLogLevel {
 }
 
 abstract final class DevLog {
+  static const _channel = MethodChannel('easysave/dev_log');
+  static Future<void> _tail = Future<void>.value();
+
+  static Future<T> _serial<T>(Future<T> Function() operation) {
+    final next = _tail.then((_) => operation());
+    _tail = next.then<void>((_) {}, onError: (Object _, StackTrace __) {});
+    return next;
+  }
+
   /// Base name of the log file inside the app's private files directory.
   static const String fileName = 'v16dl.log';
 
@@ -38,7 +48,6 @@ abstract final class DevLog {
   static const int keepFiles = 2;
 
   static const String _redacted = '<redacted>';
-
 
   /// Any http(s) URL inside a message.
   static final RegExp _urlPattern = RegExp(r'''https?://[^\s"'<>]+''');
@@ -53,12 +62,19 @@ abstract final class DevLog {
     DevLogLevel level = DevLogLevel.info,
   }) async {
     if (level == DevLogLevel.debug && kReleaseMode) return;
-    final line = '[${level.name.toUpperCase()}] [$tag] ${scrub(message)}';
+    final line =
+        '[${level.name.toUpperCase()}] [${scrub(tag)}] ${scrub(message)}'
+            .replaceAll('\r', r'\r')
+            .replaceAll('\n', r'\n');
     debugPrint(line);
     try {
+      if (defaultTargetPlatform == TargetPlatform.android) {
+        await _channel.invokeMethod<void>('append', '$line\n');
+        return;
+      }
       final dir = await _privateDir();
       if (dir == null) return;
-      await _append(File('${dir.path}/$fileName'), line);
+      await _serial(() => _append(File('${dir.path}/$fileName'), line));
     } catch (_) {
       // Logging must never break the caller.
     }
@@ -69,6 +85,9 @@ abstract final class DevLog {
   /// automatically.
   static Future<String?> exportToExternal() async {
     try {
+      if (defaultTargetPlatform == TargetPlatform.android) {
+        return await _channel.invokeMethod<String>('export');
+      }
       final dir = await _privateDir();
       final external = await getExternalStorageDirectory();
       if (dir == null || external == null) return null;
@@ -85,6 +104,10 @@ abstract final class DevLog {
   /// Remove every log file (app private dir).
   static Future<void> clear() async {
     try {
+      if (defaultTargetPlatform == TargetPlatform.android) {
+        await _channel.invokeMethod<void>('clear');
+        return;
+      }
       final dir = await _privateDir();
       if (dir == null) return;
       for (var i = 0; i < keepFiles; i++) {
@@ -110,21 +133,26 @@ abstract final class DevLog {
 
   /// Append a line, rotating when the file grows past [maxFileBytes].
   static Future<void> _append(File file, String line) async {
-    final text = '$line\n';
-    var length = 0;
+    final lockFile = File('${file.path}.lock');
+    final lock = await lockFile.open(mode: FileMode.write);
     try {
-      if (await file.exists()) length = await file.length();
-    } catch (_) {
-      length = 0;
+      await lock.lock(FileLock.exclusive);
+      var length = await file.exists() ? await file.length() : 0;
+      final text = '$line\n';
+      if (length + text.length > maxFileBytes) {
+        await _rotate(file);
+      }
+      final output = await file.open(mode: FileMode.append);
+      try {
+        await output.writeString(text);
+        await output.flush();
+      } finally {
+        await output.close();
+      }
+    } finally {
+      await lock.unlock();
+      await lock.close();
     }
-    if (length + text.length > maxFileBytes) {
-      await _rotate(file);
-    }
-    await file.writeAsString(
-      text,
-      mode: FileMode.append,
-      flush: true,
-    );
   }
 
   /// v16dl.log -> v16dl.log.1 (the previous backup is dropped).
@@ -149,10 +177,7 @@ abstract final class DevLog {
     //    semicolons, so we must redact the entire line to prevent leaking
     //    any session token.
     out = out.replaceAllMapped(
-      RegExp(
-        r'''\b(Cookie|Set-Cookie)\s*:\s*.*''',
-        caseSensitive: false,
-      ),
+      RegExp(r'''\b(Cookie|Set-Cookie)\s*:\s*.*''', caseSensitive: false),
       (m) => '${m.group(1)}: $_redacted',
     );
     // 2. Other sensitive key=value / key: value pairs.
@@ -170,10 +195,7 @@ abstract final class DevLog {
     // 3. fallback for a stray "Bearer xxx" that didn't follow a sensitive
     //    key (e.g. an exception message saying "missing Bearer abc").
     out = out.replaceAllMapped(
-      RegExp(
-        r'''\b(Bearer|Basic)\s+[A-Za-z0-9._\-]+''',
-        caseSensitive: false,
-      ),
+      RegExp(r'''\b(Bearer|Basic)\s+[A-Za-z0-9._\-]+''', caseSensitive: false),
       (m) => _redacted,
     );
     // 4. URLs -> host + path (no query, no fragment)

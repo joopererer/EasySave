@@ -104,6 +104,7 @@ void main() {
       );
 
       final file = HistoryFile(
+        itemIndex: 1,
         filename: 'xhs_post1_1.jpg',
         relativePath: 'Pictures/EasySave',
         savedAt: 123456,
@@ -135,6 +136,7 @@ void main() {
 
       // file has no relativePath (or relativePath did not match)
       final file = HistoryFile(
+        itemIndex: 1,
         filename: 'xhs_post2_1.jpg',
         assetId: 'asset_2',
         savedAt: 123456,
@@ -159,6 +161,7 @@ void main() {
       );
 
       final file = HistoryFile(
+        itemIndex: 1,
         filename: 'plain_image.jpg',
         savedAt: 123456,
       );
@@ -188,6 +191,7 @@ void main() {
       );
 
       final file = HistoryFile(
+        itemIndex: 1,
         filename: 'common_name.jpg',
         assetId: 'my_asset_id',
         savedAt: 123456,
@@ -211,6 +215,7 @@ void main() {
       );
 
       final file = HistoryFile(
+        itemIndex: 1,
         filename: 'original_abc123_1.jpg',
         savedAt: 123456,
       );
@@ -237,6 +242,7 @@ void main() {
       );
 
       final file = HistoryFile(
+        itemIndex: 1,
         filename: 'unmatched_file.jpg',
         savedAt: 123456,
       );
@@ -253,6 +259,7 @@ void main() {
       );
 
       final file = HistoryFile(
+        itemIndex: 1,
         filename: 'missing_file.jpg',
         savedAt: 123456,
         status: FileStatus.found,
@@ -307,6 +314,7 @@ void main() {
 
       // Older record without relativePath
       final file = HistoryFile(
+        itemIndex: 1,
         filename: 'backfill_item.jpg',
         savedAt: 123456,
         relativePath: null,

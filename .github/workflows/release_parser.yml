@@ -8,12 +8,16 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: parser-release
+  cancel-in-progress: false
+
 jobs:
   release:
-    name: Test, Build, Sign and Publish
+    name: Test, Build, Sign, Upload, Verify and Update Channel
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout code
+      - name: Checkout tagged source
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
@@ -22,36 +26,122 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 20
-          cache: 'npm'
-          cache-dependency-path: extension/package.json
+          cache: npm
+          cache-dependency-path: extension/package-lock.json
 
       - name: Install dependencies
         working-directory: extension
-        run: npm install
+        run: npm ci
 
-      - name: Run all tests (fixtures & bundle freshness)
+      - name: Setup Flutter for canonical URL validation
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Resolve App dependencies
+        working-directory: app
+        run: flutter pub get
+
+      - name: Run all tests
         working-directory: extension
         run: npm test
 
-      - name: Build, hash, and sign parser release
+      - name: Verify effective release and APK configuration parity
+        working-directory: extension
+        run: npm run build:candidate
+
+      - name: Verify current App required configuration contract
+        working-directory: app
+        run: flutter test --no-pub test/parser_config_contract_test.dart
+
+      - name: Verify App preview and Instagram AI regressions
+        working-directory: app
+        run: >-
+          flutter test --no-pub
+          test/preview_media_roundtrip_test.dart
+          test/preview_media_consumers_test.dart
+          test/history_preview_media_source_test.dart
+          test/instagram_ai_v149_test.dart
+          test/media_policy_diagnostics_v149_test.dart
+          test/xhs_download_cookie_v1410_test.dart
+          test/cookie_required_hosts_test.dart
+          test/selected_download_history_regression_test.dart
+          test/history_pending_card_route_test.dart
+          test/parse_entry_responsiveness_test.dart
+          test/parse_singleflight_test.dart
+          test/preview_route_reuse_test.dart
+          test/history_retry_recovery_test.dart
+          test/history_read_efficiency_test.dart
+          test/background_download_saf_test.dart
+          test/retry_media_resources_test.dart
+
+      - name: Require signing key
+        env:
+          PARSER_SIGNING_KEY: ${{ secrets.PARSER_SIGNING_KEY }}
+        run: |
+          if [[ -z "$PARSER_SIGNING_KEY" ]]; then
+            echo "::error::PARSER_SIGNING_KEY is required"
+            exit 1
+          fi
+          if [[ ! "$PARSER_SIGNING_KEY" =~ ^[[:xdigit:]]{64}$ ]]; then
+            echo "::error::PARSER_SIGNING_KEY must contain 64 hex characters"
+            exit 1
+          fi
+
+      - name: Build and sign v2 release
         working-directory: extension
         env:
           PARSER_SIGNING_KEY: ${{ secrets.PARSER_SIGNING_KEY }}
         run: npm run build:release
 
-      - name: Publish to GitHub Releases
+      - name: Upload Release attachments
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            extension/dist/manifest.json
-            extension/dist/parser.js
+            extension/dist/release/manifest.json
+            extension/dist/release/parser.js
+          fail_on_unmatched_files: true
+          overwrite_files: false
           name: Parser ${{ github.ref_name }}
           generate_release_notes: true
 
-      - name: Commit signed manifest and bundle to master
+      - name: Read back and verify Release attachments
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release download "$GITHUB_REF_NAME" \
+            --repo "$GITHUB_REPOSITORY" \
+            --pattern manifest.json --pattern parser.js \
+            --dir "$RUNNER_TEMP/parser-readback"
+          node extension/scripts/verify_release.js "$RUNNER_TEMP/parser-readback"
+
+      - name: Commit v2 channel manifest to master
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git checkout master
-          git add spec/manifest.json spec/parser.js
-          git diff --staged --quiet || (git commit -m "chore(release): update signed manifest & parser bundle for ${{ github.ref_name }} [skip ci]" && git push origin master)
+          git fetch origin master
+          export PARSER_BUILT_MANIFEST="$GITHUB_WORKSPACE/extension/dist/release/manifest.json"
+          git worktree add --detach "$RUNNER_TEMP/parser-channel-master" origin/master
+          cd "$RUNNER_TEMP/parser-channel-master"
+          node --input-type=module <<'NODE'
+          import { readFileSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
+          const bytes = readFileSync(process.env.PARSER_BUILT_MANIFEST);
+          const candidate = JSON.parse(JSON.parse(bytes).payload);
+          const target = 'spec/v2/manifest.json';
+          if (existsSync(target)) {
+            const previousBytes = readFileSync(target);
+            const previous = JSON.parse(JSON.parse(previousBytes).payload);
+            if (candidate.manifestVersion < previous.manifestVersion ||
+                (candidate.manifestVersion === previous.manifestVersion && !bytes.equals(previousBytes))) {
+              throw new Error('Refusing an older or conflicting channel manifest');
+            }
+          }
+          mkdirSync('spec/v2', { recursive: true });
+          writeFileSync(target, bytes);
+          NODE
+          git add spec/v2/manifest.json
+          if ! git diff --staged --quiet; then
+            git commit -m "chore(release): update v2 parser manifest for $GITHUB_REF_NAME [skip ci]"
+            git push origin HEAD:master
+          fi

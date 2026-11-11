@@ -63,8 +63,10 @@ void main() {
           createdAt: DateTime.now(),
           files: [
             HistoryFile(
+              itemIndex: 1,
               filename: 'video.mp4',
               savedAt: 1000,
+              status: FileStatus.found,
               isImage: false,
               assetId: null, // No assetId
             ),
@@ -109,8 +111,10 @@ void main() {
           createdAt: DateTime.now(),
           files: [
             HistoryFile(
+              itemIndex: 1,
               filename: 'video.mp4',
               savedAt: 1000,
+              status: FileStatus.found,
               isImage: false,
               assetId: null,
             ),
@@ -145,8 +149,10 @@ void main() {
           createdAt: DateTime.now(),
           files: [
             HistoryFile(
+              itemIndex: 1,
               filename: 'video.mp4',
               savedAt: 1000,
+              status: FileStatus.found,
               isImage: false,
               assetId: 'urn:uuid:1234-video',
             ),
@@ -181,8 +187,10 @@ void main() {
           createdAt: DateTime.now(),
           files: [
             HistoryFile(
+              itemIndex: 1,
               filename: 'img.jpg',
               savedAt: 1000,
+              status: FileStatus.found,
               isImage: true,
               assetId: null,
             ),
@@ -217,8 +225,10 @@ void main() {
           createdAt: DateTime.now(),
           files: [
             HistoryFile(
+              itemIndex: 1,
               filename: 'video.mp4',
               savedAt: 1000,
+              status: FileStatus.found,
               isImage: false,
               assetId: '', // Empty assetId
             ),

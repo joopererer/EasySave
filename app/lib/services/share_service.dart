@@ -11,7 +11,10 @@ import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
 
 import 'download_manager.dart';
-import 'saver.dart';
+import '../core/models.dart';
+import 'media_request_policy.dart';
+import 'authorized_media_http.dart';
+import 'site_registry.dart';
 
 /// Share text for a finished batch: author, title, caption, post link.
 String shareTextFor(DownloadBatch batch) {
@@ -35,18 +38,40 @@ List<DownloadJob> shareableImageJobs(DownloadBatch batch) => [
 /// fails — the caller then shares text only instead of erroring.
 Future<XFile?> fetchShareFile(
   DownloadJob job,
-  String referer, {
+  String platform, {
   http.Client? client,
   Duration timeout = const Duration(seconds: 15),
 }) async {
   final owned = client == null;
   final httpClient = client ?? http.Client();
   try {
-    for (final url in job.urls) {
+    final site = SiteRegistry.current.byId(platform);
+    if (site == null) {
+      throw const MediaPolicyException('REQUEST_SITE_REJECTED', '');
+    }
+    final policy = MediaRequestPolicy(site);
+    final item = MediaItem(
+      type: 'image',
+      url: job.urls.first,
+      fallbacks: job.urls.skip(1).toList(),
+    );
+    final resources = job.resources.isNotEmpty
+        ? job.resources
+        : policy.resourcesFor(item);
+    for (final resource in resources) {
+      policy.validate(resource);
+    }
+    for (final resource in resources) {
       try {
-        final response = await httpClient
-            .get(Uri.parse(url), headers: {'Referer': referer})
-            .timeout(timeout);
+        final stream = await sendAuthorizedMediaGet(
+          httpClient,
+          policy,
+          resource,
+          timeout: timeout,
+        );
+        final response = await http.Response.fromStream(
+          stream,
+        ).timeout(timeout);
         if (response.statusCode != 200 || response.bodyBytes.isEmpty) {
           continue;
         }
@@ -54,6 +79,8 @@ Future<XFile?> fetchShareFile(
         final file = File('${dir.path}/share_${job.filename}');
         await file.writeAsBytes(response.bodyBytes, flush: true);
         return XFile(file.path, name: job.filename);
+      } on MediaPolicyException {
+        rethrow;
       } catch (_) {
         // Try the next URL.
       }
@@ -70,11 +97,7 @@ Future<bool> shareBatch(DownloadBatch batch, {http.Client? client}) async {
   final text = shareTextFor(batch);
   final files = <XFile>[];
   for (final job in shareableImageJobs(batch)) {
-    final file = await fetchShareFile(
-      job,
-      refererFor(batch.platform),
-      client: client,
-    );
+    final file = await fetchShareFile(job, batch.platform, client: client);
     if (file != null) files.add(file);
   }
   if (files.isEmpty) {

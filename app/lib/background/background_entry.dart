@@ -10,11 +10,17 @@ import 'package:flutter/widgets.dart';
 
 import '../core/dev_log.dart';
 import '../core/models.dart';
+import '../core/media_request.dart';
+import '../services/media_request_policy.dart';
+import '../services/site_registry.dart';
 import '../services/download_manager.dart';
 import '../services/download_claims.dart';
+import '../services/gallery_locator_service.dart';
 import '../services/history_db.dart';
 import '../services/links.dart';
 import '../services/parse_service.dart';
+import '../services/preview_resources.dart';
+import '../services/shared_preview_cache.dart';
 import '../services/settings.dart';
 import '../services/update_service.dart';
 
@@ -31,6 +37,7 @@ void backgroundEntry() {
   // save them to the album and write their history record (the main isolate
   // reads the same SharedPreferences snapshots and must ignore them).
   DownloadManager.owner = DownloadBatch.sourceBackground;
+  HistoryDb.engine = 'background';
   final channel = MethodChannel(_channelName);
   channel.setMethodCallHandler((call) async {
     switch (call.method) {
@@ -47,13 +54,37 @@ void backgroundEntry() {
         _selectCompleter = null;
         if (c != null && !c.isCompleted) c.complete(picked);
         break;
+      case 'mediaPolicyRejected':
+        final values = call.arguments as Map? ?? const {};
+        final code = values['code'] as String? ?? 'REQUEST_URL_REJECTED';
+        final host = values['host'] as String? ?? '';
+        final field = values['field'] as String? ?? '';
+        final shape = values['shape'] as String? ?? '';
+        if (RegExp(r'^REQUEST_[A-Z_]+$').hasMatch(code) &&
+            RegExp(r'^[a-z0-9.:-]{0,253}$').hasMatch(host) &&
+            RegExp(
+              r'^(thumbRequest|imageRequest|videoRequest)$',
+            ).hasMatch(field) &&
+            RegExp(
+              r'^(empty|relative|protocol-relative|scheme=[a-z][a-z0-9+.-]*)$',
+            ).hasMatch(shape)) {
+          await DevLog.write(
+            'RequestPolicy',
+            '$code host=$host${code == 'REQUEST_URL_REJECTED' ? ' field=$field shape=$shape' : ''}',
+          );
+        }
+        break;
     }
     return null;
   });
   channel.invokeMethod('ready');
 }
 
-Future<void> _invoke(MethodChannel channel, String method, [dynamic args]) async {
+Future<void> _invoke(
+  MethodChannel channel,
+  String method, [
+  dynamic args,
+]) async {
   try {
     await channel.invokeMethod<void>(method, args);
   } catch (_) {
@@ -77,8 +108,12 @@ Future<void> _toast(MethodChannel channel, String msg) =>
 
 /// Error notification that carries the link + code + message so tapping it can
 /// open the app on the same error page as a manual parse.
-Future<void> _error(MethodChannel channel, String url, String code, String message) =>
-    _invoke(channel, 'error', {'url': url, 'code': code, 'message': message});
+Future<void> _error(
+  MethodChannel channel,
+  String url,
+  String code,
+  String message,
+) => _invoke(channel, 'error', {'url': url, 'code': code, 'message': message});
 
 /// Drive the Quick Settings tile state (active + subtitle).
 Future<void> _tile(MethodChannel channel, bool active, String? subtitle) =>
@@ -96,17 +131,16 @@ Future<void> _bubble(
   String? url,
   String? code,
   String? message,
-]) =>
-    _invoke(channel, 'bubble', {
-      'active': active,
-      'done': done,
-      'total': total,
-      'label': label,
-      'error': error,
-      'url': url,
-      'code': code,
-      'message': message,
-    });
+]) => _invoke(channel, 'bubble', {
+  'active': active,
+  'done': done,
+  'total': total,
+  'label': label,
+  'error': error,
+  'url': url,
+  'code': code,
+  'message': message,
+});
 
 /// Build the caption text (title + body) for the bubble's "复制文案".
 String _captionText(ParsedPost post) {
@@ -118,7 +152,11 @@ String _captionText(ParsedPost post) {
   return parts.join('\n\n');
 }
 
-Future<void> _handleSubmit(MethodChannel channel, Map<dynamic, dynamic> args) async {  final mode = args['mode']?.toString() ?? 'all';
+Future<void> _handleSubmit(
+  MethodChannel channel,
+  Map<dynamic, dynamic> args,
+) async {
+  final mode = args['mode']?.toString() ?? 'all';
   final source = args['source']?.toString() ?? 'background';
   final text = args['text']?.toString();
   var urls = (args['urls'] as List?)?.map((e) => '$e').toList() ?? <String>[];
@@ -127,7 +165,6 @@ Future<void> _handleSubmit(MethodChannel channel, Map<dynamic, dynamic> args) as
   }
   await _log(channel, 'submit: mode=$mode urls=${urls.length} source=$source');
   await _invoke(channel, 'keepAlive');
-  await _notify(channel, '正在解析…');
   final settings = await AppSettings.load();
   final toasts = settings.backgroundToast;
   final emptyHint = args['hint']?.toString() ?? '没有可解析的链接';
@@ -139,13 +176,11 @@ Future<void> _handleSubmit(MethodChannel channel, Map<dynamic, dynamic> args) as
     return;
   }
   if (toasts) await _toast(channel, '下载准备中…');
-  await _tile(channel, true, '解析中…');
-  await _bubble(channel, true, 0, 0, '解析中…', false);
 
   try {
     await ParserManager.instance.init();
   } catch (e) {
-    await _log(channel, 'ParserManager init FAILED: $e');
+    await _log(channel, 'ParserManager init FAILED type=${e.runtimeType}');
   }
 
   final manager = DownloadManager.instance;
@@ -158,14 +193,22 @@ Future<void> _handleSubmit(MethodChannel channel, Map<dynamic, dynamic> args) as
     final started = DateTime.now();
     final sw = Stopwatch()..start();
     try {
-      final outcome = await parsePostOutcome(url);
+      final outcome = await parsePostOutcome(
+        url,
+        source: mode == 'select' ? 'bubble_select' : 'bubble_background',
+        onCacheMiss: () async {
+          await _notify(channel, '正在解析…');
+          await _tile(channel, true, '解析中…');
+          await _bubble(channel, true, 0, 0, '解析中…', false);
+        },
+      );
       final post = outcome.data;
       if (mode == 'caption') {
         final cap = _captionText(post);
         // The headless engine has no PlatformPlugin, so Clipboard.setData would
         // hang; set it natively via HostService instead.
         await _invoke(channel, 'clipboard', cap);
-        await _log(channel, 'CAPTION copied ${cap.length} chars :: $url');
+        await _log(channel, 'CAPTION copied ${cap.length} chars');
         anyStarted = true;
         await _tile(channel, false, null);
         await _bubble(channel, false, 1, 1, null, false);
@@ -184,31 +227,138 @@ Future<void> _handleSubmit(MethodChannel channel, Map<dynamic, dynamic> args) as
         // Which items of this post were already downloaded (so the panel can
         // mark them and the user can just fetch what is missing).
         final savedIdx = <int>{};
+        final savedAssets = <int, String>{};
         try {
-          final db = await HistoryDb.instance();
-          final existing = await db.getByPostId(post.id);
-          if (existing != null) {
-            final is1Based = existing.files.isNotEmpty &&
-                existing.files.every((f) => f.itemIndex > 0);
-            for (final f in existing.files) {
-              savedIdx.add(is1Based ? f.itemIndex - 1 : f.itemIndex);
-            }
+          final found = await GalleryLocatorService.instance
+              .findDownloadedAssets(post, refreshAlbum: true);
+          for (final entry in found.entries) {
+            savedIdx.add(entry.key);
+            final id = entry.value.id;
+            if (id.isNotEmpty) savedAssets[entry.key] = id;
           }
         } catch (e) {
-          await _log(channel, 'SELECT history lookup failed: $e');
+          await _log(
+            channel,
+            'SELECT history lookup failed type=${e.runtimeType}',
+          );
+        }
+        final site = SiteRegistry.current.byId(post.platform);
+        if (site == null) {
+          throw const MediaPolicyException('REQUEST_SITE_REJECTED', '');
+        }
+        final mediaPolicy = MediaRequestPolicy(site);
+        Future<Map<String, Object?>> nativeRequirement(
+          MediaRequestResource resource,
+          String identity,
+        ) async {
+          final uri = mediaPolicy.validate(resource);
+          if (resource.role == MediaResourceRole.image ||
+              resource.role == MediaResourceRole.poster ||
+              (resource.role == MediaResourceRole.fallback &&
+                  resource.fallbackFor != MediaResourceRole.video)) {
+            return {
+              'cacheIdentity': safeCacheLabel(identity),
+              'cacheKey': opaquePreviewKey(identity),
+              if (resource.request.expiresAt != null)
+                'expiresAtMs':
+                    resource.request.expiresAt!.millisecondsSinceEpoch,
+              'sharedImageKey': SharedThumbnailCache.instance.registerResource(
+                mediaPolicy,
+                resource,
+                identity: identity,
+              ),
+            };
+          }
+
+          final requiresCookie = resource.request.cookieDomains.any(
+            (domain) => uri.host == domain || uri.host.endsWith('.$domain'),
+          );
+          if (requiresCookie) return {'requiresAppPreview': true};
+          final authorized = await mediaPolicy.authorize(resource);
+          return {
+            'url': authorized.uri.toString(),
+            'headers': authorized.headers,
+            'mediaHosts': (site.data['download'] as Map)['mediaHosts'],
+            if (resource.request.expiresAt != null)
+              'expiresAtMs': resource.request.expiresAt!.millisecondsSinceEpoch,
+          };
+        }
+
+        final panelItems = <Map<String, Object?>>[];
+        for (var i = 0; i < post.items.length; i++) {
+          final item = post.items[i];
+          final identity = thumbnailIdentity(
+            post.platform,
+            post.id,
+            item.cacheItemIndex ?? i,
+            item.type == 'video' ? 'poster' : 'thumb',
+          );
+          final resources = mediaPolicy.resourcesFor(item);
+          final thumbUrl =
+              item.thumbnailUrl ??
+              (item.type != 'video'
+                  ? item.url
+                  : item.posterUrl != null &&
+                        item.posterUrl != item.url &&
+                        item.posterUrl != item.videoUrl
+                  ? item.posterUrl
+                  : item.videoUrl != null && item.videoUrl != item.url
+                  ? item.url
+                  : null);
+          final fullIdentity = item.thumbnailUrl == null
+              ? identity
+              : thumbnailIdentity(post.platform, post.id, i, 'image');
+          Future<Map<String, Object?>> forUrl(
+            String? url, {
+            bool full = false,
+          }) async {
+            if (url == null || url.isEmpty) return {'requiresAppPreview': true};
+            final resource = resources.where((r) => r.url == url).firstOrNull;
+            if (resource == null) {
+              mediaPolicy.rejectResource(url);
+            }
+            return nativeRequirement(resource, full ? fullIdentity : identity);
+          }
+
+          Future<List<Map<String, Object?>>> imageFallbacks(
+            String? url, {
+            bool full = false,
+          }) async {
+            final candidates = previewImageCandidates(resources, url);
+            return [
+              for (final resource in candidates.skip(1))
+                await nativeRequirement(
+                  resource,
+                  full ? fullIdentity : identity,
+                ),
+            ];
+          }
+
+          panelItems.add({
+            'thumbRequest': await forUrl(thumbUrl),
+            'imageRequest': await forUrl(item.url, full: true),
+            'thumbFallbacks': await imageFallbacks(thumbUrl),
+            'imageFallbacks': await imageFallbacks(item.url, full: true),
+            'videoRequest': await forUrl(item.videoUrl ?? item.url),
+            'video': item.type == 'video',
+            'live':
+                item.type == 'live' &&
+                item.videoUrl != null &&
+                item.videoUrl!.isNotEmpty,
+            'openOnHold': post.platform == 'tiktok' && item.type == 'video',
+            'saved': savedIdx.contains(i),
+            // MediaStore id of the saved copy: the panel opens that file
+            // directly for a fullscreen preview instead of fetching the
+            // original again.
+            if (savedAssets[i] != null) 'savedMediaId': savedAssets[i],
+          });
         }
         await _invoke(channel, 'showSelectPanel', {
           'stickyPreview': settings.bubblePreviewSticky,
-          'items': [
-            for (var i = 0; i < post.items.length; i++)
-              {
-                'thumb': post.items[i].posterUrl ?? post.items[i].url,
-                'url': post.items[i].url,
-                'videoUrl': post.items[i].videoUrl,
-                'video': post.items[i].type == 'video',
-                'saved': savedIdx.contains(i),
-              },
-          ],
+          'postUrl': url,
+          'postTitle': post.title,
+          'aiLabel': post.aiLabel?.toJson(),
+          'items': panelItems,
         });
         // Keep the engine alive while the user picks.
         final picker = Timer.periodic(
@@ -220,7 +370,7 @@ Future<void> _handleSubmit(MethodChannel channel, Map<dynamic, dynamic> args) as
         _selectCompleter = null;
         await _invoke(channel, 'unmountSelectPanel');
         if (selected == null || selected.isEmpty) {
-          await _log(channel, 'SELECT cancelled :: $url');
+          await _log(channel, 'SELECT cancelled');
           await _tile(channel, false, null);
           await _bubble(channel, false, 0, 0, null, false);
           await _invoke(channel, 'idle');
@@ -236,13 +386,19 @@ Future<void> _handleSubmit(MethodChannel channel, Map<dynamic, dynamic> args) as
           requestGalleryAccess: false,
         );
         anyStarted = true;
-        await _log(channel, 'DOWNLOAD started ${batch.jobs.length} files (selected) :: $url');
+        await _log(
+          channel,
+          'DOWNLOAD started ${batch.jobs.length} files (selected)',
+        );
         if (toasts) await _toast(channel, '开始下载 ${batch.jobs.length} 个文件');
         unawaited(_awaitBatchAndNotify(channel, batch, started, url, toasts));
         break;
       }
       if (post.items.isEmpty) {
-        await _log(channel, 'PARSE OK but no items (${sw.elapsedMilliseconds}ms) :: $url');
+        await _log(
+          channel,
+          'PARSE OK but no items (${sw.elapsedMilliseconds}ms)',
+        );
         await _notify(channel, '该帖子没有可保存的内容');
         continue;
       }
@@ -256,7 +412,7 @@ Future<void> _handleSubmit(MethodChannel channel, Map<dynamic, dynamic> args) as
         requestGalleryAccess: false,
       );
       anyStarted = true;
-      await _log(channel, 'DOWNLOAD started ${batch.jobs.length} files :: $url');
+      await _log(channel, 'DOWNLOAD started ${batch.jobs.length} files');
       if (toasts) await _toast(channel, '开始下载 ${batch.jobs.length} 个文件');
       unawaited(_awaitBatchAndNotify(channel, batch, started, url, toasts));
     } on AlreadyDownloading {
@@ -267,7 +423,10 @@ Future<void> _handleSubmit(MethodChannel channel, Map<dynamic, dynamic> args) as
       // This request is handled by an existing batch, not a parse failure.
       anyStarted = true;
     } on ParseFailure catch (e) {
-      await _log(channel, 'PARSE FAIL[${e.code}] (${sw.elapsedMilliseconds}ms) ${e.message} :: $url');
+      await _log(
+        channel,
+        'PARSE FAIL[${e.code}] (${sw.elapsedMilliseconds}ms)',
+      );
       if (e.code == ParseErrorCode.loginRequired) {
         if (toasts) await _toast(channel, '需要登录：${e.message}');
       } else if (toasts) {
@@ -276,11 +435,40 @@ Future<void> _handleSubmit(MethodChannel channel, Map<dynamic, dynamic> args) as
       await _tile(channel, false, null);
       await _bubble(channel, false, 0, 0, null, true, url, e.code, e.message);
       await _error(channel, url, e.code, e.message);
+    } on MediaPolicyException catch (e) {
+      await _log(channel, 'REQUEST POLICY ${e.code} host=${e.host}');
+      if (toasts) await _toast(channel, '该资源地址不在允许范围内');
+      await _tile(channel, false, null);
+      await _bubble(
+        channel,
+        false,
+        0,
+        0,
+        null,
+        true,
+        null,
+        e.code,
+        '该资源地址不在允许范围内',
+      );
+      await _error(channel, '', e.code, '该资源地址不在允许范围内');
     } catch (e) {
-      await _log(channel, 'ERROR (${sw.elapsedMilliseconds}ms) $e :: $url');
+      await _log(
+        channel,
+        'ERROR (${sw.elapsedMilliseconds}ms) type=${e.runtimeType}',
+      );
       if (toasts) await _toast(channel, '处理失败');
       await _tile(channel, false, null);
-      await _bubble(channel, false, 0, 0, null, true, url, ParseErrorCode.invalidPage, '$e');
+      await _bubble(
+        channel,
+        false,
+        0,
+        0,
+        null,
+        true,
+        url,
+        ParseErrorCode.invalidPage,
+        '$e',
+      );
       await _error(channel, url, ParseErrorCode.invalidPage, '$e');
     }
   }
@@ -325,12 +513,16 @@ Future<void> _awaitBatchAndNotify(
     final secs = DateTime.now().difference(started).inSeconds;
     if (failed > 0) {
       final firstError =
-          batch.jobs.firstWhere((j) => j.state == JobState.failed).error ?? '下载失败';
-      await _log(channel, 'DOWNLOAD failed: $ok/$total ok, $failed failed, ${secs}s :: $url');
+          batch.jobs.firstWhere((j) => j.state == JobState.failed).error ??
+          '下载失败';
+      await _log(
+        channel,
+        'DOWNLOAD failed: $ok/$total ok, $failed failed, ${secs}s',
+      );
       if (toasts) await _toast(channel, '下载失败：成功 $ok/$total');
       await _notify(channel, '下载失败：成功 $ok/$total —— $firstError');
     } else {
-      await _log(channel, 'DOWNLOAD done: $ok/$total in ${secs}s :: $url');
+      await _log(channel, 'DOWNLOAD done: $ok/$total in ${secs}s');
       if (toasts) await _toast(channel, '下载完成：$ok/$total 个文件');
       await _notify(channel, '下载完成：$ok/$total 个文件');
     }

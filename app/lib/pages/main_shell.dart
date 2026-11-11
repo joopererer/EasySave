@@ -1,5 +1,7 @@
 // Bottom-navigation shell: 解析 / 历史 / 我的.
 
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../services/backup/backup_model.dart';
@@ -10,6 +12,7 @@ import '../services/download_manager.dart';
 import '../services/history_rebuild_service.dart';
 import '../services/host_bridge.dart';
 import '../services/settings.dart';
+import '../services/update_service.dart';
 import 'backup_restore_page.dart';
 import 'history_page.dart';
 import 'mine_page.dart';
@@ -123,9 +126,11 @@ class _MainShellState extends State<MainShell> with WidgetsBindingObserver {
   void _consumeHostOpen() {
     final url = HostBridge.openRequest.value;
     if (url == null || url.isEmpty) return;
+    final parsePage = _parseKey.currentState;
+    if (parsePage == null) return;
     HostBridge.openRequest.value = null;
     _select(0);
-    _parseKey.currentState?.showExternalUrl(url);
+    parsePage.showExternalUrl(url);
   }
 
   @override
@@ -133,6 +138,11 @@ class _MainShellState extends State<MainShell> with WidgetsBindingObserver {
     // Pick up downloads that completed while the app was suspended.
     if (state == AppLifecycleState.resumed) {
       DownloadManager.instance.reconcile();
+      // Also re-check the parser channel: updates are only fetched in the
+      // foreground, and "returned to the app" is the moment a new release can
+      // be picked up without waiting for the next cold start. The check itself
+      // keeps a minimum interval.
+      unawaited(ParserManager.instance.checkForUpdates(trigger: 'resume'));
     }
   }
 

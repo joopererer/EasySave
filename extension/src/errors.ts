@@ -2,6 +2,7 @@
 // Content follows the code -> message -> action table in spec/parsing.md.
 
 import type { ParseErrorCode } from "./index";
+import { X_ERROR_COPY } from "./x";
 
 export type ErrorAction = "goLogin" | "backHome" | "retry" | "repaste";
 
@@ -16,6 +17,9 @@ export const ERROR_COPY: Record<ParseErrorCode, ErrorCopy> = {
   REGION_RESTRICTED: { message: '该 TikTok 帖子受地区或 IP 限制', action: 'backHome' },
   UNKNOWN: { message: '无法读取 TikTok 帖子，请重新解析', action: 'retry' },
   LOGIN_REQUIRED: { message: "需要先登录小红书/Instagram", action: "goLogin" },
+  AGE_NOT_SET: { message: X_ERROR_COPY.AGE_NOT_SET.zh, action: "backHome" },
+  AGE_RESTRICTED: { message: X_ERROR_COPY.AGE_RESTRICTED.zh, action: "goLogin" },
+  PROTECTED: { message: X_ERROR_COPY.PROTECTED.zh, action: "backHome" },
   PRIVATE_OR_UNAVAILABLE: { message: "该帖子不存在、私密或已删除", action: "backHome" },
   BLOCKED: { message: "请求被对方限制，请稍后再试", action: "retry" },
   INVALID_PAGE: { message: "页面内容无法识别，可能已改版", action: "retry" },
@@ -32,6 +36,9 @@ export const ERROR_MESSAGES: Record<ParseErrorCode, string> = {
   REGION_RESTRICTED: ERROR_COPY.REGION_RESTRICTED.message,
   UNKNOWN: ERROR_COPY.UNKNOWN.message,
   LOGIN_REQUIRED: ERROR_COPY.LOGIN_REQUIRED.message,
+  AGE_NOT_SET: ERROR_COPY.AGE_NOT_SET.message,
+  AGE_RESTRICTED: ERROR_COPY.AGE_RESTRICTED.message,
+  PROTECTED: ERROR_COPY.PROTECTED.message,
   PRIVATE_OR_UNAVAILABLE: ERROR_COPY.PRIVATE_OR_UNAVAILABLE.message,
   BLOCKED: ERROR_COPY.BLOCKED.message,
   INVALID_PAGE: ERROR_COPY.INVALID_PAGE.message,

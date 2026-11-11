@@ -84,7 +84,7 @@ describe('TikTok media selection', () => {
     expect(selectTiktokVideo({ downloadAddr: watermark })).toBeUndefined();
     expect(parseTiktok(payload({ ...post, video: { downloadAddr: watermark } }), page).ok).toBe(false);
   });
-  it('maps image title and ordered fallback URLs, excluding cover, music and video', () => {
+  it('maps image title and ordered fallback URLs, keeping the cover as poster only', () => {
     const result = parseTiktok(payload({ ...post, imagePost: { title: 'Album title',
       cover: { urlList: ['https://media.example/cover'] },
       images: [{ imageURL: { urlList: ['https://media.example/1', 'https://media.example/2'] } }],
@@ -92,6 +92,14 @@ describe('TikTok media selection', () => {
     expect(result).toMatchObject({ ok: true, data: { title: 'Album title',
       url: `https://www.tiktok.com/@/video/${id}`,
       items: [{ type: 'image', url: 'https://media.example/1', fallbacks: ['https://media.example/2'] }] } });
-    expect(JSON.stringify(result)).not.toMatch(/watermark|cover|music|play\.mp4/);
+    if (!result.ok) throw new Error('expected a parsed post');
+    const [item] = result.data.items;
+    // The cover is declared as the preview still, never as a downloadable media
+    // address, and music/watermarked playback stay out of the item entirely.
+    expect(result.data.items).toHaveLength(1);
+    expect(item.posterUrl).toBe('https://media.example/cover');
+    expect([item.url, ...(item.fallbacks ?? [])])
+      .not.toContain('https://media.example/cover');
+    expect(JSON.stringify(result)).not.toMatch(/watermark|music|play\.mp4/);
   });
 });

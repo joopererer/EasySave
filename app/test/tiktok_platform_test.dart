@@ -7,13 +7,14 @@ import 'package:flutter_test/flutter_test.dart';
 
 void main() {
   test('TikTok login routing recognizes short and canonical hosts only', () {
+    expect(loginSiteIds, containsAll(['xhs', 'instagram', 'x', 'tiktok']));
     for (final host in ['www.tiktok.com', 'vm.tiktok.com', 'vt.tiktok.com']) {
-      expect(platformFromUrl('https://$host/path'), PlatformKind.tiktok);
+      expect(platformFromUrl('https://$host/path'), 'tiktok');
     }
     expect(platformFromUrl('https://tiktok.com.evil.example/path'), isNull);
-    expect(platformFromKey('tiktok'), PlatformKind.tiktok);
-    expect(platformLabel(PlatformKind.tiktok), 'TikTok');
-    expect(loginEntryUrl(PlatformKind.tiktok), 'https://www.tiktok.com/login');
+    expect(platformFromKey('tiktok'), 'tiktok');
+    expect(platformLabel('tiktok'), 'TikTok');
+    expect(loginEntryUrl('tiktok'), 'https://www.tiktok.com/login');
   });
 
   test('TikTok metadata maps platform and only writes numeric author IDs', () {

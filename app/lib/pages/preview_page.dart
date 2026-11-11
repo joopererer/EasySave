@@ -6,6 +6,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import '../widgets/ai_label_badge.dart';
 import 'package:flutter/services.dart';
+import 'package:photo_manager/photo_manager.dart';
 
 import '../core/dev_log.dart';
 import '../core/models.dart';
@@ -14,12 +15,41 @@ import '../services/download_claims.dart';
 import '../services/gallery_locator_service.dart';
 import '../services/history_db.dart';
 import '../services/host_bridge.dart';
+import '../services/media_request_policy.dart';
 import '../services/preview_route_observer.dart';
-import '../services/saver.dart';
 import '../theme/app_theme.dart';
 import '../widgets/download_sheet.dart';
 import '../widgets/gallery_browser.dart';
 import '../widgets/shared.dart';
+import '../widgets/verified_asset_image.dart';
+
+class PreviewItemCover extends StatelessWidget {
+  const PreviewItemCover({
+    super.key,
+    required this.item,
+    required this.platform,
+    this.asset,
+    this.verifyExistence,
+  });
+
+  final MediaItem item;
+  final String platform;
+  final AssetEntity? asset;
+  final Future<bool> Function(String)? verifyExistence;
+
+  @override
+  Widget build(BuildContext context) {
+    final remote = CoverImage(item: item, platform: platform);
+    final local = asset;
+    return local == null
+        ? remote
+        : VerifiedAssetImage(
+            local,
+            fallback: remote,
+            verifyExistence: verifyExistence,
+          );
+  }
+}
 
 class PreviewPage extends StatefulWidget {
   const PreviewPage({
@@ -55,6 +85,15 @@ class PreviewPage extends StatefulWidget {
     );
   }
 
+  static Future<void> open(BuildContext context, {
+    required ParsedPost post,
+    List<RawImageEntry> rawImages = const [],
+    VoidCallback? onSaved,
+  }) async {
+    if (PreviewRouteObserver.instance.revealPreview(post.id)) return;
+    await Navigator.of(context).push(route(post: post, rawImages: rawImages, onSaved: onSaved));
+  }
+
   @override
   State<PreviewPage> createState() => _PreviewPageState();
 }
@@ -65,6 +104,8 @@ class _PreviewPageState extends State<PreviewPage> {
     for (var i = 0; i < _post.items.length; i++) i,
   ];
   Set<int> _downloaded = {};
+  Map<int, AssetEntity> _localAssets = {};
+  Map<int, AssetEntity> _localMotions = {};
   // Thumbnails only start fetching after the push transition settles:
   // firing N concurrent original-size downloads inside the animation
   // starves the raster thread and freezes the transition mid-way.
@@ -101,9 +142,13 @@ class _PreviewPageState extends State<PreviewPage> {
 
   Widget _downloadStrip() {
     if (_saving) {
-      return const Padding(
-        padding: EdgeInsets.all(12),
-        child: Column(children: [Text('处理中…'), LinearProgressIndicator()]),
+      return Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(children: [
+          for (final index in _order)
+            Text('第 ${index + 1} 项 · 正在准备保存'),
+          const LinearProgressIndicator(),
+        ]),
       );
     }
     final batch = _activeBatch;
@@ -151,8 +196,9 @@ class _PreviewPageState extends State<PreviewPage> {
                 onPressed: _batchBusy
                     ? null
                     : () => _batchAction((b) async {
-                        final owned =
-                            await DownloadManager.instance.forceAdopt(b);
+                        final owned = await DownloadManager.instance.forceAdopt(
+                          b,
+                        );
                         await DownloadManager.instance.retryBatch(owned);
                       }),
                 child: const Text('重试'),
@@ -165,6 +211,7 @@ class _PreviewPageState extends State<PreviewPage> {
 
   @override
   void dispose() {
+    _imageReadyTimer?.cancel();
     GalleryLocatorService.instance.removeListener(_checkDownloaded);
     _batchPoll?.cancel();
     DownloadManager.instance.removeListener(_refreshBatch);
@@ -183,13 +230,19 @@ class _PreviewPageState extends State<PreviewPage> {
     GalleryLocatorService.instance.addListener(_checkDownloaded);
     _checkDownloaded();
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      Future.delayed(const Duration(milliseconds: 350), () {
+      if (!mounted) return;
+      _imageReadyTimer = Timer(const Duration(milliseconds: 350), () {
         if (mounted) setState(() => _imagesReady = true);
       });
     });
   }
 
-  Future<void> _checkDownloaded() async {
+  Timer? _imageReadyTimer;
+
+  Future<void>? _localCheck;
+  Future<void> _checkDownloaded() => _localCheck ??= _readDownloaded().whenComplete(() => _localCheck = null);
+
+  Future<void> _readDownloaded() async {
     try {
       final db = await HistoryDb.instance();
       final merged = await db.mergeParsedPost(_post);
@@ -197,11 +250,18 @@ class _PreviewPageState extends State<PreviewPage> {
       setState(() => _post = merged);
     } catch (_) {}
 
-    final downloaded =
-        await GalleryLocatorService.instance.findDownloadedIndices(_post);
+    final assets = await GalleryLocatorService.instance.matchPostItems(_post);
+    final motions = _post.items.any((item) => item.type == 'live')
+        ? await GalleryLocatorService.instance.matchPostItems(
+            _post,
+            liveVideoOnly: true,
+          )
+        : <int, AssetEntity>{};
     if (!mounted) return;
     setState(() {
-      _downloaded = downloaded;
+      _localAssets = assets;
+      _localMotions = motions;
+      _downloaded = assets.keys.toSet();
     });
   }
 
@@ -239,14 +299,13 @@ class _PreviewPageState extends State<PreviewPage> {
         builder: (_) => GalleryBrowserPage(
           items: [
             for (var i = 0; i < _post.items.length; i++)
-              GalleryBrowserItem(
+              GalleryBrowserItem.fromMediaItem(
+                _post.items[i],
                 index: i,
-                type: _post.items[i].type,
-                url: _post.items[i].url,
-                videoUrl: _post.items[i].videoUrl,
-                posterUrl: _post.items[i].posterUrl,
-                fallbacks: _post.items[i].fallbacks,
-                isGif: _post.items[i].isGif ?? false,
+                cachePostId: _post.id,
+                asset: _localAssets[i],
+                liveVideoAsset: _localMotions[i],
+                filename: _post.items[i].localFilename,
                 status: FileStatus.found,
               ),
           ],
@@ -280,24 +339,46 @@ class _PreviewPageState extends State<PreviewPage> {
   Future<void> _save() async {
     if (_order.isEmpty || _saving) return;
     setState(() => _saving = true);
-    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('正在处理保存请求')));
-    try { await _saveSelection(); }
-    on AlreadyDownloading {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('已在下载中')));
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(const SnackBar(content: Text('正在处理保存请求')));
+    try {
+      await _saveSelection();
+    } on AlreadyDownloading {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('已在下载中')));
+      }
+    } on MediaPolicyException {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('该资源地址不在允许范围内')));
+      }
     } catch (e) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('保存失败：$e')));
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('保存失败：$e')));
+      }
     } finally {
-      if (mounted) { setState(() => _saving = false); await _refreshBatch(); }
+      if (mounted) {
+        setState(() => _saving = false);
+        await _refreshBatch();
+      }
     }
   }
 
   Future<void> _saveSelection() async {
+    final watch = Stopwatch()..start();
     final locator = GalleryLocatorService.instance;
     // Re-check which selected items are already in the album right before
     // saving: those are associated with the history record instead of being
     // downloaded again. The album scan happens once and the result is reused
     // for the association write, so the two steps cannot disagree.
     final matches = await locator.matchPostItems(_post);
+    unawaited(DevLog.write('V16DL', 'event=prepare stage=local-match ms=${watch.elapsedMilliseconds}'));
     final downloaded = matches.keys.toSet();
     final toAssociate = _order.where(downloaded.contains).toList();
     final toDownload = _order.where((i) => !downloaded.contains(i)).toList();
@@ -306,7 +387,7 @@ class _PreviewPageState extends State<PreviewPage> {
     DevLog.write(
       'V16DL', // i18n:ignore 日志
       'save plan post=${_post.id} selected=${_order.length} '
-      'associate=${toAssociate.length} download=${toDownload.length}',
+          'associate=${toAssociate.length} download=${toDownload.length}',
     );
 
     var associated = 0;
@@ -319,15 +400,16 @@ class _PreviewPageState extends State<PreviewPage> {
         restoreDeleted: true,
         matches: matches,
       );
+      unawaited(DevLog.write('V16DL', 'event=prepare stage=associate-db ms=${watch.elapsedMilliseconds}'));
     }
     if (!mounted) return;
 
     // Everything was already local: just link the records and go back.
     if (toDownload.isEmpty) {
       widget.onSaved?.call();
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('已将 $associated 个本地文件关联到历史记录')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('已将 $associated 个本地文件关联到历史记录')));
       // Notify history page to refresh
       HostBridge.historyRevision.value = HostBridge.historyRevision.value + 1;
       Navigator.of(context).pop(true);
@@ -387,8 +469,14 @@ class _PreviewPageState extends State<PreviewPage> {
           children: [
             Flexible(child: Text(post.author.name ?? post.id)),
             const SizedBox(width: 8),
-            PlatformTag(platform: post.platform),
-            AiLabelBadge(text: post.aiLabel?.text, source: post.aiLabel?.source),
+            PlatformTag(
+              platform: post.platform,
+              savedDisplayName: post.platformDisplayName,
+            ),
+            AiLabelBadge(
+              text: post.aiLabel?.text,
+              source: post.aiLabel?.source,
+            ),
           ],
         ),
         actions: [
@@ -405,9 +493,7 @@ class _PreviewPageState extends State<PreviewPage> {
                   }
                 });
               },
-              child: Text(
-                _order.length == post.items.length ? '全不选' : '全选',
-              ),
+              child: Text(_order.length == post.items.length ? '全不选' : '全选'),
             ),
         ],
       ),
@@ -445,6 +531,7 @@ class _PreviewPageState extends State<PreviewPage> {
             ),
           Expanded(
             child: GridView.builder(
+              cacheExtent: 100,
               padding: const EdgeInsets.all(16),
               gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
                 crossAxisCount: 2,
@@ -484,11 +571,10 @@ class _PreviewPageState extends State<PreviewPage> {
                               Radius.circular(AppTokens.thumbRadius - 3),
                             ),
                             child: _imagesReady
-                                ? CoverImage(
-                                    key: ValueKey(item.url),
+                                ? PreviewItemCover(
                                     item: item,
-                                    referer: refererFor(post.platform),
-                                    cacheWidth: 400,
+                                    platform: post.platform,
+                                    asset: _localAssets[index],
                                   )
                                 : const ColoredBox(color: Colors.black12),
                           ),
@@ -548,7 +634,9 @@ class _PreviewPageState extends State<PreviewPage> {
                                 color: Colors.black.withValues(alpha: 0.65),
                                 borderRadius: BorderRadius.circular(6),
                                 border: Border.all(
-                                  color: Colors.greenAccent.withValues(alpha: 0.7),
+                                  color: Colors.greenAccent.withValues(
+                                    alpha: 0.7,
+                                  ),
                                   width: 1,
                                 ),
                               ),

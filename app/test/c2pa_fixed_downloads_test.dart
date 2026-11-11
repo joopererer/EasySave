@@ -112,7 +112,7 @@ void main() {
       title: 'post_1.jpg', relativePath: 'Pictures/EasySave/');
     locator.setScannedForTesting(scanned: true, permission: PermissionState.authorized,
       assets: [download, pictures], relativePaths: {'download': c2paRelativePath, 'pictures': 'Pictures/EasySave/'});
-    final found = await locator.locateAssetAsync(HistoryFile(filename: 'post_1.jpg', relativePath: c2paRelativePath, savedAt: 1),
+    final found = await locator.locateAssetAsync(HistoryFile(itemIndex: 1, filename: 'post_1.jpg', relativePath: c2paRelativePath, savedAt: 1),
       '7674898126922140959', platform: 'tiktok');
     expect(found?.id, 'download');
   });

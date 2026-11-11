@@ -93,7 +93,7 @@ class HostService : Service() {
     private val pending = ArrayDeque<Map<String, Any?>>()
     private val handler = Handler(Looper.getMainLooper())
     private val idleRunnable = Runnable {
-        Log.i(TAG, "Idle ${IDLE_TIMEOUT_MS}ms reached → destroy engine + stopSelf")
+        NativeLog.i(TAG, "Idle ${IDLE_TIMEOUT_MS}ms reached → destroy engine + stopSelf")
         releaseEngine()
     }
 
@@ -136,12 +136,16 @@ class HostService : Service() {
                 loader.startInitialization(applicationContext)
                 loader.ensureInitializationComplete(applicationContext, null)
             } catch (e: Exception) {
-                Log.i(TAG, "FlutterLoader init skipped: ${e.message}")
+                NativeLog.i(TAG, "FlutterLoader init skipped: ${e.message}")
             }
 
             val e = FlutterEngine(applicationContext, null, true)
+            NativeLog.register(applicationContext, e.dartExecutor.binaryMessenger)
+            SharedPreviewBridge.register(applicationContext, e.dartExecutor.binaryMessenger, background = true)
             ProvenancePairWriter.register(applicationContext, e.dartExecutor.binaryMessenger)
             DownloadControl.register(e.dartExecutor.binaryMessenger)
+            SafStorageBridge.register(applicationContext, e.dartExecutor.binaryMessenger)
+            MediaStoreBridge.register(applicationContext, e.dartExecutor.binaryMessenger)
             engine = e
             val ch = MethodChannel(e.dartExecutor.binaryMessenger, "easysave/bgtask")
             channel = ch
@@ -149,7 +153,7 @@ class HostService : Service() {
                 when (call.method) {
                     "ready" -> {
                         ready = true
-                        Log.i(TAG, "BG engine ready")
+                        NativeLog.i(TAG, "BG engine ready")
                         while (pending.isNotEmpty()) {
                             ch.invokeMethod("submit", pending.removeFirst())
                         }
@@ -160,7 +164,7 @@ class HostService : Service() {
                         // The message comes from Dart; scrub it again here so a
                         // URL with query parameters can never reach logcat.
                         val msg = call.arguments as? String ?: ""
-                        Log.i(TAG, LogSanitizer.scrub(msg))
+                        NativeLog.i(TAG, LogSanitizer.scrub(msg))
                         result.success(null)
                     }
                     "notify" -> {
@@ -229,7 +233,7 @@ class HostService : Service() {
                                     android.content.ClipData.newPlainText("EasySave", text)
                                 )
                             } catch (e: Exception) {
-                                Log.e(TAG, "setClipboard failed: $e")
+                                NativeLog.e(TAG, "setClipboard failed: $e")
                             }
                         }
                         result.success(null)
@@ -238,7 +242,8 @@ class HostService : Service() {
                         val args = call.arguments as? Map<*, *>
                         val items = args?.get("items") as? List<Any?> ?: emptyList()
                         val stickyPreview = args?.get("stickyPreview") as? Boolean ?: false
-                        showSelectPanel(items, stickyPreview)
+                        showSelectPanel(items, stickyPreview, args?.get("postUrl") as? String,
+                            args?.get("postTitle") as? String, args?.get("aiLabel") as? Map<*, *>)
                         result.success(null)
                     }
                     "unmountSelectPanel" -> {
@@ -263,9 +268,9 @@ class HostService : Service() {
             e.dartExecutor.executeDartEntrypoint(
                 DartExecutor.DartEntrypoint(loader.findAppBundlePath(), "backgroundMain")
             )
-            Log.i(TAG, "FlutterEngine.executeDartEntrypoint(backgroundMain) called")
+            NativeLog.i(TAG, "FlutterEngine.executeDartEntrypoint(backgroundMain) called")
         } catch (e: Exception) {
-            Log.e(TAG, "ensureEngine FAILED: $e", e)
+            NativeLog.e(TAG, "ensureEngine FAILED: $e", e)
             updateNotification("后台引擎启动失败: ${e.message}")
             stopSelf()
         }
@@ -278,7 +283,8 @@ class HostService : Service() {
 
     /// Show the native "选择下载" panel as an overlay window. A FlutterView in
     /// an overlay proved unreliable, so this is a plain Android view tree.
-    private fun showSelectPanel(items: List<Any?>, stickyPreview: Boolean = false) {
+    private fun showSelectPanel(items: List<Any?>, stickyPreview: Boolean = false, postUrl: String? = null,
+        postTitle: String? = null, aiLabel: Map<*, *>? = null) {
         handler.post {
             unmountSelectPanel()
             try {
@@ -288,7 +294,31 @@ class HostService : Service() {
                     @Suppress("DEPRECATION")
                     WindowManager.LayoutParams.TYPE_PHONE
                 }
-                val panel = SelectPanelView(this, stickyPreview = stickyPreview) { picked ->
+                val panel = SelectPanelView(this, stickyPreview = stickyPreview,
+                    onPolicyRejected = { code, host, field, shape ->
+                        handler.post {
+                            channel?.invokeMethod("mediaPolicyRejected", mapOf("code" to code, "host" to host, "field" to field, "shape" to shape))
+                        }
+                    },
+                    onOpenPreview = {
+                        if (!postUrl.isNullOrBlank()) {
+                            val intent = Intent(this, MainActivity::class.java).apply {
+                                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+                                putExtra(MainActivity.EXTRA_OPEN_URL, postUrl)
+                            }
+                            try {
+                                startActivity(intent)
+                                unmountSelectPanel()
+                                channel?.invokeMethod("selectResult", null)
+                            } catch (error: android.content.ActivityNotFoundException) {
+                                NativeLog.e(TAG, "open preview failed: activity unavailable")
+                                android.widget.Toast.makeText(this, "无法打开 App，请重试", android.widget.Toast.LENGTH_SHORT).show()
+                            } catch (error: SecurityException) {
+                                NativeLog.e(TAG, "open preview failed: permission denied")
+                                android.widget.Toast.makeText(this, "无法打开 App，请重试", android.widget.Toast.LENGTH_SHORT).show()
+                            }
+                        }
+                    }) { picked ->
                     unmountSelectPanel()
                     val payload: Any? = picked?.let { mapOf("indices" to it.map { i -> i as Any }) }
                     channel?.invokeMethod("selectResult", payload)
@@ -306,9 +336,10 @@ class HostService : Service() {
                 }
                 (getSystemService(WINDOW_SERVICE) as WindowManager).addView(panel, params)
                 panelView = panel
+                panel.setPostMetadata(postTitle, aiLabel)
                 panel.setItems(items)
             } catch (e: Exception) {
-                Log.e(TAG, "showSelectPanel failed: $e")
+                NativeLog.e(TAG, "showSelectPanel failed: $e")
                 channel?.invokeMethod("selectResult", null)
             }
         }
@@ -329,6 +360,7 @@ class HostService : Service() {
         unmountSelectPanel()
         try {
             channel?.setMethodCallHandler(null)
+            engine?.let { SharedPreviewBridge.detach(it.dartExecutor.binaryMessenger) }
             engine?.destroy()
         } catch (_: Exception) {
         }
@@ -364,7 +396,7 @@ class HostService : Service() {
             intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
             startActivity(intent)
         } catch (e: Exception) {
-            Log.e(TAG, "openApp failed: $e")
+            NativeLog.e(TAG, "openApp failed: $e")
         }
     }
 

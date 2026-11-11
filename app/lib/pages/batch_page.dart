@@ -9,6 +9,7 @@ import 'package:flutter/services.dart';
 import '../core/error_copy.dart';
 import '../core/models.dart';
 import '../services/links.dart';
+import '../services/site_registry.dart';
 import '../services/parse_service.dart';
 import '../services/preview_open_guard.dart';
 import '../services/seal.dart';
@@ -50,13 +51,8 @@ class _BatchPageState extends State<BatchPage> {
     _run();
   }
 
-  String _platformOf(String link) {
-    final host = Uri.tryParse(link)?.host.toLowerCase() ?? '';
-    if (host.contains('instagram.com') || host.contains('instagr.am')) {
-      return 'instagram';
-    }
-    return 'xhs';
-  }
+  String _platformOf(String link) =>
+      SiteRegistry.current.match(link)?.id ?? 'unknown';
 
   Future<void> _run() async {
     if (_running) return;
@@ -73,7 +69,7 @@ class _BatchPageState extends State<BatchPage> {
         // parsePostOutcome resolves short links itself (and, for XHS, does so
         // in a real WebView so the share token survives). Resolving here with
         // plain HTTP first would drop Xiaohongshu's token and land on /login.
-        final outcome = await parsePostOutcome(item.link);
+        final outcome = await parsePostOutcome(item.link, source: 'batch');
         if (!mounted || _cancelRequested) break;
         setState(() {
           item.state = BatchItemState.done;
@@ -107,12 +103,7 @@ class _BatchPageState extends State<BatchPage> {
     // preview (e.g. tapped twice before the push finished).
     if (PreviewOpenGuard.isTopPreview(post.id)) return;
     _opening = true;
-    await Navigator.of(context).push(
-      PreviewPage.route(
-        post: post,
-        rawImages: item.rawImages,
-      ),
-    );
+    await PreviewPage.open(context, post: post, rawImages: item.rawImages);
     _opening = false;
   }
 

@@ -1,0 +1,39 @@
+{
+  "manifestVersion": 10,
+  "parserAbi": 1,
+  "minAppVersion": "1.9.0",
+  "parserUrlTemplate": "https://github.com/joopererer/EasySave/releases/download/parser-v{parserVersion}/parser.js",
+  "platforms": {
+    "tiktok": {
+      "enabled": true,
+      "notice": "TikTok 解析服务维护中，请稍后再试"
+    },
+    "xhs": {
+      "enabled": true,
+      "notice": "小红书解析服务维护中，请稍后再试"
+    },
+    "instagram": {
+      "enabled": true,
+      "notice": "Instagram 解析服务维护中，请稍后再试"
+    },
+    "x": {
+      "enabled": true,
+      "notice": "X 解析服务维护中，请稍后再试",
+      "endpoint": "https://cdn.syndication.twimg.com/tweet-result?id={id}&lang=en&token={token}"
+    }
+  },
+  "headers": {
+    "tiktok": {
+      "Referer": "https://www.tiktok.com/"
+    },
+    "xhs": {
+      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
+    },
+    "instagram": {
+      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
+    },
+    "x": {
+      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
+    }
+  }
+}

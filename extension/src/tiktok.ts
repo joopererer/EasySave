@@ -38,10 +38,40 @@ export interface TiktokItem {
   type: 'image' | 'video';
   url: string;
   videoUrl?: string;
+  /** Preview still (prov-less): the app declares it as a `poster` resource. */
+  posterUrl?: string;
   fallbacks?: string[];
   width?: number;
   height?: number;
   duration?: number;
+}
+
+/**
+ * Preview still of a TikTok item, in the order the players themselves use.
+ *
+ * `video.cover` / `originCover` / `dynamicCover` are plain strings on the item
+ * detail payload; `imagePost.cover` is a `{imageURL: {urlList: [...]}}` object.
+ * Relative or non-http candidates are skipped; the host itself is authorised by
+ * the manifest (`download.mediaHosts`) in the App's request policy, exactly
+ * like every other media address.
+ */
+export function selectTiktokPoster(value: unknown): string | undefined {
+  const candidates: string[] = [];
+  const push = (raw: unknown) => {
+    candidates.push(...urls(raw));
+    if (raw !== null && typeof raw === 'object') {
+      const holder = record(raw);
+      candidates.push(...urls(record(holder.imageURL).urlList), ...urls(holder.urlList));
+    }
+  };
+  const source = record(value);
+  push(source.originCover);
+  push(source.cover);
+  push(source.dynamicCover);
+  push(record(source.video).originCover);
+  push(record(source.video).cover);
+  push(record(source.video).dynamicCover);
+  return candidates[0];
 }
 
 /** Only playback addresses are candidates. downloadAddr is never read. */
@@ -116,9 +146,13 @@ export function parseTiktok(input: string, pageUrl: string): TiktokResult {
         width: number(image.imageWidth) || undefined, height: number(image.imageHeight) || undefined };
     });
     if (items.some(i => !i.url)) return failure({});
+    // The gallery cover is what the web player shows in the feed.
+    const cover = selectTiktokPoster({ cover: imagePost.cover });
+    if (cover && items.length) items[0] = { ...items[0], posterUrl: cover };
   } else {
     const video = selectTiktokVideo(item.video);
-    items = video ? [video] : [];
+    const poster = selectTiktokPoster({ video: item.video });
+    items = video ? [{ ...video, posterUrl: poster }] : [];
   }
   if (!items.length) return failure({});
   const author = record(item.author), authorId = text(author.id);
@@ -131,4 +165,20 @@ export function parseTiktok(input: string, pageUrl: string): TiktokResult {
     aiLabel: tiktokAiLabel(item.aigcLabelType, id),
     publishedAt: created > 0 && !isNaN(date.getTime()) ? date.toISOString().replace('.000Z', 'Z') : undefined,
     items } };
+}
+
+
+// Known TikTok URL expiry fields, not a generic App query-parameter heuristic.
+// Repeated/case-varied fields use the earliest valid timestamp conservatively.
+export function tiktokExpiresAt(url: string): string | undefined {
+  try {
+    let earliest = Infinity;
+    new URL(url).searchParams.forEach((value, key) => {
+      if (!['expire', 'x-expires'].includes(key.toLowerCase()) || !/^[0-9]+$/.test(value)) return;
+      const seconds = Number(value), ms = seconds * 1000;
+      if (Number.isSafeInteger(seconds) && Number.isSafeInteger(ms) &&
+          !Number.isNaN(new Date(ms).getTime())) earliest = Math.min(earliest, ms);
+    });
+    return Number.isFinite(earliest) ? new Date(earliest).toISOString() : undefined;
+  } catch { return undefined; }
 }

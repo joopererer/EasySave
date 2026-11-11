@@ -3,9 +3,11 @@ import 'verified_media.dart';
 // builds in-memory filename/postId index once per session, and locates
 // saved files for history records without repeated disk queries.
 
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
 import 'package:photo_manager/photo_manager.dart';
 
 import '../core/dev_log.dart';
@@ -24,7 +26,38 @@ class GalleryLocatorService extends ChangeNotifier {
     evictMediaIds([id]);
     notifyListeners();
   }
-  Future<bool> isPresent(String id) async => !_unreadableIds.contains(id) && await mediaExists(id);
+  Future<bool> isPresent(String id) async {
+    if (_unreadableIds.contains(id)) return false;
+    // The native index lists what MediaStore returns to this app right now;
+    // photo_manager's per-id query is not usable without its permission.
+    final native = _nativeIds;
+    if (native != null && !hasAccess) return native.contains(id);
+    return (presenceProbeForTesting ?? mediaExists)(id);
+  }
+
+  static const MethodChannel _mediaChannel = MethodChannel('easysave/media');
+
+  /// How the current album index was built: `plugin` (photo_manager with its
+  /// permission) or `native` (MediaStore through [_mediaChannel], used when
+  /// photo_manager reports no access, e.g. in the overlay engine).
+  String _lookupMethod = 'plugin';
+  String get lookupMethod => _lookupMethod;
+
+  /// Permission reported by the native side for the native index.
+  String? _nativePermission;
+  Set<String>? _nativeIds;
+  int _nativeOwned = 0;
+
+  /// Test seams for the platform calls; production leaves them null.
+  @visibleForTesting
+  Future<PermissionState> Function()? permissionReaderForTesting;
+  @visibleForTesting
+  Future<List<AssetEntity>> Function()? albumReaderForTesting;
+  @visibleForTesting
+  Future<bool> Function(String id)? presenceProbeForTesting;
+  @visibleForTesting
+  Future<Map<Object?, Object?>?> Function(List<String> albums)?
+      nativeIndexReaderForTesting;
 
   GalleryLocatorService._();
 
@@ -47,6 +80,15 @@ class GalleryLocatorService extends ChangeNotifier {
   bool get isScanning => _isScanning;
 
   final Map<String, AssetEntity> _exactMap = {};
+
+  /// Lower-case display name without extension -> asset. MediaStore titles
+  /// carry their extension, so a lookup by base name needs this map.
+  final Map<String, AssetEntity> _stemMap = {};
+
+  void _indexStem(String baseName, AssetEntity asset) {
+    final dot = baseName.lastIndexOf('.');
+    if (dot > 0) _stemMap.putIfAbsent(baseName.substring(0, dot), () => asset);
+  }
   final Map<String, AssetEntity> _idMap = {};
   final List<AssetEntity> _allAssets = [];
   final Map<String, String?> _relPathMap = {};
@@ -98,11 +140,13 @@ class GalleryLocatorService extends ChangeNotifier {
       }
     }
     if (idsToFetch.isEmpty) return;
+    var changed = false;
     final futures = idsToFetch.map((id) async {
       try {
         final asset = await AssetEntity.fromId(id);
         if (asset != null) {
           _idMap[id] = asset;
+          changed = true;
           if (asset.title != null && asset.title!.isNotEmpty) {
             _exactMap[asset.title!.toLowerCase()] = asset;
           }
@@ -110,7 +154,7 @@ class GalleryLocatorService extends ChangeNotifier {
       } catch (_) {}
     });
     await Future.wait(futures);
-    notifyListeners();
+    if (changed) notifyListeners();
   }
 
   /// Evict deleted media IDs from in-memory caches.
@@ -124,6 +168,7 @@ class GalleryLocatorService extends ChangeNotifier {
         _exactMap.remove(baseName);
       }
       _allAssets.removeWhere((a) => a.id == id);
+      _stemMap.removeWhere((_, a) => a.id == id);
     }
     notifyListeners();
   }
@@ -131,8 +176,11 @@ class GalleryLocatorService extends ChangeNotifier {
   /// Check current permission state without prompting the user.
   Future<PermissionState> checkPermission() async {
     try {
-      _permission = await PhotoManager.getPermissionState(requestOption: _defaultOption);
-      notifyListeners();
+      final permission = await (permissionReaderForTesting?.call() ??
+          PhotoManager.getPermissionState(requestOption: _defaultOption));
+      final changed = permission != _permission;
+      _permission = permission;
+      if (changed) notifyListeners();
     } catch (e) {
       debugPrint('GalleryLocatorService.checkPermission error: $e');
     }
@@ -198,6 +246,14 @@ class GalleryLocatorService extends ChangeNotifier {
     notifyListeners();
 
     try {
+      final testAlbum = albumReaderForTesting;
+      if (testAlbum != null) {
+        _replaceIndex(await testAlbum());
+        _lookupMethod = 'plugin';
+        _nativeIds = null;
+        _scanned = true;
+        return;
+      }
       final settings = await AppSettings.load();
       final albumName = settings.albumName.trim().toLowerCase();
       // Every album the app has used, not just the current one: renaming the
@@ -258,26 +314,9 @@ class GalleryLocatorService extends ChangeNotifier {
         }
       }
 
-      _exactMap.clear();
-      _idMap.clear();
-      _allAssets.clear();
-      _relPathMap.clear();
-      _xmpCache.clear();
-
-      for (final asset in assetsToIndex) {
-        _idMap[asset.id] = asset;
-        _allAssets.add(asset);
-
-        final title = (asset.title ?? '').trim().toLowerCase();
-        if (title.isNotEmpty) {
-          _exactMap[title] = asset;
-
-          // Strip directory path if title has any
-          final baseName = title.split('/').last.split('\\').last;
-          _exactMap[baseName] = asset;
-        }
-      }
-
+      _replaceIndex(assetsToIndex);
+      _lookupMethod = 'plugin';
+      _nativeIds = null;
       _scanned = true;
     } catch (e) {
       debugPrint('GalleryLocatorService.scanAlbum error: $e');
@@ -287,14 +326,117 @@ class GalleryLocatorService extends ChangeNotifier {
     }
   }
 
+  void _replaceIndex(List<AssetEntity> assets) {
+    _exactMap.clear();
+    _stemMap.clear();
+    _idMap.clear();
+    _allAssets.clear();
+    _relPathMap.clear();
+    _xmpCache.clear();
+    for (final asset in assets) {
+      _idMap[asset.id] = asset;
+      _allAssets.add(asset);
+      final title = (asset.title ?? '').trim().toLowerCase();
+      if (title.isNotEmpty) {
+        _exactMap[title] = asset;
+        // Strip directory path if title has any
+        final baseName = title.split('/').last.split('\\').last;
+        _exactMap[baseName] = asset;
+        _indexStem(baseName, asset);
+      }
+    }
+  }
+
+  /// Index EasySave's albums through native MediaStore when photo_manager has
+  /// no access (its permission query needs an Activity, so the overlay engine
+  /// always sees notDetermined). Without read permission Android 10+ still
+  /// returns the files this app wrote, so EasySave's own saves are found.
+  Future<bool> _loadNativeIndex() async {
+    try {
+      final settings = await AppSettings.load();
+      final albums = [
+        for (final name in settings.effectiveAlbumNames)
+          if (name.trim().isNotEmpty) name.trim(),
+      ];
+      final raw = await (nativeIndexReaderForTesting?.call(albums) ??
+          _mediaChannel.invokeMethod<Map<Object?, Object?>>(
+            'savedMediaIndex',
+            {'albums': albums},
+          ));
+      if (raw == null) return false;
+      final assets = <AssetEntity>[];
+      var owned = 0;
+      for (final item in (raw['items'] as List? ?? const []).whereType<Map>()) {
+        final id = item['id']?.toString();
+        if (id == null || id.isEmpty) continue;
+        if (item['owned'] == true) owned++;
+        assets.add(AssetEntity(
+          id: id,
+          typeInt: (item['type'] == 'video' ? AssetType.video : AssetType.image).index,
+          width: (item['width'] as num?)?.toInt() ?? 0,
+          height: (item['height'] as num?)?.toInt() ?? 0,
+          title: item['title']?.toString(),
+          relativePath: item['relativePath']?.toString(),
+        ));
+      }
+      _replaceIndex(assets);
+      for (final asset in assets) {
+        _relPathMap[asset.id] = asset.relativePath;
+      }
+      _nativeIds = {for (final asset in assets) asset.id};
+      _nativeOwned = owned;
+      _nativePermission = raw['permission']?.toString() ?? 'unknown';
+      _lookupMethod = 'native';
+      _scanned = true;
+      if (raw['error'] != null) {
+        unawaited(DevLog.write('SavedLookup',
+            'event=native_query_error error=${raw['error']} sdk=${raw['sdk']}'));
+      }
+      return true;
+    } catch (e) {
+      unawaited(DevLog.write('SavedLookup',
+          'event=native_unavailable type=${e.runtimeType}'));
+      return false;
+    }
+  }
+
+  /// Make sure an album index exists: photo_manager when it has access,
+  /// otherwise native MediaStore. [force] rebuilds it. Returns false when no
+  /// index could be built.
+  Future<bool> ensureIndexed({bool force = false}) async {
+    if (!hasAccess) await checkPermission();
+    if (hasAccess) {
+      if (force || !_scanned || _lookupMethod == 'native') {
+        await scanAlbum(force: true);
+      }
+      return true;
+    }
+    if (force || _lookupMethod != 'native' || _nativeIds == null) {
+      return _loadNativeIndex();
+    }
+    return true;
+  }
+
+  /// Provenance of an album file from its header bytes and sidecar (never a
+  /// full-file copy, which a large video would not survive on a full disk).
+  Future<XmpProvenance?> readAlbumProvenance(AssetEntity asset) async {
+    if (_xmpCache.containsKey(asset.id)) return _xmpCache[asset.id];
+    final mime = asset.type == AssetType.video ? 'video/mp4' : 'image/jpeg';
+    final bytes = await MediaHeaderService.readHeader(asset.id, mime);
+    final prov = mergeProvenanceXml(MetadataService.readXmpXmlFromBytes(bytes),
+        await readProvenanceSidecarXml(asset.id));
+    _xmpCache[asset.id] = prov;
+    return prov;
+  }
+
   /// Exact album lookup by a file's base name (no extension). Unlike
   /// [locateAsset] this never fuzzy-matches, so it is safe to use as an
   /// idempotency guard: "is a file with this name already in the album?"
   AssetEntity? assetByBaseName(String baseName) {
-    if (!hasAccess) return null;
+    if (!hasAccess && _nativeIds == null) return null;
     final key = baseName.trim().toLowerCase();
     if (key.isEmpty) return null;
-    return _exactMap[key];
+    return _exactMap[key] ?? _stemMap[key];
   }
 
   /// Testing hook to inject pre-scanned assets and permission state.
@@ -307,23 +449,7 @@ class GalleryLocatorService extends ChangeNotifier {
   }) {
     _scanned = scanned;
     _permission = permission;
-    _exactMap.clear();
-    _idMap.clear();
-    _allAssets.clear();
-    _relPathMap.clear();
-    _xmpCache.clear();
-    if (assets != null) {
-      for (final a in assets) {
-        _idMap[a.id] = a;
-        _allAssets.add(a);
-        final title = (a.title ?? '').trim().toLowerCase();
-        if (title.isNotEmpty) {
-          _exactMap[title] = a;
-          final baseName = title.split('/').last.split('\\').last;
-          _exactMap[baseName] = a;
-        }
-      }
-    }
+    _replaceIndex(assets ?? const []);
     if (relativePaths != null) {
       _relPathMap.addAll(relativePaths);
     }
@@ -333,10 +459,19 @@ class GalleryLocatorService extends ChangeNotifier {
   /// Testing hook to reset locator state.
   @visibleForTesting
   void resetForTesting() {
+    nativeIndexReaderForTesting = null;
+    _lookupMethod = 'plugin';
+    _nativeIds = null;
+    _nativePermission = null;
+    _nativeOwned = 0;
+    permissionReaderForTesting = null;
+    albumReaderForTesting = null;
+    presenceProbeForTesting = null;
     _scanned = false;
     _isScanning = false;
     _permission = PermissionState.notDetermined;
     _exactMap.clear();
+    _stemMap.clear();
     _idMap.clear();
     _allAssets.clear();
     _relPathMap.clear();
@@ -400,6 +535,7 @@ class GalleryLocatorService extends ChangeNotifier {
     String? expectedAssetId,
     String? expectedPlatform,
     required String expectedPostId,
+    int? expectedItemIndex,
   }) async {
     try {
       XmpProvenance? prov = _xmpCache[asset.id];
@@ -415,6 +551,10 @@ class GalleryLocatorService extends ChangeNotifier {
       if (prov == null) {
         return true;
       }
+      if ((prov.itemIndex != null && expectedItemIndex != null && prov.itemIndex != expectedItemIndex) ||
+          (prov.sourceId != null && prov.sourceId != expectedPostId) ||
+          (prov.platform != null && expectedPlatform != null &&
+              toSpecPlatform(prov.platform!) != toSpecPlatform(expectedPlatform))) return false;
 
       // 文件含 XMP，必须用 MediaHeaderReader 读出的 assetId 或 platform+sourceId 核对一致，才能关联；
       // XMP 不一致的文件不得关联（常见文件名会重名）。
@@ -427,7 +567,8 @@ class GalleryLocatorService extends ChangeNotifier {
 
       if (prov.platform != null &&
           prov.sourceId != null &&
-          prov.sourceId == expectedPostId) {
+          prov.sourceId == expectedPostId &&
+          (expectedItemIndex == null || prov.itemIndex == expectedItemIndex)) {
         if (expectedPlatform != null && expectedPlatform.isNotEmpty) {
           if (toSpecPlatform(prov.platform!) == toSpecPlatform(expectedPlatform)) {
             return true;
@@ -441,7 +582,7 @@ class GalleryLocatorService extends ChangeNotifier {
       return false;
     } catch (e) {
       DevLog.write('GalleryLocator', 'Error checking XMP: $e');
-      return true;
+      return false;
     }
   }
 
@@ -478,7 +619,9 @@ class GalleryLocatorService extends ChangeNotifier {
               title == targetName ||
               baseName == targetName ||
               _matchesDoubleExtension(baseName, targetName)) {
-            return cached;
+            if (await _verifyXmpConsistency(cached, expectedAssetId: file.assetId,
+                expectedPlatform: platform, expectedPostId: postId,
+                expectedItemIndex: file.itemIndex)) return cached;
           }
         } else {
           evictMediaIds([cached.id]);
@@ -499,6 +642,9 @@ class GalleryLocatorService extends ChangeNotifier {
             _matchesDoubleExtension(baseName, targetName)) {
           final rel = await getRelativePath(asset);
           if (rel != null && normalizePath(rel) == targetRel) {
+            if (!await _verifyXmpConsistency(asset, expectedAssetId: file.assetId,
+                expectedPlatform: platform, expectedPostId: postId,
+                expectedItemIndex: file.itemIndex)) continue;
             _idMap[asset.id] = asset;
             return asset;
           }
@@ -526,6 +672,7 @@ class GalleryLocatorService extends ChangeNotifier {
           expectedAssetId: file.assetId,
           expectedPlatform: platform,
           expectedPostId: postId,
+          expectedItemIndex: file.itemIndex,
         );
         if (isConsistent) {
           _idMap[candidate.id] = candidate;
@@ -561,7 +708,7 @@ class GalleryLocatorService extends ChangeNotifier {
 
         // Sequence ordering
         final seqMatch = RegExp(r'[_ -](\d+)\.').firstMatch(fn);
-        List<AssetEntity> orderedCandidates = pool;
+        List<AssetEntity> orderedCandidates = const [];
         if (seqMatch != null) {
           final seq = seqMatch.group(1)!;
           final withSeq = pool.where((a) {
@@ -571,10 +718,7 @@ class GalleryLocatorService extends ChangeNotifier {
                 t.contains(' $seq.');
           }).toList();
           if (withSeq.isNotEmpty) {
-            orderedCandidates = [
-              ...withSeq,
-              ...pool.where((a) => !withSeq.contains(a)),
-            ];
+            orderedCandidates = withSeq;
           }
         }
 
@@ -584,6 +728,7 @@ class GalleryLocatorService extends ChangeNotifier {
             expectedAssetId: file.assetId,
             expectedPlatform: platform,
             expectedPostId: postId,
+            expectedItemIndex: file.itemIndex,
           );
           if (isConsistent) {
             _idMap[candidate.id] = candidate;
@@ -599,7 +744,12 @@ class GalleryLocatorService extends ChangeNotifier {
   /// Locate asset for a HistoryFile synchronously using cached assets.
   AssetEntity? locateAsset(HistoryFile file, String postId) {
     if (file.mediaId != null && _idMap.containsKey(file.mediaId)) {
-      return _idMap[file.mediaId];
+      final asset = _idMap[file.mediaId]!;
+      final name = (asset.title ?? '').trim().toLowerCase().split('/').last.split('\\').last;
+      final target = file.filename.trim().toLowerCase();
+      final prov = _xmpCache[asset.id];
+      if ((target.isEmpty || name == target || _matchesDoubleExtension(name, target)) &&
+          (prov?.itemIndex == null || prov?.itemIndex == file.itemIndex)) return asset;
     }
 
     // Priority 1: cached relativePath + filename
@@ -628,7 +778,7 @@ class GalleryLocatorService extends ChangeNotifier {
         final prov = _xmpCache[candidate.id];
         if (prov == null ||
             (file.assetId != null && prov.assetId == file.assetId) ||
-            prov.sourceId == postId) {
+            (prov.sourceId == postId && prov.itemIndex == file.itemIndex)) {
           return candidate;
         }
       }
@@ -685,7 +835,7 @@ class GalleryLocatorService extends ChangeNotifier {
           if (withSeq.isNotEmpty) return withSeq.first;
         }
 
-        return pool.first;
+        return null;
       }
     }
 
@@ -731,22 +881,19 @@ class GalleryLocatorService extends ChangeNotifier {
             updatedFiles.add(file);
           }
         } else {
-          // If permission is limited, denied, notDetermined, or album not scanned yet, keep unknown
-          if (file.status != FileStatus.unknown) {
-            updatedFiles.add(file.copyWith(status: FileStatus.unknown));
-            changed = true;
-          } else {
-            updatedFiles.add(file);
-          }
+          // Not being able to look at the album is not evidence that a file
+          // disappeared. Never downgrade a row that was already confirmed: that
+          // made the history hide (and later re-show) files the user had saved.
+          updatedFiles.add(file);
         }
       }
     }
 
     if (changed && record.id != null) {
-      record.files.clear();
-      record.files.addAll(updatedFiles);
       final db = await HistoryDb.instance();
-      await db.updateFiles(record.id!, updatedFiles);
+      final merged = await db.syncScannedFiles(record.id!, record.files, updatedFiles);
+      record.files.clear();
+      record.files.addAll(merged);
     }
   }
 
@@ -757,23 +904,68 @@ class GalleryLocatorService extends ChangeNotifier {
     }
   }
 
-  /// Return the set of item indices for [post] that are already saved locally.
-  Future<Set<int>> findDownloadedIndices(ParsedPost post) async =>
-      (await matchPostItems(post)).keys.toSet();
+  /// Return the item indices of [post] that are already saved locally.
+  ///
+  /// [refreshAlbum] re-reads permission and rescans the used albums first. The
+  /// overlay's background engine passes it: that engine never ran the
+  /// foreground start-up permission check, and its album index can predate
+  /// files the foreground saved since. The result is never cached; every
+  /// caller decides again from the current history rows and album.
+  Future<Set<int>> findDownloadedIndices(
+    ParsedPost post, {
+    bool refreshAlbum = false,
+  }) async => (await findDownloadedAssets(post, refreshAlbum: refreshAlbum)).keys.toSet();
+
+  /// Same lookup as [findDownloadedIndices], but keeps the album asset behind
+  /// each saved index. The native selection panel needs the MediaStore id to
+  /// open an already-saved image from the album instead of the network.
+  Future<Map<int, AssetEntity>> findDownloadedAssets(
+    ParsedPost post, {
+    bool refreshAlbum = false,
+  }) async {
+    if (refreshAlbum) {
+      await checkPermission();
+      if (hasAccess) {
+        await scanAlbum(force: true);
+      } else {
+        await _loadNativeIndex();
+      }
+    }
+    final matched = await matchPostItems(post);
+    final native = _lookupMethod == 'native';
+    unawaited(DevLog.write(
+      'SavedLookup',
+      'engine=${HistoryDb.engine} method=$_lookupMethod '
+          'permission=${native ? _nativePermission : _permission.name} '
+          'pluginPermission=${_permission.name} '
+          'scanned=${_scanned ? 1 : 0} refreshed=${refreshAlbum ? 1 : 0} '
+          'albumAssets=${_allAssets.length}${native ? ' owned=$_nativeOwned' : ''} '
+          'items=${post.items.length} saved=${matched.length}',
+    ));
+    return matched;
+  }
 
   /// Locate the album asset behind each item of [post] (index -> asset) using
   /// the persisted history record first, then a postId + sequence scan.
-  Future<Map<int, AssetEntity>> matchPostItems(ParsedPost post) async {
+  Future<Map<int, AssetEntity>> matchPostItems(ParsedPost post, {bool liveVideoOnly = false}) async {
     final result = <int, AssetEntity>{};
     try {
-      if (hasAccess && !_scanned) {
-        await scanAlbum();
+      // A secondary engine starts with an unknown permission state; without
+      // this read every lookup below would silently report nothing saved.
+      if (!hasAccess) await checkPermission();
+      if (hasAccess && (!_scanned || _lookupMethod == 'native')) {
+        await scanAlbum(force: _lookupMethod == 'native');
+      } else if (!hasAccess && _lookupMethod != 'native') {
+        await _loadNativeIndex();
       }
       final db = await HistoryDb.instance();
-      final record = await db.getByPostId(post.id);
+      final record = await db.getByPostId(post.id, platform: post.platform);
       if (record != null && !record.isDeleted && record.files.isNotEmpty) {
         final is1Based = record.files.every((f) => f.itemIndex > 0);
         for (final file in record.files) {
+          final zeroBased = is1Based ? file.itemIndex - 1 : file.itemIndex;
+          if (zeroBased < 0 || zeroBased >= post.items.length) continue;
+          if (liveVideoOnly && (file.isImage || post.items[zeroBased].type != 'live')) continue;
           final asset = await locateAssetAsync(
             file,
             post.id,
@@ -785,8 +977,12 @@ class GalleryLocatorService extends ChangeNotifier {
               evictMediaIds([asset.id]);
               continue;
             }
-            final zeroBased = is1Based ? file.itemIndex - 1 : file.itemIndex;
-            result[zeroBased] = asset;
+            final previous = result[zeroBased];
+            final preferredType = liveVideoOnly || post.items[zeroBased].type == 'video'
+                ? AssetType.video : AssetType.image;
+            if (previous == null || (asset.type == preferredType && previous.type != preferredType)) {
+              result[zeroBased] = asset;
+            }
           }
         }
       }
@@ -803,7 +999,8 @@ class GalleryLocatorService extends ChangeNotifier {
           for (var i = 0; i < post.items.length; i++) {
             if (result.containsKey(i)) continue;
             final it = post.items[i];
-            final isImage = it.type != 'video';
+            if (liveVideoOnly && it.type != 'live') continue;
+            final isImage = !liveVideoOnly && it.type != 'video';
             final seq = i + 1;
             final matched = matches.where((a) {
               if (isImage && a.type != AssetType.image) return false;
@@ -815,12 +1012,17 @@ class GalleryLocatorService extends ChangeNotifier {
                   t.contains(' $seq.');
             }).toList();
             if (matched.isNotEmpty) {
-              final candidate = matched.first;
-              final exists = await isPresent(candidate.id);
-              if (exists) {
-                result[i] = candidate;
-              } else {
-                evictMediaIds([candidate.id]);
+              for (final candidate in matched) {
+                if (result.values.any((a) => a.id == candidate.id)) continue;
+                if (!await _verifyXmpConsistency(candidate, expectedPlatform: post.platform,
+                    expectedPostId: post.id, expectedItemIndex: i + 1)) continue;
+                final exists = await isPresent(candidate.id);
+                if (exists) {
+                  result[i] = candidate;
+                  break;
+                } else {
+                  evictMediaIds([candidate.id]);
+                }
               }
             }
           }
@@ -895,6 +1097,7 @@ class GalleryLocatorService extends ChangeNotifier {
       ),
       restoreDeleted: restoreDeleted,
       userSave: restoreDeleted,
+      source: 'associate-existing',
     );
     return files.length;
   }
@@ -1023,4 +1226,3 @@ class GalleryLocatorService extends ChangeNotifier {
     return fixed;
   }
 }
-
