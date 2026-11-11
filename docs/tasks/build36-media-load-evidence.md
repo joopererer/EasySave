@@ -36,7 +36,7 @@
 | `gallery_browser.dart` `_shareCurrent()`、`history_page.dart` `_shareRecords/_shareMedia()` | 是（分享必须给真实路径） | 保留，但统一走 `LocalMedia.file`（有超时、独立名额、`[MediaLoad]` 记录），只在用户主动分享时发生 |
 | `history_backfill_service.dart` `_resolveAssetFile()` → `asset.file` | 是（改写 provenance 需要真实路径） | 保留但加 128MB 上限 + `LocalMedia.file`（超时/名额/日志），大视频不再进入这条路 |
 | `download_manager.dart` 相册校验/补全 | 否：只用 `MediaStore` 的 SIZE / provenance 头字节（`MediaHeaderService`，只读文件头） | 不变 |
-| `history_page.dart` 封面、`gallery_browser` 缩略图条 | 否：只用 `thumbnailDataWithSize` | 现在全部经过 `LocalMedia` 名额与超时 |
+| `history_page.dart` 封面、`gallery_browser` 缩略图条、`parse_page.dart` 48px 缩略图 | 否：只用 `thumbnailDataWithSize` | 现在全部经过 `LocalMedia` 名额与超时（`parse_page` 的 `AssetEntityImageProvider` 也改为经 `VerifiedAssetImage.providerFor`） |
 
 ---
 
@@ -146,8 +146,8 @@ flutter analyze lib test ->  0 errors
 | --- | --- |
 | 版本号 | `1.10.0+36`（versionCode 36，versionName 1.10.0） |
 | APK 路径 | `app/build/app/outputs/flutter-apk/app-release.apk` |
-| 大小 | 64,108,358 字节 |
-| SHA-256 | `4ba0080aefe5fe93e903f0c78deea17387221336aa976c1889b074b09862d22c` |
+| 大小 | 63,960,902 字节 |
+| SHA-256 | `c22297a2cd28ded3fc1761199e7f2dbb0f1fca38c5fa8252454b97274148b642` |
 
 请以交付消息中的 SHA-256 为准复核（`Get-FileHash -Algorithm SHA256` 或
 `sha256sum`）。
