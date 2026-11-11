@@ -1,18 +1,33 @@
 import 'dart:async';
 import 'dart:ui' as ui;
+import 'package:easysave/widgets/local_asset_image.dart';
 import 'package:easysave/widgets/verified_asset_image.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:photo_manager/photo_manager.dart';
-import 'package:photo_manager_image_provider/photo_manager_image_provider.dart';
 
 void main() {
+  TestWidgetsFlutterBinding.ensureInitialized();
+
+  // Local decodes now run inside the media load gate (deadline + slot), so the
+  // album plugin must answer instead of leaving a platform call pending.
+  const photos = MethodChannel('com.fluttercandies/photo_manager');
+  setUp(() {
+    VerifiedAssetImage.resetKnownPresentForTesting();
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(photos, (_) async => null);
+  });
+  tearDown(() {
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(photos, null);
+  });
+
   final asset = AssetEntity(id: 'saved-thumb', typeInt: 1, width: 2, height: 2);
-  final provider = AssetEntityImageProvider(
+  final provider = LocalThumbImageProvider(
     asset,
-    isOriginal: false,
-    thumbnailSize: const ThumbnailSize.square(400),
+    const ThumbnailSize.square(400),
   );
   Future<void> cacheThumb(WidgetTester tester) async {
     final recorder = ui.PictureRecorder();
@@ -136,7 +151,15 @@ void main() {
           ),
         ),
       );
-      expect(find.byType(RawImage), findsNothing);
+      // The thumbnail may paint a frame a tick later, but the previous post's
+      // image must never be carried over through gapless playback.
+      expect(
+        tester
+            .widgetList<RawImage>(find.byType(RawImage))
+            .every((raw) => raw.image == null),
+        isTrue,
+        reason: 'no stale image from the previous asset',
+      );
       a.complete(true);
       b.complete(false);
       await tester.pumpAndSettle();

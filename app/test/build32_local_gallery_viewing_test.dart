@@ -81,7 +81,8 @@ void main() {
       ..maximumSize = 1000;
   });
 
-  testWidgets('a local original decodes without a thumbnail or a loading indicator',
+  testWidgets(
+      'a local original paints the system thumbnail first and replaces it silently',
       (tester) async {
     await _prepareImage(tester);
     final gate = Completer<void>();
@@ -93,8 +94,9 @@ void main() {
     ));
     await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 20)));
     await tester.pump();
+    // No spinner, ever: the system thumbnail covers the wait for the original.
     expect(find.byType(CircularProgressIndicator), findsNothing);
-    expect(loads['a:thumb'], isNull, reason: 'no enlarged thumbnail placeholder');
+    expect(loads['a:thumb'], 1);
     expect(loads['a:original'], 1);
 
     await tester.runAsync(() async {
@@ -102,9 +104,38 @@ void main() {
       await Future<void>.delayed(const Duration(milliseconds: 50));
     });
     await tester.pump();
-    final raw = tester.widget<RawImage>(find.byType(RawImage));
-    expect(raw.image, isNotNull);
+    final raws = tester.widgetList<RawImage>(find.byType(RawImage)).toList();
+    expect(raws.length, 2, reason: 'thumbnail stays underneath the original');
+    expect(raws.every((raw) => raw.image != null), isTrue);
     expect(find.byType(CircularProgressIndicator), findsNothing);
+  });
+
+  testWidgets(
+      'a stuck original keeps the thumbnail and offers a retry instead of a grey area',
+      (tester) async {
+    await _prepareImage(tester);
+    final gate = Completer<void>();
+    VerifiedAssetImage.providerForTesting = (asset, original, _) => original
+        ? _CountingProvider(asset.id, true, loads, gate)
+        : _CountingProvider(asset.id, false, loads);
+    await tester.pumpWidget(MaterialApp(
+      home: VerifiedAssetImage(_asset('a'), fallback: const Text('fallback'),
+          isOriginal: true, fit: BoxFit.contain),
+    ));
+    await tester.runAsync(() async {
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+      gate.completeError(StateError('LOCAL_ORIGINAL_TIMEOUT'));
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+    });
+    await tester.pumpAndSettle();
+    // The decoded system thumbnail is still on screen and the original can be
+    // retried by tapping.
+    expect(tester.widget<RawImage>(find.byType(RawImage)).image, isNotNull);
+    expect(find.text('原图加载失败，点击重试'), findsOneWidget);
+    expect(loads['a:thumb'], 1);
+    await tester.tap(find.text('原图加载失败，点击重试'));
+    await tester.pump();
+    expect(loads['a:original'], 2, reason: 'tapping retries the original');
   });
 
   testWidgets('swiping back to a seen local image does not decode it again',

@@ -59,6 +59,27 @@ abstract final class MediaHeaderService {
   /// Overridable for tests: (path, mimeType) -> scanned uri.
   static Future<String?> Function(String path, String? mimeType)? scanner;
 
+  /// Overridable for tests: (mediaId, video) -> bytes on disk.
+  static Future<int?> Function(String mediaId, bool video)? sizeReader;
+
+  /// MediaStore SIZE of one asset. A metadata query: it never opens the file,
+  /// so it is the safe way to size a deadline for a large video.
+  static Future<int?> fileSize(String mediaId, {required bool video}) async {
+    final override = sizeReader;
+    if (override != null) return override(mediaId, video);
+    try {
+      return await _channel.invokeMethod<int>('mediaSize', {
+        'id': mediaId,
+        'video': video,
+      });
+    } on MissingPluginException {
+      return null;
+    } catch (e) {
+      DevLog.write(logTag, 'mediaSize failed for $mediaId: $e'); // i18n:ignore 日志
+      return null;
+    }
+  }
+
   /// Trigger MediaScannerConnection.scanFile on [path].
   static Future<String?> scanFile(String path, [String? mimeType]) async {
     final override = scanner;

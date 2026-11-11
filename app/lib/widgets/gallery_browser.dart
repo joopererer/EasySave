@@ -3,11 +3,9 @@
 // Adheres strictly to docs/design/ui-spec.md and docs/design/gallery-prototype/.
 
 import 'dart:async';
-import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:photo_manager/photo_manager.dart';
-import 'package:photo_manager_image_provider/photo_manager_image_provider.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:video_player/video_player.dart';
@@ -16,6 +14,8 @@ import '../core/models.dart';
 import '../core/media_request.dart';
 import '../services/gallery_locator_service.dart';
 import '../services/history_db.dart';
+import '../services/local_media.dart';
+import '../services/media_load_gate.dart';
 import '../services/preview_video.dart';
 import '../services/media_request_policy.dart';
 import 'shared.dart';
@@ -171,6 +171,10 @@ class _GalleryBrowserPageState extends State<GalleryBrowserPage> {
   /// neighbours and the last pages seen.
   final _decoded = DecodedImageKeeper(capacity: 5);
 
+  /// Requests started by the thumbnail strip belong to this page: closing the
+  /// page cancels every still-loading strip thumbnail.
+  final MediaLoadScope _pageScope = MediaLoadScope('gallery-page');
+
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
@@ -193,6 +197,7 @@ class _GalleryBrowserPageState extends State<GalleryBrowserPage> {
   @override
   void dispose() {
     _decoded.dispose();
+    _pageScope.dispose();
     _pageController.dispose();
     _thumbController.dispose();
     super.dispose();
@@ -213,7 +218,7 @@ class _GalleryBrowserPageState extends State<GalleryBrowserPage> {
     final item = widget.items[_currentIndex];
     if (item.asset != null) {
       try {
-        final file = await item.asset!.file;
+        final file = await LocalMedia.file(item.asset!);
         if (file != null && await file.exists()) {
           await SharePlus.instance.share(
             ShareParams(text: widget.postUrl, files: [XFile(file.path)]),
@@ -534,6 +539,7 @@ class _GalleryBrowserPageState extends State<GalleryBrowserPage> {
                                         _ThumbnailImage(
                                           item: it,
                                           platform: widget.platform,
+                                          scope: _pageScope,
                                         ),
                                         if (isSel)
                                           Positioned(
@@ -715,9 +721,10 @@ class _GalleryPermissionHint extends StatelessWidget {
 }
 
 class _ThumbnailImage extends StatelessWidget {
-  const _ThumbnailImage({required this.item, required this.platform});
+  const _ThumbnailImage({required this.item, required this.platform, this.scope});
   final GalleryBrowserItem item;
   final String platform;
+  final MediaLoadScope? scope;
 
   @override
   Widget build(BuildContext context) {
@@ -738,6 +745,7 @@ class _ThumbnailImage extends StatelessWidget {
         isOriginal: false,
         thumbnailSize: const ThumbnailSize.square(120),
         fit: BoxFit.cover,
+        scope: scope,
       );
     }
     return CoverImage(
@@ -778,6 +786,10 @@ class _BrowserItemViewState extends State<_BrowserItemView> {
   bool _isNotFound = false;
   String? _error;
 
+  /// Every request this item starts (video prepare, originals, thumbnails) is
+  /// cancelled here when the item leaves the page.
+  final MediaLoadScope _scope = MediaLoadScope('gallery-item');
+
   @override
   void initState() {
     super.initState();
@@ -811,6 +823,7 @@ class _BrowserItemViewState extends State<_BrowserItemView> {
   void dispose() {
     _hideTimer?.cancel();
     _videoController?.dispose();
+    _scope.dispose();
     super.dispose();
   }
 
@@ -850,35 +863,57 @@ class _BrowserItemViewState extends State<_BrowserItemView> {
 
   Future<void> _initVideo() async {
     final it = widget.item;
+    VideoPlayerController controller;
     try {
-      VideoPlayerController controller;
-      if (it.asset != null) {
-        final f = await it.asset!.file;
-        if (f != null && await f.exists()) {
-          controller = VideoPlayerController.file(f);
-        } else {
+      controller = await MediaLoadGate.run(
+        kind: MediaLoadKind.video,
+        id: it.asset?.id ?? 'url',
+        source: it.asset != null ? 'getMediaUrl' : 'networkPreview',
+        scope: _scope,
+        timeout: const Duration(seconds: 15),
+        action: () async {
+          final asset = it.asset;
+          if (asset != null) {
+            // content:// URI via MediaStore: the player streams it, no file is
+            // copied into the app cache and no whole-file read is issued.
+            final uri = await LocalMedia.mediaUri(asset, scope: _scope);
+            if (uri == null || uri.isEmpty) {
+              throw StateError('LOCAL_VIDEO_URI_MISSING');
+            }
+            return VideoPlayerController.contentUri(Uri.parse(uri));
+          }
           final targetUrl = it.videoUrl ?? it.url;
-          controller = await networkPreviewController(
+          return await networkPreviewController(
             targetUrl,
             widget.platform,
             item: it.toMediaItem(),
           );
-        }
-      } else {
-        final targetUrl = it.videoUrl ?? it.url;
-        controller = await networkPreviewController(
-          targetUrl,
-          widget.platform,
-          item: it.toMediaItem(),
-        );
-      }
+        },
+      );
+    } on MediaLoadTimeout {
+      if (!mounted) return;
+      setState(() => _error = '视频准备超时，点击重试');
+      return;
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _error = previewFailureMessage(e, widget.platform));
+      return;
+    }
 
+    try {
       await controller.initialize();
-      if (!mounted) {
-        await controller.dispose();
-        return;
-      }
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _error = previewFailureMessage(e, widget.platform));
+      await controller.dispose();
+      return;
+    }
+    if (!mounted) {
+      await controller.dispose();
+      return;
+    }
 
+    try {
       if (it.isGif) {
         await controller.setLooping(true);
         await controller.setVolume(0);
@@ -891,14 +926,16 @@ class _BrowserItemViewState extends State<_BrowserItemView> {
         _isPlaying = false;
         _controlsVisible = true;
       }
-
-      setState(() => _videoController = controller);
-      _attachVideoListener(controller);
     } catch (e) {
+      await controller.dispose();
       if (mounted) {
         setState(() => _error = previewFailureMessage(e, widget.platform));
       }
+      return;
     }
+
+    setState(() => _videoController = controller);
+    _attachVideoListener(controller);
   }
 
   Future<void> _startLiveMotion() async {
@@ -907,24 +944,46 @@ class _BrowserItemViewState extends State<_BrowserItemView> {
 
     try {
       final it = widget.item;
-      VideoPlayerController controller;
 
+      AssetEntity? sourceAsset;
       if (it.liveVideoAsset != null) {
-        final f = await it.liveVideoAsset!.file;
-        if (f != null && await f.exists()) {
-          controller = VideoPlayerController.file(f);
-        } else {
-          final videoUrl = it.videoUrl;
-          if (videoUrl == null || videoUrl.isEmpty) return;
-          controller = await _createPlayerController(videoUrl);
-        }
+        sourceAsset = it.liveVideoAsset;
       } else {
-        final videoUrl = it.videoUrl;
-        if (videoUrl == null || videoUrl.isEmpty) return;
-        controller = await _createPlayerController(videoUrl);
+        sourceAsset = it.asset;
+      }
+      final videoUrl = it.videoUrl;
+      if (sourceAsset == null && (videoUrl == null || videoUrl.isEmpty)) {
+        return;
       }
 
-      await controller.initialize();
+      // The motion part is a local video: content:// URI, 15 s deadline, video
+      // pool - never a whole-file copy.
+      final controller = await MediaLoadGate.run(
+        kind: MediaLoadKind.live,
+        id: sourceAsset?.id ?? 'url',
+        source: sourceAsset != null ? 'getMediaUrl' : 'networkPreview',
+        scope: _scope,
+        timeout: const Duration(seconds: 15),
+        action: () async {
+          final VideoPlayerController player;
+          if (sourceAsset != null) {
+            final uri = await LocalMedia.mediaUri(sourceAsset, scope: _scope);
+            if (uri == null || uri.isEmpty) {
+              throw StateError('LOCAL_LIVE_URI_MISSING');
+            }
+            player = VideoPlayerController.contentUri(Uri.parse(uri));
+          } else {
+            player = await networkPreviewController(
+              videoUrl!,
+              widget.platform,
+              item: it.toMediaItem(),
+            );
+          }
+          await player.initialize();
+          return player;
+        },
+      );
+
       await controller.setLooping(true);
       await controller.setVolume(0);
       if (!mounted || !_isLiveHolding) {
@@ -934,6 +993,8 @@ class _BrowserItemViewState extends State<_BrowserItemView> {
       _videoController = controller;
       await controller.play();
       setState(() {});
+    } on MediaLoadTimeout {
+      if (mounted) setState(() => _isLiveHolding = false);
     } catch (error) {
       if (mounted) {
         setState(() => _isLiveHolding = false);
@@ -943,20 +1004,6 @@ class _BrowserItemViewState extends State<_BrowserItemView> {
           )?.showSnackBar(const SnackBar(content: Text('该资源地址不在允许范围内')));
         }
       }
-    }
-  }
-
-  Future<VideoPlayerController> _createPlayerController(String target) async {
-    if (target.startsWith('http://') || target.startsWith('https://')) {
-      return await networkPreviewController(
-        target,
-        widget.platform,
-        item: widget.item.toMediaItem(),
-      );
-    } else if (target.startsWith('content://')) {
-      return VideoPlayerController.contentUri(Uri.parse(target));
-    } else {
-      return VideoPlayerController.file(File(target));
     }
   }
 
@@ -1295,6 +1342,7 @@ class _BrowserItemViewState extends State<_BrowserItemView> {
                           ),
                           isOriginal: true,
                           fit: BoxFit.contain,
+                          scope: _scope,
                         )
                       : Stack(
                           fit: StackFit.passthrough,
@@ -1367,6 +1415,7 @@ class _BrowserItemViewState extends State<_BrowserItemView> {
     return _ZoomableImageView(
       item: it,
       platform: widget.platform,
+      scope: _scope,
       onZoomChanged: widget.onZoomChanged,
       onLongPress: widget.onToggleSelect,
     );
@@ -1377,12 +1426,16 @@ class _ZoomableImageView extends StatefulWidget {
   const _ZoomableImageView({
     required this.item,
     required this.platform,
+    this.scope,
     this.onZoomChanged,
     this.onLongPress,
   });
 
   final GalleryBrowserItem item;
   final String platform;
+
+  /// Page-owned scope: closing the page cancels a still-loading original.
+  final MediaLoadScope? scope;
   final ValueChanged<bool>? onZoomChanged;
   final VoidCallback? onLongPress;
 
@@ -1476,6 +1529,7 @@ class _ZoomableImageViewState extends State<_ZoomableImageView>
                   ),
                   isOriginal: true,
                   fit: BoxFit.contain,
+                  scope: widget.scope,
                 )
               : Stack(
                   fit: StackFit.passthrough,

@@ -13,6 +13,7 @@ import '../core/dev_log.dart';
 import '../../core/models.dart';
 import '../../theme/app_theme.dart';
 import '../services/auth.dart';
+import '../services/media_load_gate.dart';
 import '../services/site_registry.dart';
 import '../services/media_request_policy.dart';
 import '../services/shared_preview_cache.dart';
@@ -331,7 +332,14 @@ class CdnImage extends ImageProvider<CdnImage> {
   @override
   ImageStreamCompleter loadImage(CdnImage key, ImageDecoderCallback decode) {
     return MultiFrameImageStreamCompleter(
-      codec: _loadAsync(key, decode),
+      // Traced into the same [MediaLoad] stream as the local requests, with a
+      // hashed identity so no post URL reaches the log.
+      codec: MediaLoadGate.trace(
+        kind: MediaLoadKind.thumb,
+        id: 'n${cacheIdentity.hashCode.toRadixString(16)}',
+        source: 'network',
+        action: () => _loadAsync(key, decode),
+      ),
       scale: 1.0,
       debugLabel: platform,
     );

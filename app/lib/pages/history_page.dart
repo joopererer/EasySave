@@ -23,6 +23,7 @@ import '../services/history_db.dart';
 import '../services/history_deletion.dart';
 import '../services/history_io.dart';
 import '../services/host_bridge.dart';
+import '../services/local_media.dart';
 import '../services/media_delete_service.dart';
 import '../services/parse_service.dart';
 import '../services/settings.dart';
@@ -37,6 +38,12 @@ import '../widgets/history_masonry.dart';
 import 'download_queue_page.dart';
 import 'login_page.dart';
 import 'preview_page.dart';
+
+/// Lookups a single history refresh may start. Twelve ids on the four-slot
+/// lookup pool with a 3 s deadline each keeps the media step inside its 5 s
+/// budget instead of queueing hundreds of MediaStore queries behind a stuck
+/// plugin thread (the build 35 `refresh-media-failed` pattern).
+const int preloadLookupLimit = 12;
 
 @visibleForTesting
 Widget historyGroupSliver({
@@ -322,7 +329,7 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
       await locator.requestPermission();
     }
     if (locator.hasAccess) {
-      await locator.preloadMediaIds(_records);
+      await locator.preloadMediaIds(_records, limit: preloadLookupLimit);
       if (mounted) setState(() {});
       unawaited(_backgroundScanAndSync());
     }
@@ -347,7 +354,7 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
   Future<void> _reload() => _historyRefresh.refresh(_reloadRecords, () async {
     final locator = GalleryLocatorService.instance;
     if (locator.hasAccess) {
-      await locator.preloadMediaIds(_records);
+      await locator.preloadMediaIds(_records, limit: preloadLookupLimit);
       if (mounted) setState(() {});
     }
   });
@@ -784,7 +791,10 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
             locator.getAssetById(f.mediaId) ?? locator.locateAsset(f, r.postId);
         if (asset == null) continue;
         try {
-          final file = await asset.file;
+          // Sharing needs a real path, so this is the one place that may ask
+          // the plugin for a file; it is deadlined and logged like every other
+          // local media request.
+          final file = await LocalMedia.file(asset);
           if (file != null && await file.exists()) files.add(XFile(file.path));
         } catch (_) {
           // Skip files we can't read.
@@ -821,7 +831,8 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
           locator.locateAsset(matched, r.postId);
       if (asset == null) continue;
       try {
-        final file = await asset.file;
+        // Same as above: a share needs a path, deadlined and logged.
+        final file = await LocalMedia.file(asset);
         if (file != null && await file.exists()) files.add(XFile(file.path));
       } catch (_) {
         // Skip unreadable files.

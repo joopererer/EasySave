@@ -112,21 +112,59 @@ class HistoryThumb extends StatelessWidget {
       if (asset != null) break;
     }
 
+    // A saved file whose media id this session's index never resolved: ask
+    // MediaStore by id before assuming the network is needed. Treating an
+    // unresolved-but-known-local file as missing is what put locally saved
+    // posts onto the network.
+    if (asset == null) {
+      final pending = record.savedFiles.where((f) => f.mediaId != null);
+      if (pending.isNotEmpty) {
+        final f = pending.first;
+        asset = AssetEntity(
+          id: f.mediaId!,
+          typeInt: f.isImage ? AssetType.image.index : AssetType.video.index,
+          width: 0,
+          height: 0,
+        );
+      }
+    }
+
     if (asset != null) {
       return VerifiedAssetImage(
         asset,
-        fallback: CoverImage(
-          item: remote ?? MediaItem(type: 'image', url: ''),
-          platform: (record.platform),
-          fit: fit,
-          width: width,
-          height: height,
-        ),
+        fallback: remote == null || !remote.url.startsWith('http')
+            ? ColoredBox(
+                color: Colors.black12,
+                child: Center(
+                  child: Icon(
+                    Icons.broken_image,
+                    size: brokenIconSize,
+                    color: AppTokens.textSecondary,
+                  ),
+                ),
+              )
+            : CoverImage(
+                item: remote,
+                platform: (record.platform),
+                fit: fit,
+                width: width,
+                height: height,
+              ),
         isOriginal: false,
         thumbnailSize: const ThumbnailSize.square(400),
         fit: fit,
         width: width,
         height: height,
+        localFailure: ColoredBox(
+          color: Colors.black12,
+          child: Center(
+            child: Icon(
+              Icons.photo_outlined,
+              size: brokenIconSize,
+              color: AppTokens.textSecondary,
+            ),
+          ),
+        ),
       );
     }
 

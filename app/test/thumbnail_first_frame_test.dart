@@ -4,9 +4,22 @@ import 'package:easysave/pages/preview_page.dart';
 import 'package:easysave/services/shared_preview_cache.dart';
 import 'package:easysave/widgets/shared.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  // Local album lookups go through the media load gate now, which arms a
+  // deadline; the plugin must answer so no timer outlives the test.
+  const photos = MethodChannel('com.fluttercandies/photo_manager');
+  setUp(() {
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(photos, (_) async => null);
+  });
+  tearDown(() {
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(photos, null);
+  });
+
   testWidgets(
     'real CoverImage decodes at logical width times DPR and originals opt in',
     (tester) async {

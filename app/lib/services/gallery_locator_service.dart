@@ -1,4 +1,6 @@
 import 'verified_media.dart';
+import 'local_media.dart';
+import 'media_load_gate.dart';
 // Gallery locator service: scans EasySave album using photo_manager,
 // builds in-memory filename/postId index once per session, and locates
 // saved files for history records without repeated disk queries.
@@ -106,13 +108,17 @@ class GalleryLocatorService extends ChangeNotifier {
     return _idMap[mediaId];
   }
 
+  /// AssetEntities this session already failed to resolve; never retried, so a
+  /// stuck MediaStore look-up does not keep re-queueing the same id.
+  final Set<String> _preloadMisses = {};
+
   /// Asynchronously retrieve AssetEntity by mediaId, querying MediaStore if not cached.
   Future<AssetEntity?> getAssetByIdAsync(String? mediaId) async {
     if (mediaId == null || mediaId.isEmpty) return null;
     if (_idMap.containsKey(mediaId)) return _idMap[mediaId];
     if (!hasAccess) return null;
     try {
-      final asset = await AssetEntity.fromId(mediaId);
+      final asset = await LocalMedia.assetById(mediaId);
       if (asset != null) {
         _idMap[mediaId] = asset;
         if (asset.title != null && asset.title!.isNotEmpty) {
@@ -120,40 +126,61 @@ class GalleryLocatorService extends ChangeNotifier {
         }
         return asset;
       }
+    } on MediaLoadTimeout {
+      _preloadMisses.add(mediaId);
     } catch (_) {}
     return null;
   }
 
   /// Preload AssetEntities for known mediaIds without scanning entire album.
-  Future<void> preloadMediaIds(List<HistoryRecord> records) async {
+  ///
+  /// Bounded: only [limit] ids are ever asked in one call, lookups share the
+  /// lookup pool (4 slots) with other gallery reads, and ids that failed once
+  /// are not retried this session. A stuck lookup blocks at most its own
+  /// deadline instead of blocking every thumbnail forever.
+  Future<void> preloadMediaIds(List<HistoryRecord> records, {int limit = 24}) async {
     if (!_permission.hasAccess) {
       await checkPermission();
       if (!_permission.hasAccess) return;
     }
-    final idsToFetch = <String>{};
+    final idsToFetch = <String>[];
     for (final r in records) {
       for (final f in r.files) {
         final id = f.mediaId;
-        if (id != null && id.isNotEmpty && !_idMap.containsKey(id)) {
+        if (id != null &&
+            id.isNotEmpty &&
+            !_idMap.containsKey(id) &&
+            !_preloadMisses.contains(id) &&
+            !idsToFetch.contains(id)) {
           idsToFetch.add(id);
         }
+        if (idsToFetch.length >= limit) break;
       }
+      if (idsToFetch.length >= limit) break;
     }
     if (idsToFetch.isEmpty) return;
     var changed = false;
-    final futures = idsToFetch.map((id) async {
-      try {
-        final asset = await AssetEntity.fromId(id);
-        if (asset != null) {
-          _idMap[id] = asset;
-          changed = true;
-          if (asset.title != null && asset.title!.isNotEmpty) {
-            _exactMap[asset.title!.toLowerCase()] = asset;
+    await Future.wait([
+      for (final id in idsToFetch)
+        () async {
+          try {
+            final asset = await LocalMedia.assetById(id);
+            if (asset != null) {
+              _idMap[id] = asset;
+              changed = true;
+              if (asset.title != null && asset.title!.isNotEmpty) {
+                _exactMap[asset.title!.toLowerCase()] = asset;
+              }
+            } else {
+              _preloadMisses.add(id);
+            }
+          } on MediaLoadTimeout {
+            _preloadMisses.add(id);
+          } catch (_) {
+            _preloadMisses.add(id);
           }
-        }
-      } catch (_) {}
-    });
-    await Future.wait(futures);
+        }(),
+    ]);
     if (changed) notifyListeners();
   }
 
@@ -177,7 +204,7 @@ class GalleryLocatorService extends ChangeNotifier {
   Future<PermissionState> checkPermission() async {
     try {
       final permission = await (permissionReaderForTesting?.call() ??
-          PhotoManager.getPermissionState(requestOption: _defaultOption));
+          LocalMedia.permission());
       final changed = permission != _permission;
       _permission = permission;
       if (changed) notifyListeners();
@@ -262,7 +289,7 @@ class GalleryLocatorService extends ChangeNotifier {
         for (final name in settings.effectiveAlbumNames) name.trim().toLowerCase(),
       };
 
-      final paths = await PhotoManager.getAssetPathList(
+      final paths = await LocalMedia.assetPaths(
         type: RequestType.common,
         hasAll: true,
         // Without `needTitle`, AssetEntity.title is null on Android, so every
@@ -288,9 +315,9 @@ class GalleryLocatorService extends ChangeNotifier {
       for (final p in paths) {
         if (p.isAll) continue;
         if (!wanted.contains(p.name.trim().toLowerCase())) continue;
-        final count = await p.assetCountAsync;
+        final count = await LocalMedia.assetCount(p);
         if (count <= 0) continue;
-        final list = await p.getAssetListRange(start: 0, end: count);
+        final list = await LocalMedia.assetRange(p, 0, count);
         for (final asset in list) {
           if (seenIds.add(asset.id)) assetsToIndex.add(asset);
         }
@@ -305,9 +332,9 @@ class GalleryLocatorService extends ChangeNotifier {
           'no used album found ($albumName), falling back to the whole library',
           level: DevLogLevel.warn,
         );
-        final count = await allAlbum.assetCountAsync;
+        final count = await LocalMedia.assetCount(allAlbum);
         if (count > 0) {
-          final list = await allAlbum.getAssetListRange(start: 0, end: count);
+          final list = await LocalMedia.assetRange(allAlbum, 0, count);
           for (final a in list) {
             if (seenIds.add(a.id)) assetsToIndex.add(a);
           }
@@ -600,7 +627,7 @@ class GalleryLocatorService extends ChangeNotifier {
       var cached = _idMap[file.mediaId];
       if (cached == null && hasAccess) {
         try {
-          cached = await AssetEntity.fromId(file.mediaId!);
+          cached = await LocalMedia.assetById(file.mediaId!);
           if (cached != null) {
             _idMap[file.mediaId!] = cached;
             if (cached.title != null && cached.title!.isNotEmpty) {
@@ -1116,14 +1143,14 @@ class GalleryLocatorService extends ChangeNotifier {
       if (!_permission.hasAccess) return const [];
     }
     try {
-      final paths = await PhotoManager.getAssetPathList(
+      final paths = await LocalMedia.assetPaths(
         type: RequestType.image,
         hasAll: false,
       );
       final counts = <String, int>{};
       for (final path in paths) {
         if (path.isAll) continue;
-        final count = await path.assetCountAsync;
+        final count = await LocalMedia.assetCount(path);
         counts.update(path.name, (n) => n + count, ifAbsent: () => count);
       }
       return [for (final entry in counts.entries) (name: entry.key, count: entry.value)];
@@ -1140,12 +1167,12 @@ class GalleryLocatorService extends ChangeNotifier {
       if (!_permission.hasAccess) return 0;
     }
     try {
-      final paths = await PhotoManager.getAssetPathList(
+      final paths = await LocalMedia.assetPaths(
         type: RequestType.image,
         hasAll: true,
       );
       for (final path in paths) {
-        if (path.isAll) return await path.assetCountAsync;
+        if (path.isAll) return await LocalMedia.assetCount(path);
       }
     } catch (e) {
       debugPrint('allAlbumCount error: $e');
@@ -1170,7 +1197,7 @@ class GalleryLocatorService extends ChangeNotifier {
     };
     if (wanted.isEmpty) return fixed;
     try {
-      final paths = await PhotoManager.getAssetPathList(
+      final paths = await LocalMedia.assetPaths(
         type: RequestType.common,
         hasAll: false,
         filterOption: FilterOptionGroup(
@@ -1205,7 +1232,7 @@ class GalleryLocatorService extends ChangeNotifier {
       if (!_permission.hasAccess) return fixed;
     }
     try {
-      final paths = await PhotoManager.getAssetPathList(
+      final paths = await LocalMedia.assetPaths(
         type: RequestType.common,
         hasAll: true,
         filterOption: FilterOptionGroup(
@@ -1215,9 +1242,9 @@ class GalleryLocatorService extends ChangeNotifier {
       );
       for (final path in paths) {
         if (path.isAll) {
-          final count = await path.assetCountAsync;
+          final count = await LocalMedia.assetCount(path);
           if (count <= 0) return fixed;
-          return unionMedia(await path.getAssetListRange(start: 0, end: count), fixed);
+          return unionMedia(await LocalMedia.assetRange(path, 0, count), fixed);
         }
       }
     } catch (e) {
