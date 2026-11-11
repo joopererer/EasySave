@@ -3,10 +3,11 @@
 本文按 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 整理面向用户的主要变化，中英文逐条对应。
 This file documents notable user-facing changes following [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), with matching Chinese and English entries.
 
-本稿依据 `docs/tasks/` 的任务文档与交接记录回顾整理，待用户审核；未确认的历史发布日期暂不填写，v1.10 仍在进行中，不代表已发布或全部真机验收通过。
-This draft is compiled from task documents and handover notes in `docs/tasks/` and awaits user review; unconfirmed historical release dates are omitted, and v1.10 remains in progress, not a released or fully device-verified version.
+本稿依据 `docs/tasks/` 的任务文档与交接记录回顾整理；v1.10 已按用户确认的代码版本 0e367c1 定稿并随本节发布。
 
-## [Unreleased] - v1.10
+## [Unreleased]
+
+## [1.10.0] - 2026-11-11
 
 ### 新增 / Added
 
@@ -48,6 +49,16 @@ This draft is compiled from task documents and handover notes in `docs/tasks/` a
   Fixed floating-overlay edge positioning in landscape, saved-file detection, and large-image preview issues.
 - 修复大文件下载时存储不足提示、失败记录展示及备份恢复状态不准确的问题。
   Fixed insufficient-storage messages for large downloads, failed-record display, and inaccurate backup restore status.
+
+### 已知问题 / Known issues
+
+- 下载带 Live 图的小红书帖子时，动态部分可能被存成无法播放的 .mp4（实际是 HEIC 图片），将在 v1.10.1 修复。
+  Posts with Live images downloaded from Xiaohongshu may save the dynamic portion as an unplayable .mp4 (it is actually a HEIC image); fixed in v1.10.1.
+
+### 签名密钥变更 / Signing key change
+
+- 本版本更换了签名密钥。从旧版本升级，需要先导出备份、卸载旧版、安装新版后恢复备份，再重新授权和登录。
+  This release uses a new signing key. Upgrading from an older version requires exporting a backup, uninstalling the old version, installing the new version, restoring the backup, then re-authorizing and logging in.
 
 ## [1.9.0]
 
