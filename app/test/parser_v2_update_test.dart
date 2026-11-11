@@ -397,16 +397,21 @@ void main() {
   test(
     'malformed state recovers highest verified local watermark and allows newer updates',
     () async {
-      await install(10);
+      // Start above the APK-bundled floor so the installed release, not the
+      // built-in one, is the active source (the floor moves with each parser
+      // release).
+      final builtinVersion = (jsonDecode(File('assets/parser/builtin-manifest.json')
+          .readAsStringSync()) as Map)['manifestVersion'] as int;
+      await install(builtinVersion);
       File('${directory.path}/state.json').writeAsStringSync('{}');
       await prepare();
       expect(manager.activeSource, ParserSource.remote);
-      expect(state()['highestAcceptedManifestVersion'], 10);
+      expect(state()['highestAcceptedManifestVersion'], builtinVersion);
       remote = await sign(payload(1));
       expect(await manager.checkForUpdates(force: true), isFalse);
-      remote = await sign(payload(11));
+      remote = await sign(payload(builtinVersion + 1));
       expect(await manager.checkForUpdates(force: true), isTrue);
-      expect(state()['highestAcceptedManifestVersion'], 11);
+      expect(state()['highestAcceptedManifestVersion'], builtinVersion + 1);
     },
   );
 

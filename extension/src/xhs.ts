@@ -360,6 +360,41 @@ export function audioStateOf(entry: Record<string, unknown>): AudioState {
   return namedCodec || (channels ?? 0) > 0 || (bitrate ?? 0) > 0 ? "yes" : "no";
 }
 
+/**
+ * Media kind of a Xiaohongshu CDN URL, read from its host, path shape and any
+ * file extension. `undefined` means "cannot tell": every caller keeps such a
+ * URL, so a CDN shape this list has not seen yet never costs a real file.
+ *
+ * A Live photo's still is served from the image bucket (`sns-img-*`,
+ * `sns-webpic-*`, `ci.xiaohongshu.com`, or a `.heic` / `.jpg` path), while its
+ * motion clip comes from `sns-video-*` or a `/stream/` path.
+ */
+export function xhsMediaKindOf(url: string): "image" | "video" | undefined {
+  let parsed: URL;
+  try {
+    parsed = new URL(toHttps(url));
+  } catch {
+    return undefined;
+  }
+  const host = parsed.hostname.toLowerCase();
+  const path = parsed.pathname.toLowerCase();
+  if (path.includes("/stream/") || /\.(?:mp4|mov|m4v|webm)$/.test(path)) return "video";
+  if (/^sns-video-/.test(host)) return "video";
+  if (/\.(?:jpe?g|png|webp|gif|heic|heif|avif)$/.test(path)) return "image";
+  if (/^sns-(?:img|webpic)-/.test(host) || host === "ci.xiaohongshu.com") return "image";
+  return undefined;
+}
+
+/** A still image must never fill a video slot. */
+function isImageUrl(url: string): boolean {
+  return xhsMediaKindOf(url) === "image";
+}
+
+/** A motion clip must never fill a still-image slot. */
+function isVideoUrl(url: string): boolean {
+  return xhsMediaKindOf(url) === "video";
+}
+
 function candidateFromEntry(entry: Record<string, unknown>): VideoCandidate | undefined {
   const type = entry["streamType"] ?? entry["stream_type"];
   const desc = entry["streamDesc"] ?? entry["stream_desc"];
@@ -367,6 +402,9 @@ function candidateFromEntry(entry: Record<string, unknown>): VideoCandidate | un
     type === 259 ||
     type === 309 ||
     (typeof desc === "string" && desc.toUpperCase() === "WEB_LIVEPHOTO_19");
+  // Only motion-clip URLs may become a video candidate: a Live photo's still
+  // rendition can sit in the same stream map and must not be downloaded as the
+  // clip (it would be saved as an unplayable `.mp4`).
   const urls = [
     entry["masterUrl"],
     entry["master_url"],
@@ -376,7 +414,7 @@ function candidateFromEntry(entry: Record<string, unknown>): VideoCandidate | un
         ? (entry["backup_urls"] as unknown[])
         : []),
     entry["url"],
-  ].filter(nonBlank);
+  ].filter((u): u is string => nonBlank(u) && !isImageUrl(u));
   if (urls.length === 0) return undefined;
   const width = typeof entry["width"] === "number" ? (entry["width"] as number) : 0;
   const height = typeof entry["height"] === "number" ? (entry["height"] as number) : 0;
@@ -417,7 +455,11 @@ function originVideoUrl(video: Record<string, unknown>): string | undefined {
     (isRecord(video["consumer"]) ? pickString(video["consumer"] as Record<string, unknown>, ["originVideoKey"]) : undefined) ??
     pickString(video, ["originVideoKey"]);
   if (!key) return undefined;
-  if (/^https?:\/\//i.test(key)) return toHttps(key);
+  if (/^https?:\/\//i.test(key)) {
+    const url = toHttps(key);
+    // An absolute key is only trustworthy when it does not point at a still.
+    return isImageUrl(url) ? undefined : url;
+  }
   return `https://sns-video-bd.xhscdn.com/${key.replace(/^\/+/, "")}`;
 }
 
@@ -525,7 +567,7 @@ function imageUrlOf(entry: Record<string, unknown>): { url: string; fallbacks: s
   // Primary: the bare original-bucket URL (upstream formula) — the token
   // carries no watermark; the CDN only burns one in when a `!style`
   // rendition is requested. JPEG transcode, scene renditions and the ci
-  // token trail as fallbacks.
+  // token trail as fallbacks. A motion-clip URL never becomes a still.
   const token = entryToken(entry);
   if (token) {
     const primary = originalImageUrl(token);
@@ -535,12 +577,15 @@ function imageUrlOf(entry: Record<string, unknown>): { url: string; fallbacks: s
       ...sceneRaws(entry),
       ...(direct ? [toHttps(direct)] : []),
       `https://ci.xiaohongshu.com/${token}`,
-    ].filter((u) => u && u !== primary);
+    ].filter((u) => u && u !== primary && !isVideoUrl(u));
     return { url: primary, fallbacks: [...new Set(rest)] };
   }
   const direct = pickString(entry, ["urlDefault", "url"]);
   if (direct) {
-    return { url: transformImageUrl(direct), fallbacks: [toHttps(direct)] };
+    const primary = transformImageUrl(direct);
+    if (!isVideoUrl(primary)) {
+      return { url: primary, fallbacks: [toHttps(direct)].filter((u) => u !== primary && !isVideoUrl(u)) };
+    }
   }
   const traceId = pickString(entry, ["traceId"]);
   if (traceId) return { url: `https://sns-img-qc.xhscdn.com/${traceId}`, fallbacks: [] };
@@ -845,11 +890,15 @@ export function buildNoteFromRecord(
       const entryKey =
         pickString(entry, ["originVideoKey"]) ??
         (isRecord(livePhoto) ? pickString(livePhoto, ["originVideoKey"]) : undefined);
-      const entryKeyUrl = entryKey
+      const entryKeyUrlRaw = entryKey
         ? /^https?:\/\//i.test(entryKey)
           ? toHttps(entryKey)
           : `https://sns-video-bd.xhscdn.com/${entryKey.replace(/^\/+/, "")}`
         : undefined;
+      // A Live photo's originVideoKey can name the still; only a non-image URL
+      // may become the motion clip.
+      const entryKeyUrl =
+        entryKeyUrlRaw && !isImageUrl(entryKeyUrlRaw) ? entryKeyUrlRaw : undefined;
       const ownCandidates = [
         ...collectStreamCandidates(entry["stream"]),
         ...(isRecord(livePhoto) && livePhoto["stream"] !== undefined
@@ -972,7 +1021,8 @@ export function xhsImageVariant(url: string): XhsImageVariant {
  * Download preference: the original resolution first (the CDN's JPEG
  * transcode of the original, which the album and provenance writer support,
  * then the original bucket and the bare ci original), then the default-size
- * variant, then anything else. Preview variants are left out.
+ * variant, then anything else. Preview variants are left out, and so is any
+ * motion-clip URL: a still-image candidate list never contains a video.
  */
 const VARIANT_RANK: Record<Exclude<XhsImageVariant, "preview">, number> = {
   jpeg: 0, original: 1, original_ci: 2, default: 3, other: 4,
@@ -982,7 +1032,7 @@ export function xhsImageDownloadOrder(url: string, fallbacks: string[] = []): st
   const unique = [...new Set([url, ...fallbacks].filter((u) => typeof u === "string" && u.length > 0))];
   return unique
     .map((u, index) => ({ u, index, variant: xhsImageVariant(u) }))
-    .filter((c) => c.variant !== "preview")
+    .filter((c) => c.variant !== "preview" && !isVideoUrl(c.u))
     .sort((a, b) => VARIANT_RANK[a.variant as keyof typeof VARIANT_RANK] -
       VARIANT_RANK[b.variant as keyof typeof VARIANT_RANK] || a.index - b.index)
     .map((c) => c.u);

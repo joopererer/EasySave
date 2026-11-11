@@ -28,6 +28,7 @@ import 'gallery_locator_service.dart';
 import 'history_db.dart';
 import 'history_io.dart';
 import 'image_dimensions.dart';
+import 'media_content_type.dart';
 import 'mp4_audio_probe.dart';
 import 'storage_guard.dart';
 import 'parse_service.dart';
@@ -633,7 +634,12 @@ List<PlannedFile> planFiles(
     // Display order: CDN originals first (the rewritten ci primary is
     // occasionally slow/unreachable from mobile networks); ci stays last
     // as a fallback so nothing is lost when only it serves the bytes.
-    final imageUrls = orderedMediaUrls(post, item);
+    // Each file only carries URLs of its own kind: a still-image URL must
+    // never be fetched as a motion clip (it is saved as an unplayable .mp4).
+    final imageUrls = filterMediaCandidates(
+      orderedMediaUrls(post, item),
+      isImage: true,
+    );
     if (item.type == 'live' && item.videoUrl != null) {
       final base = nextLabel('Live');
       planned.add(
@@ -667,7 +673,10 @@ List<PlannedFile> planFiles(
           // With a separate videoUrl, url/fallbacks describe the still poster.
           // Otherwise the parser ranks the video first and its fallbacks are
           // the next renditions to try (e.g. when a file has no audio track).
-          urls: item.videoUrl != null ? [url] : [item.url, ...item.fallbacks],
+          urls: item.videoUrl != null
+              ? [url]
+              : filterMediaCandidates([item.url, ...item.fallbacks],
+                  isImage: false),
           filename: '${nameFor(label, seq, 'mp4')}.mp4',
           isImage: false,
           itemIndex: index + 1, // 1-based position in original post
@@ -2017,6 +2026,21 @@ class DownloadManager extends ChangeNotifier {
     if (resolution.retry) return;
     path = resolution.path;
 
+    // The plan trusts URL kinds; the bytes decide. A CDN may answer an image
+    // URL with an ISO-BMFF HEIC, which used to be saved as an unplayable .mp4.
+    final wrongContent = await _wrongContent(job, path);
+    if (wrongContent != null) {
+      unawaited(DevLog.write(
+        'V16DL', // i18n:ignore 日志
+        'event=reject reason=content_kind index=${job.itemIndex} '
+            'expected=${job.isImage ? 'image' : 'video'} actual=${wrongContent.extension} '
+            'moov=${wrongContent.playable ?? '-'} '
+            'candidate=${job.attempts}/${job.urls.length}',
+      ));
+      await _discardWrongContent(batch, job, path);
+      return;
+    }
+
     if (await shouldRetryForMissingAudio(job, path)) {
       unawaited(DevLog.write(
         'V16DL', // i18n:ignore 日志
@@ -2038,6 +2062,75 @@ class DownloadManager extends ChangeNotifier {
       itemIndex: itemIndex,
       isImage: isImage,
     );
+  }
+
+  /// Header identity of a finished file (production: [sniffMediaFile]).
+  @visibleForTesting
+  Future<MediaContentType?> Function(String path)? mediaContentTypeForTesting;
+
+  Future<MediaContentType?> _contentOf(String path) async {
+    try {
+      return await (mediaContentTypeForTesting ?? sniffMediaFile)(path);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// The file's own container when it contradicts [job], null when it matches
+  /// or the header is unreadable (kept, as before this check existed).
+  Future<MediaContentType?> _wrongContent(DownloadJob job, String path) async {
+    final content = await _contentOf(path);
+    if (content == null) return null;
+    final kindMismatch = content.isImage != job.isImage;
+    final unplayable = content.playable == false;
+    return kindMismatch || unplayable ? content : null;
+  }
+
+  @visibleForTesting
+  Future<MediaContentType?> wrongContentForTesting(
+    DownloadJob job,
+    String path,
+  ) => _wrongContent(job, path);
+
+  @visibleForTesting
+  Future<void> discardWrongContentForTesting(
+    DownloadBatch batch,
+    DownloadJob job,
+    String path,
+  ) => _discardWrongContent(batch, job, path);
+
+  /// Drops a finished file whose own bytes are not what [job] asked for. The
+  /// next candidate is tried; once every candidate is used the job fails, so a
+  /// still never lands in the album under a `.mp4` name.
+  Future<void> _discardWrongContent(
+    DownloadBatch batch,
+    DownloadJob job,
+    String path,
+  ) async {
+    try {
+      await File(path).delete();
+    } catch (_) {}
+    if (job.attempts < job.urls.length) {
+      await _persist(batch);
+      await _enqueueAttempt(batch, job);
+      return;
+    }
+    // A full-size image kept from an earlier candidate still beats nothing;
+    // it already matched the job's kind when it was set aside.
+    final kept = job.lowResPath;
+    if (job.isImage && kept != null && await File(kept).exists()) {
+      job
+        ..lowResPath = null
+        ..notOriginal = true;
+      await _importFile(batch, job, kept, isImage: true, itemIndex: job.itemIndex);
+      return;
+    }
+    job
+      ..state = JobState.failed
+      ..error = job.isImage ? '下载到的文件不是图片，已跳过' : '下载到的文件不是视频，已跳过';
+    await _persist(batch);
+    notifyListeners();
+    await _afterTerminal(batch, recovered: false);
   }
 
   Future<void> _importFile(
@@ -3065,13 +3158,18 @@ class DownloadManager extends ChangeNotifier {
 List<String>? planFilesForItem(ParsedPost post, int itemIndex) {
   if (itemIndex < 0 || itemIndex >= post.items.length) return null;
   final item = post.items[itemIndex];
-  final imageUrls = orderedMediaUrls(post, item);
+  final imageUrls = filterMediaCandidates(
+    orderedMediaUrls(post, item),
+    isImage: true,
+  );
   if (item.type == 'live' && item.videoUrl != null) {
     return [imageUrls.first, item.videoUrl!];
   }
   if (item.type == 'video') {
     final url = item.videoUrl ?? item.url;
-    return item.videoUrl != null ? [url] : imageUrls;
+    return item.videoUrl != null
+        ? [url]
+        : filterMediaCandidates([item.url, ...item.fallbacks], isImage: false);
   }
   return imageUrls;
 }
