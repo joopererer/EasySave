@@ -11,6 +11,17 @@ This file documents notable user-facing changes following [Keep a Changelog](htt
 
 ### 修复 / Fixed
 
+- 启动时比较 App 内置的 parser 清单与已下载的在线版本，启用 `manifestVersion` 较高的一份：此前只要设备下载过在线 parser 就永远使用它，APK 里更新的解析器永远不会生效（真机日志 `activeVersion=1.4.15 activeManifest=11` 而 `builtinManifest=12`）。内置版本同样经过校验（APK 签名 + 清单结构与 parser 哈希），选择结果写入一行 `[ParserUpdate] event=select builtin=… stored=… chosen=… reason=…`。
+  Startup now compares the parser manifest bundled in the App with the downloaded one and uses whichever has the higher `manifestVersion`: a device that had ever downloaded a parser kept using it forever, so a newer parser inside the APK never took effect (device log showed `activeVersion=1.4.15 activeManifest=11` while `builtinManifest=12`). The bundled manifest is verified the same way (APK signature plus manifest structure and parser hash), and the choice is logged as one `[ParserUpdate] event=select builtin=… stored=… chosen=… reason=…` line.
+- 选中内置 parser 时防回滚水位线同步提升到该版本，之后在线通道发来同号同内容的版本按「相同」处理（`result=same reason=same_as_builtin`），不再报冲突；同号但内容不同时保持现状并记录 `reason=same_sequence_different_content`，不启用另一份。
+  When the bundled parser wins, the anti-rollback watermark rises with it, so a later online release with the same sequence and the same signed content counts as a match (`result=same reason=same_as_builtin`) instead of a conflict; a same-sequence release with different content keeps the current source and is logged as `reason=same_sequence_different_content`.
+- 某站点的登录状态变化（登录成功、退出、检测到会话失效）时清除该站点的解析缓存，日志 `[ParseCache] event=cleared site=… reason=login|logout|session_invalid`；此前 Instagram 登录后仍会命中登录前的封面结果，需要悬浮球重新解析才正确。
+  A site's parsed cache is now cleared whenever its login state changes — a confirmed login, a logout, or a detected expired session — logged as `[ParseCache] event=cleared site=… reason=login|logout|session_invalid`. Before this, Instagram kept answering with the cover parsed before login, and only a manual re-parse from the floating ball got the real media.
+- 解析失败与降级结果（例如登录墙上仅有的封面图）不再写入解析缓存（`[ParseCache] event=degraded reason=og_cover_only`）；解析过程中若登录状态变化，这一次的结果照常显示但不会写入缓存。
+  A failed parse and a degraded answer (for example the only cover a login wall exposes) are no longer written to the parse cache (`[ParseCache] event=degraded reason=og_cover_only`); a parse whose site changed login state while the page was loading is still shown but never published to the cache.
+- 历史页与首页的「刷新」一定重新解析：强制刷新不再并入正在进行的缓存命中请求；命中缓存的日志仍为 `ParseCache event=hit`。
+  「刷新」 in history and on the home page always re-parses: a forced refresh no longer joins an in-flight task that is about to answer from the cache. A cached answer still logs `ParseCache event=hit`.
+
 - 保存时不接受本机无法解码的 HEIC/AVIF 原图：新增原生解码自检，在导入前用本机平台解码器（BitmapFactory / ImageDecoder，只取边界并小尺寸采样）验证已下载的临时文件，带超时、独立线程，不阻塞主线程与 photo_manager 队列；不可解码时继续下一个候选，最终使用预览图并标「非原图」，日志 `result=rejected:undecodable_on_device`。
   A HEIC / AVIF original the device cannot decode is no longer saved: a native decode check (BitmapFactory / ImageDecoder, bounds plus a small sampled decode only) verifies the downloaded temp file before import, with a timeout on its own thread, never blocking the main thread or photo_manager's queue. An undecodable file is skipped for the next candidate; the item ends on the preview still marked 「非原图」, logged as `result=rejected:undecodable_on_device`.
 - jpg 原图优先，并新增小红书 CDN 的 JPEG 原图候选（`imageView2/format/jpg/q/100`，原尺寸），排在 HEIC 原图之前；实测 `format/jpeg` 与 `format/jpg` 字节一致，仅 `format/jpg` 会把 1290×1608 的图压到约 245KB，加 `/q/100` 后回到约 1.03MB，与 1.01MB 的原始字节接近。
