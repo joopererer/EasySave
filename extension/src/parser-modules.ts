@@ -2,14 +2,18 @@ import { withMediaResources } from './media-resources';
 import { parseX, parseXGraphql, xProbe, calculateToken, extractTweetId, X_SENSITIVE_MEDIA_HINT, X_SESSION_EXPIRED } from './x';
 import { findNoteInStates, xhsImageDownloadOrder, xhsImageProbe, xhsStreamProbe } from './xhs';
 import { parseTiktok, extractTiktokPostId, tiktokExpiresAt } from './tiktok';
+import { gateMediaUnavailable } from './instagram';
 import { parsePageForModule as legacyPage, parse as legacyParse } from './_parse_page';
 import { installIgSniff, installXGraphqlSniff, readXhsAccount, tiktokReady } from './page-hooks';
 
-type Context = { url: string; input?: string; site: any; error?: any; loggedIn?: boolean; statusCode?: number; location?: string };
+type Context = { url: string; input?: string; site: any; error?: any; loggedIn?: boolean; statusCode?: number; location?: string; caps?: string[] };
 type Hooks = Partial<Record<'install' | 'request' | 'ready' | 'navigate' | 'prepare' | 'parsePage' | 'parse' | 'classify' | 'account' | 'probeSession' | 'expiresAt' | 'probe', (c: Context) => any>>
   & { decorate?: (result: any) => any };
 const page = () => window as any;
 const failure = (code: string, message: string) => ({ code, message });
+/** An older App gets a code it renders with login guidance. */
+const appFacing = (moduleId: string, result: any, caps: unknown) =>
+  moduleId === 'instagram' ? gateMediaUnavailable(result, caps) : result;
 const onXPage = () => {
   try { return /(?:^|\.)(?:x|twitter)\.com$/i.test(location.hostname); } catch (_) { return false; }
 };
@@ -140,9 +144,9 @@ export function moduleCall(moduleId: string, hook: string, context: Context): st
       } catch (_) {
         // A stale page cache must not prevent the independent HTML fallback.
       }
-      return output(JSON.parse(legacyParse(document.documentElement.outerHTML, context.url, moduleId, context.site.download?.thumbnailScenes, context.site.download?.thumbnailVariant === 'smallestCandidate')));
+      return output(appFacing(moduleId, JSON.parse(legacyParse(document.documentElement.outerHTML, context.url, moduleId, context.site.download?.thumbnailScenes, context.site.download?.thumbnailVariant === 'smallestCandidate')), context.caps));
     }
-    case 'parse': return output(JSON.parse(legacyParse(context.input || '', context.url, moduleId, context.site.download?.thumbnailScenes, context.site.download?.thumbnailVariant === 'smallestCandidate')));
+    case 'parse': return output(appFacing(moduleId, JSON.parse(legacyParse(context.input || '', context.url, moduleId, context.site.download?.thumbnailScenes, context.site.download?.thumbnailVariant === 'smallestCandidate')), context.caps));
     case 'classify': {
       const error = context.error;
       return JSON.stringify({ value: error?.code === 'PRIVATE_OR_UNAVAILABLE' &&

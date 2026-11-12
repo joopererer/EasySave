@@ -141,6 +141,38 @@ function ogImageOnlyFailure(html: string, pageUrl: string): InstagramError | und
   return undefined;
 }
 
+/** Capability an App declares in the hook context when it renders MEDIA_UNAVAILABLE. */
+const MEDIA_UNAVAILABLE_CAPABILITY = "media_unavailable";
+
+/** Login guidance shown to an App that only knows the v1 error vocabulary. */
+const MEDIA_UNAVAILABLE_LOGIN_FALLBACK: InstagramError = {
+  code: "LOGIN_REQUIRED",
+  message: "需要登录 Instagram 后才能查看该内容，请在“我的”页登录后重试。",
+};
+
+/**
+ * Keep MEDIA_UNAVAILABLE only for a client that declared the capability.
+ *
+ * The App renders an unknown code as a bare retry prompt with no way to reach
+ * the Instagram login, which leaves the user stuck; an App that sends no
+ * capability therefore gets LOGIN_REQUIRED and its login button instead. The
+ * browser extension runs the parser it was built with and always declares it.
+ */
+export function gateMediaUnavailable<T>(result: T, caps: unknown): T {
+  if (!isRecord(result) || result["ok"] !== false) return result;
+  const error = result["error"];
+  if (!isRecord(error) || error["code"] !== "MEDIA_UNAVAILABLE") return result;
+  if (declaresMediaUnavailable(caps)) return result;
+  return { ...result, error: { ...MEDIA_UNAVAILABLE_LOGIN_FALLBACK } } as T;
+}
+
+export function declaresMediaUnavailable(caps: unknown): boolean {
+  return (
+    Array.isArray(caps) &&
+    caps.some((capability) => capability === MEDIA_UNAVAILABLE_CAPABILITY)
+  );
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }

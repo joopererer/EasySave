@@ -833,6 +833,21 @@ var EasySaveParser = (() => {
     }
     return void 0;
   }
+  var MEDIA_UNAVAILABLE_CAPABILITY = "media_unavailable";
+  var MEDIA_UNAVAILABLE_LOGIN_FALLBACK = {
+    code: "LOGIN_REQUIRED",
+    message: "\u9700\u8981\u767B\u5F55 Instagram \u540E\u624D\u80FD\u67E5\u770B\u8BE5\u5185\u5BB9\uFF0C\u8BF7\u5728\u201C\u6211\u7684\u201D\u9875\u767B\u5F55\u540E\u91CD\u8BD5\u3002"
+  };
+  function gateMediaUnavailable(result, caps) {
+    if (!isRecord2(result) || result["ok"] !== false) return result;
+    const error = result["error"];
+    if (!isRecord2(error) || error["code"] !== "MEDIA_UNAVAILABLE") return result;
+    if (declaresMediaUnavailable(caps)) return result;
+    return { ...result, error: { ...MEDIA_UNAVAILABLE_LOGIN_FALLBACK } };
+  }
+  function declaresMediaUnavailable(caps) {
+    return Array.isArray(caps) && caps.some((capability) => capability === MEDIA_UNAVAILABLE_CAPABILITY);
+  }
   function isRecord2(value) {
     return typeof value === "object" && value !== null;
   }
@@ -1837,6 +1852,7 @@ var EasySaveParser = (() => {
   // src/parser-modules.ts
   var page = () => window;
   var failure2 = (code, message) => ({ code, message });
+  var appFacing = (moduleId, result, caps) => moduleId === "instagram" ? gateMediaUnavailable(result, caps) : result;
   var onXPage = () => {
     try {
       return /(?:^|\.)(?:x|twitter)\.com$/i.test(location.hostname);
@@ -1963,10 +1979,10 @@ var EasySaveParser = (() => {
           if (result.ok) return output(result);
         } catch (_) {
         }
-        return output(JSON.parse(parse(document.documentElement.outerHTML, context.url, moduleId, context.site.download?.thumbnailScenes, context.site.download?.thumbnailVariant === "smallestCandidate")));
+        return output(appFacing(moduleId, JSON.parse(parse(document.documentElement.outerHTML, context.url, moduleId, context.site.download?.thumbnailScenes, context.site.download?.thumbnailVariant === "smallestCandidate")), context.caps));
       }
       case "parse":
-        return output(JSON.parse(parse(context.input || "", context.url, moduleId, context.site.download?.thumbnailScenes, context.site.download?.thumbnailVariant === "smallestCandidate")));
+        return output(appFacing(moduleId, JSON.parse(parse(context.input || "", context.url, moduleId, context.site.download?.thumbnailScenes, context.site.download?.thumbnailVariant === "smallestCandidate")), context.caps));
       case "classify": {
         const error = context.error;
         return JSON.stringify({ value: error?.code === "PRIVATE_OR_UNAVAILABLE" && context.site.auth.mode !== "none" && !context.loggedIn ? failure2("LOGIN_REQUIRED", "\u53EF\u80FD\u9700\u8981\u767B\u5F55" + context.site.displayName) : error });

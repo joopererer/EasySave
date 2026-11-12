@@ -1,6 +1,8 @@
 import 'package:easysave/core/error_copy.dart';
 import 'package:easysave/core/models.dart';
 import 'package:easysave/services/parser_hooks.dart';
+import 'package:easysave/services/site_registry.dart';
+import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -50,6 +52,17 @@ void main() {
     for (final line in lines) {
       expect(line, isNot(contains('PRIVATE')));
       expect(line, isNot(contains('http')));
+    }
+  });
+
+  test('every hook call declares the media_unavailable capability', () {
+    final site = SiteRegistry.current.byId('instagram')!;
+    final hooks = ParserHooks('', site);
+    for (final hook in ['install', 'ready', 'parsePage', 'classify']) {
+      final js = hooks.expression(hook, 'https://www.instagram.com/p/AbC123/');
+      final context =
+          jsonDecode(js.substring(js.indexOf('{"url"'), js.length - 1)) as Map;
+      expect(context['caps'], ['media_unavailable'], reason: hook);
     }
   });
 }

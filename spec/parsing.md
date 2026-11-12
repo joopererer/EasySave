@@ -31,6 +31,7 @@ a partial or empty success.
 | code | message（用户文案） | action（操作按钮） |
 |---|---|---|
 | `LOGIN_REQUIRED` | 需要先登录对应平台（小红书/Instagram/X） | `goLogin` → [去登录]（跳对应平台登录页） |
+| `MEDIA_UNAVAILABLE` | 未能获取该 Instagram 媒体，请检查 Instagram 登录后重试（App 文案注明在“我的”页） | `goLogin` → [去登录] |
 | `PRIVATE_OR_UNAVAILABLE` | 该帖子不存在、私密或已删除 | `backHome` → [返回首页] |
 | `BLOCKED` | 请求被对方限制，请稍后再试 | `retry` → [重试] |
 | `INVALID_PAGE` | 页面内容无法识别，可能已改版 | `retry` → [重试] + [复制诊断信息] |
@@ -38,6 +39,21 @@ a partial or empty success.
 | `TIMEOUT` | 网络超时，请检查网络后重试 | `retry` → [重试] |
 
 **Blocked-page判定.** XHS: an anonymous fetch returns the generic shell whose `__INITIAL_STATE__` holds only global `appSettings` and no `noteDetailMap[<id>]` entry for the requested note, even though the note id may appear in links/meta — this is authenticated-only content, so the expected code is LOGIN_REQUIRED. Instagram: an anonymous fetch returns the logged-out shell (`PolarisLoggedOut*` route, `CurrentUserInitialData` with `USER_ID` 0) with no product object matching the shortcode-derived media id — likewise LOGIN_REQUIRED. X: an anonymous fetch returning a `TweetTombstone` with viewer/age restrictions or sensitive content returns LOGIN_REQUIRED. Only pages showing an explicit captcha/challenge interstitial use BLOCKED.
+
+**Error-code capability negotiation.** The parser bundle is delivered to Apps that were
+built before it, so a new error code must never reach an App that would render it as
+an unknown failure. Each App sends `caps` (a list of code names it renders with copy
+and action) in the `EasySaveParser.moduleCall` context; the bundle downgrades any
+code the App did not declare. Today `MEDIA_UNAVAILABLE` becomes `LOGIN_REQUIRED` with
+login guidance for every App that does not send `media_unavailable`, and stays
+`MEDIA_UNAVAILABLE` for Apps that do (v1.11+). Absence of `caps` always means "old
+App", so this holds for clients that predate the field.
+
+**Instagram OpenGraph is not a fallback.** A page that yields no product object and
+only an `og:image` fails: on a reel/TV page the `og:image` is the link-preview cover
+(with Instagram's drawn play button), and on a `/p/` page it is a single cover that
+would otherwise be presented as the whole post. A login-wall hint in that page yields
+`LOGIN_REQUIRED`; otherwise it yields `MEDIA_UNAVAILABLE`.
 
 Resolution policy: always select the highest resolution available.
 

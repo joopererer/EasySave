@@ -21,6 +21,10 @@ export const ERROR_COPY: Record<ParseErrorCode, ErrorCopy> = {
   AGE_RESTRICTED: { message: X_ERROR_COPY.AGE_RESTRICTED.zh, action: "goLogin" },
   PROTECTED: { message: X_ERROR_COPY.PROTECTED.zh, action: "backHome" },
   PRIVATE_OR_UNAVAILABLE: { message: "该帖子不存在、私密或已删除", action: "backHome" },
+  MEDIA_UNAVAILABLE: {
+    message: "未能获取该 Instagram 媒体，请检查 Instagram 登录后重试",
+    action: "goLogin",
+  },
   BLOCKED: { message: "请求被对方限制，请稍后再试", action: "retry" },
   INVALID_PAGE: { message: "页面内容无法识别，可能已改版", action: "retry" },
   UNSUPPORTED_URL: {
@@ -40,6 +44,7 @@ export const ERROR_MESSAGES: Record<ParseErrorCode, string> = {
   AGE_RESTRICTED: ERROR_COPY.AGE_RESTRICTED.message,
   PROTECTED: ERROR_COPY.PROTECTED.message,
   PRIVATE_OR_UNAVAILABLE: ERROR_COPY.PRIVATE_OR_UNAVAILABLE.message,
+  MEDIA_UNAVAILABLE: ERROR_COPY.MEDIA_UNAVAILABLE.message,
   BLOCKED: ERROR_COPY.BLOCKED.message,
   INVALID_PAGE: ERROR_COPY.INVALID_PAGE.message,
   UNSUPPORTED_URL: ERROR_COPY.UNSUPPORTED_URL.message,

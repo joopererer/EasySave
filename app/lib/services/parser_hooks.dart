@@ -10,12 +10,20 @@ class ParserHooks {
   final String script;
   final SiteDefinition site;
 
+  /// Error codes this App renders with their own copy and action.
+  ///
+  /// The parser bundle is hot-updated, so it must not assume the App knows a
+  /// code it introduced after this build: without `media_unavailable` the
+  /// parser answers LOGIN_REQUIRED for the same failure, and this App's login
+  /// button still gets the user to the Instagram login page.
+  static const List<String> capabilities = ['media_unavailable'];
+
   String expression(
     String hook,
     String url, [
     Map<String, dynamic> extra = const {},
   ]) =>
-      'EasySaveParser.moduleCall(${jsonEncode(site.parserModule)},${jsonEncode(hook)},${jsonEncode({'url': url, 'site': site.data, ...extra})})';
+      'EasySaveParser.moduleCall(${jsonEncode(site.parserModule)},${jsonEncode(hook)},${jsonEncode({'url': url, 'site': site.data, 'caps': capabilities, ...extra})})';
 
   /// Run one hook and unwrap `{value: ...}`.
   ///
