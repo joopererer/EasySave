@@ -7,7 +7,22 @@ This file documents notable user-facing changes following [Keep a Changelog](htt
 
 ## [Unreleased]
 
-## [1.10.1] - 2026-11-11
+## [1.10.2] - 2026-11-12
+
+### 修复 / Fixed
+
+- 修复小红书 jpg 候选连接失败后回退到 HEIC 原图时写入相册失败的问题：协议栈、HTTP 方法与预检请求的差异导致原生下载连接被重置，现重置与超时时先在同一候选上做一次短暂退避重试，仍失败再换下一个候选，每次尝试写一条日志；重试成功后立即清除旧批次的失败标记，无需离开页面或重新进入。
+  Fixed saving to the gallery after a Xiaohongshu jpg candidate connection failure falls back to the HEIC original: after a stack/method difference against the preflight HEAD request caused the native download connection to be reset, a reset or timeout now retries the same candidate once after a short backoff, then moves on; one log line is written per attempt. A successful retry clears the stale batch failure immediately, without leaving the page.
+- HEIC / HEIF / AVIF / GIF 原图按原格式写入相册：当 `provenance=skipped` 时，原生导入链路不再执行任何依赖内嵌来源信息或限定容器格式的检查（inspectTarget、pair 校验、来源验证等），直接按文件真实 MIME 写入；实况 HEIC 静态图的配对只依赖历史行的 pair_id，不依赖文件内 XMP。
+  Originals kept in their own format (HEIC / HEIF / AVIF / GIF): when provenance is skipped, the native import chain runs no check that depends on embedded provenance or restricts container format (inspectTarget, pair validation, provenance verification), and imports straight by the file's real MIME type. A Live photo's HEIC still pairs only through its history-row pairId, not through XMP in the file.
+- 扩展原生导入链路的容器白名单：`ExportNames`、`PublicMediaWriter`、`ProvenancePairWriter` 均接受 gif、heic、heif、avif；来源信息可嵌入的容器集合保持不变。
+  Extended the native import container whitelist: `ExportNames`, `PublicMediaWriter` and `ProvenancePairWriter` now accept gif, heic, heif, avif; the set of containers that can carry provenance is unchanged.
+
+### 安装 / Install
+
+- 与 v1.10.1 使用同一签名密钥，可直接覆盖安装，不必卸载旧版或清数据。Same signing key as v1.10.1, so this installs over it without uninstalling or clearing data.
+
+## [1.10.1] - 2026-11-12
 
 ### 修复 / Fixed
 

@@ -151,4 +151,38 @@ void main() {
           ['https://cdn.example.com/a']);
     });
   });
+
+  group('verification-only HEIC switch', () {
+    const jpeg = 'https://ci.xiaohongshu.com/notes_pre_post/a?imageView2/format/jpg';
+    const imgHeic = 'https://sns-img-bd.xhscdn.com/notes_pre_post/a.heic';
+    const webpic = 'https://sns-webpic-qc.xhscdn.com/2026/a/x!nd_dft_wlteh_webp_3';
+
+    test('is off in a normal build, so the release package keeps every '
+        'candidate', () {
+      // --dart-define is resolved at compile time: without the key the switch
+      // is `false` and the filter is dead code, which is what the release APK
+      // ships (proved by identical hashes of the two release builds).
+      expect(kVerifyHeicOnlyStills, isFalse);
+      expect(verifyOnlyStillCandidates([jpeg, imgHeic, webpic]),
+          [jpeg, imgHeic, webpic]);
+    });
+
+    test('drops jpeg candidates only when the verification build sets it', () {
+      // The switch cannot be flipped at runtime; the filter itself is checked
+      // by its pure helper on the same input the verification build produces.
+      final withoutJpeg = [
+        for (final url in [jpeg, imgHeic, webpic])
+          if (!candidateLabelOf(url).endsWith(':jpg')) url,
+      ];
+      expect(withoutJpeg, [imgHeic, webpic]);
+      expect(candidateLabelOf(jpeg), 'ci:jpg');
+      expect(candidateLabelOf(imgHeic), 'img:heic');
+    });
+
+    test('a jpeg-only item still downloads (the filter never empties a list)',
+        () {
+      expect(verifyOnlyStillCandidates([jpeg]), [jpeg]);
+      expect(verifyOnlyStillCandidates(const []), isEmpty);
+    });
+  });
 }

@@ -243,6 +243,26 @@ String candidateLabelOf(String url) {
   return safe.isEmpty ? source : '$source:$safe';
 }
 
+/// Verification-only build switch, never set in a release build:
+/// `flutter build apk --release --dart-define=EASYSAVE_VERIFY_HEIC_ONLY=true`
+/// drops every jpeg-labelled still candidate so the quality ladder is forced
+/// onto the HEIC original. [bool.fromEnvironment] is resolved at compile time,
+/// so an undefined key makes this `false` and the filter below dead code.
+const bool kVerifyHeicOnlyStills =
+    bool.fromEnvironment('EASYSAVE_VERIFY_HEIC_ONLY');
+
+/// Drops jpeg-labelled still candidates when [kVerifyHeicOnlyStills] is set.
+/// Returns [urls] unchanged when nothing is left, so an item that only has
+/// jpeg candidates still downloads.
+List<String> verifyOnlyStillCandidates(List<String> urls) {
+  if (!kVerifyHeicOnlyStills) return urls;
+  final kept = [
+    for (final url in urls)
+      if (!candidateLabelOf(url).endsWith(':jpg')) url,
+  ];
+  return kept.isEmpty ? urls : kept;
+}
+
 /// Whether [url] is a preview-size derivative of a still: the `sns-webpic-*`
 /// bucket, a preview scene (`WB_PRV` / `H5_PRV`), a preview style
 /// (`!nd_prv_*` / `!h5_prv_*`) or a down-sizing `imageView2` query

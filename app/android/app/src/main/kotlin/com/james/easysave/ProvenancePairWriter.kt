@@ -126,7 +126,11 @@ object ProvenancePairWriter {
     private fun save(context: Context, source: File, mime: String, requestedName: String): Map<String, String> {
         val sidecar = File(source.path + ".xmp")
         require(source.isFile && sidecar.isFile && sidecar.length() in 1..1048576)
-        require(mime in setOf("image/jpeg", "image/png", "image/webp", "video/mp4"))
+        // The pair path exists for a container provenance was written into, so
+        // the sidecar above is mandatory. A still whose container cannot carry
+        // provenance (HEIC / HEIF / AVIF / GIF) never reaches this method: the
+        // Dart side calls saveMedia for it and pairs by the history row.
+        MediaImportPolicy.requireAllowed(mime)
         val name = PairSavePolicy.mediaName(requestedName)
         PublicMediaWriter.available(context, C2paStoragePolicy.RELATIVE_PATH, name)
         if (Build.VERSION.SDK_INT < 29) return saveLegacy(context, source, sidecar, mime, name)

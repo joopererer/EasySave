@@ -51,6 +51,19 @@ const int kMaxAttempts = 3;
 /// of stored candidates says: no item may keep retrying forever.
 const int kMaxAttemptsHardCap = 6;
 
+/// Ceiling on the attempts of a still: every stored candidate once plus the one
+/// backoff retry each of them may use on a connection reset or a timeout.
+const int kMaxStillAttemptsHardCap = 12;
+
+/// How long a candidate waits before its single backoff retry. Short enough to
+/// stay inside the item's patience, long enough for a dropped connection to be
+/// re-established.
+const Duration kResetRetryBackoff = Duration(milliseconds: 600);
+
+/// Overrides the backoff before [kResetRetryBackoff] in unit tests.
+@visibleForTesting
+Duration resetRetryBackoffForTesting = kResetRetryBackoff;
+
 int maxAttemptsFor(DownloadBatch batch, DownloadJob job) =>
     (SiteRegistry.current.byId(batch.platform)?.data['download']
             as Map?)?['transport'] ==
@@ -74,11 +87,14 @@ int candidateCapFor(DownloadJob job) {
 
 /// Bound of the transfer attempts of [job]: a still tries every stored
 /// candidate once (original-resolution candidates first, preview-size ones
-/// last) so a dead first candidate cannot cost the item its original, while a
-/// video keeps the site rule of [attemptCapFor]. Never above
-/// [kMaxAttemptsHardCap].
-int retryCapFor(DownloadBatch batch, DownloadJob job) =>
-    job.isImage ? candidateCapFor(job) : attemptCapFor(batch, job);
+/// last) so a dead first candidate cannot cost the item its original, plus the
+/// one backoff retry each candidate may use on a connection reset or a timeout.
+/// A video keeps the site rule of [attemptCapFor].
+int retryCapFor(DownloadBatch batch, DownloadJob job) {
+  if (!job.isImage) return attemptCapFor(batch, job);
+  final base = candidateCapFor(job) * 2;
+  return base > kMaxStillAttemptsHardCap ? kMaxStillAttemptsHardCap : base;
+}
 
 /// Whether the candidate [job] just downloaded is a preview-size derivative,
 /// i.e. its file is only kept because every original-resolution candidate of
@@ -117,7 +133,9 @@ Future<bool> shouldRetryForMissingAudio(
   String path, {
   Future<bool?> Function(String path)? probe,
 }) async {
-  if (job.isImage || job.isLivePhoto || job.attempts >= job.urls.length) {
+  if (job.isImage ||
+      job.isLivePhoto ||
+      DownloadManager.candidateIndexOf(job) + 1 >= job.urls.length) {
     return false;
   }
   final hasAudio =
@@ -295,6 +313,13 @@ class DownloadJob {
   JobState state = JobState.queued;
   double progress = 0;
   int attempts = 0;
+  /// Index into [urls] of the candidate being tried. Unlike [attempts], this
+  /// advances only to a *different* candidate: a backoff retry of the same
+  /// candidate keeps it, so connection reset/timeout does not spend a switch.
+  int candidateIndex = 0;
+  /// [candidateIndex] already used its one backoff retry on reset/timeout.
+  /// Cleared whenever [candidateIndex] advances.
+  bool candidateRetryUsed = false;
   String? currentTaskId;
   bool saved = false;
   String? error;
@@ -367,6 +392,8 @@ class DownloadJob {
     'isLivePhoto': isLivePhoto,
     'state': state.index,
     'attempts': attempts,
+    if (candidateIndex > 0) 'candidateIndex': candidateIndex,
+    if (candidateRetryUsed) 'candidateRetryUsed': true,
     'currentTaskId': currentTaskId,
     'saved': saved,
     'error': error,
@@ -406,6 +433,11 @@ class DownloadJob {
     );
     job.state = JobState.values[(map['state'] as num).toInt()];
     job.attempts = (map['attempts'] as num).toInt();
+    final storedCandidate = (map['candidateIndex'] as num?)?.toInt() ?? 0;
+    final lastCandidate = job.urls.isEmpty ? 0 : job.urls.length - 1;
+    job.candidateIndex =
+        storedCandidate < 0 ? 0 : (storedCandidate > lastCandidate ? lastCandidate : storedCandidate);
+    job.candidateRetryUsed = map['candidateRetryUsed'] as bool? ?? false;
     job.currentTaskId = map['currentTaskId'] as String?;
     job.saved = map['saved'] as bool? ?? false;
     job.error = map['error'] as String?;
@@ -695,7 +727,7 @@ List<PlannedFile> planFiles(
     // ranking, so the still of a Live item is never the only file in a batch
     // that starts with a container provenance cannot be written to.
     final imageUrls = rankStillCandidates(filterMediaCandidates(
-      orderedMediaUrls(post, item),
+      verifyOnlyStillCandidates(orderedMediaUrls(post, item)),
       isImage: true,
     ));
     if (item.type == 'live' && item.videoUrl != null) {
@@ -1395,6 +1427,13 @@ class DownloadManager extends ChangeNotifier {
   Future<void> afterTerminalForTesting(DownloadBatch batch) =>
       _afterTerminal(batch, recovered: false);
 
+  /// The drop step [_afterTerminal] performs once a batch finished without a
+  /// failure. Exposed so the failure-state rule can be tested without the
+  /// fire-and-forget backup/notification work that follows it.
+  @visibleForTesting
+  Future<void> forgetSupersededFailuresForTesting(DownloadBatch batch) =>
+      _forgetSupersededFailureBatches(batch);
+
   @visibleForTesting
   Future<void> lateImportForTesting(String key) =>
       _lateImports[key] ?? Future<void>.value();
@@ -1602,7 +1641,7 @@ class DownloadManager extends ChangeNotifier {
       await _startSessionDownload(batch, job);
       return;
     }
-    final index = job.attempts % job.urls.length;
+    final index = candidateIndexOf(job);
     final policy = _policyFor(batch.platform);
     final authorized = await policy.authorize(_jobResource(job, index, policy));
     if (authorized.cookie != null && authorized.cookie!.isNotEmpty) {
@@ -1755,7 +1794,7 @@ class DownloadManager extends ChangeNotifier {
   /// Fail [job] before it downloads when its known size does not fit.
   Future<bool> _storageBlocked(DownloadBatch batch, DownloadJob job) async {
     if (job.urls.isEmpty) return false;
-    final index = job.attempts % job.urls.length;
+    final index = candidateIndexOf(job);
     var size = job.expectedBytes;
     if (size == null) {
       try {
@@ -2221,8 +2260,18 @@ class DownloadManager extends ChangeNotifier {
   /// The candidate URL [job] just downloaded (never logged verbatim).
   static String? candidateUrlOf(DownloadJob job) {
     if (job.urls.isEmpty) return null;
-    final spent = job.attempts <= 0 ? 1 : job.attempts;
-    return job.urls[(spent - 1) % job.urls.length];
+    return job.urls[candidateIndexOf(job)];
+  }
+
+  /// Index into [urls] of [job]'s last attempt: [candidateIndex] only advances
+  /// to a *different* candidate, so a backoff retry keeps pointing at the same
+  /// URL. Clamped, never wrapped: a candidate is never downloaded twice except
+  /// by its one deliberate backoff retry.
+  static int candidateIndexOf(DownloadJob job) {
+    final last = job.urls.length - 1;
+    if (last <= 0) return 0;
+    if (job.candidateIndex < 0) return 0;
+    return job.candidateIndex > last ? last : job.candidateIndex;
   }
 
   String? _candidateUrlOf(DownloadJob job) => candidateUrlOf(job);
@@ -2415,7 +2464,7 @@ class DownloadManager extends ChangeNotifier {
             }
           }
           if (existing != null) {
-            _log('gallery import skipped, already saved: ${job.filename}');
+            _log('gallery import skipped, already saved: ${existing.title ?? job.filename}');
             job.mediaId = existing.id;
             job.savedTitle = existing.title;
             try {
@@ -2470,6 +2519,12 @@ class DownloadManager extends ChangeNotifier {
               filename: finalName,
               tempPath: path,
               album: batch.album,
+              // A provenance-skipped still (HEIC / HEIF / AVIF / GIF) carries no
+              // embedded identity, so the collision lookup never inspects an
+              // album row: the native import writes the bytes directly; name
+              // clashes fall back through the saved filename ladder instead.
+              inspect:
+                  job.provenanceSkipped ? (String name) async => null : null,
               pair: job.metadataNotice != null,
               expected: provenanceForBatchItem(
                 batch,
@@ -2484,7 +2539,7 @@ class DownloadManager extends ChangeNotifier {
                   : saveToGallery(path, isImage, batch.album, finalName: name),
             );
             final saved = outcome.saved;
-            _log('gallery import done: ${job.filename} -> ${saved.mediaId}');
+            _log('gallery import done: ${saved.title ?? job.filename} mime=${content?.mime ?? '-'} -> ${saved.mediaId}');
             job.mediaId = saved.mediaId;
             job.savedTitle = saved.title;
             job.relativePath = saved.relativePath;
@@ -2500,7 +2555,7 @@ class DownloadManager extends ChangeNotifier {
     try {
       await work.timeout(finishTimeoutForTesting ?? finishTimeoutFor(sourceBytes));
     } on TimeoutException {
-      _log('gallery import timed out: ${job.filename} bytes=${sourceBytes ?? -1}');
+      _log('gallery import timed out: planned=${job.filename} bytes=${sourceBytes ?? -1}');
       job.error = '保存超时，请重试';
       job.state = JobState.failed;
       // The album copy keeps running; record its real outcome when it ends
@@ -2706,15 +2761,34 @@ class DownloadManager extends ChangeNotifier {
     // host class and the cause are fixed tokens — never the URL, the host name
     // or its query.
     final cap = retryCapFor(batch, job);
+    final cause = _failureCause(update);
+    // A dropped connection or a timeout is usually transient: the same
+    // candidate gets one short backoff and one more attempt before it is
+    // written off. Every other failure rotates to the next candidate at once.
+    final backoffRetry = (cause == 'reset' || cause == 'timeout') &&
+        !job.candidateRetryUsed &&
+        job.attempts < cap;
     unawaited(DevLog.write(
       'V16DL', // i18n:ignore 日志
       'candidate index=${job.itemIndex} role=${roleOf(job)} '
           'label=${candidateLabelOf(_candidateUrlOf(job) ?? '')} '
           'host_class=${_hostClassOf(batch, job)} bytes=- '
           'sniff=- result=transfer_failed reason=${_transferReason(update)} '
-          'cause=${_failureCause(update)} candidate=${job.attempts}/$cap',
+          'cause=$cause candidate=${job.attempts}/$cap'
+          '${backoffRetry ? ' retry=backoff wait_ms=${kResetRetryBackoff.inMilliseconds} candidate_seq=${candidateIndexOf(job) + 1}/${job.urls.length}' : ''}',
     ));
-    if (job.attempts < cap) {
+    if (backoffRetry) {
+      job.candidateRetryUsed = true;
+      await Future<void>.delayed(resetRetryBackoffForTesting);
+      await _enqueueAttempt(batch, job);
+      return;
+    }
+    job.candidateRetryUsed = false;
+    final nextCandidate = candidateIndexOf(job) + 1;
+    // Never wrap around to a candidate that was already downloaded: the item
+    // gives up (or imports its best small copy) instead of re-requesting it.
+    if (nextCandidate < job.urls.length && job.attempts < cap) {
+      job.candidateIndex = nextCandidate;
       await _enqueueAttempt(batch, job);
       return;
     }
@@ -2907,6 +2981,63 @@ class DownloadManager extends ChangeNotifier {
     await _persist(batch);
     notifyListeners();
     unawaited(_refreshNotification(batch));
+    await _forgetSupersededFailureBatches(batch);
+  }
+
+  /// A retry runs in a fresh flow, so an older batch of the same post can still
+  /// sit in the snapshot index with its failed jobs. Those stale failures kept
+  /// the failure strip on the history card and at the top of the preview page
+  /// until the page was rebuilt. Once [batch] finished without a failure, drop
+  /// them: dismiss the snapshot, so neither engine resurrects it, and let the
+  /// listeners repaint. Nothing is removed while any job is unfinished, and a
+  /// batch that still fails keeps its own failure.
+  ///
+  /// The stored snapshot and this engine's own copy are examined, not
+  /// [liveBatches]: its merged view already clears a failure that a later save
+  /// supersedes, which would hide exactly the batches looked for here.
+  Future<void> _forgetSupersededFailureBatches(DownloadBatch batch) async {
+    if (batch.failedCount > 0) return;
+    final ids = <String>{};
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      for (final id in prefs.getStringList(_batchIndexKey) ?? const <String>[]) {
+        if (id == batch.batchId) continue;
+        if (prefs.getBool('$_dismissedPrefix$id') == true) continue;
+        final raw = prefs.getString(_batchKey(id));
+        if (raw == null) continue;
+        DownloadBatch stored;
+        try {
+          stored = DownloadBatch.fromJson(
+            (jsonDecode(raw) as Map).cast<String, Object?>(),
+          );
+        } catch (_) {
+          continue;
+        }
+        if (stored.postId != batch.postId) continue;
+        if (!stored.isTerminal || stored.failedCount == 0) continue;
+        ids.add(id);
+      }
+    } catch (_) {
+      // Fall through to the in-memory copies.
+    }
+    for (final local in _batches.values) {
+      if (local.batchId == batch.batchId) continue;
+      if (local.postId != batch.postId) continue;
+      if (!local.isTerminal || local.failedCount == 0) continue;
+      ids.add(local.batchId);
+    }
+    if (ids.isEmpty) return;
+    final prefs = await SharedPreferences.getInstance();
+    for (final id in ids) {
+      await prefs.setBool('$_dismissedPrefix$id', true);
+      final local = _batches.remove(id);
+      _lastShownPercent.remove(id);
+      await _removeSnapshot(id);
+      if (local != null) await _cancelNotification(local);
+      _log('drop superseded failure batch $id '
+          '(post=${batch.postId} retried by ${batch.batchId})');
+    }
+    notifyListeners();
   }
 
   /// Manual per-row retry: re-parse the post first so 403/expired CDN links
@@ -2983,6 +3114,8 @@ class DownloadManager extends ChangeNotifier {
       // Keep the stored URLs and try once more below for non-session media.
     }
     job.attempts = 0;
+    job.candidateIndex = 0;
+    job.candidateRetryUsed = false;
     job.lastStatusCode = null;
     try {
       await _enqueueAttempt(batch, job);

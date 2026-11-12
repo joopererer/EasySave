@@ -64,7 +64,7 @@ object PublicMediaWriter {
     }
     fun save(context: Context, source: File, mime: String, album: String, name: String): Map<String, String> = synchronized(lock) {
         ExportNames.requireClean(name)
-        require(mime in setOf("image/jpeg", "image/png", "image/webp", "video/mp4"))
+        MediaImportPolicy.requireAllowed(mime)
         val relative = ExportNames.albumPath(album)
         available(context, relative, name)
         if (Build.VERSION.SDK_INT < 29) return@synchronized legacy(context, source, mime, relative, name)
