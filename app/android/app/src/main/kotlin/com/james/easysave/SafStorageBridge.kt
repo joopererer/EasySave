@@ -10,6 +10,37 @@ import io.flutter.plugin.common.MethodChannel
 import io.flutter.plugin.common.StandardMethodCodec
 import java.io.IOException
 
+/**
+ * Pure decision for "does the backup folder still work?".
+ *
+ * A folder may only be declared lost when the answer is certain: a probe that
+ * threw (e.g. the channel was not attached yet, the volume was busy) is
+ * [State.UNKNOWN] and the caller must keep the current setting.
+ */
+object SafFolderGrant {
+    enum class State { OK, LOST, UNKNOWN }
+
+    data class Decision(val state: State, val reason: String)
+
+    fun decide(
+        uriValid: Boolean,
+        persistedGrants: Int,
+        matched: Boolean,
+        documentExists: Boolean,
+        isDirectory: Boolean,
+        writable: Boolean,
+        probeFailed: Boolean,
+    ): Decision = when {
+        !uriValid -> Decision(State.LOST, "invalid_uri")
+        probeFailed -> Decision(State.UNKNOWN, "probe_failed")
+        !matched -> Decision(State.LOST, "grant_missing")
+        !documentExists -> Decision(State.LOST, "directory_missing")
+        !isDirectory -> Decision(State.LOST, "not_a_directory")
+        !writable -> Decision(State.LOST, "not_writable")
+        else -> Decision(State.OK, "ok")
+    }
+}
+
 /** Storage-only SAF operations shared by foreground and background engines. */
 class SafStorageBridge(private val context: Context) {
     companion object {
@@ -32,6 +63,20 @@ class SafStorageBridge(private val context: Context) {
                     checkDirectoryAccess(treeUri, result)
                 } else {
                     result.success(false)
+                }
+            }
+            "checkFolderGrant" -> {
+                val treeUri = call.argument<String>("treeUri")
+                if (treeUri != null) {
+                    checkFolderGrant(treeUri, result)
+                } else {
+                    result.success(mapOf(
+                        "state" to "lost",
+                        "reason" to "no_uri",
+                        "grants" to 0,
+                        "matched" to false,
+                        "authority" to "",
+                    ))
                 }
             }
             "writeBackupToDirectory" -> {
@@ -82,27 +127,93 @@ class SafStorageBridge(private val context: Context) {
     }
 
     private fun checkDirectoryAccess(treeUriString: String, result: MethodChannel.Result) {
-        try {
-            val uri = Uri.parse(treeUriString)
-            // 1. persistedUriPermissions 中仍包含该 URI 且可写
-            val hasPersistedWrite = context.contentResolver.persistedUriPermissions.any {
-                it.uri == uri && it.isWritePermission
-            }
-            if (!hasPersistedWrite) {
-                result.success(false)
-                return
-            }
-            // 2. DocumentFile 存在; 3. 是目录; 4. canWrite
-            val treeDoc = DocumentFile.fromTreeUri(context, uri)
-            val isValid = treeDoc != null &&
-                    treeDoc.exists() &&
-                    treeDoc.isDirectory &&
-                    treeDoc.canWrite()
-            result.success(isValid)
+        // A probe that could not answer keeps the folder usable: only a
+        // confirmed loss may pause the automatic backup.
+        result.success(probeFolder(treeUriString).state != SafFolderGrant.State.LOST)
+    }
+
+    /**
+     * Detailed folder probe for the backup settings: reports *why* a folder is
+     * unusable so the app can tell "the grant is really gone" from "the probe
+     * could not answer yet" (and never silently switch auto backup off).
+     */
+    private fun checkFolderGrant(treeUriString: String, result: MethodChannel.Result) {
+        val probe = probeFolder(treeUriString)
+        result.success(mapOf(
+            "state" to probe.state.name.lowercase(),
+            "reason" to probe.reason,
+            "grants" to probe.grants,
+            "matched" to probe.matched,
+            "exists" to probe.exists,
+            "writable" to probe.writable,
+            // Authority type only; the app never logs the full tree URI.
+            "authority" to probe.authority,
+        ))
+    }
+
+    private class FolderProbe(
+        val state: SafFolderGrant.State,
+        val reason: String,
+        val grants: Int,
+        val matched: Boolean,
+        val exists: Boolean,
+        val writable: Boolean,
+        val authority: String,
+    )
+
+    private fun probeFolder(treeUriString: String): FolderProbe {
+        var grants = 0
+        var matched = false
+        var exists = false
+        var directory = false
+        var writable = false
+        var probeFailed = false
+        val uri = try {
+            Uri.parse(treeUriString)
         } catch (e: Exception) {
-            NativeLog.w("EasySaveSAF", "storage error type=${e.javaClass.simpleName}")
-            result.success(false)
+            null
         }
+        if (uri != null) {
+            try {
+                val persisted = context.contentResolver.persistedUriPermissions
+                grants = persisted.size
+                matched = persisted.any {
+                    it.uri == uri && (it.isWritePermission || it.isReadPermission)
+                }
+            } catch (e: Exception) {
+                probeFailed = true
+                NativeLog.w("EasySaveSAF", "folder grant probe failed type=${e.javaClass.simpleName}")
+            }
+            if (!probeFailed) {
+                try {
+                    val treeDoc = DocumentFile.fromTreeUri(context, uri)
+                    exists = treeDoc?.exists() == true
+                    directory = treeDoc?.isDirectory == true
+                    writable = treeDoc?.canWrite() == true
+                } catch (e: Exception) {
+                    probeFailed = true
+                    NativeLog.w("EasySaveSAF", "folder document probe failed type=${e.javaClass.simpleName}")
+                }
+            }
+        }
+        val decision = SafFolderGrant.decide(
+            uriValid = uri != null,
+            persistedGrants = grants,
+            matched = matched,
+            documentExists = exists,
+            isDirectory = directory,
+            writable = writable,
+            probeFailed = probeFailed,
+        )
+        return FolderProbe(
+            decision.state,
+            decision.reason,
+            grants,
+            matched,
+            exists,
+            writable,
+            uri?.authority ?: "",
+        )
     }
 
     private fun writeBackupToDirectory(

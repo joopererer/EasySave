@@ -162,8 +162,8 @@ void main() {
 
     testWidgets('renders 未设置 when backupTreeUri is null', (tester) async {
       final settings = await AppSettings.load();
-      settings.backupTreeUri = null;
-      await settings.save();
+      // Only an explicit clear forgets the folder (a plain save keeps it).
+      await settings.clearBackupFolder();
 
       await tester.pumpWidget(
         const MaterialApp(
@@ -179,18 +179,29 @@ void main() {
       expect(find.text('选择文件夹'), findsOneWidget);
     });
 
-    testWidgets('shows warning and button when folder permission is lost', (tester) async {
+    testWidgets('shows re-authorisation prompt and keeps the switch on when the grant is lost',
+        (tester) async {
       const safChannel = MethodChannel('easysave/saf');
       TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
           .setMockMethodCallHandler(safChannel, (call) async {
-        if (call.method == 'checkDirectoryAccess') {
-          return false; // Permission lost or folder deleted
+        if (call.method == 'checkFolderGrant') {
+          return {
+            'state': 'lost',
+            'reason': 'grant_missing',
+            'grants': 0,
+            'matched': false,
+            'exists': false,
+            'writable': false,
+            'authority': 'com.android.externalstorage.documents',
+          };
         }
+        if (call.method == 'checkDirectoryAccess') return false;
         return null;
       });
 
       final settings = await AppSettings.load();
       settings.backupTreeUri = 'content://tree/lost_folder';
+      settings.autoFolderBackupEnabled = true;
       await settings.save();
 
       await tester.pumpWidget(
@@ -201,8 +212,20 @@ void main() {
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 100));
 
-      expect(find.text('文件夹权限失效或文件夹已被删除'), findsOneWidget);
-      expect(find.text('重新选择文件夹'), findsOneWidget);
+      expect(find.text('备份文件夹授权已失效，点此重新授权'), findsOneWidget);
+      expect(find.text('重新授权'), findsOneWidget);
+
+      // The setting itself is untouched: switch on, folder still shown.
+      final reloaded = await AppSettings.load();
+      expect(reloaded.autoFolderBackupEnabled, isTrue);
+      expect(reloaded.backupTreeUri, 'content://tree/lost_folder');
+      final switchTile = tester.widget<SwitchListTile>(
+        find.byKey(const Key('auto_folder_backup_switch')),
+      );
+      expect(switchTile.value, isTrue);
+
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(safChannel, null);
     });
 
     testWidgets('shows prompt confirmation when clicking 立即备份 with empty history', (tester) async {
@@ -343,7 +366,8 @@ void main() {
 
     testWidgets('autoFolderBackupEnabled switch: opening when no folder set triggers picker; cancelling keeps it OFF', (tester) async {
       final settings = await AppSettings.load();
-      settings.backupTreeUri = null;
+      // Only an explicit clear forgets the folder (a plain save keeps it).
+      await settings.clearBackupFolder();
       settings.autoFolderBackupEnabled = false;
       await settings.save();
 
@@ -379,7 +403,8 @@ void main() {
 
     testWidgets('autoFolderBackupEnabled switch: opening when no folder set triggers picker and turns ON when picked', (tester) async {
       final settings = await AppSettings.load();
-      settings.backupTreeUri = null;
+      // Only an explicit clear forgets the folder (a plain save keeps it).
+      await settings.clearBackupFolder();
       settings.autoFolderBackupEnabled = false;
       await settings.save();
 
@@ -469,6 +494,17 @@ void main() {
       const safChannel = MethodChannel('easysave/saf');
       TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
           .setMockMethodCallHandler(safChannel, (call) async {
+        if (call.method == 'checkFolderGrant') {
+          return {
+            'state': hasAccess ? 'ok' : 'lost',
+            'reason': hasAccess ? 'ok' : 'grant_missing',
+            'grants': hasAccess ? 1 : 0,
+            'matched': hasAccess,
+            'exists': hasAccess,
+            'writable': hasAccess,
+            'authority': 'com.android.externalstorage.documents',
+          };
+        }
         if (call.method == 'checkDirectoryAccess') return hasAccess;
         return null;
       });
@@ -479,7 +515,7 @@ void main() {
       await tester.pumpAndSettle();
 
       // Initially valid, no warning
-      expect(find.text('文件夹权限失效或文件夹已被删除'), findsNothing);
+      expect(find.text('备份文件夹授权已失效，点此重新授权'), findsNothing);
 
       // Access is revoked externally (e.g. folder deleted)
       hasAccess = false;
@@ -488,9 +524,13 @@ void main() {
       tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
       await tester.pumpAndSettle();
 
-      // Warning and re-select button appear
-      expect(find.text('文件夹权限失效或文件夹已被删除'), findsOneWidget);
-      expect(find.text('重新选择文件夹'), findsOneWidget);
+      // Re-authorisation prompt appears, the switch stays on
+      expect(find.text('备份文件夹授权已失效，点此重新授权'), findsOneWidget);
+      expect(find.text('重新授权'), findsOneWidget);
+      final switchTile = tester.widget<SwitchListTile>(
+        find.byKey(const Key('auto_folder_backup_switch')),
+      );
+      expect(switchTile.value, isTrue);
     });
   });
 }

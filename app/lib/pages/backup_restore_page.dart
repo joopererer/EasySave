@@ -5,6 +5,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import '../services/backup/backup_folder_guard.dart';
 import '../services/backup/backup_model.dart';
 import '../services/backup/backup_service.dart';
 import '../services/backup/saf_service.dart';
@@ -61,7 +62,20 @@ class _BackupRestorePageState extends State<BackupRestorePage> with WidgetsBindi
   Future<void> _loadState() async {
     final version = ++_loadStateVersion;
     final settings = await AppSettings.load();
-    bool hasAccess = true;
+    // The guard owns the "is the folder still usable" decision: a lost grant is
+    // reported, never written back into the settings.
+    final accessState = await BackupFolderGuard.instance
+        .refresh(source: 'backup_page');
+    final access = FolderAccess(
+      state: accessState,
+      reason: BackupFolderGuard.instance.reason,
+      grants: BackupFolderGuard.instance.grants,
+      matched: BackupFolderGuard.instance.matched,
+      authority: BackupFolderGuard.instance.authority == '-'
+          ? ''
+          : BackupFolderGuard.instance.authority,
+    );
+    bool hasAccess = access.state != FolderAccessState.lost;
     String? folderDisplay;
     if (settings.backupTreeUri != null && settings.backupTreeUri!.isNotEmpty) {
       final tree = settings.backupTreeUri!;
@@ -71,11 +85,6 @@ class _BackupRestorePageState extends State<BackupRestorePage> with WidgetsBindi
       } else {
         final docName = await SafService.getDirectoryDisplayName(tree);
         folderDisplay = SafService.formatReadableDirectoryPath(tree, fallbackName: docName);
-      }
-      try {
-        hasAccess = await SafService.checkDirectoryAccess(tree);
-      } catch (_) {
-        hasAccess = false;
       }
     }
     if (!mounted || version != _loadStateVersion) return;
@@ -104,7 +113,10 @@ class _BackupRestorePageState extends State<BackupRestorePage> with WidgetsBindi
   Future<String?> _pickFolder({bool enableAutoBackupOnSuccess = false}) async {
     _isPickingFolder = true;
     try {
-      final uri = await SafService.pickDirectory();
+      // Re-authorising an existing folder opens the picker on that folder.
+      final uri = await SafService.pickDirectory(
+        initialUri: _settings.backupTreeUri,
+      );
       if (uri != null && mounted) {
         _settings.backupTreeUri = uri;
         if (enableAutoBackupOnSuccess) {
@@ -112,6 +124,7 @@ class _BackupRestorePageState extends State<BackupRestorePage> with WidgetsBindi
           _settings.backupFolderHintDismissed = true;
         }
         await _settings.save();
+        BackupFolderGuard.instance.markAuthorised();
         await _loadState();
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
@@ -586,7 +599,7 @@ class _BackupRestorePageState extends State<BackupRestorePage> with WidgetsBindi
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
                               Text(
-                                '文件夹权限失效或文件夹已被删除',
+                                '备份文件夹授权已失效，点此重新授权',
                                 style: TextStyle(
                                   fontWeight: FontWeight.bold,
                                   color: theme.colorScheme.onErrorContainer,
@@ -594,7 +607,9 @@ class _BackupRestorePageState extends State<BackupRestorePage> with WidgetsBindi
                               ),
                               const SizedBox(height: 4),
                               Text(
-                                '自动备份已暂停，请重新授权文件夹。',
+                                _settings.autoFolderBackupEnabled
+                                    ? '自动备份已暂停，开关与文件夹会保留；重新授权同一文件夹即可继续。'
+                                    : '文件夹已保留，重新授权后可继续备份。',
                                 style: TextStyle(
                                   fontSize: 12,
                                   color: theme.colorScheme.onErrorContainer,
@@ -605,7 +620,7 @@ class _BackupRestorePageState extends State<BackupRestorePage> with WidgetsBindi
                         ),
                         FilledButton.tonal(
                           onPressed: _pickFolder,
-                          child: const Text('重新选择文件夹'),
+                          child: const Text('重新授权'),
                         ),
                       ],
                     ),

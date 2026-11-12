@@ -39,6 +39,14 @@ class _MinePageState extends State<MinePage> with WidgetsBindingObserver {
   final Set<String> _checking = {};
   bool _checkingLogin = true;
   AppSettings _settings = AppSettings();
+
+  /// Whether [_load] already replaced the default snapshot with the stored one.
+  /// Saving before that would write every key from the defaults — which used to
+  /// switch the external backup folder and its toggle off when a switch on this
+  /// page was tapped during startup (the page is built by the shell's
+  /// IndexedStack before its async load finishes, and the first cold start
+  /// after an update makes that window long).
+  bool _settingsLoaded = false;
   String _version = '';
   final _nicknames = <String, String>{};
   Set<String> _lastExpired = const {};
@@ -222,6 +230,7 @@ class _MinePageState extends State<MinePage> with WidgetsBindingObserver {
     if (!mounted) return;
     setState(() {
       _settings = settings;
+      _settingsLoaded = true;
       _loggedIn.addAll(states);
       _xhsStatus = xhsStatus;
       _checkingLogin = false;
@@ -229,7 +238,11 @@ class _MinePageState extends State<MinePage> with WidgetsBindingObserver {
     });
   }
 
-  Future<void> _saveSettings() => _settings.save();
+  Future<void> _saveSettings() async {
+    // Never persist the pre-load default snapshot.
+    if (!_settingsLoaded) return;
+    await _settings.save();
+  }
 
   Future<void> _addTileToControlCenter() async {
     final added = await TileService.addTile();

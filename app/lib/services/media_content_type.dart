@@ -171,6 +171,120 @@ int? _boxSize(Uint8List bytes, int available) {
 String _fourCc(Uint8List bytes, int offset) =>
     offset + 4 <= bytes.length ? String.fromCharCodes(bytes, offset, offset + 4) : '';
 
+/// Whether provenance can be embedded into a still of [type]. provenance_dart
+/// writes XMP into JPEG, PNG and WebP only; every ISO-BMFF still (HEIC, AVIF)
+/// and GIF must keep its own bytes instead of going through the MP4 writer.
+bool provenanceEmbeddableStill(MediaContentType type) =>
+    const {'jpg', 'png', 'webp'}.contains(type.extension);
+
+/// What the download pipeline does with a finished file whose own bytes are
+/// [content], for a job that asked for [isImage]. [attempts] is the number of
+/// candidates already spent and [candidateCount] the size of the list.
+enum ContentVerdict {
+  /// The file is what the job asked for: import it.
+  accept,
+
+  /// The bytes belong to the other media kind (an image job answered with an
+  /// ISO-BMFF movie): the *candidate* is wrong, the next one is tried.
+  rejectKind,
+
+  /// A movie without a `moov` box: unusable, the next candidate is tried.
+  rejectUnplayable,
+
+  /// A still whose container cannot carry provenance (HEIC / AVIF / GIF). It
+  /// is a real photo, so it is set aside while an embeddable candidate is
+  /// still untried and imported as-is once none is left.
+  deferUnembeddable,
+}
+
+ContentVerdict contentVerdictFor({
+  required bool isImage,
+  required int attempts,
+  required int candidateCount,
+  required MediaContentType? content,
+}) {
+  // An unreadable header is kept, exactly as before this check existed.
+  if (content == null) return ContentVerdict.accept;
+  if (content.isImage != isImage) return ContentVerdict.rejectKind;
+  if (content.playable == false) return ContentVerdict.rejectUnplayable;
+  if (!isImage || provenanceEmbeddableStill(content)) {
+    return ContentVerdict.accept;
+  }
+  // All candidates are HEIC/AVIF: never fail the item, save it in its own
+  // format (the provenance step is skipped for that container).
+  return attempts < candidateCount
+      ? ContentVerdict.deferUnembeddable
+      : ContentVerdict.accept;
+}
+
+/// Short label of a candidate URL for the diagnostic log: where the bytes come
+/// from and which format the URL advertises. Never the URL itself, its query
+/// or anything else that could identify the account.
+String candidateLabelOf(String url) {
+  final uri = Uri.tryParse(url.trim());
+  if (uri == null) return 'unknown';
+  final host = uri.host.toLowerCase();
+  final String source;
+  if (host == 'ci.xiaohongshu.com' || host.startsWith('ci.')) {
+    source = 'ci';
+  } else if (host.startsWith('sns-img-')) {
+    source = 'img';
+  } else if (host.startsWith('sns-webpic-')) {
+    source = 'webpic';
+  } else if (host.startsWith('sns-video-') || uri.path.contains('/stream/')) {
+    source = 'video';
+  } else {
+    source = 'other';
+  }
+  final path = uri.path.toLowerCase();
+  // XHS serves the format as a path-style query segment
+  // (`?imageView2/format/jpg`), so the token is read from the whole URL but
+  // only ever a short alphanumeric one: nothing else of the query is used.
+  var format = RegExp(r'/format/([a-z0-9]{2,5})')
+          .firstMatch(url.toLowerCase())
+          ?.group(1) ??
+      RegExp(r'\.([a-z0-9]{2,5})$').firstMatch(path)?.group(1) ??
+      '';
+  if (format == 'jpeg') format = 'jpg';
+  if (format == 'heif') format = 'heic';
+  final safe = RegExp(r'^[a-z0-9]{2,5}$').hasMatch(format) ? format : '';
+  return safe.isEmpty ? source : '$source:$safe';
+}
+
+/// Format rank of a still candidate: the writable (provenance-capable)
+/// containers are tried before HEIC / AVIF / GIF. Unknown shapes stay in the
+/// middle so a CDN the parser does not know is never pushed to the end.
+int stillCandidateRank(String url) {
+  final label = candidateLabelOf(url);
+  final format = label.contains(':') ? label.split(':').last : '';
+  switch (format) {
+    case 'jpg':
+      return 0;
+    case 'png':
+      return 1;
+    case 'webp':
+      return 2;
+    case 'heic':
+    case 'avif':
+    case 'gif':
+      return 4;
+    default:
+      return 3;
+  }
+}
+
+/// Stable jpeg-first ordering of the still candidates of one item. Live photo
+/// stills and ordinary images share it, so a Live photo's still is never the
+/// only one in the batch that starts with an unwritable container.
+List<String> rankStillCandidates(Iterable<String> urls) {
+  final indexed = urls.toList().indexed.toList();
+  indexed.sort((a, b) {
+    final byRank = stillCandidateRank(a.$2).compareTo(stillCandidateRank(b.$2));
+    return byRank != 0 ? byRank : a.$1.compareTo(b.$1);
+  });
+  return [for (final (_, url) in indexed) url];
+}
+
 /// Media kind of a media URL, from host, path shape and extension. `undefined`
 /// equivalents (null) are kept by callers, so an unseen CDN shape never loses
 /// a real file. Mirrors the parser's `xhsMediaKindOf`.

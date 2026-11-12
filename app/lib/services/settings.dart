@@ -61,7 +61,18 @@ class AppSettings {
   String? backupTreeUri;
 
   /// Whether automatic backup to external SAF folder is enabled (v1.8).
-  bool autoFolderBackupEnabled = false;
+  ///
+  /// The backing value is only written back by a [save] of an instance that
+  /// actually read it (or assigned it), so a default-constructed snapshot can
+  /// never silently switch the feature off.
+  bool get autoFolderBackupEnabled => _autoFolderBackup;
+  set autoFolderBackupEnabled(bool value) {
+    _autoFolderBackup = value;
+    _autoFolderBackupKnown = true;
+  }
+
+  bool _autoFolderBackup = false;
+  bool _autoFolderBackupKnown = false;
 
   /// Timestamp (ms) of the last successful backup (v1.8).
   int? lastBackupTime;
@@ -74,6 +85,9 @@ class AppSettings {
 
   /// Whether user has dismissed the one-time video provenance backfill hint (v1.8.2).
   bool videoBackfillHintDismissed = false;
+
+  /// Set only by [clearBackupFolder]: a regular [save] must keep the folder.
+  bool _forgetBackupFolder = false;
 
   static Future<AppSettings> load() async {
     final prefs = await SharedPreferences.getInstance();
@@ -131,12 +145,19 @@ class AppSettings {
     await prefs.setString('historySort', historySort.name);
     await prefs.setBool('saveProvenanceInImages', saveProvenanceInImages);
     await prefs.setStringList('usedAlbumNames', usedAlbumNames);
-    if (backupTreeUri != null) {
+    // The backup folder is only ever forgotten by clearBackupFolder(). A
+    // full-object save (startup backup, bubble sync, restore, …) must never
+    // remove it just because this snapshot was taken before the folder was
+    // chosen: that is what made the folder and its switch disappear after an
+    // app update.
+    if (backupTreeUri != null && backupTreeUri!.isNotEmpty) {
       await prefs.setString('backupTreeUri', backupTreeUri!);
-    } else {
+    } else if (_forgetBackupFolder) {
       await prefs.remove('backupTreeUri');
     }
-    await prefs.setBool('autoFolderBackupEnabled', autoFolderBackupEnabled);
+    if (_autoFolderBackupKnown) {
+      await prefs.setBool('autoFolderBackupEnabled', _autoFolderBackup);
+    }
     if (lastBackupTime != null) {
       await prefs.setInt('lastBackupTime', lastBackupTime!);
     } else {
@@ -162,9 +183,22 @@ class AppSettings {
     usedAlbumNames = <String>[...usedAlbumNames, trimmed];
   }
 
+  /// Forgets the backup folder and switches auto backup off. Only an explicit
+  /// user action ("更换文件夹" → 移除, or a new folder) reaches this; a lost
+  /// grant keeps both values so the user can re-authorise the same directory.
+  Future<void> clearBackupFolder() async {
+    backupTreeUri = null;
+    autoFolderBackupEnabled = false;
+    _forgetBackupFolder = true;
+    try {
+      await save();
+    } finally {
+      _forgetBackupFolder = false;
+    }
+  }
+
   /// All albums the app has used: the current one plus the remembered ones.
-  List<String> get effectiveAlbumNames {
-    final names = <String>[];
+  List<String> get effectiveAlbumNames {    final names = <String>[];
     final seen = <String>{};
     for (final name in [albumName, ...usedAlbumNames]) {
       final trimmed = name.trim();

@@ -238,6 +238,69 @@ class SafBackupResult {
   });
 }
 
+/// How usable the persisted backup folder currently is.
+enum FolderAccessState {
+  /// The persisted grant is present and the folder is writable.
+  ok,
+
+  /// The grant is gone (or the folder no longer exists): re-authorise.
+  lost,
+
+  /// The probe could not answer (channel not ready, engine starting, plugin
+  /// exception). Never treated as "lost": the saved setting stays untouched.
+  unknown,
+}
+
+/// Result of probing the backup folder. Carries the reason for the log line
+/// ([Backup] event=folder_check …) and never the full tree URI.
+class FolderAccess {
+  const FolderAccess({
+    required this.state,
+    required this.reason,
+    this.grants = 0,
+    this.matched = false,
+    this.authority = '',
+  });
+
+  final FolderAccessState state;
+  final String reason;
+  final int grants;
+  final bool matched;
+  final String authority;
+
+  bool get isOk => state == FolderAccessState.ok;
+  bool get isLost => state == FolderAccessState.lost;
+
+  /// Authority type only (`externalstorage` for the system picker), or `-`.
+  String get authorityLabel {
+    if (authority.isEmpty) return '-';
+    final parts = authority.split('.');
+    // `com.android.externalstorage.documents` -> `externalstorage`
+    return parts.length >= 2 ? parts[parts.length - 2] : parts.first;
+  }
+
+  static const FolderAccess unknown = FolderAccess(
+    state: FolderAccessState.unknown,
+    reason: 'probe_failed',
+  );
+
+  static FolderAccess fromChannel(Object? raw) {
+    if (raw is! Map) return FolderAccess.unknown;
+    final state = switch ('${raw['state']}') {
+      'ok' => FolderAccessState.ok,
+      'lost' => FolderAccessState.lost,
+      _ => FolderAccessState.unknown,
+    };
+    return FolderAccess(
+      state: state,
+      reason: '${raw['reason'] ?? 'unknown'}',
+      grants: raw['grants'] is num ? (raw['grants'] as num).toInt() : 0,
+      matched: raw['matched'] == true,
+      authority: '${raw['authority'] ?? ''}',
+    );
+  }
+}
+
 abstract final class SafService {
   static const MethodChannel _channel = MethodChannel('easysave/saf');
   static const throttleDuration = Duration(hours: 1);
@@ -283,10 +346,35 @@ abstract final class SafService {
 
   /// Launch system folder picker (ACTION_OPEN_DOCUMENT_TREE) with persistable flags.
   /// Returns the persisted Tree URI string, or null if cancelled.
-  static Future<String?> pickDirectory({MethodChannel? channelOverride}) async {
+  ///
+  /// [initialUri] re-opens the picker on the folder that is already configured,
+  /// so a re-authorisation does not make the user navigate again.
+  static Future<String?> pickDirectory({
+    String? initialUri,
+    MethodChannel? channelOverride,
+  }) async {
     final ch = channelOverride ?? _channel;
     try {
-      final uri = await ch.invokeMethod<String>('pickDirectory');
+      final uri = await ch.invokeMethod<String>('pickDirectory', {
+        if (initialUri != null && initialUri.isNotEmpty) 'initialUri': initialUri,
+      });
+      // The native side persists the grant with takePersistableUriPermission
+      // before answering; a URI without a persisted grant would be forgotten
+      // on the next start, so it is reported instead of stored.
+      if (uri != null && uri.isNotEmpty) {
+        final access = await folderAccess(uri, channelOverride: channelOverride);
+        DevLog.write(
+          'Backup', // i18n:ignore 日志
+          'event=folder_pick uriPresent=1 provider=${access.authorityLabel} '
+          'persistedGrants=${access.grants} matched=${access.matched} '
+          'result=${access.state.name} reason=${access.reason}',
+        );
+        if (access.isLost) {
+          throw const SafPermissionException(
+            'The chosen folder could not be persisted',
+          );
+        }
+      }
       return uri;
     } on PlatformException catch (e) {
       DevLog.write('SAF', 'pickDirectory error: ${e.message}', level: DevLogLevel.error);
@@ -294,20 +382,71 @@ abstract final class SafService {
     }
   }
 
-  /// Launch system file picker (ACTION_OPEN_DOCUMENT) to pick a backup JSON file.
-  /// Returns Document URI string, or null if cancelled.
-  static Future<String?> pickBackupFile({MethodChannel? channelOverride}) async {
+  /// Detailed probe of the backup folder: [FolderAccessState.ok] only when the
+  /// persisted grant is present and the folder is writable, [state.lost] only
+  /// when the system confirmed it is gone, [FolderAccessState.unknown] when the
+  /// probe could not answer.
+  static Future<FolderAccess> folderAccess(
+    String treeUri, {
+    MethodChannel? channelOverride,
+  }) async {
     final ch = channelOverride ?? _channel;
     try {
-      final uri = await ch.invokeMethod<String>('pickBackupFile');
-      return uri;
+      final raw = await ch.invokeMethod<Object?>('checkFolderGrant', {
+        'treeUri': treeUri,
+      });
+      return FolderAccess.fromChannel(raw);
+    } on MissingPluginException {
+      // An engine without the detailed probe: fall back to the boolean check
+      // and treat a negative answer as unknown rather than lost.
+      final ok = await _booleanDirectoryAccess(treeUri, ch);
+      return ok
+          ? const FolderAccess(state: FolderAccessState.ok, reason: 'legacy_ok')
+          : FolderAccess.unknown;
     } on PlatformException catch (e) {
-      DevLog.write('SAF', 'pickBackupFile error: ${e.message}', level: DevLogLevel.error);
-      throw _mapPlatformException(e);
+      DevLog.write(
+        'Backup', // i18n:ignore 日志
+        'event=folder_check result=unknown reason=platform_${e.code} '
+            'provider=${_authorityLabelOf(treeUri)}',
+        level: DevLogLevel.warn,
+      );
+      return FolderAccess.unknown;
+    } catch (e) {
+      DevLog.write(
+        'Backup', // i18n:ignore 日志
+        'event=folder_check result=unknown reason=${e.runtimeType} '
+            'provider=${_authorityLabelOf(treeUri)}',
+        level: DevLogLevel.warn,
+      );
+      return FolderAccess.unknown;
     }
   }
 
-  /// Check whether the persisted Tree URI still has valid read/write permission.
+  /// Authority type of a tree URI (`externalstorage`), never the URI itself.
+  static String _authorityLabelOf(String treeUri) {
+    final authority = Uri.tryParse(treeUri)?.authority ?? '';
+    if (authority.isEmpty) return '-';
+    final parts = authority.split('.');
+    return parts.length >= 2 ? parts[parts.length - 2] : parts.first;
+  }
+
+  static Future<bool> _booleanDirectoryAccess(String treeUri, MethodChannel ch) async {
+    try {
+      return await ch.invokeMethod<bool>('checkDirectoryAccess', {
+            'treeUri': treeUri,
+          }) ??
+          false;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// Check whether the persisted Tree URI can still be written to.
+  ///
+  /// The native side answers `true` for a probe it could not complete (see
+  /// [SafFolderGrant.decide]): only a *confirmed* lost grant may delay the
+  /// automatic backup, never a transient failure. Use [folderAccess] when the
+  /// reason matters (settings page, diagnostics).
   static Future<bool> checkDirectoryAccess(
     String treeUri, {
     MethodChannel? channelOverride,
@@ -321,6 +460,19 @@ abstract final class SafService {
     } catch (e) {
       DevLog.write('SAF', 'checkDirectoryAccess error: $e', level: DevLogLevel.warn);
       return false;
+    }
+  }
+
+  /// Launch system file picker (ACTION_OPEN_DOCUMENT) to pick a backup JSON file.
+  /// Returns Document URI string, or null if cancelled.
+  static Future<String?> pickBackupFile({MethodChannel? channelOverride}) async {
+    final ch = channelOverride ?? _channel;
+    try {
+      final uri = await ch.invokeMethod<String>('pickBackupFile');
+      return uri;
+    } on PlatformException catch (e) {
+      DevLog.write('SAF', 'pickBackupFile error: ${e.message}', level: DevLogLevel.error);
+      throw _mapPlatformException(e);
     }
   }
 

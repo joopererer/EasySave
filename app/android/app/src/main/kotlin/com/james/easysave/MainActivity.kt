@@ -12,6 +12,7 @@ import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.provider.MediaStore
+import android.provider.DocumentsContract
 import android.provider.Settings
 import androidx.core.content.ContextCompat
 import android.util.Log
@@ -281,7 +282,9 @@ class MainActivity : FlutterActivity() {
             flutterEngine.dartExecutor.binaryMessenger.makeBackgroundTaskQueue())
             .setMethodCallHandler { call, result ->
                 when (call.method) {
-                    "pickDirectory" -> runOnUiThread { pickDirectory(result) }
+                    "pickDirectory" -> runOnUiThread {
+                        pickDirectory(result, call.argument<String>("initialUri"))
+                    }
                     "pickBackupFile" -> runOnUiThread { pickBackupFile(result) }
                     else -> if (!SafStorageBridge(applicationContext).handle(call, result)) result.notImplemented()
                 }
@@ -536,7 +539,7 @@ class MainActivity : FlutterActivity() {
         }
     }
 
-    private fun pickDirectory(result: MethodChannel.Result) {
+    private fun pickDirectory(result: MethodChannel.Result, initialUri: String? = null) {
         pendingPickDirectoryResult = result
         try {
             val intent = Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).apply {
@@ -545,6 +548,15 @@ class MainActivity : FlutterActivity() {
                     Intent.FLAG_GRANT_WRITE_URI_PERMISSION or
                     Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION
                 )
+                // Re-authorisation of an existing folder opens the picker on
+                // that folder instead of the last visited location.
+                if (!initialUri.isNullOrEmpty()) {
+                    try {
+                        putExtra(DocumentsContract.EXTRA_INITIAL_URI, Uri.parse(initialUri))
+                    } catch (e: Exception) {
+                        NativeLog.w("EasySaveSAF", "initial folder ignored type=${e.javaClass.simpleName}")
+                    }
+                }
             }
             startActivityForResult(intent, SAF_PICK_DIRECTORY_REQUEST_CODE)
         } catch (e: Exception) {

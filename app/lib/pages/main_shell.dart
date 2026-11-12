@@ -4,6 +4,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import '../services/backup/backup_folder_guard.dart';
 import '../services/backup/backup_model.dart';
 import '../services/backup/backup_service.dart';
 import '../services/backup/startup_backup_coordinator.dart';
@@ -55,6 +56,9 @@ class _MainShellState extends State<MainShell> with WidgetsBindingObserver {
       _consumeHostError();
       _consumeHostOpen();
       _checkStartupRestoreGuide();
+      // After an update the persisted folder grant may be gone: report it here
+      // (banner + log) instead of letting any later save clear the setting.
+      unawaited(BackupFolderGuard.instance.refresh(source: 'startup'));
     });
   }
 
@@ -155,23 +159,30 @@ class _MainShellState extends State<MainShell> with WidgetsBindingObserver {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      body: IndexedStack(
-        index: _index,
+      body: Column(
         children: [
-          ParsePage(
-            key: _parseKey,
-            onSeeAll: () => _select(1),
-            isVisible: () => _index == 0,
-            onShowSelf: () => _select(0),
+          _BackupFolderBanner(onReauthorise: _openBackupPage),
+          Expanded(
+            child: IndexedStack(
+              index: _index,
+              children: [
+                ParsePage(
+                  key: _parseKey,
+                  onSeeAll: () => _select(1),
+                  isVisible: () => _index == 0,
+                  onShowSelf: () => _select(0),
+                ),
+                HistoryPage(
+                  key: _historyKey,
+                  onGoParse: () => _select(0),
+                  onSelectionModeChanged: (active) {
+                    if (mounted) setState(() => _historySelectionMode = active);
+                  },
+                ),
+                const MinePage(),
+              ],
+            ),
           ),
-          HistoryPage(
-            key: _historyKey,
-            onGoParse: () => _select(0),
-            onSelectionModeChanged: (active) {
-              if (mounted) setState(() => _historySelectionMode = active);
-            },
-          ),
-          const MinePage(),
         ],
       ),
       // Hide the nav bar while history multi-select is active; the history page
@@ -201,8 +212,14 @@ class _MainShellState extends State<MainShell> with WidgetsBindingObserver {
     return '$y-$m-$d $h:$min';
   }
 
-  Future<void> _checkStartupRestoreGuide() async {
-    // 1. Mandatory check: Is active history empty?
+  /// Open the backup settings page (used by the re-authorisation prompt).
+  Future<void> _openBackupPage() async {
+    await Navigator.of(context).push(
+      MaterialPageRoute(builder: (_) => const BackupRestorePage()),
+    );
+  }
+
+  Future<void> _checkStartupRestoreGuide() async {    // 1. Mandatory check: Is active history empty?
     final isHistoryEmpty = await BackupService.isHistoryEmpty();
     if (!isHistoryEmpty || !mounted) return;
 
@@ -409,5 +426,67 @@ class _MainShellState extends State<MainShell> with WidgetsBindingObserver {
         SnackBar(content: Text('相册扫描失败：$e')),
       );
     }
+  }
+}
+
+/// Home-page prompt for a backup folder whose persisted grant is gone.
+///
+/// It sits above the tabs, keeps the setting (switch and folder name) and
+/// re-authorises the *same* directory, so an app update can no longer leave the
+/// user with a silently disabled auto backup.
+class _BackupFolderBanner extends StatelessWidget {
+  const _BackupFolderBanner({required this.onReauthorise});
+
+  final Future<void> Function() onReauthorise;
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: BackupFolderGuard.instance,
+      builder: (context, _) {
+        final guard = BackupFolderGuard.instance;
+        if (!guard.needsReauth) return const SizedBox.shrink();
+        final theme = Theme.of(context);
+        return Material(
+          color: theme.colorScheme.errorContainer,
+          child: InkWell(
+            onTap: onReauthorise,
+            child: SafeArea(
+              bottom: false,
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                child: Row(
+                  children: [
+                    Icon(Icons.folder_off_outlined,
+                        size: 20, color: theme.colorScheme.onErrorContainer),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Text(
+                        guard.pausedBecauseLost
+                            ? '备份文件夹授权已失效，自动备份已暂停，点此重新授权'
+                            : '备份文件夹授权已失效，点此重新授权',
+                        key: const Key('backup_folder_reauth_banner'),
+                        style: TextStyle(
+                          fontSize: 13,
+                          color: theme.colorScheme.onErrorContainer,
+                        ),
+                      ),
+                    ),
+                    Text(
+                      '重新授权',
+                      style: TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w600,
+                        color: theme.colorScheme.onErrorContainer,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        );
+      },
+    );
   }
 }
