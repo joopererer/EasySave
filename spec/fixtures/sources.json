@@ -14,7 +14,10 @@
   "instagram": {
     "ig_carousel": "https://www.instagram.com/p/Ddl1WWnGyCN/",
     "ig_reel": "https://www.instagram.com/p/DeTOj5WRMIh/",
-    "blocked": "https://www.instagram.com/p/Ddl1WWnGyCN/"
+    "blocked": "https://www.instagram.com/p/Ddl1WWnGyCN/",
+    "ig_og_only_reel": "https://www.instagram.com/reel/DflxolxpdHT/",
+    "ig_og_only_post": "https://www.instagram.com/p/ig_og_only_post/",
+    "ig_login_wall": "https://www.instagram.com/p/ig_login_wall/"
   },
   "x": {
     "photo": "https://x.com/Lucy_love_AI/status/2110916144072913327",

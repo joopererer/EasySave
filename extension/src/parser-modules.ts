@@ -99,6 +99,7 @@ const modules: Record<string, Hooks> = {
       }
       return false;
     },
+    probe: () => null,
     classify: (c) => c.error?.code === 'LOGIN_REQUIRED' && c.loggedIn
       ? failure('PRIVATE_OR_UNAVAILABLE', /敏感内容|年龄限制/.test(c.error.message || '')
         ? c.error.message : '未能读取帖子内容（可能包含受限内容或已被删除）') : c.error,

@@ -101,3 +101,23 @@ void _logHookResult(
     '${fields == null ? '' : ' fields=$fields'}',
   );
 }
+
+/// Fixed vocabulary of the parser's `[IgParse]` diagnostic.
+///
+/// The parser may say where Instagram data came from and how much of it it
+/// got; nothing else is accepted. A page address, query, cookie or account
+/// value can never reach the log, because the whole line must match.
+final RegExp _igParseLinePattern = RegExp(
+  r'^source=(?:api|graphql|embedded_json|og_meta) '
+  r'mediaType=(?:image|video|carousel) '
+  r'items=\d{1,4} loginWall=[01]$',
+);
+
+/// Record one `[IgParse] source=... mediaType=... items=N loginWall=0|1` line.
+void logIgParseDiagnostic(String message) {
+  const prefix = '[IgParse] ';
+  if (!message.startsWith(prefix)) return;
+  final body = message.substring(prefix.length);
+  if (!_igParseLinePattern.hasMatch(body)) return;
+  DevLog.write('IgParse', body); // i18n:ignore 日志
+}
