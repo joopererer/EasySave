@@ -17,6 +17,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../core/dev_log.dart';
 import 'links.dart' show parsePathCategory;
+import 'parse_service.dart' show clearParsedCacheForSite;
 import 'site_registry.dart';
 import 'parser_hooks.dart';
 import 'update_service.dart';
@@ -785,6 +786,7 @@ Future<void> logout(String platform) async {
   } catch (_) {}
   await AccountCache.clear(platform);
   LoginExpiredBus.clear(platform);
+  clearParsedCacheForSite(platform, reason: 'logout');
 }
 
 /// Tracks which platforms failed a parse because their stored session was
@@ -802,6 +804,19 @@ abstract final class LoginExpiredBus {
     }
     if (expired.value.contains(platform)) return;
     expired.value = {...expired.value, platform};
+    // The session that produced the cached answers is gone: a stored parse is a
+    // guess (often the login wall's cover) until the user signs in again.
+    clearParsedCacheForSite(platform, reason: 'session_invalid');
+  }
+
+  /// A session the user just confirmed in a login flow.
+  ///
+  /// Distinct from [clear] (which also runs when an already valid session is
+  /// re-checked): only a real login invalidates the site's parsed cache, because
+  /// only a real login changes what the next parse is allowed to see.
+  static void markLoggedIn(String platform) {
+    clear(platform);
+    clearParsedCacheForSite(platform, reason: 'login');
   }
 
   /// A post may require login on one domain even if another remains signed in.

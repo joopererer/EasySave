@@ -84,6 +84,15 @@ class SharedPreviewCacheTest {
         assertNull(handoff.get("post:0"))
         assertNotNull(handoff.get("post:8"))
     }
+    @Test fun clearingOneSiteDropsOnlyThatSitesPosts() {
+        val handoff = ParsedHandoff { 1L }
+        handoff.put(mapOf("canonical" to "instagram:AbC123", "keys" to listOf("instagram:AbC123"), "site" to "instagram"))
+        handoff.put(mapOf("canonical" to "xhs:abc123", "keys" to listOf("xhs:abc123"), "site" to "xhs"))
+        assertEquals(1, handoff.clear("instagram"))
+        assertEquals("miss", handoff.lookup("instagram:AbC123")["status"])
+        assertEquals("hit", handoff.lookup("xhs:abc123")["status"])
+        assertEquals(0, handoff.clear("instagram"))
+    }
     @Test fun thumbnailsEvictExpireAndRejectPathsOutsideTheCache() {
         val root = Files.createTempDirectory("easysave-synthetic-cache-").toFile()
         var now = 1000L

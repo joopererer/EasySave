@@ -3,7 +3,7 @@
 //
 // Sign-in state is read from the page itself (`__INITIAL_STATE__.user`), the
 // same way XHS_Downloader_Android does it: it is authoritative, instant, and
-// avoids extra network round-trips that used to make "完成" feel broken.
+// avoids extra network round-trips that used to make "??" feel broken.
 //
 // XHS's login page also probes 127.0.0.1 (to detect its desktop client) and
 // redirects there after login. Nothing listens on that port inside the app,
@@ -80,12 +80,12 @@ class _LoginPageState extends State<LoginPage> {
     await showDialog<void>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('请使用邮箱或手机号登录'),
+        title: const Text('???????????'),
         content: Text(googleLoginMessage(widget.platform)),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context),
-            child: const Text('返回登录'),
+            child: const Text('????'),
           ),
         ],
       ),
@@ -129,7 +129,7 @@ class _LoginPageState extends State<LoginPage> {
   }
 
   /// XHS keeps `__INITIAL_STATE__` in sync with the actual session, so we can
-  /// watch it while the user types/logs in: no reload needed, and the "完成"
+  /// watch it while the user types/logs in: no reload needed, and the "??"
   /// button becomes an instant confirmation when a session is already there.
   void _startPolling() {
     if (!_hasAccountHook) return;
@@ -151,7 +151,7 @@ class _LoginPageState extends State<LoginPage> {
       await AccountCache.save(widget.platform, account);
       if (!mounted) return;
       _pollTimer?.cancel();
-      LoginExpiredBus.clear(widget.platform);
+      LoginExpiredBus.markLoggedIn(widget.platform);
       Navigator.of(context).pop(true);
     });
   }
@@ -189,7 +189,7 @@ class _LoginPageState extends State<LoginPage> {
     setState(() => _verifying = false);
 
     if (ok) {
-      LoginExpiredBus.clear(widget.platform);
+      LoginExpiredBus.markLoggedIn(widget.platform);
       Navigator.of(context).pop(true);
       return true;
     }
@@ -197,20 +197,20 @@ class _LoginPageState extends State<LoginPage> {
     final confirmExit = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('未检测到登录状态'),
+        title: const Text('????????'),
         content: Text(
           _hasAccountHook
-              ? '页面还没有显示登录成功。\n\n请输入手机号获取验证码完成登录（可切换密码登录），登录成功后会自动返回。'
-              : '尚未检测到登录信息，确定要退出吗？',
+              ? '????????????\n\n????????????????????????????????????'
+              : '?????????????????',
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(ctx).pop(true),
-            child: const Text('仍要退出'),
+            child: const Text('????'),
           ),
           FilledButton(
             onPressed: () => Navigator.of(ctx).pop(false),
-            child: const Text('继续登录'),
+            child: const Text('????'),
           ),
         ],
       ),
@@ -237,7 +237,7 @@ class _LoginPageState extends State<LoginPage> {
           await checkLogin(widget.platform, webViewController: _controller);
       if (!mounted) return;
       if (ok) {
-        LoginExpiredBus.clear(widget.platform);
+        LoginExpiredBus.markLoggedIn(widget.platform);
         Navigator.of(context).pop(true);
         return;
       }
@@ -245,7 +245,7 @@ class _LoginPageState extends State<LoginPage> {
       _callbackNoticeShown = true;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('页面跳转到本地客户端回调，已自动忽略'),
+          content: Text('??????????????????'),
           duration: Duration(seconds: 3),
         ),
       );
@@ -272,7 +272,7 @@ class _LoginPageState extends State<LoginPage> {
         _selectedEntryUrl == null &&
         widget.windowId == null) {
       return Scaffold(
-        appBar: AppBar(title: const Text('选择登录站点')),
+        appBar: AppBar(title: const Text('??????')),
         body: SingleChildScrollView(
           child: XhsLoginChoices(
             onSelected: (url) => setState(() => _selectedEntryUrl = url),
@@ -286,11 +286,11 @@ class _LoginPageState extends State<LoginPage> {
 
     return Scaffold(
       appBar: AppBar(
-        title: Text('${platformLabel(widget.platform)}登录'),
+        title: Text('${platformLabel(widget.platform)}??'),
         actions: [
           IconButton(
             icon: const Icon(Icons.refresh, color: Colors.white),
-            tooltip: '刷新',
+            tooltip: '??',
             onPressed: _reload,
           ),
           TextButton(
@@ -304,7 +304,7 @@ class _LoginPageState extends State<LoginPage> {
                       color: Colors.white,
                     ),
                   )
-                : const Text('完成', style: TextStyle(color: Colors.white)),
+                : const Text('??', style: TextStyle(color: Colors.white)),
           ),
         ],
       ),
@@ -319,7 +319,7 @@ class _LoginPageState extends State<LoginPage> {
                       xhsDomain(Uri.parse(_entryUrl).host) == 'xiaohongshu.com'
                   ? xhsQrLoginHint
                   : _auth['loginHint'] as String? ??
-                        '请在此页面完成登录，成功后点右上角“完成”。登录状态保存在本机，重启 App 依然有效。',
+                        '?????????????????????????????????? App ?????',
               style: TextStyle(fontSize: 12, color: bannerText, height: 1.5),
             ),
           ),
@@ -442,7 +442,7 @@ class _LoginPageState extends State<LoginPage> {
                     if (request.isForMainFrame != true || !mounted) return;
                     setState(() {
                       _httpFailure = true;
-                      _loadError = '登录页面请求失败（HTTP ${response.statusCode}）';
+                      _loadError = '?????????HTTP ${response.statusCode}?';
                     });
                   },
                   onLoadStop: (controller, url) {
@@ -480,7 +480,7 @@ class _LoginPageState extends State<LoginPage> {
                             CircularProgressIndicator(strokeWidth: 2),
                             SizedBox(height: 12),
                             Text(
-                              '正在加载登录页面…',
+                              '?????????',
                               style: TextStyle(
                                 fontSize: 12,
                                 color: Colors.black54,
@@ -515,7 +515,7 @@ class _LoginPageState extends State<LoginPage> {
               const Icon(Icons.wifi_off, size: 40, color: Colors.grey),
               const SizedBox(height: 16),
               Text(
-                isDns ? '无法解析${platformLabel(widget.platform)}域名' : '登录页面加载失败',
+                isDns ? '????${platformLabel(widget.platform)}??' : '????????',
                 style: const TextStyle(
                   fontSize: 16,
                   fontWeight: FontWeight.w600,
@@ -524,13 +524,13 @@ class _LoginPageState extends State<LoginPage> {
               const SizedBox(height: 8),
               Text(
                 isDns
-                    ? '当前网络无法解析 ${Uri.parse(_entryUrl).host}。\n请切换网络/开启代理后重试。'
+                    ? '???????? ${Uri.parse(_entryUrl).host}?\n?????/????????'
                     : detail,
                 textAlign: TextAlign.center,
                 style: const TextStyle(fontSize: 12, color: Colors.grey),
               ),
               const SizedBox(height: 20),
-              FilledButton(onPressed: _reload, child: const Text('重试')),
+              FilledButton(onPressed: _reload, child: const Text('??')),
             ],
           ),
         ),

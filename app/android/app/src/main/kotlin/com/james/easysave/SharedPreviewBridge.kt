@@ -39,6 +39,12 @@ internal class ParsedHandoff(private val now: () -> Long = System::currentTimeMi
         }
         return mapOf("status" to "hit", "value" to record.second)
     }
+    /** Drop one site's posts: its login state changed, so every answer is stale. */
+    @Synchronized fun clear(site: String): Int {
+        val before = values.size
+        values.removeAll { (_, value) -> value["site"] == site }
+        return before - values.size
+    }
     private fun prune() { values.removeAll { it.first <= now() } }
 }
 
@@ -208,6 +214,7 @@ internal object SharedPreviewBridge {
                     "putParsed" -> { posts.put(args); result.success(null) }
                     "getParsed" -> result.success(posts.get(args["key"] as String))
                     "lookupParsed" -> result.success(posts.lookup(args["key"] as String))
+                    "clearParsed" -> result.success(posts.clear(args["site"] as String))
                     "thumbnailVisibleBegin" -> {
                         visible.begin(args["key"] as String, messenger)
                         result.success(null)

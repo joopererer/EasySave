@@ -305,7 +305,7 @@ class _MinePageState extends State<MinePage> with WidgetsBindingObserver {
         : status == SessionStatus.valid;
     if (!mounted) return;
     if (loggedIn) {
-      LoginExpiredBus.clear(platform);
+      LoginExpiredBus.markLoggedIn(platform);
     } else if (platform != 'xhs') {
       LoginExpiredBus.markExpired(platform);
     }
