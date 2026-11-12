@@ -33,7 +33,9 @@ object FixedRebuildAccess {
     }
     fun mime(name: String): String? = when (name.substringAfterLast('.', "").lowercase()) {
         "jpg", "jpeg" -> "image/jpeg"; "png" -> "image/png"; "webp" -> "image/webp"
-        "heic" -> "image/heic"; "avif" -> "image/avif"; "mp4" -> "video/mp4"; "mov" -> "video/quicktime"
+        "gif" -> "image/gif"
+        "heic" -> "image/heic"; "heif" -> "image/heif"; "avif" -> "image/avif"
+        "mp4" -> "video/mp4"; "mov" -> "video/quicktime"
         else -> null
     }
     fun mediaUri(context: Context, name: String): Uri {

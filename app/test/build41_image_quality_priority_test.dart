@@ -104,6 +104,7 @@ void main() {
 
   tearDown(() async {
     debugPrint = debugPrintThrottled;
+    resetRetryBackoffForTesting = kResetRetryBackoff;
     manager
       ..enqueueForTesting = null
       ..mediaContentTypeForTesting = null
@@ -270,8 +271,10 @@ void main() {
           TaskException('Connection reset by peer'),
         );
 
-    test('original candidates rotate on transfer failure; the same candidate '
-        'is never retried; a preview is only the last candidate', () async {
+    test('reset or timeout retries the same candidate once after a short '
+        'backoff, then moves on; every other failure rotates at once', ()
+        async {
+      resetRetryBackoffForTesting = Duration.zero;
       final job = _job(
         urls: [_cjpeg, _cImgHeic, _cImgJpg, _cWebp],
         isImage: true,
@@ -279,38 +282,85 @@ void main() {
       manager.setBatchForTesting(_batch([job]));
       manager.enqueueForTesting = (_, j) async => j.attempts++;
 
-      final seen = <String>[];
-      for (var attempt = 1; attempt <= 4; attempt++) {
-        final logBefore = logs.length;
-        await manager.taskFailureForTesting(
-          _batch([job]),
-          job,
-          failureFor(job.urls[attempt - 1], attempt),
-        );
-        seen.add(candidateLabelOf(job.urls[attempt - 1]));
-        // No raw URL, host or query may leak into the log; host class and
-        // cause are fixed tokens instead.
-        final line = logs.sublist(logBefore).join('\n');
-        expect(line, contains('host_class='));
-        expect(line, contains('cause=reset'));
-        expect(line, isNot(contains('http')));
-        expect(line, isNot(contains('sign')));
-        expect(line, isNot(contains('xiaohongshu')));
-      }
+      // ci:jpg is reset: the same candidate is retried once after backoff.
+      final first = DownloadManager.candidateUrlOf(job)!;
+      await manager.taskFailureForTesting(
+        _batch([job]), job,
+        failureFor(first, 1),
+      );
+      expect(DownloadManager.candidateUrlOf(job), first,
+          reason: 'backoff retry keeps the same candidate');
+      final log1 = logs.join('\n');
+      expect(log1, contains('cause=reset'));
+      expect(log1, contains('retry=backoff'));
+      expect(log1, isNot(contains('http')));
 
-      expect(seen, ['ci:jpg', 'img:heic', 'img:jpg', 'webpic']);
+      // A second reset on the same candidate retires it: move to img:heic.
+      await manager.taskFailureForTesting(
+        _batch([job]), job,
+        failureFor(first, 2),
+      );
+      expect(DownloadManager.candidateUrlOf(job), _cImgHeic);
+
+      // A non-transient failure rotates immediately, no backoff.
+      await manager.taskFailureForTesting(
+        _batch([job]), job,
+        TaskStatusUpdate(
+          DownloadTask(taskId: 'job-1-try3', url: _cImgHeic, filename: 'x.jpg'),
+          TaskStatus.failed,
+          TaskException('boom'),
+        ),
+      );
+      expect(DownloadManager.candidateUrlOf(job), _cImgJpg);
+
+      // img:jpg is reset: backoff keeps it, then retires it to webpic.
+      await manager.taskFailureForTesting(
+        _batch([job]), job,
+        failureFor(_cImgJpg, 4),
+      );
+      expect(DownloadManager.candidateUrlOf(job), _cImgJpg);
+      await manager.taskFailureForTesting(
+        _batch([job]), job,
+        failureFor(_cImgJpg, 5),
+      );
+      expect(DownloadManager.candidateUrlOf(job), _cWebp);
+
+      // webpic uses its retry too, then the ladder ends: no wrap-around to
+      // ci:jpg, the item fails with readable per-item text.
+      await manager.taskFailureForTesting(
+        _batch([job]), job,
+        failureFor(_cWebp, 6),
+      );
+      expect(DownloadManager.candidateUrlOf(job), _cWebp);
+      await manager.taskFailureForTesting(
+        _batch([job]), job,
+        failureFor(_cWebp, 7),
+      );
+
       expect(job.state, JobState.failed);
       expect(job.error, '第1项图片下载失败');
       expect(job.error, isNot(contains('TaskConnectionException')));
       expect(job.error, isNot(contains('reset')));
+
+      // Every attempt logged one line; no URL, host, query or token leaked.
+      final failureLines = logs.where((line) => line.contains('result=transfer_failed')).toList();
+      expect(failureLines, hasLength(7), reason: 'one line per attempt');
+      for (final line in failureLines) {
+        expect(line, isNot(contains('http')));
+        expect(line, isNot(contains('sign')));
+        expect(line, isNot(contains('xiaohongshu')));
+        expect(line, contains('host_class='));
+        expect(line, contains('cause='));
+      }
     });
 
-    test('retry cap lets a still try every stored candidate', () {
+    test('retry cap: one attempt per stored candidate, plus one backoff '
+        'retry each', () {
       final job = _job(
         urls: [_cjpeg, _cImgHeic, _cImgJpg, _cWebp],
         isImage: true,
       );
-      expect(retryCapFor(_batch([job]), job), 4);
+      expect(retryCapFor(_batch([job]), job), 8);
 
       // A video keeps the site rule (max 3 attempts per file).
       final videoJob = _job(
@@ -329,7 +379,8 @@ void main() {
         urls: [_cjpeg, _cImgHeic, _cImgJpg, _cWebp],
         isImage: true,
         attempts: 4,
-      );
+      )
+        ..candidateIndex = 3;
       manager.setBatchForTesting(_batch([job]));
       final file = await File('${Directory.systemTemp.path}/preview.webp')
           .create(recursive: false)

@@ -346,5 +346,14 @@ void main() {
       );
       expect(record.fileCount, 2, reason: 'physical rows stay 2');
     });
+
+    test('pairing key ignores the container extension', () {
+      final still = _row('${_postId}_1.heic', itemIndex: 1, isImage: true);
+      final legacyJpg = _row('${_postId}_1.jpg', itemIndex: 1, isImage: true);
+      expect(pairingKeyOf(still), pairingKeyOf(legacyJpg));
+      expect(pairingKeyOf(still), 'n1');
+      final clip = _row('${_postId}_1.mp4', itemIndex: 1, isImage: false);
+      expect(pairingKeyOf(clip), 'n1');
+    });
   });
 }

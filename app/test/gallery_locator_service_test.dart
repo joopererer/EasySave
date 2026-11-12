@@ -7,6 +7,7 @@ import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 import 'package:easysave/core/models.dart';
 import 'package:easysave/services/gallery_locator_service.dart';
 import 'package:easysave/services/history_db.dart';
+import 'package:photo_manager/photo_manager.dart';
 
 void main() {
   late String dbPath;
@@ -65,5 +66,21 @@ void main() {
       await GalleryLocatorService.instance.isPresent('missing-media-id'),
       isFalse,
     );
+  });
+
+  test('asset lookup by base name matches any container extension', () async {
+    GalleryLocatorService.instance.setScannedForTesting(
+      scanned: true,
+      permission: PermissionState.authorized,
+      assets: <AssetEntity>[
+        AssetEntity(id: 'media-a', typeInt: 1, width: 1, height: 1, title: 'post_1.jpg'),
+        AssetEntity(id: 'media-b', typeInt: 2, width: 1, height: 1, title: 'post_2.mp4'),
+      ],
+    );
+    // An album file kept its old .jpg name; the new run plans _1.heic. Both
+    // resolve to the same base name, so the idempotency guard sees one item.
+    expect(GalleryLocatorService.instance.assetByBaseName('post_1')!.id, 'media-a');
+    expect(GalleryLocatorService.instance.assetByBaseName('post_2')!.id, 'media-b');
+    expect(GalleryLocatorService.instance.assetByBaseName('post_3'), isNull);
   });
 }

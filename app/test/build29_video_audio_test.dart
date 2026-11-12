@@ -92,11 +92,23 @@ void main() {
     test('the last candidate, images and Live Photo clips are kept', () async {
       Future<bool?> silent(String _) async => false;
       expect(
-        await shouldRetryForMissingAudio(_videoJob()..attempts = 2, 'x', probe: silent),
+        await shouldRetryForMissingAudio(
+          _videoJob()
+            ..attempts = 2
+            ..candidateIndex = 1,
+          'x',
+          probe: silent,
+        ),
         isFalse,
       );
       expect(
-        await shouldRetryForMissingAudio(_videoJob(urls: 1)..attempts = 1, 'x', probe: silent),
+        await shouldRetryForMissingAudio(
+          _videoJob(urls: 1)
+            ..attempts = 1
+            ..candidateIndex = 0,
+          'x',
+          probe: silent,
+        ),
         isFalse,
       );
       expect(

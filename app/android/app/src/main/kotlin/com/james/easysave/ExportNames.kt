@@ -2,7 +2,10 @@ package com.james.easysave
 
 object ExportNames {
     private const val ID = "[A-Za-z0-9_-]+"
-    private const val EXT = "jpg|jpeg|png|webp|mp4|mov"
+    // Every container the download pipeline can hand to the album. A still
+    // keeps its own format when provenance cannot be embedded into it (HEIC /
+    // HEIF / AVIF / GIF), so these extensions are as valid as jpg/png/webp.
+    private const val EXT = "jpg|jpeg|png|webp|gif|heic|heif|avif|mp4|mov"
     private const val UUID = "[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
     private val clean = Regex("^($ID)_([1-9][0-9]*)\\.($EXT)$")
     private val legacy = Regex("^($ID)_([1-9][0-9]*)_($UUID)\\.($EXT)$")

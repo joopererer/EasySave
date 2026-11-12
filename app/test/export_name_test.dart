@@ -90,4 +90,54 @@ void main() {
       );
     },
   );
+
+  // A still kept in its own container: the album row must carry the extension
+  // and MIME of the bytes, never the `.jpg` the download plan guessed from the
+  // URL. The log line used to print the plan name, which read like a `.jpg`
+  // had been written; these assert what actually reaches the writer.
+  for (final still in [
+    (
+      ext: 'heic',
+      mime: 'image/heic',
+      path: 'android/app/src/test/resources/fixtures/xhs_live_still.heic',
+    ),
+    (
+      ext: 'webp',
+      mime: 'image/webp',
+      path: '../docs/provenance-spec/test-vectors/x-single.webp',
+    ),
+  ]) {
+    test(
+      'a ${still.ext} still is named and typed from its own header bytes',
+      () async {
+        final source =
+            await File(still.path).copy('${dir.path}/batch-$uuid.${still.ext}');
+        final type = await exportTypeFor(source.path);
+        expect(type.extension, still.ext);
+        expect(exportMime(type), still.mime);
+
+        final wanted = await exportNameFor(source.path, id, 1);
+        expect(wanted, '${id}_1.${still.ext}');
+
+        messenger.setMockMethodCallHandler(channel, (call) async {
+          expect(call.method, 'saveMedia');
+          expect(call.arguments['filename'], '${id}_1.${still.ext}');
+          expect(call.arguments['mime'], still.mime);
+          return {
+            'mediaId': '1',
+            'title': wanted,
+            'relativePath': 'Pictures/EasySave/',
+          };
+        });
+        final saved = await saveToGallery(
+          source.path,
+          true,
+          'EasySave',
+          finalName: wanted,
+          nativeAndroid: true,
+        );
+        expect(saved.title, '${id}_1.${still.ext}');
+      },
+    );
+  }
 }
