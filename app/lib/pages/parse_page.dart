@@ -21,6 +21,7 @@ import '../services/gallery_locator_service.dart';
 import '../services/history_db.dart';
 import '../services/host_bridge.dart';
 import '../services/links.dart';
+import '../services/live_pairs.dart';
 import '../services/preview_open_guard.dart';
 import '../services/preview_route_observer.dart';
 import '../services/parse_service.dart';
@@ -993,7 +994,8 @@ class ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
                       overflow: TextOverflow.ellipsis,
                     ),
                     subtitle: Text(
-                      '${record.authorName ?? ''} · ${record.savedFiles.length} 个文件',
+                      '${record.authorName ?? ''} · '
+                      '${savedMediaEntryCount(record.savedFiles)} 个文件',
                     ),
                     trailing: _openingRecordId == (record.id ?? -1)
                         ? const SizedBox(
@@ -1141,55 +1143,12 @@ class ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
       final post = PreviewPage.postFromRecord(record);
       final locator = GalleryLocatorService.instance;
 
-      final files = [...record.files]
-        ..sort((a, b) => a.itemIndex.compareTo(b.itemIndex));
-      final items = <GalleryBrowserItem>[];
-
-      if (files.isNotEmpty) {
-        final is1Based = files.every((f) => f.itemIndex > 0);
-        for (final f in files) {
-          final zeroBasedIdx = is1Based ? f.itemIndex - 1 : f.itemIndex;
-          MediaItem? postItem;
-          if (zeroBasedIdx >= 0 && zeroBasedIdx < post.items.length) {
-            postItem = post.items[zeroBasedIdx];
-          } else if (f.itemIndex >= 0 && f.itemIndex < post.items.length) {
-            postItem = post.items[f.itemIndex];
-          }
-
-          AssetEntity? asset =
-              locator.getAssetById(f.mediaId) ??
-              locator.locateAsset(f, record.postId);
-          if (asset == null && locator.hasAccess) {
-            asset = await locator.locateAssetAsync(
-              f,
-              record.postId,
-              platform: record.platform,
-            );
-          }
-
-          final status = (asset != null)
-              ? FileStatus.found
-              : (locator.scanned ? f.status : FileStatus.unknown);
-
-          items.add(
-            GalleryBrowserItem(
-              index: zeroBasedIdx,
-              cachePostId: record.postId,
-              type: postItem?.type ?? (f.isImage ? 'image' : 'video'),
-              url: postItem?.url ?? '',
-              videoUrl: postItem?.videoUrl,
-              posterUrl: postItem?.posterUrl,
-              thumbnailUrl: postItem?.thumbnailUrl,
-              fallbacks: postItem?.fallbacks ?? const [],
-              requestResources: postItem?.requestResources,
-              isGif: postItem?.isGif ?? false,
-              asset: asset,
-              status: status,
-              filename: f.filename,
-            ),
-          );
-        }
-      }
+      final built = await savedBrowserItems(
+        record: record,
+        files: record.files,
+        post: post,
+      );
+      final items = built.items;
 
       if (items.isEmpty && post.items.isNotEmpty) {
         for (var i = 0; i < post.items.length; i++) {

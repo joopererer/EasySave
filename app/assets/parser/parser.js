@@ -269,6 +269,27 @@ var EasySaveParser = (() => {
     const namedCodec = typeof codec === "string" && codec.trim() !== "" && !/^(?:none|null|unknown|0)$/i.test(codec.trim());
     return namedCodec || (channels ?? 0) > 0 || (bitrate ?? 0) > 0 ? "yes" : "no";
   }
+  function xhsMediaKindOf(url) {
+    let parsed;
+    try {
+      parsed = new URL(toHttps(url));
+    } catch {
+      return void 0;
+    }
+    const host = parsed.hostname.toLowerCase();
+    const path = parsed.pathname.toLowerCase();
+    if (path.includes("/stream/") || /\.(?:mp4|mov|m4v|webm)$/.test(path)) return "video";
+    if (/^sns-video-/.test(host)) return "video";
+    if (/\.(?:jpe?g|png|webp|gif|heic|heif|avif)$/.test(path)) return "image";
+    if (/^sns-(?:img|webpic)-/.test(host) || host === "ci.xiaohongshu.com") return "image";
+    return void 0;
+  }
+  function isImageUrl(url) {
+    return xhsMediaKindOf(url) === "image";
+  }
+  function isVideoUrl(url) {
+    return xhsMediaKindOf(url) === "video";
+  }
   function candidateFromEntry(entry) {
     const type = entry["streamType"] ?? entry["stream_type"];
     const desc = entry["streamDesc"] ?? entry["stream_desc"];
@@ -278,7 +299,7 @@ var EasySaveParser = (() => {
       entry["master_url"],
       ...Array.isArray(entry["backupUrls"]) ? entry["backupUrls"] : Array.isArray(entry["backup_urls"]) ? entry["backup_urls"] : [],
       entry["url"]
-    ].filter(nonBlank);
+    ].filter((u) => nonBlank(u) && !isImageUrl(u));
     if (urls2.length === 0) return void 0;
     const width = typeof entry["width"] === "number" ? entry["width"] : 0;
     const height = typeof entry["height"] === "number" ? entry["height"] : 0;
@@ -304,7 +325,10 @@ var EasySaveParser = (() => {
   function originVideoUrl(video) {
     const key = (isRecord(video["consumer"]) ? pickString(video["consumer"], ["originVideoKey"]) : void 0) ?? pickString(video, ["originVideoKey"]);
     if (!key) return void 0;
-    if (/^https?:\/\//i.test(key)) return toHttps(key);
+    if (/^https?:\/\//i.test(key)) {
+      const url = toHttps(key);
+      return isImageUrl(url) ? void 0 : url;
+    }
     return `https://sns-video-bd.xhscdn.com/${key.replace(/^\/+/, "")}`;
   }
   function videoStreamEntries(video) {
@@ -407,12 +431,15 @@ var EasySaveParser = (() => {
         ...sceneRaws(entry),
         ...direct2 ? [toHttps(direct2)] : [],
         `https://ci.xiaohongshu.com/${token}`
-      ].filter((u) => u && u !== primary);
+      ].filter((u) => u && u !== primary && !isVideoUrl(u));
       return { url: primary, fallbacks: [...new Set(rest)] };
     }
     const direct = pickString(entry, ["urlDefault", "url"]);
     if (direct) {
-      return { url: transformImageUrl(direct), fallbacks: [toHttps(direct)] };
+      const primary = transformImageUrl(direct);
+      if (!isVideoUrl(primary)) {
+        return { url: primary, fallbacks: [toHttps(direct)].filter((u) => u !== primary && !isVideoUrl(u)) };
+      }
     }
     const traceId = pickString(entry, ["traceId"]);
     if (traceId) return { url: `https://sns-img-qc.xhscdn.com/${traceId}`, fallbacks: [] };
@@ -609,7 +636,8 @@ var EasySaveParser = (() => {
         const img = imageUrlOf(entry);
         const livePhoto = entry["livePhoto"];
         const entryKey = pickString(entry, ["originVideoKey"]) ?? (isRecord(livePhoto) ? pickString(livePhoto, ["originVideoKey"]) : void 0);
-        const entryKeyUrl = entryKey ? /^https?:\/\//i.test(entryKey) ? toHttps(entryKey) : `https://sns-video-bd.xhscdn.com/${entryKey.replace(/^\/+/, "")}` : void 0;
+        const entryKeyUrlRaw = entryKey ? /^https?:\/\//i.test(entryKey) ? toHttps(entryKey) : `https://sns-video-bd.xhscdn.com/${entryKey.replace(/^\/+/, "")}` : void 0;
+        const entryKeyUrl = entryKeyUrlRaw && !isImageUrl(entryKeyUrlRaw) ? entryKeyUrlRaw : void 0;
         const ownCandidates = [
           ...collectStreamCandidates(entry["stream"]),
           ...isRecord(livePhoto) && livePhoto["stream"] !== void 0 ? collectStreamCandidates(livePhoto["stream"]) : []
@@ -720,7 +748,7 @@ var EasySaveParser = (() => {
   };
   function xhsImageDownloadOrder(url, fallbacks = []) {
     const unique = [...new Set([url, ...fallbacks].filter((u) => typeof u === "string" && u.length > 0))];
-    return unique.map((u, index) => ({ u, index, variant: xhsImageVariant(u) })).filter((c) => c.variant !== "preview").sort((a, b) => VARIANT_RANK[a.variant] - VARIANT_RANK[b.variant] || a.index - b.index).map((c) => c.u);
+    return unique.map((u, index) => ({ u, index, variant: xhsImageVariant(u) })).filter((c) => c.variant !== "preview" && !isVideoUrl(c.u)).sort((a, b) => VARIANT_RANK[a.variant] - VARIANT_RANK[b.variant] || a.index - b.index).map((c) => c.u);
   }
   var IMAGE_FIELDS = ["urlDefault", "urlPre", "url", "infoList", "traceId", "fileId", "livePhoto", "stream"];
   function xhsImageProbe(note) {

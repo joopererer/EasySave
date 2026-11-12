@@ -11,7 +11,6 @@ import 'package:photo_manager/photo_manager.dart';
 
 import '../core/models.dart';
 import 'media_header_service.dart';
-import '../metadata/metadata_service.dart';
 import 'export_names.dart';
 
 /// Import a finished temp download into the album, then delete the temp file.
@@ -33,7 +32,9 @@ Future<({String? mediaId, String? title, String? relativePath})> saveToGallery(
   File? exportCopy;
   try {
     if (nativeAndroid ?? Platform.isAndroid) {
-      final mime = exportMime(await MetadataService.detectFormat(path));
+      // The MIME type must follow the bytes: an ISO-BMFF still (HEIC) is an
+      // image even though it shares the MP4 box layout.
+      final mime = exportMime(await exportTypeFor(path));
       final result = await const MethodChannel('easysave/provenance_pair')
           .invokeMapMethod<String, String>('saveMedia', {
             'path': path,

@@ -63,7 +63,8 @@ void main() {
 
   testWidgets('shows gentle hint on first batch success when folder backup is off', (tester) async {
     final settings = await AppSettings.load();
-    settings.backupTreeUri = null;
+    // Only an explicit clear forgets the folder (a plain save keeps it).
+    await settings.clearBackupFolder();
     settings.autoFolderBackupEnabled = false;
     settings.backupFolderHintDismissed = false;
     await settings.save();
@@ -96,7 +97,8 @@ void main() {
 
   testWidgets('throttled to at most once per session', (tester) async {
     final settings = await AppSettings.load();
-    settings.backupTreeUri = null;
+    // Only an explicit clear forgets the folder (a plain save keeps it).
+    await settings.clearBackupFolder();
     settings.autoFolderBackupEnabled = false;
     settings.backupFolderHintDismissed = false;
     await settings.save();

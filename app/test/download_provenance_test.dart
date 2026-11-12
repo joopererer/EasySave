@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:typed_data';
 import 'package:easysave/metadata/metadata_service.dart';
 import 'package:easysave/services/download_manager.dart';
 import 'package:easysave/services/download_provenance.dart';
@@ -52,6 +53,31 @@ void main() {
     final file = await File('${directory.path}/photo.avif').writeAsString('unsupported test container');
     await expectLater(prepareDownloadProvenance(file.path, provenance),
       throwsA(isA<StateError>().having((e) => e.message, 'message', '该格式无法写入来源信息')));
+  });
+
+  test('a HEIC still is never given an MP4 XMP box', () async {
+    // A Xiaohongshu Live photo still: HEIC brand, top-level meta and mdat.
+    Uint8List box(String type, List<int> body) {
+      final size = 8 + body.length;
+      return Uint8List.fromList([
+        (size >> 24) & 0xff, (size >> 16) & 0xff, (size >> 8) & 0xff, size & 0xff,
+        ...type.codeUnits, ...body,
+      ]);
+    }
+
+    Uint8List fourCc(String type) => Uint8List.fromList(type.codeUnits);
+    final bytes = Uint8List.fromList([
+      ...box('ftyp', [...fourCc('heic'), 0, 0, 0, 0, ...fourCc('mif1'), ...fourCc('heic')]),
+      ...box('meta', List.filled(40, 0)),
+      ...box('mdat', List.filled(64, 3)),
+    ]);
+    final file = await File('${directory.path}/still.heic').writeAsBytes(bytes);
+    await expectLater(prepareDownloadProvenance(file.path, provenance),
+      throwsA(isA<StateError>().having((e) => e.message, 'message', '该格式无法写入来源信息')));
+    expect(await file.readAsBytes(), bytes, reason: 'the still must stay byte-identical');
+    for (final chunk in ['uuid', 'XMP']) {
+      expect(String.fromCharCodes(bytes).contains(chunk), isFalse);
+    }
   });
 
   test('write success without persisted metadata fails verification', () async {

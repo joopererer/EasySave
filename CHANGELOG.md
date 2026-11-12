@@ -7,6 +7,30 @@ This file documents notable user-facing changes following [Keep a Changelog](htt
 
 ## [Unreleased]
 
+## [1.10.1] - 2026-11-11
+
+### 修复 / Fixed
+
+- 修复小红书 Live 图的动态部分被存成无法播放的 .mp4（实际是 HEIC 图片）的问题：动态视频只使用视频地址，下载完成后按文件头确认实际类型，与预期不符的文件会被丢弃并换用下一个候选，扩展名与 MIME 类型按实际内容写入，图片不再被追加 MP4 的来源信息。
+  Fixed Xiaohongshu Live photos saving the dynamic portion as an unplayable .mp4 (it is actually a HEIC image): the motion part now uses video URLs only, the downloaded file's real type is confirmed from its header, a file that does not match is discarded in favour of the next candidate, the extension and MIME type follow the actual content, and images no longer receive MP4 provenance.
+- 修复 Live 图被当成两个文件的问题：图片与动态视频在下载写入历史时就带上配对标识，帖子卡片、首页“最近保存”和全屏查看器统一按同一规则配对，一对 Live 图计为 1 个条目、显示为 1 张（LIVE 标记，长按播放）。
+  Fixed Live photos being shown as two files: the still and the motion clip now carry their pairing identity as soon as the download writes history, and the post card, the home "recently saved" list and the fullscreen viewer all pair with one shared rule, so a Live photo counts as one entry, shown as one still with the LIVE badge and long-press playback.
+- 修复混合帖中实况静态图下载失败的问题：静态图取到 HEIC / AVIF 时不再被当作失败，按原格式保存并跳过来源信息，仍与动态视频配对；图片任务收到视频文件时改判该候选不合格并换下一个候选，而不是报“不支持的格式”。失败提示改为逐条可读文案（如“第3项实况的静态图保存失败”），通知、历史卡片和下载队列中不再出现原始异常（包括“Bad state: …”）。
+  Fixed Live stills failing to download in mixed posts: a still that arrives as HEIC / AVIF is no longer treated as a failure — it is saved in its own format with provenance skipped and still pairs with its motion clip, and an image job that receives a movie now rejects that candidate in favour of the next one instead of reporting an unsupported format. Failures are reported as readable per-item text (e.g. "第3项实况的静态图保存失败") instead of raw exceptions (including "Bad state: …") in notifications, history cards and the download queue.
+- 修复覆盖安装后自动备份设置丢失的问题：保存设置时不再移除备份文件夹，也不会用尚未加载完成的默认值把自动备份关掉；文件夹授权确实失效时保留开关与文件夹名，设置页与首页提示“备份文件夹授权已失效，点此重新授权”，重新授权仍打开原来那个文件夹，只有系统确认持久授权已消失才判定文件夹丢失。
+  Fixed auto-backup settings being lost after a covered install: saving settings no longer drops the backup folder or switches auto-backup off from a snapshot that had not finished loading, and when the folder grant really is gone the switch and folder name are kept while the settings page and the home page show "备份文件夹授权已失效，点此重新授权" (backup folder permission expired, tap to re-authorize), re-authorizing the same directory; a lost folder is only declared once the system confirms the persisted grant is gone.
+- 修复图片与 Live 静态图取到低清预览图的问题：画质优先，原图地址（ci / img / ci:jpg）按顺序尝试，HEIC / AVIF 原图按原格式保存（不写入来源信息，仍与动态视频配对），只有全部原图地址都失败时才使用预览图并标记“非原图”。
+  Fixed stills (including a Live photo's still) being saved from a low-resolution preview: quality now comes first, original candidates (ci / img / ci:jpg) are tried in order, a HEIC / AVIF original is saved in its own format (without embedded provenance and still paired with its motion clip), and a preview is only used once every original candidate failed, keeping the "非原图" mark.
+- 改进候选地址失败后的快速切换：一个候选失败后立刻换下一个，同一候选不会重复请求，每个候选只尝试一次（仍受全局尝试次数上限约束），失败项不再拖住其他项的下载。
+  Improved fast failover when a candidate address fails: a failed candidate immediately moves on to the next one, the same candidate is never requested again, each candidate is tried once (still bounded by the overall attempt cap), and one failing item no longer holds up the others.
+- 下载日志补充候选地址的主机类别（站点媒体 / CDN / 其他）与连接失败原因，不记录网址、主机名或查询参数。
+  The download log now records the candidate host class (site media / CDN / other) and the connection failure cause, without writing the URL, host name or query string.
+
+### 已有错误文件的处理 / Files already saved wrongly
+
+- 本版本不会自动处理已经保存的错误文件，请在相册中手动删除。识别方法：文件名以 `.mp4` 结尾、在相册中显示为 0 秒、点开后无法播放。删除后重新下载该帖子即可得到正常的 Live 图与动态部分。
+  This version does not touch files that are already saved; please delete them in your gallery yourself. How to recognise them: the name ends in `.mp4`, the gallery shows a 0-second video, and it does not play. Downloading the post again afterwards gives a correct Live photo and motion part.
+
 ## [1.10.0] - 2026-11-11
 
 ### 新增 / Added
@@ -52,8 +76,8 @@ This file documents notable user-facing changes following [Keep a Changelog](htt
 
 ### 已知问题 / Known issues
 
-- 下载带 Live 图的小红书帖子时，动态部分可能被存成无法播放的 .mp4（实际是 HEIC 图片），将在 v1.10.1 修复。
-  Posts with Live images downloaded from Xiaohongshu may save the dynamic portion as an unplayable .mp4 (it is actually a HEIC image); fixed in v1.10.1.
+- 下载带 Live 图的小红书帖子时，动态部分可能被存成无法播放的 .mp4（实际是 HEIC 图片）；已在 1.10.1 修复。
+  Posts with Live images downloaded from Xiaohongshu may save the dynamic portion as an unplayable .mp4 (it is actually a HEIC image); fixed in 1.10.1.
 
 ### 签名密钥变更 / Signing key change
 

@@ -512,9 +512,11 @@ Future<void> _awaitBatchAndNotify(
     failed = batch.jobs.where((j) => j.state == JobState.failed).length;
     final secs = DateTime.now().difference(started).inSeconds;
     if (failed > 0) {
-      final firstError =
-          batch.jobs.firstWhere((j) => j.state == JobState.failed).error ??
-          '下载失败';
+      final firstFailed = batch.jobs.firstWhere((j) => j.state == JobState.failed);
+      // Never the raw exception ("Bad state: …") in a notification: the
+      // download manager already stores a per-item sentence, and history uses
+      // shortFailureReason() for the same reason.
+      final firstError = userFacingFailureReason(firstFailed);
       await _log(
         channel,
         'DOWNLOAD failed: $ok/$total ok, $failed failed, ${secs}s',
