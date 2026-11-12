@@ -24,6 +24,14 @@ void main() {
   const script = '// signed v2 parser';
   final scriptBytes = utf8.encode(script);
   final repo = Directory.current.path.endsWith('app') ? '..' : '.';
+  // Startup always keeps the higher `manifestVersion`, so a release installed by
+  // these tests must sit above the APK's own one; otherwise the next start
+  // (correctly) replaces it with the bundled parser.
+  final builtinVersion =
+      (jsonDecode(File('assets/parser/builtin-manifest.json').readAsStringSync())
+              as Map)['manifestVersion']
+          as int;
+  int above(int steps) => builtinVersion + steps;
   Map<String, dynamic> payload(int version) {
     final example =
         jsonDecode(
@@ -136,7 +144,7 @@ void main() {
     publicKey = UpdateVerifier.bytesToHex((await key.extractPublicKey()).bytes);
     expect(publicKey, isNot(kDefaultParserPublicKeyHex));
     requests = 0;
-    remote = await sign(payload(1));
+    remote = await sign(payload(above(1)));
     await prepare();
   });
   tearDown(() => directory.deleteSync(recursive: true));
@@ -151,7 +159,7 @@ void main() {
   test(
     'valid original payload bytes and parser are cached unchanged and reverified',
     () async {
-      remote = await sign(payload(1), pretty: true);
+      remote = await sign(payload(above(1)), pretty: true);
       expect(await manager.checkForUpdates(force: true), isTrue);
       expect(manager.activeVersion, '1.5.0');
       final cached = releaseFile(state()['current'] as String, 'manifest.json');
@@ -193,9 +201,9 @@ void main() {
     },
   );
   test('hash mismatch keeps current bundle and watermark', () async {
-    await install(3);
+    await install(above(3));
     final before = File('${directory.path}/state.json').readAsStringSync();
-    final broken = payload(4)..['sha256'] = List.filled(64, '0').join();
+    final broken = payload(above(4))..['sha256'] = List.filled(64, '0').join();
     remote = await sign(broken);
     expect(await manager.checkForUpdates(force: true), isFalse);
     expect(File('${directory.path}/state.json').readAsStringSync(), before);
@@ -278,18 +286,18 @@ void main() {
   test(
     'cache parser corruption falls back to previous verified version without reducing watermark',
     () async {
-      await install(1);
-      await install(2);
+      await install(above(1));
+      await install(above(2));
       releaseFile(
         state()['current'] as String,
         'parser.js',
       ).writeAsStringSync('corrupt');
       await prepare(foreground: false);
       expect(manager.activeSource, ParserSource.remote);
-      expect(manager.activeSignedManifest!.version, 1);
-      expect(state()['highestAcceptedManifestVersion'], 2);
+      expect(manager.activeSignedManifest!.version, above(1));
+      expect(state()['highestAcceptedManifestVersion'], above(2));
       expect(await manager.getActiveScript(), script);
-      remote = await sign(payload(1));
+      remote = await sign(payload(above(1)));
       await prepare();
       expect(await manager.checkForUpdates(force: true), isFalse);
     },
@@ -297,30 +305,30 @@ void main() {
   test(
     'manifest corruption is detected on every use; two broken versions fall back to builtin',
     () async {
-      await install(1);
-      await install(2);
+      await install(above(1));
+      await install(above(2));
       releaseFile(
         state()['current'] as String,
         'manifest.json',
       ).writeAsStringSync('{}');
       expect(await manager.getActiveScript(), script);
-      expect(manager.activeSignedManifest!.version, 1);
+      expect(manager.activeSignedManifest!.version, above(1));
       releaseFile(
         state()['previous'] as String,
         'parser.js',
       ).writeAsStringSync('corrupt');
       expect(await manager.getActiveScript(), isNot(script));
       expect(manager.activeSource, ParserSource.builtin);
-      expect(state()['highestAcceptedManifestVersion'], 2);
+      expect(state()['highestAcceptedManifestVersion'], above(2));
     },
   );
   test(
     'failed activation commit cannot advance watermark or replace current',
     () async {
-      await install(1);
+      await install(above(1));
       final before = File('${directory.path}/state.json').readAsStringSync();
       Directory('${directory.path}/state.json.tmp').createSync();
-      remote = await sign(payload(2));
+      remote = await sign(payload(above(2)));
       expect(await manager.checkForUpdates(force: true), isFalse);
       expect(File('${directory.path}/state.json').readAsStringSync(), before);
       expect(await manager.getActiveScript(), script);
@@ -329,7 +337,7 @@ void main() {
   test(
     'background engine neither fetches nor writes projection; fresh directory remains absent',
     () async {
-      await install(1);
+      await install(above(1));
       final view = File('${directory.path}/link-recognition.json');
       view.writeAsStringSync('recognition marker');
       await prepare(foreground: false);
@@ -559,7 +567,7 @@ void main() {
     ]);
     expect(results, [true, true]);
     expect(requests, 2);
-    expect(state()['highestAcceptedManifestVersion'], 1);
+    expect(state()['highestAcceptedManifestVersion'], above(1));
   });
 
   test('legacy platform getters remain available during 2a', () async {

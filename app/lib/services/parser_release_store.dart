@@ -11,6 +11,35 @@ class ParserRelease {
   final String script;
 }
 
+enum ParserSelectionChoice { builtin, stored, none }
+
+/// One startup comparison between the APK-bundled manifest and the stored
+/// release, reported as a single `[ParserUpdate] event=select` line.
+class ParserSelection {
+  const ParserSelection({
+    required this.builtin,
+    required this.stored,
+    required this.chosen,
+    required this.reason,
+  });
+
+  final SignedParserManifest? builtin;
+  final ParserRelease? stored;
+  final ParserSelectionChoice chosen;
+
+  /// `builtin_higher`, `stored_higher`, `same_sequence_same_content`,
+  /// `same_sequence_different_content`, `stored_only`, `builtin_only`,
+  /// `stored_none`, `stored_unreadable`, `builtin_unavailable` or
+  /// `no_release`.
+  final String reason;
+
+  SignedParserManifest? get chosenManifest => switch (chosen) {
+    ParserSelectionChoice.builtin => builtin,
+    ParserSelectionChoice.stored => stored?.manifest,
+    ParserSelectionChoice.none => null,
+  };
+}
+
 /// Only the foreground updater calls activate. Readers never mutate state or caches.
 /// One atomically replaced state file commits the selection and anti-rollback watermark.
 class ParserReleaseStore {
@@ -144,6 +173,131 @@ class ParserReleaseStore {
       }
     }
     return null;
+  }
+
+  /// Choose between the APK-bundled manifest and the stored release.
+  ///
+  /// `manifestVersion` is the release sequence, so it decides: the APK already
+  /// carries a newer parser than the one on disk after every parser release, and
+  /// never comparing them left the device on the downloaded bundle forever.
+  /// Both sides are verified before they are compared — the builtin by
+  /// [SignedParserManifest.fromBuiltin] (APK signature plus parser hash), the
+  /// stored one by re-reading and re-verifying its Ed25519 envelope.
+  ///
+  /// Equal sequences are never resolved by picking a winner: identical content
+  /// keeps whichever side is already current, and different content keeps the
+  /// current side too, because activating the other would be exactly the
+  /// equivocation the online check reports. Readers call this; they never write.
+  Future<ParserSelection> select() async {
+    final builtin = builtinManifest;
+    Map<String, dynamic>? state;
+    ParserRelease? stored;
+    try {
+      state = readState();
+      stored = await load();
+    } catch (_) {
+      // An unreadable state file is not a selection: fall back to the floor.
+      state = null;
+      stored = null;
+    }
+    final storedManifest = stored?.manifest;
+    if (storedManifest == null) {
+      if (builtin == null) {
+        return const ParserSelection(
+          builtin: null,
+          stored: null,
+          chosen: ParserSelectionChoice.none,
+          reason: 'no_release',
+        );
+      }
+      return ParserSelection(
+        builtin: builtin,
+        stored: null,
+        chosen: ParserSelectionChoice.builtin,
+        reason: state == null
+            ? 'builtin_only'
+            : (state['current'] == 'builtin'
+                  ? 'stored_none'
+                  : 'stored_unreadable'),
+      );
+    }
+    if (builtin == null) {
+      return ParserSelection(
+        builtin: null,
+        stored: stored,
+        chosen: ParserSelectionChoice.stored,
+        reason: 'builtin_unavailable',
+      );
+    }
+    if (builtin.version > storedManifest.version) {
+      return ParserSelection(
+        builtin: builtin,
+        stored: stored,
+        chosen: ParserSelectionChoice.builtin,
+        reason: 'builtin_higher',
+      );
+    }
+    if (storedManifest.version > builtin.version) {
+      return ParserSelection(
+        builtin: builtin,
+        stored: stored,
+        chosen: ParserSelectionChoice.stored,
+        reason: 'stored_higher',
+      );
+    }
+    final current = state?['current'] == 'builtin'
+        ? ParserSelectionChoice.builtin
+        : ParserSelectionChoice.stored;
+    return ParserSelection(
+      builtin: builtin,
+      stored: stored,
+      chosen: current,
+      reason: builtin.payloadHash == storedManifest.payloadHash
+          ? 'same_sequence_same_content'
+          : 'same_sequence_different_content',
+    );
+  }
+
+  /// Make the APK-bundled manifest the selection and lift the anti-rollback
+  /// watermark to it.
+  ///
+  /// The watermark has to move with the selection, otherwise the next online
+  /// check would compare a remote release against a floor the device no longer
+  /// runs. It is only ever raised: a sequence already accepted above the builtin
+  /// one (a damaged or unreadable cache) keeps its floor and its current
+  /// reference, so the online check can still repair that release in place.
+  /// Foreground startup is the only caller — readers stay read-only.
+  void commitBuiltin(SignedParserManifest builtin, {String? previous}) {
+    Map<String, dynamic>? state;
+    try {
+      state = readState();
+    } catch (_) {
+      state = null;
+    }
+    // Nothing was ever stored: the APK is the only source, so there is no
+    // sequence to raise the floor to and no state file is created for it.
+    if (state == null) return;
+    final highest = state['highestAcceptedManifestVersion'] as int;
+    if (highest > builtin.version) return;
+    if (state['current'] == 'builtin' &&
+        highest == builtin.version &&
+        state['contentHash'] == builtin.payloadHash) {
+      return;
+    }
+    final retained = state['previous'];
+    _atomicWrite(
+      _stateFile,
+      utf8.encode(
+        jsonEncode({
+          'current': 'builtin',
+          'previous': _validReference(previous)
+              ? previous
+              : (_validReference(retained) ? retained : null),
+          'highestAcceptedManifestVersion': builtin.version,
+          'contentHash': builtin.payloadHash,
+        }),
+      ),
+    );
   }
 
   Future<ParserRelease> _read(
