@@ -19,6 +19,7 @@ import '../services/download_manager.dart';
 import '../services/gallery_locator_service.dart';
 import '../services/history_backfill_service.dart';
 import '../services/history_db.dart';
+import '../services/history_decode_check.dart';
 import '../services/history_deletion.dart';
 import '../services/history_io.dart';
 import '../services/host_bridge.dart';
@@ -358,6 +359,11 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
         _loading = false;
         _dbError = null;
       });
+      // A quiet, read-only pass over stills the album already holds: a HEIC
+      // this device cannot decode is marked so its card can say so. It runs
+      // once per session, one file at a time, and never opens a decode path
+      // that could stall the page.
+      unawaited(HistoryDecodeCheck.runOnce());
     } catch (e) {
       if (!mounted) return;
       setState(() {

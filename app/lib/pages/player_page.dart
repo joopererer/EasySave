@@ -7,6 +7,7 @@ import 'package:flutter/material.dart';
 import 'package:video_player/video_player.dart';
 
 import '../core/models.dart';
+import '../core/dev_log.dart';
 import '../services/preview_video.dart';
 import '../services/media_request_policy.dart';
 import '../widgets/shared.dart';
@@ -54,6 +55,11 @@ class _VideoPlayerPageState extends State<VideoPlayerPage>
       final active = controller;
       active.addListener(() {
         if (mounted && active.value.hasError) {
+          unawaited(DevLog.write(
+            'PreviewPlayer',
+            'event=failed source=network item_kind=${widget.item.type} '
+                'type=player_state',
+          ));
           setState(() => _error = previewPlaybackError(widget.platform));
         }
       });
@@ -62,6 +68,11 @@ class _VideoPlayerPageState extends State<VideoPlayerPage>
       setState(() {});
       await controller.play();
     } catch (error) {
+      unawaited(DevLog.write(
+        'PreviewPlayer',
+        'event=failed source=network item_kind=${widget.item.type} '
+            'type=${playbackFailureType(error)}',
+      ));
       await controller?.dispose();
       if (mounted) {
         setState(() {

@@ -439,6 +439,39 @@ class GalleryLocatorService extends ChangeNotifier {
     return _exactMap[key] ?? _stemMap[key];
   }
 
+  /// Album lookup by the full file name, extension included. A file of another
+  /// extension under the same album sequence never answers this.
+  AssetEntity? assetByExactName(String name) {
+    if (!hasAccess && _nativeIds == null) return null;
+    final key = name.trim().toLowerCase();
+    if (key.isEmpty) return null;
+    return _exactMap[key];
+  }
+
+  /// Album asset with base name [baseName] **and** the requested kind. An old
+  /// `…_1.jpg` cover left next to a freshly downloaded `…_1.mp4` shares the
+  /// album sequence but must never stand in for the video (or for its id).
+  AssetEntity? assetByBaseNameOfType(String baseName, {required bool video}) {
+    if (!hasAccess && _nativeIds == null) return null;
+    final key = baseName.trim().toLowerCase();
+    if (key.isEmpty) return null;
+    final wanted = video ? AssetType.video : AssetType.image;
+    for (final asset in _allAssets) {
+      if (asset.type != wanted) continue;
+      final title = (asset.title ?? '')
+          .trim()
+          .toLowerCase()
+          .split('/')
+          .last
+          .split('\\')
+          .last;
+      final dot = title.lastIndexOf('.');
+      final stem = dot > 0 ? title.substring(0, dot) : title;
+      if (stem == key) return asset;
+    }
+    return null;
+  }
+
   /// Testing hook to inject pre-scanned assets and permission state.
   @visibleForTesting
   void setScannedForTesting({

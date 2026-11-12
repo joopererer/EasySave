@@ -158,7 +158,10 @@ void main() {
       expect(still, hasLength(2));
       expect(still[0].urls, still[1].urls,
           reason: 'a Live photo still must not rank candidates differently');
-      expect(still[1].urls.first, _cjpeg);
+      expect(still[1].urls.first, contains('imageView2/format/jpg/q/100'),
+          reason: 'a CDN JPEG original of the token is tried first');
+      expect(stillCandidateRank(still[1].urls.first), 0);
+      expect(still[1].urls, contains(_cjpeg));
       for (final url in still[1].urls) {
         expect(mediaKindOfUrl(url), MediaContentKind.image, reason: url);
       }

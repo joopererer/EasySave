@@ -28,8 +28,10 @@ import 'gallery_locator_service.dart';
 import 'history_db.dart';
 import 'history_io.dart';
 import 'image_dimensions.dart';
+import 'image_decode_probe.dart';
 import 'media_content_type.dart';
 import 'mp4_audio_probe.dart';
+import 'transfer_headers.dart';
 import 'storage_guard.dart';
 import 'parse_service.dart';
 import 'saver.dart';
@@ -51,18 +53,44 @@ const int kMaxAttempts = 3;
 /// of stored candidates says: no item may keep retrying forever.
 const int kMaxAttemptsHardCap = 6;
 
-/// Ceiling on the attempts of a still: every stored candidate once plus the one
-/// backoff retry each of them may use on a connection reset or a timeout.
-const int kMaxStillAttemptsHardCap = 12;
+/// Ceiling on the attempts of a still: every stored candidate once plus the
+/// backoff retries each of them may use on a connection reset or a timeout.
+const int kMaxStillAttemptsHardCap = 24;
 
-/// How long a candidate waits before its single backoff retry. Short enough to
-/// stay inside the item's patience, long enough for a dropped connection to be
-/// re-established.
+/// Absolute ceiling on the attempts of one file, whatever its candidates:
+/// [kMaxAttemptsHardCap] candidates times one transfer each plus the
+/// [kCandidateRetryLimit] backoff retries every transfer may use.
+const int kAttemptHardCap = 24;
+
+/// Backoff before each retry of the *same* candidate after a connection reset
+/// or a timeout: 0.6s, 1.2s, 2.4s, then the item switches to its next
+/// candidate. The CDN drops a connection on its own edge often enough that a
+/// single retry was not worth the switch it cost.
+const List<Duration> kCandidateRetryBackoffs = [
+  Duration(milliseconds: 600),
+  Duration(milliseconds: 1200),
+  Duration(milliseconds: 2400),
+];
+
+/// How many times one candidate may be retried on reset/timeout.
+const int kCandidateRetryLimit = 3;
+
+/// First backoff, kept as the documented short wait of a reset retry.
 const Duration kResetRetryBackoff = Duration(milliseconds: 600);
 
-/// Overrides the backoff before [kResetRetryBackoff] in unit tests.
+/// Overrides the backoff ladder in unit tests.
 @visibleForTesting
-Duration resetRetryBackoffForTesting = kResetRetryBackoff;
+List<Duration> candidateRetryBackoffsForTesting = kCandidateRetryBackoffs;
+
+/// Wait before retry number [retry] (1-based) of the same candidate. Past the
+/// list the last value is reused, so a raised [kCandidateRetryLimit] still has
+/// a bounded wait.
+Duration candidateBackoffFor(int retry) {
+  final ladder = candidateRetryBackoffsForTesting;
+  if (ladder.isEmpty) return kResetRetryBackoff;
+  final index = retry <= 1 ? 0 : (retry - 1).clamp(0, ladder.length - 1);
+  return ladder[index];
+}
 
 int maxAttemptsFor(DownloadBatch batch, DownloadJob job) =>
     (SiteRegistry.current.byId(batch.platform)?.data['download']
@@ -88,12 +116,13 @@ int candidateCapFor(DownloadJob job) {
 /// Bound of the transfer attempts of [job]: a still tries every stored
 /// candidate once (original-resolution candidates first, preview-size ones
 /// last) so a dead first candidate cannot cost the item its original, plus the
-/// one backoff retry each candidate may use on a connection reset or a timeout.
-/// A video keeps the site rule of [attemptCapFor].
+/// [kCandidateRetryLimit] backoff retries each candidate may use on a
+/// connection reset or a timeout. A video keeps the site rule of
+/// [attemptCapFor] with the same retry allowance.
 int retryCapFor(DownloadBatch batch, DownloadJob job) {
-  if (!job.isImage) return attemptCapFor(batch, job);
-  final base = candidateCapFor(job) * 2;
-  return base > kMaxStillAttemptsHardCap ? kMaxStillAttemptsHardCap : base;
+  final base = job.isImage ? candidateCapFor(job) : attemptCapFor(batch, job);
+  final cap = base * (1 + kCandidateRetryLimit);
+  return cap > kAttemptHardCap ? kAttemptHardCap : cap;
 }
 
 /// Whether the candidate [job] just downloaded is a preview-size derivative,
@@ -158,6 +187,36 @@ List<String> orderedMediaUrls(ParsedPost post, MediaItem item) {
 /// consider its owner dead and adopt the batch. The owner refreshes the
 /// snapshot every 15s (heartbeat), so 90s is a safe margin.
 const int kStalledBatchAgeMs = 90 * 1000;
+
+/// The declared resource of [url], or one cloned from the declared resource of
+/// the same host and path when [url] is a candidate this build derived from it
+/// (the CDN's JPEG original). Nothing else may invent a resource: an unknown
+/// URL is still rejected by the policy.
+MediaRequestResource resourceForCandidate(
+  MediaRequestPolicy policy,
+  List<MediaRequestResource> declared,
+  String url,
+) {
+  for (final resource in declared) {
+    if (resource.url == url) return resource;
+  }
+  final target = Uri.tryParse(url);
+  if (target != null && target.hasAuthority) {
+    for (final base in declared) {
+      final baseUri = Uri.tryParse(base.url);
+      if (baseUri == null) continue;
+      if (baseUri.host == target.host && baseUri.path == target.path) {
+        return MediaRequestResource(
+          role: base.role,
+          url: url,
+          fallbackFor: base.fallbackFor,
+          request: base.request,
+        );
+      }
+    }
+  }
+  policy.rejectResource(url);
+}
 
 /// Pure decision helper for the dual-engine ownership rules: may this engine
 /// adopt a batch that was started by the other engine?
@@ -317,9 +376,10 @@ class DownloadJob {
   /// advances only to a *different* candidate: a backoff retry of the same
   /// candidate keeps it, so connection reset/timeout does not spend a switch.
   int candidateIndex = 0;
-  /// [candidateIndex] already used its one backoff retry on reset/timeout.
-  /// Cleared whenever [candidateIndex] advances.
-  bool candidateRetryUsed = false;
+  /// How many backoff retries [candidateIndex] already used on a connection
+  /// reset or a timeout (0..[kCandidateRetryLimit]). Cleared whenever
+  /// [candidateIndex] advances.
+  int candidateRetryCount = 0;
   String? currentTaskId;
   bool saved = false;
   String? error;
@@ -393,7 +453,7 @@ class DownloadJob {
     'state': state.index,
     'attempts': attempts,
     if (candidateIndex > 0) 'candidateIndex': candidateIndex,
-    if (candidateRetryUsed) 'candidateRetryUsed': true,
+    if (candidateRetryCount > 0) 'candidateRetryCount': candidateRetryCount,
     'currentTaskId': currentTaskId,
     'saved': saved,
     'error': error,
@@ -437,7 +497,10 @@ class DownloadJob {
     final lastCandidate = job.urls.isEmpty ? 0 : job.urls.length - 1;
     job.candidateIndex =
         storedCandidate < 0 ? 0 : (storedCandidate > lastCandidate ? lastCandidate : storedCandidate);
-    job.candidateRetryUsed = map['candidateRetryUsed'] as bool? ?? false;
+    // Snapshots written before v1.10.3 stored a single retry as a boolean.
+    job.candidateRetryCount =
+        (map['candidateRetryCount'] as num?)?.toInt() ??
+        (map['candidateRetryUsed'] == true ? 1 : 0);
     job.currentTaskId = map['currentTaskId'] as String?;
     job.saved = map['saved'] as bool? ?? false;
     job.error = map['error'] as String?;
@@ -727,7 +790,9 @@ List<PlannedFile> planFiles(
     // ranking, so the still of a Live item is never the only file in a batch
     // that starts with a container provenance cannot be written to.
     final imageUrls = rankStillCandidates(filterMediaCandidates(
-      verifyOnlyStillCandidates(orderedMediaUrls(post, item)),
+      verifyOnlyStillCandidates(
+        withDerivedJpegOriginals(orderedMediaUrls(post, item)),
+      ),
       isImage: true,
     ));
     if (item.type == 'live' && item.videoUrl != null) {
@@ -1486,9 +1551,10 @@ class DownloadManager extends ChangeNotifier {
       for (final file in planned)
         [
           for (final url in file.urls)
-            resourcesByIndex[file.itemIndex]!.firstWhere(
-              (resource) => resource.url == url,
-              orElse: () => policy.rejectResource(url),
+            resourceForCandidate(
+              policy,
+              resourcesByIndex[file.itemIndex]!,
+              url,
             ),
         ],
     ];
@@ -1679,7 +1745,7 @@ class DownloadManager extends ChangeNotifier {
       taskId: taskId,
       url: url,
       filename: job.filename,
-      headers: authorized.headers,
+      headers: unifiedTransferHeaders(authorized.headers),
       directory: downloadTempDirectory(batch.batchId, taskId),
       baseDirectory: BaseDirectory.temporary,
       group: batch.batchId,
@@ -1815,8 +1881,12 @@ class DownloadManager extends ChangeNotifier {
     return true;
   }
 
-  /// HEAD for the Content-Length of a cookie-free background download. No
-  /// redirect is followed (each hop would need its own authorization).
+  /// Size probe of a cookie-free background download, using the same method
+  /// and the same headers as the transfer itself: a ranged `GET` (a `HEAD` is
+  /// answered by a different path on the CDN and its result never described
+  /// the bytes the transfer would receive), `Accept-Encoding: identity` and a
+  /// browser User-Agent. No redirect is followed (each hop would need its own
+  /// authorization).
   Future<int?> _probeContentLength(
     DownloadBatch batch,
     DownloadJob job,
@@ -1828,12 +1898,25 @@ class DownloadManager extends ChangeNotifier {
     if (authorized.cookie != null && authorized.cookie!.isNotEmpty) return null;
     final client = http.Client();
     try {
-      final request = http.Request('HEAD', authorized.uri)
+      final request = http.Request('GET', authorized.uri)
         ..followRedirects = false
-        ..headers.addAll(authorized.headers);
+        ..headers.addAll(
+          unifiedTransferHeaders({...authorized.headers, 'Range': 'bytes=0-0'}),
+        );
       final response =
           await client.send(request).timeout(const Duration(seconds: 8));
-      return response.statusCode == 200 ? response.contentLength : null;
+      try {
+        if (response.statusCode == 200) return response.contentLength;
+        if (response.statusCode != 206) return null;
+        // `Content-Range: bytes 0-0/12345` carries the full size.
+        final range = response.headers['content-range'];
+        final total = range == null
+            ? null
+            : int.tryParse(range.split('/').last.trim());
+        return total != null && total > 0 ? total : null;
+      } finally {
+        await response.stream.drain<void>().catchError((_) {});
+      }
     } finally {
       client.close();
     }
@@ -2105,7 +2188,13 @@ class DownloadManager extends ChangeNotifier {
     );
     final dot = name.lastIndexOf('.');
     final base = dot > 0 ? name.substring(0, dot) : name;
-    final asset = locator.assetByBaseName(base);
+    // The full name first, then a base-name match of the *same kind*: an old
+    // `…_1.jpg` cover must never answer the lookup of a new `…_1.mp4`, or the
+    // video row would take the still's id and fail to play.
+    final asset =
+        locator.assetByExactName(name) ??
+        locator.assetByBaseNameOfType(base, video: !job.isImage) ??
+        locator.assetByBaseName(base);
     final matchesType =
         asset != null &&
         (job.isImage
@@ -2192,8 +2281,12 @@ class DownloadManager extends ChangeNotifier {
       candidateCount: job.urls.length,
       content: content,
     );
-    await _logCandidate(batch, job, path, content, verdict);
-    if (verdict != ContentVerdict.accept) {
+    // A HEIC / HEIF / AVIF original is only accepted when the platform
+    // decoders of *this* device really decode it. The probe runs on the
+    // finished temp file, off the main thread and off photo_manager's queue,
+    // and it is bounded: a decode that never answers cannot hold the item.
+    final effective = await _gatedVerdict(batch, job, path, content, verdict);
+    if (effective != ContentVerdict.accept) {
       await _handleContentVerdict(batch, job, path);
       return;
     }
@@ -2305,6 +2398,8 @@ class DownloadManager extends ChangeNotifier {
           ? 'rejected:video_container'
           : 'rejected:still_for_video',
       ContentVerdict.rejectUnplayable => 'rejected:unplayable_video',
+      ContentVerdict.rejectUndecodableOnDevice =>
+        'rejected:undecodable_on_device',
     };
     unawaited(DevLog.write(
       'V16DL', // i18n:ignore 日志
@@ -2314,6 +2409,59 @@ class DownloadManager extends ChangeNotifier {
           '${extra == null ? '' : ' $extra'}',
     ));
   }
+
+  /// The verdict of a finished file after the device decode gate, logged once.
+  ///
+  /// Only a still whose own header says the platform must decode it
+  /// ([requiresDeviceDecode]) is probed; everything else keeps the content
+  /// verdict unchanged. The probe never runs on the main thread or on
+  /// photo_manager's queue, and its timeout cannot block another item.
+  Future<ContentVerdict> _gatedVerdict(
+    DownloadBatch batch,
+    DownloadJob job,
+    String path,
+    MediaContentType? content,
+    ContentVerdict verdict,
+  ) async {
+    final gate = verdict != ContentVerdict.accept
+        ? const StillDecodeGate.notRequired()
+        : await (ImageDecodeProbe.stillGateForTesting ??
+                  StillDecodeGate.forStoredStill)(
+              content,
+              path,
+            );
+    final effective = gate.rejected
+        ? ContentVerdict.rejectUndecodableOnDevice
+        : verdict;
+    await _logCandidate(
+      batch,
+      job,
+      path,
+      content,
+      effective,
+      extra: gate.probed ? gate.logFields : null,
+    );
+    return effective;
+  }
+
+  @visibleForTesting
+  Future<ContentVerdict> gatedVerdictForTesting(
+    DownloadBatch batch,
+    DownloadJob job,
+    String path, {
+    MediaContentType? content,
+  }) => _gatedVerdict(
+    batch,
+    job,
+    path,
+    content,
+    contentVerdictFor(
+      isImage: job.isImage,
+      attempts: job.attempts,
+      candidateCount: job.urls.length,
+      content: content,
+    ),
+  );
 
   /// Per-item, user-readable failure text ("第3项实况的静态图保存失败"). Never
   /// the raw exception: a `StateError('该格式…')` prefix belongs in the log.
@@ -2763,11 +2911,14 @@ class DownloadManager extends ChangeNotifier {
     final cap = retryCapFor(batch, job);
     final cause = _failureCause(update);
     // A dropped connection or a timeout is usually transient: the same
-    // candidate gets one short backoff and one more attempt before it is
-    // written off. Every other failure rotates to the next candidate at once.
+    // candidate is retried on an exponential ladder (0.6s, 1.2s, 2.4s) before
+    // it is written off. Every other failure rotates to the next candidate at
+    // once.
     final backoffRetry = (cause == 'reset' || cause == 'timeout') &&
-        !job.candidateRetryUsed &&
+        job.candidateRetryCount < kCandidateRetryLimit &&
         job.attempts < cap;
+    final nextRetry = job.candidateRetryCount + 1;
+    final backoff = candidateBackoffFor(nextRetry);
     unawaited(DevLog.write(
       'V16DL', // i18n:ignore 日志
       'candidate index=${job.itemIndex} role=${roleOf(job)} '
@@ -2775,15 +2926,15 @@ class DownloadManager extends ChangeNotifier {
           'host_class=${_hostClassOf(batch, job)} bytes=- '
           'sniff=- result=transfer_failed reason=${_transferReason(update)} '
           'cause=$cause candidate=${job.attempts}/$cap'
-          '${backoffRetry ? ' retry=backoff wait_ms=${kResetRetryBackoff.inMilliseconds} candidate_seq=${candidateIndexOf(job) + 1}/${job.urls.length}' : ''}',
+          '${backoffRetry ? ' retry=backoff retry_index=$nextRetry/$kCandidateRetryLimit wait_ms=${backoff.inMilliseconds} candidate_seq=${candidateIndexOf(job) + 1}/${job.urls.length}' : ''}',
     ));
     if (backoffRetry) {
-      job.candidateRetryUsed = true;
-      await Future<void>.delayed(resetRetryBackoffForTesting);
+      job.candidateRetryCount = nextRetry;
+      await Future<void>.delayed(backoff);
       await _enqueueAttempt(batch, job);
       return;
     }
-    job.candidateRetryUsed = false;
+    job.candidateRetryCount = 0;
     final nextCandidate = candidateIndexOf(job) + 1;
     // Never wrap around to a candidate that was already downloaded: the item
     // gives up (or imports its best small copy) instead of re-requesting it.
@@ -3093,8 +3244,7 @@ class DownloadManager extends ChangeNotifier {
         final declarations = policy.resourcesFor(outcome.data.items[postIdx]);
         final freshResources = [
           for (final url in planned.urls)
-            declarations.firstWhere((resource) => resource.url == url,
-                orElse: () => policy.rejectResource(url)),
+            resourceForCandidate(policy, declarations, url),
         ];
         // URL, role and authorization are one refreshed resource set. Keeping
         // old declarations would revive old cookie scopes and expired URLs.
@@ -3115,7 +3265,7 @@ class DownloadManager extends ChangeNotifier {
     }
     job.attempts = 0;
     job.candidateIndex = 0;
-    job.candidateRetryUsed = false;
+    job.candidateRetryCount = 0;
     job.lastStatusCode = null;
     try {
       await _enqueueAttempt(batch, job);
@@ -3658,7 +3808,9 @@ List<String>? planFilesForItem(ParsedPost post, int itemIndex) {
   if (itemIndex < 0 || itemIndex >= post.items.length) return null;
   final item = post.items[itemIndex];
   final imageUrls = rankStillCandidates(filterMediaCandidates(
-    orderedMediaUrls(post, item),
+    verifyOnlyStillCandidates(
+      withDerivedJpegOriginals(orderedMediaUrls(post, item)),
+    ),
     isImage: true,
   ));
   if (item.type == 'live' && item.videoUrl != null) {

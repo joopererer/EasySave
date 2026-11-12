@@ -29,6 +29,7 @@ class HistoryFile {
     this.size,
     this.notOriginal = false,
     this.pairId,
+    this.undecodable,
   });
 
   final String filename;
@@ -73,6 +74,11 @@ class HistoryFile {
   /// album scan. Null for ordinary files and for rows written before v1.10.1.
   final String? pairId;
 
+  /// Whether the platform decoders of this device reject the file (a HEIC the
+  /// album cannot preview). Null means "not checked yet": rows written before
+  /// v1.10.3 and containers no device has to decode stay null.
+  final bool? undecodable;
+
   Map<String, Object?> toMap() => {
     'filename': filename,
     'saved_at': savedAt,
@@ -87,6 +93,7 @@ class HistoryFile {
     if (size != null) 'size': size,
     if (notOriginal) 'not_original': 1,
     if (pairId != null) 'pair_id': pairId,
+    if (undecodable != null) 'undecodable': undecodable == true ? 1 : 0,
   };
 
   factory HistoryFile.fromMap(Map<String, Object?> map) => HistoryFile(
@@ -106,6 +113,9 @@ class HistoryFile {
     size: (map['size'] as num?)?.toInt(),
     notOriginal: (map['not_original'] as num?)?.toInt() == 1,
     pairId: map['pair_id'] as String?,
+    undecodable: map['undecodable'] == null
+        ? null
+        : (map['undecodable'] as num?)?.toInt() == 1,
   );
 
   HistoryFile copyWith({
@@ -122,6 +132,7 @@ class HistoryFile {
     int? size,
     bool? notOriginal,
     String? pairId,
+    bool? undecodable,
   }) => HistoryFile(
     filename: filename ?? this.filename,
     savedAt: savedAt ?? this.savedAt,
@@ -136,6 +147,7 @@ class HistoryFile {
     size: size ?? this.size,
     notOriginal: notOriginal ?? this.notOriginal,
     pairId: pairId ?? this.pairId,
+    undecodable: undecodable ?? this.undecodable,
   );
 }
 

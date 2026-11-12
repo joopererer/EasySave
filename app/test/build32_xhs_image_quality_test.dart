@@ -23,6 +23,11 @@ const _dft =
     'https://sns-webpic-qc.xhscdn.com/202610112129/eb1fb79a62c72f9dbe14dd2909e2d83c/$_token!nd_dft_wlteh_webp_3';
 const _ci = 'https://ci.xiaohongshu.com/$_token';
 
+/// The JPEG original this build derives from [_original] (see
+/// `withDerivedJpegOriginals`).
+const _derivedJpeg =
+    'https://sns-img-bd.xhscdn.com/$_token?imageView2/format/jpg/q/100';
+
 Uint8List _jpegBytes(int width, int height) => Uint8List.fromList([
   0xFF, 0xD8,
   // APP1 segment (e.g. EXIF/XMP) before the frame.
@@ -119,7 +124,11 @@ void main() {
       ],
     );
     final planned = planFiles(post, [0], (l, s, e) => 'f$s.$e').single;
-    expect(planned.urls, [_jpeg, _original, _ci, _dft]);
+    // v1.10.3: the CDN's own JPEG original of the `img` token is inserted
+    // before that token, so a HEIC original is never the first JPEG-less
+    // fallback. The parser's existing `ci:jpg` already covers that host and
+    // path, so no second transcode is added for it.
+    expect(planned.urls, [_jpeg, _derivedJpeg, _original, _ci, _dft]);
     expect(planned.urls, isNot(contains(_preview)));
     expect((planned.expectedWidth, planned.expectedHeight), (1290, 1608));
     // The App keeps the order when items round-trip through history JSON.

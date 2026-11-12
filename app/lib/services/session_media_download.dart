@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 import '../core/media_request.dart';
 import 'media_request_policy.dart';
+import 'transfer_headers.dart';
 
 const expiredMediaMessage = '链接已过期，请重新解析';
 const interruptedMediaMessage = '需要重新解析';
@@ -59,7 +60,8 @@ class SessionMediaDownload {
         final request = await client.getUrl(current);
         request.followRedirects = false;
         if (authorized != null) {
-          for (final header in authorized.wireHeaders.entries) {
+          final headers = unifiedTransferHeaders(authorized.wireHeaders);
+          for (final header in headers.entries) {
             request.headers.set(header.key, header.value);
           }
         } else {

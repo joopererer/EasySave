@@ -7,6 +7,27 @@ This file documents notable user-facing changes following [Keep a Changelog](htt
 
 ## [Unreleased]
 
+## [1.10.3] - 2026-11-12
+
+### 修复 / Fixed
+
+- 保存时不接受本机无法解码的 HEIC/AVIF 原图：新增原生解码自检，在导入前用本机平台解码器（BitmapFactory / ImageDecoder，只取边界并小尺寸采样）验证已下载的临时文件，带超时、独立线程，不阻塞主线程与 photo_manager 队列；不可解码时继续下一个候选，最终使用预览图并标「非原图」，日志 `result=rejected:undecodable_on_device`。
+  A HEIC / AVIF original the device cannot decode is no longer saved: a native decode check (BitmapFactory / ImageDecoder, bounds plus a small sampled decode only) verifies the downloaded temp file before import, with a timeout on its own thread, never blocking the main thread or photo_manager's queue. An undecodable file is skipped for the next candidate; the item ends on the preview still marked 「非原图」, logged as `result=rejected:undecodable_on_device`.
+- jpg 原图优先，并新增小红书 CDN 的 JPEG 原图候选（`imageView2/format/jpg/q/100`，原尺寸），排在 HEIC 原图之前；实测 `format/jpeg` 与 `format/jpg` 字节一致，仅 `format/jpg` 会把 1290×1608 的图压到约 245KB，加 `/q/100` 后回到约 1.03MB，与 1.01MB 的原始字节接近。
+  JPEG originals are preferred, with an extra Xiaohongshu CDN JPEG original candidate (`imageView2/format/jpg/q/100`, original pixel size) ranked before the HEIC original: `format/jpeg` and `format/jpg` return identical bytes, while plain `format/jpg` re-encodes 1290x1608 down to about 245KB and adding `/q/100` restores about 1.03MB against the 1.01MB stored original.
+- 对连接重置与超时的重试由 1 次提高到最多 3 次指数退避（0.6s、1.2s、2.4s）再换下一个候选；预检改用与正式下载相同的 GET + Range 请求、同一套请求头（浏览器 UA、`Accept-Encoding: identity`），使预检与下载在 CDN 侧不再像两个不同客户端。
+  Retries on a connection reset or timeout went from one to up to three exponential backoffs (0.6s, 1.2s, 2.4s) before switching candidates. The preflight now uses the same GET + Range request and the same headers as the download (browser User-Agent, `Accept-Encoding: identity`), so the CDN no longer sees the preflight and the transfer as two different clients.
+- 修复同一帖子序号下旧封面图与新下载视频被当成一张实况的问题：图片与视频只有在双方 pair_id 一致、或由同一次下载写入时才配对，扩展名不同的旧文件不再顶替新文件的 assetId。
+  Fixed an old cover still and a freshly downloaded video of the same post sequence being treated as one Live photo: a still and a clip only pair when both carry the same pair_id or were written by one download, and an older file of another extension no longer answers the new file's assetId lookup.
+- 视频写入相册时显式写入时长与像素尺寸，写入后读回 DURATION 并在仍为 0 时触发一次扫描，日志打印导入前后的时长，避免相册显示 0 秒。
+  A saved video now carries its duration and pixel size from the start; after publishing, DURATION is read back, a rescan is triggered when it is still 0, and the duration before/after is logged, so the album no longer shows a 0-second entry.
+- 视频与实况播放失败时记录播放器错误类型（不含 URL），静态图不会再被当作视频交给播放器。
+  Player failures now log the player error type (never the URL), and a still is never handed to the player as a video.
+- 本地缩略图增加每项独立超时：单个文件解码失败或超时不再留白，回退到网络封面或占位图并记录 `[ThumbLoad] event=local_decode_failed`；不使用共享加载闸门，也不读取整份原图。
+  Local thumbnails now have a per-item deadline: a file that fails or stalls falls back to the network cover or a placeholder and logs `[ThumbLoad] event=local_decode_failed`, without a shared gate and without reading a whole original.
+- 已保存但本机无法解码的 HEIC 会在历史卡片上标注「本机无法显示此格式」，点开后可「重新下载」：先确认再删除相册中的旧文件，并按新规则替换该项；检测为后台只读、带超时、一次一个文件。
+  A saved HEIC this device cannot decode is marked 「本机无法显示此格式」 on its history card, and opening it offers 「重新下载」: the old album file is deleted only after the user confirms, and the item is replaced under the new rules. The detection is a background, read-only, one-file-at-a-time pass with a timeout.
+
 ## [1.10.2] - 2026-11-12
 
 ### 修复 / Fixed

@@ -1,9 +1,12 @@
+import 'dart:async';
 import 'dart:io';
 
+import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
 import 'package:video_player/video_player.dart';
 
+import '../core/dev_log.dart';
 import '../core/models.dart';
 import 'authorized_media_http.dart';
 import 'media_request_policy.dart';
@@ -52,8 +55,12 @@ Future<VideoPlayerController> networkPreviewController(
     }
     if (bytes == 0) throw const FileSystemException('PREVIEW_EMPTY');
     return VideoPlayerController.file(file);
-  } catch (_) {
+  } catch (error) {
     if (await file.exists()) await file.delete();
+    unawaited(DevLog.write(
+      'PreviewPlayer',
+      'event=failed source=network type=${playbackFailureType(error)}',
+    ));
     rethrow;
   } finally {
     client.close();
@@ -69,3 +76,26 @@ String previewFailureMessage(Object error, String platform) =>
     error is MediaPolicyException
     ? '该资源地址不在允许范围内'
     : previewPlaybackError(platform);
+
+/// Log-safe type of a playback failure.
+///
+/// Never the source and never the native message: `video_player` puts the URL
+/// into both `VideoPlayerValue.errorDescription` and the exception it throws, so
+/// only a stable token leaves this function.
+String playbackFailureType(Object? error) {
+  if (error == null) return 'unknown';
+  if (error is MediaPolicyException) return 'policy:${_tokenOf(error.code)}';
+  if (error is PlatformException) return 'platform:${_tokenOf(error.code)}';
+  if (error is FileSystemException) {
+    final message = error.message.trim();
+    final local = RegExp(r'^[A-Z][A-Z_]{2,40}$').hasMatch(message);
+    return 'file:${local ? message : 'io'}';
+  }
+  if (error is TimeoutException) return 'timeout';
+  if (error is MissingPluginException) return 'no_plugin';
+  if (error is FormatException) return 'format';
+  return _tokenOf(error.runtimeType.toString());
+}
+
+String _tokenOf(String value) =>
+    RegExp(r'^[A-Za-z0-9_.-]{1,48}$').hasMatch(value) ? value : 'error';

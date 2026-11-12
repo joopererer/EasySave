@@ -18,6 +18,7 @@ import io.flutter.plugin.common.BinaryMessenger
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
 import io.flutter.plugin.common.StandardMethodCodec
+import java.io.File
 
 /**
  * MediaStore reads that need no Activity, shared by the foreground and the
@@ -70,9 +71,96 @@ class MediaStoreBridge(private val context: Context) {
             "storageInfo" -> storageInfo(result)
             "mediaSize" -> mediaSize(call, result)
             "mediaSizes" -> mediaSizes(call, result)
+            "probeImageDecodable" -> probeImageDecodable(call, result)
+            "probeMediaDecodable" -> probeMediaDecodable(call, result)
+            "mediaDuration" -> mediaDuration(call, result)
             else -> return false
         }
         return true
+    }
+
+    /**
+     * Probes one app-private still with the platform decoders. Never reads a
+     * path outside this app's own storage: the self-check and the import gate
+     * only ever check files EasySave itself wrote.
+     */
+    private fun probeImageDecodable(call: MethodCall, result: MethodChannel.Result) {
+        val path = call.argument<String>("path")
+        if (path == null || path.isBlank()) {
+            result.error("bad_args", "path required", null)
+            return
+        }
+        val file = try {
+            File(path).canonicalFile
+        } catch (e: Exception) {
+            result.error("path_rejected", "unresolvable path", null)
+            return
+        }
+        if (!insideAppStorage(file)) {
+            result.error("path_rejected", "path outside app storage", null)
+            return
+        }
+        replyOnMain(result) {
+            ImageDecodeProbe.probeFile(file).toMap() + mapOf("bytes" to file.length())
+        }
+    }
+
+    /** Probes an album still by MediaStore id; read-only, never deletes. */
+    private fun probeMediaDecodable(call: MethodCall, result: MethodChannel.Result) {
+        val mediaId = call.argument<String>("id")?.toLongOrNull()
+        if (mediaId == null) {
+            result.error("bad_args", "id must be a numeric media id", null)
+            return
+        }
+        val uri = ContentUris.withAppendedId(
+            MediaStore.Images.Media.EXTERNAL_CONTENT_URI, mediaId,
+        )
+        replyOnMain(result) {
+            ImageDecodeProbe.probeUri(context.contentResolver, uri).toMap() +
+                mapOf("id" to mediaId.toString())
+        }
+    }
+
+    /** MediaStore DURATION in ms of a saved video, or null when not visible. */
+    private fun mediaDuration(call: MethodCall, result: MethodChannel.Result) {
+        val mediaId = call.argument<String>("id")?.toLongOrNull()
+        if (mediaId == null) {
+            result.error("bad_args", "id must be a numeric media id", null)
+            return
+        }
+        try {
+            result.success(MediaMetadataProbe.durationOf(context.contentResolver, mediaId))
+        } catch (e: Exception) {
+            result.success(null)
+        }
+    }
+
+    private fun insideAppStorage(file: File): Boolean {
+        val roots = listOfNotNull(
+            context.filesDir, context.cacheDir,
+            context.getExternalFilesDir(null), context.getExternalCacheDir(),
+        )
+        val prefix = file.path + File.separator
+        return roots.any { root ->
+            runCatching { prefix.startsWith(root.canonicalFile.path + File.separator) }
+                .getOrDefault(false)
+        }
+    }
+
+    /** Runs [block] on the probe pool and answers on the platform thread. */
+    private fun replyOnMain(
+        result: MethodChannel.Result,
+        block: () -> Map<String, Any?>,
+    ) {
+        val main = Handler(Looper.getMainLooper())
+        ImageDecodeProbe.submit {
+            try {
+                val payload = block()
+                main.post { result.success(payload) }
+            } catch (e: Exception) {
+                main.post { result.error("probe_failed", e.javaClass.simpleName, null) }
+            }
+        }
     }
 
     private fun permission(): String = permissionState(Build.VERSION.SDK_INT) {

@@ -52,6 +52,16 @@ const _heicBrands = {
 /// AVIF still brands.
 const _avifBrands = {'avif', 'avis'};
 
+/// Still containers whose decode depends on the device's own codecs: Android
+/// 12's HEIF decoder rejects the HEIC files an iPhone writes with an alpha
+/// auxiliary image, and a file this device cannot decode must never reach the
+/// album (blank album thumbnail, stalled MediaStore metadata, unviewable post).
+const Set<String> kDeviceDecodedStillExtensions = {'heic', 'heif', 'avif'};
+
+/// Whether [type] is a still the device itself has to be able to decode.
+bool requiresDeviceDecode(MediaContentType type) =>
+    type.isImage && kDeviceDecodedStillExtensions.contains(type.extension);
+
 /// ISO-BMFF brands that only a movie may declare.
 const _videoBrands = {
   'isom', 'iso2', 'iso3', 'iso4', 'iso5', 'iso6', 'iso8', 'iso9',
@@ -189,6 +199,12 @@ enum ContentVerdict {
 
   /// A movie without a `moov` box: unusable, the next candidate is tried.
   rejectUnplayable,
+
+  /// A HEIC / HEIF / AVIF original the platform decoders of *this* device
+  /// cannot decode (see [requiresDeviceDecode]): saving it would leave a file
+  /// the album cannot preview. The next candidate is tried; only when none is
+  /// left does the item fall back to a preview-size still marked "非原图".
+  rejectUndecodableOnDevice,
 }
 
 /// Quality wins over provenance: a still whose container cannot carry
@@ -322,6 +338,80 @@ List<String> rankStillCandidates(Iterable<String> urls) {
     return byRank != 0 ? byRank : a.$1.compareTo(b.$1);
   });
   return [for (final (_, url) in indexed) url];
+}
+
+/// The CDN's own JPEG transcode of an original, at the original pixel size and
+/// at the highest quality it will produce.
+///
+/// Measured against the live CDN (`spec/fixtures/xhs` token, 2026-11-12):
+/// `?imageView2/format/jpg` keeps the declared 1290x1608 but re-encodes to
+/// 245,672 bytes (the stored original is 1,007,645 bytes); adding `/q/100`
+/// gives 1,030,648 bytes at the same size. `format/jpeg` and `format/jpg` are
+/// byte-identical, so the parser's `jpg` spelling is fine. `sns-img-*` and
+/// `ci` honour the same parameters on the same token.
+const String kJpegOriginalQuery = 'imageView2/format/jpg/q/100';
+
+/// Adds the CDN JPEG original of every original-resolution still candidate that
+/// carries no processing query, directly before that candidate so it is tried
+/// before a HEIC / AVIF original of the same token.
+///
+/// Nothing is added when the parser already handed out a JPEG transcode of the
+/// same host and path (its `ci:jpg` candidate): one ladder per token is enough.
+///
+/// This is a *candidate* on top of what the parser delivered, not a parser
+/// change: the token is the one the parser already produced, only the host's
+/// own transcoder is asked for JPEG.
+List<String> withDerivedJpegOriginals(Iterable<String> urls) {
+  final all = urls.toList();
+  final out = <String>[];
+  for (final url in all) {
+    final derived = derivedJpegOriginal(url);
+    if (derived != null &&
+        !all.contains(derived) &&
+        !out.contains(derived) &&
+        !_hasDeclaredJpegTranscode(all, url)) {
+      out.add(derived);
+    }
+    if (!out.contains(url)) out.add(url);
+  }
+  return out;
+}
+
+/// Whether [urls] already declares a JPEG transcode of [url]'s host and path.
+bool _hasDeclaredJpegTranscode(List<String> urls, String url) {
+  final target = Uri.tryParse(url.trim());
+  if (target == null) return false;
+  for (final other in urls) {
+    final uri = Uri.tryParse(other.trim());
+    if (uri == null || uri.host != target.host || uri.path != target.path) {
+      continue;
+    }
+    if (uri.query.toLowerCase().startsWith('imageview2/format/jp')) return true;
+  }
+  return false;
+}
+
+/// JPEG-transcoded form of [url], or null when it does not apply: a preview
+/// derivative, a non-image host, a URL that already asks for a format, or a
+/// `!style` rendition.
+String? derivedJpegOriginal(String url) {
+  final uri = Uri.tryParse(url.trim());
+  if (uri == null || uri.scheme != 'https' || uri.host.isEmpty) return null;
+  final host = uri.host.toLowerCase();
+  final isImageCdn = host == 'ci.xiaohongshu.com' ||
+      host == 'sns-img-bd.xhscdn.com' ||
+      host.startsWith('sns-img-');
+  if (!isImageCdn) return null;
+  if (uri.path.contains('!')) return null;
+  if (uri.query.isNotEmpty) return null;
+  if (isPreviewStillCandidate(url)) return null;
+  // The token's own container decides whether a transcode is worth a request:
+  // a token that already names a JPEG / PNG / WebP / GIF is that container
+  // already, while a bare token or a HEIC / HEIF / AVIF one is exactly what
+  // the CDN has to transcode.
+  final path = uri.path.toLowerCase();
+  if (RegExp(r'\.(jpe?g|png|webp|gif)$').hasMatch(path)) return null;
+  return uri.replace(query: kJpegOriginalQuery).toString();
 }
 
 /// Media kind of a media URL, from host, path shape and extension. `undefined`
