@@ -181,7 +181,10 @@ void main() {
   });
 
   group('what the finished bytes mean for the job', () {
-    test('a still answered with HEIC is retried once more candidates exist', () {
+    test('an original-resolution HEIC is a success, never a retry', () {
+      // build 41: quality first. A HEIC / AVIF still of an original candidate
+      // is saved in its own container (provenance skipped); its container must
+      // never make the item fall back to a preview-size candidate.
       expect(
         contentVerdictFor(
           isImage: true,
@@ -189,7 +192,7 @@ void main() {
           candidateCount: 3,
           content: detectMediaContentType(_heicStill()),
         ),
-        ContentVerdict.deferUnembeddable,
+        ContentVerdict.accept,
       );
     });
 

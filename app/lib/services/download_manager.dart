@@ -72,6 +72,21 @@ int candidateCapFor(DownloadJob job) {
   return count > kMaxAttemptsHardCap ? kMaxAttemptsHardCap : count;
 }
 
+/// Bound of the transfer attempts of [job]: a still tries every stored
+/// candidate once (original-resolution candidates first, preview-size ones
+/// last) so a dead first candidate cannot cost the item its original, while a
+/// video keeps the site rule of [attemptCapFor]. Never above
+/// [kMaxAttemptsHardCap].
+int retryCapFor(DownloadBatch batch, DownloadJob job) =>
+    job.isImage ? candidateCapFor(job) : attemptCapFor(batch, job);
+
+/// Whether the candidate [job] just downloaded is a preview-size derivative,
+/// i.e. its file is only kept because every original-resolution candidate of
+/// the item failed. Such a still is saved with the existing "非原图" mark.
+bool importsPreviewOnly(DownloadJob job) =>
+    job.isImage &&
+    isPreviewStillCandidate(DownloadManager.candidateUrlOf(job) ?? '');
+
 bool needsSessionDownload(DownloadBatch batch, DownloadJob job) {
   if (job.resources.isNotEmpty) {
     return job.resources.first.request.transport == MediaTransport.session;
@@ -304,11 +319,6 @@ class DownloadJob {
   String? lowResPath;
   int? lowResPixels;
 
-  /// A HEIC / AVIF still of this item, kept aside while an embeddable
-  /// candidate (JPEG / PNG / WebP) is still untried. Imported as-is when none
-  /// is left: the item must never fail just because the CDN only serves HEIC.
-  String? pendingStillPath;
-
   /// The saved file carries no provenance because its container cannot hold it
   /// (HEIC / AVIF / GIF). History still writes the pairId, so a Live photo
   /// still pairs with its clip.
@@ -368,7 +378,6 @@ class DownloadJob {
     if (expectedHeight != null) 'expectedHeight': expectedHeight,
     if (lowResPath != null) 'lowResPath': lowResPath,
     if (lowResPixels != null) 'lowResPixels': lowResPixels,
-    if (pendingStillPath != null) 'pendingStillPath': pendingStillPath,
     if (provenanceSkipped) 'provenanceSkipped': true,
     if (notOriginal) 'notOriginal': true,
     'assetId': assetId,
@@ -408,7 +417,8 @@ class DownloadJob {
     job.expectedHeight = (map['expectedHeight'] as num?)?.toInt();
     job.lowResPath = map['lowResPath'] as String?;
     job.lowResPixels = (map['lowResPixels'] as num?)?.toInt();
-    job.pendingStillPath = map['pendingStillPath'] as String?;
+    // Snapshots written by build 40 may carry `pendingStillPath`; the pipeline
+    // no longer parks an unwritable still aside, so the key is simply ignored.
     job.provenanceSkipped = map['provenanceSkipped'] as bool? ?? false;
     job.notOriginal = map['notOriginal'] as bool? ?? false;
     job.assetId = map['assetId'] as String?;
@@ -1355,7 +1365,30 @@ class DownloadManager extends ChangeNotifier {
     );
     await _logCandidate(batch, job, path, content, verdict);
     if (verdict == ContentVerdict.accept) return;
-    await _handleContentVerdict(batch, job, path, content, verdict);
+    await _handleContentVerdict(batch, job, path);
+  }
+
+  /// The accept path of [_finishFileOnce]: log the candidate and apply the
+  /// quality-ladder mark, without touching the album.
+  @visibleForTesting
+  Future<void> finishFileForTesting(
+    DownloadBatch batch,
+    DownloadJob job,
+    String path, {
+    MediaContentType? content,
+  }) async {
+    final verdict = contentVerdictFor(
+      isImage: job.isImage,
+      attempts: job.attempts,
+      candidateCount: job.urls.length,
+      content: content,
+    );
+    await _logCandidate(batch, job, path, content, verdict);
+    if (verdict != ContentVerdict.accept) {
+      await _handleContentVerdict(batch, job, path);
+      return;
+    }
+    _markPreviewOnly(job);
   }
 
   @visibleForTesting
@@ -1818,12 +1851,6 @@ class DownloadManager extends ChangeNotifier {
       await remove(File(kept));
       job.lowResPath = null;
     }
-    final still = job.pendingStillPath;
-    if (still != null) {
-      await remove(File(still));
-      await remove(File('$still.xmp'));
-      job.pendingStillPath = null;
-    }
     try {
       final root = await (tempRootForTesting?.call() ?? getTemporaryDirectory());
       final batchDir = Directory(
@@ -2128,9 +2155,13 @@ class DownloadManager extends ChangeNotifier {
     );
     await _logCandidate(batch, job, path, content, verdict);
     if (verdict != ContentVerdict.accept) {
-      await _handleContentVerdict(batch, job, path, content, verdict);
+      await _handleContentVerdict(batch, job, path);
       return;
     }
+    // Quality first: the candidates are ordered so a preview-size derivative is
+    // only downloaded once every original-resolution one failed. Its file is a
+    // scaled copy, so it keeps the existing "非原图" mark.
+    _markPreviewOnly(job);
 
     if (await shouldRetryForMissingAudio(job, path)) {
       unawaited(DevLog.write(
@@ -2173,12 +2204,28 @@ class DownloadManager extends ChangeNotifier {
       ? (job.isImage ? 'live_still' : 'live_clip')
       : (job.isImage ? 'image' : 'video');
 
+  /// Marks a still whose file came from a preview-size candidate "非原图": the
+  /// quality ladder only reaches a preview once every original-resolution
+  /// candidate of the item failed.
+  void _markPreviewOnly(DownloadJob job) {
+    if (!importsPreviewOnly(job)) return;
+    job.notOriginal = true;
+    unawaited(DevLog.write(
+      'V16DL', // i18n:ignore 日志
+      'item preview_only index=${job.itemIndex} role=${roleOf(job)} '
+          'label=${candidateLabelOf(candidateUrlOf(job) ?? '')} '
+          'not_original=true',
+    ));
+  }
+
   /// The candidate URL [job] just downloaded (never logged verbatim).
-  String? _candidateUrlOf(DownloadJob job) {
+  static String? candidateUrlOf(DownloadJob job) {
     if (job.urls.isEmpty) return null;
     final spent = job.attempts <= 0 ? 1 : job.attempts;
     return job.urls[(spent - 1) % job.urls.length];
   }
+
+  String? _candidateUrlOf(DownloadJob job) => candidateUrlOf(job);
 
   /// `[V16DL] candidate index=2 role=live_still label=img:jpg bytes=… sniff=heic
   /// result=…` — host/format label only, no URL, query, cookie or account.
@@ -2197,16 +2244,18 @@ class DownloadManager extends ChangeNotifier {
     final label = candidateLabelOf(_candidateUrlOf(job) ?? '');
     final sniff = content?.extension ?? 'unknown';
     final result = switch (verdict) {
-      ContentVerdict.accept => sniff == 'unknown' || content == null
+      // A HEIC / AVIF / GIF still is saved in its own container without
+      // embedded provenance: a success, logged as such.
+      ContentVerdict.accept => content == null ||
+              sniff == 'unknown' ||
+              !content.isImage ||
+              provenanceEmbeddableStill(content)
           ? 'ok'
-          : (content.isImage && !provenanceEmbeddableStill(content)
-              ? 'ok:unsupported_provenance'
-              : 'ok'),
+          : 'ok:provenance_skipped',
       ContentVerdict.rejectKind => job.isImage
           ? 'rejected:video_container'
           : 'rejected:still_for_video',
       ContentVerdict.rejectUnplayable => 'rejected:unplayable_video',
-      ContentVerdict.deferUnembeddable => 'retry:unsupported_provenance',
     };
     unawaited(DevLog.write(
       'V16DL', // i18n:ignore 日志
@@ -2256,17 +2305,7 @@ class DownloadManager extends ChangeNotifier {
     DownloadBatch batch,
     DownloadJob job,
     String path,
-    MediaContentType? content,
-    ContentVerdict verdict,
   ) async {
-    if (verdict == ContentVerdict.deferUnembeddable) {
-      // A HEIC/AVIF still the album can hold but provenance cannot annotate:
-      // keep it aside and give the next candidate a chance to be a JPEG.
-      await _setAsideStill(job, path, content?.extension);
-      await _persist(batch);
-      await _enqueueAttempt(batch, job);
-      return;
-    }
     await _discardWrongContent(batch, job, path);
   }
 
@@ -2290,23 +2329,13 @@ class DownloadManager extends ChangeNotifier {
     await _failReadable(batch, job);
   }
 
-  /// Imports the best file set aside while better candidates were tried (a
-  /// full-size still, or a HEIC/AVIF still of the same item). Returns false
-  /// when nothing was set aside, so the caller can fail the job.
+  /// Imports the largest still kept aside while better candidates were tried.
+  /// Returns false when nothing was set aside, so the caller can fail the job.
   Future<bool> _importBestSetAside(
     DownloadBatch batch,
     DownloadJob job, {
     required String reason,
   }) async {
-    // A HEIC/AVIF still of this item: a real photo, the only shape the CDN
-    // served. It is imported as-is (provenance skipped for that container).
-    final still = job.pendingStillPath;
-    if (job.isImage && still != null && await File(still).exists()) {
-      job.pendingStillPath = null;
-      _log('importing set-aside still index=${job.itemIndex} reason=$reason');
-      await _importFile(batch, job, still, isImage: true, itemIndex: job.itemIndex);
-      return true;
-    }
     // A full-size image kept from an earlier candidate still beats nothing;
     // it already matched the job's kind when it was set aside.
     final kept = job.lowResPath;
@@ -2330,51 +2359,9 @@ class DownloadManager extends ChangeNotifier {
     job
       ..state = JobState.failed
       ..error = error ?? (job.isImage ? failureTextFor(job) : '下载到的文件不是视频，已跳过');
-    final still = job.pendingStillPath;
-    if (still != null) {
-      try {
-        await File(still).delete();
-      } catch (_) {}
-      job.pendingStillPath = null;
-    }
     await _persist(batch);
     notifyListeners();
     await _afterTerminal(batch, recovered: false);
-  }
-
-  /// Stores an unembeddable still (HEIC / AVIF) in the private temp area so the
-  /// next candidate can be tried without losing the only photo the CDN serves.
-  Future<void> _setAsideStill(
-    DownloadJob job,
-    String path,
-    String? extension,
-  ) async {
-    try {
-      final root = await (tempRootForTesting?.call() ?? getTemporaryDirectory());
-      final dir = Directory(
-        '${root.path}/easysave_stills/${Uri.encodeComponent(job.key)}',
-      );
-      await dir.create(recursive: true);
-      final previous = job.pendingStillPath;
-      if (previous != null) {
-        try {
-          await File(previous).delete();
-        } catch (_) {}
-      }
-      final name = File(path).uri.pathSegments.isEmpty
-          ? 'still.${extension ?? 'bin'}'
-          : File(path).uri.pathSegments.last;
-      final keep = File('${dir.path}/try${job.attempts}_$name');
-      try {
-        await File(path).rename(keep.path);
-      } on FileSystemException {
-        await File(path).copy(keep.path);
-        await File(path).delete();
-      }
-      job.pendingStillPath = keep.path;
-    } catch (e) {
-      _log('set-aside still failed index=${job.itemIndex} type=${e.runtimeType}');
-    }
   }
 
   Future<void> _importFile(
@@ -2715,21 +2702,25 @@ class DownloadManager extends ChangeNotifier {
       return;
     }
     // One line per failed attempt: the retry counter is bounded by
-    // maxAttemptsFor(), so the log always shows how a file used its tries.
+    // retryCapFor(), so the log always shows how a file used its tries. The
+    // host class and the cause are fixed tokens — never the URL, the host name
+    // or its query.
+    final cap = retryCapFor(batch, job);
     unawaited(DevLog.write(
       'V16DL', // i18n:ignore 日志
       'candidate index=${job.itemIndex} role=${roleOf(job)} '
-          'label=${candidateLabelOf(_candidateUrlOf(job) ?? '')} bytes=- '
+          'label=${candidateLabelOf(_candidateUrlOf(job) ?? '')} '
+          'host_class=${_hostClassOf(batch, job)} bytes=- '
           'sniff=- result=transfer_failed reason=${_transferReason(update)} '
-          'candidate=${job.attempts}/${attemptCapFor(batch, job)}',
+          'cause=${_failureCause(update)} candidate=${job.attempts}/$cap',
     ));
-    if (job.attempts < attemptCapFor(batch, job)) {
+    if (job.attempts < cap) {
       await _enqueueAttempt(batch, job);
       return;
     }
     if (await _importBestSetAside(batch, job, reason: 'transfer_failed')) return;
     _log('transfer gave up index=${job.itemIndex} role=${roleOf(job)} '
-        'reason=${_transferReason(update)} '
+        'reason=${_transferReason(update)} cause=${_failureCause(update)} '
         'detail=${update.exception?.toString() ?? 'unknown'}');
     await _cleanupJobTemp(batch, job);
     await _failReadable(
@@ -2739,6 +2730,36 @@ class DownloadManager extends ChangeNotifier {
           ? '${failureTextFor(job)}（HTTP ${update.responseStatusCode}）'
           : failureTextFor(job),
     );
+  }
+
+  /// The transport-failure path for one candidate (production: a
+  /// `TaskStatus.failed` update). Exposed so the quality ladder can be tested
+  /// end to end: original candidates rotate first, preview candidates last,
+  /// and the same candidate is never tried twice.
+  @visibleForTesting
+  Future<void> taskFailureForTesting(
+    DownloadBatch batch,
+    DownloadJob job,
+    TaskStatusUpdate update,
+  ) => _failAttempt(batch, job, update);
+
+  /// Log-safe class of the candidate host: the site's own media host
+  /// (`site_media`), a declared CDN host (`cdn_media`) or anything else
+  /// (`other`). The host name itself is never written.
+  String _hostClassOf(DownloadBatch batch, DownloadJob job) {
+    final raw = _candidateUrlOf(job);
+    if (raw == null) return 'other';
+    final host = Uri.tryParse(raw)?.host.toLowerCase() ?? '';
+    if (host.isEmpty) return 'other';
+    final site = SiteRegistry.current.byId(batch.platform);
+    if (site == null) return 'other';
+    if (site.hasHost(host)) return 'site_media';
+    final download = site.data['download'] as Map?;
+    final mediaHosts =
+        (download?['mediaHosts'] as List?)?.cast<Map>() ?? const <Map>[];
+    return mediaHosts.any((rule) => matchesHost(host, rule))
+        ? 'cdn_media'
+        : 'other';
   }
 
   /// Short, log-safe transfer failure reason (no URL, no query).
@@ -2754,6 +2775,28 @@ class DownloadManager extends ChangeNotifier {
     }
     final type = update.exception?.runtimeType;
     return type == null ? 'unknown' : type.toString().toLowerCase();
+  }
+
+  /// Detail of a connection failure as a fixed token. The native description
+  /// is never logged: on Android it embeds the host name and the request URL.
+  static String _failureCause(TaskStatusUpdate update) {
+    if (update.responseStatusCode != null) return 'http';
+    final description = update.exception?.description ?? '';
+    bool has(String pattern) =>
+        RegExp(pattern, caseSensitive: false).hasMatch(description);
+    if (has(r'unknownhost|unresolved|gaierror|nodename')) return 'dns';
+    if (has(r'ssl|certificate|handshake|certpath')) return 'tls';
+    if (has(r'econnrefused|connection refused|connectexception')) {
+      return 'refused';
+    }
+    if (has(r'timeout|timed out|超时')) return 'timeout';
+    if (has(r'noroutetohost|enetunreach|ehostunreach|unreachable')) {
+      return 'unreachable';
+    }
+    if (has(r'econnreset|connection reset|epipe|eof|broken pipe')) {
+      return 'reset';
+    }
+    return 'other';
   }
 
   /// Write history with up to three attempts; a full disk (SQLITE_FULL) is
@@ -3407,7 +3450,7 @@ class DownloadManager extends ChangeNotifier {
         changed = true;
       } else if (record.status == TaskStatus.failed ||
           record.status == TaskStatus.notFound) {
-        if (job.attempts < attemptCapFor(batch, job)) {
+        if (job.attempts < retryCapFor(batch, job)) {
           await _enqueueAttempt(batch, job);
         } else {
           job.state = JobState.failed;

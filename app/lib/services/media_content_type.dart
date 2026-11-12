@@ -178,8 +178,7 @@ bool provenanceEmbeddableStill(MediaContentType type) =>
     const {'jpg', 'png', 'webp'}.contains(type.extension);
 
 /// What the download pipeline does with a finished file whose own bytes are
-/// [content], for a job that asked for [isImage]. [attempts] is the number of
-/// candidates already spent and [candidateCount] the size of the list.
+/// [content], for a job that asked for [isImage].
 enum ContentVerdict {
   /// The file is what the job asked for: import it.
   accept,
@@ -190,13 +189,13 @@ enum ContentVerdict {
 
   /// A movie without a `moov` box: unusable, the next candidate is tried.
   rejectUnplayable,
-
-  /// A still whose container cannot carry provenance (HEIC / AVIF / GIF). It
-  /// is a real photo, so it is set aside while an embeddable candidate is
-  /// still untried and imported as-is once none is left.
-  deferUnembeddable,
 }
 
+/// Quality wins over provenance: a still whose container cannot carry
+/// provenance (HEIC / AVIF / GIF) is accepted as-is and saved in its own
+/// format. It is never a reason to fall back to a preview-size candidate, so
+/// [attempts] and [candidateCount] no longer change the verdict — they stay in
+/// the signature because every call site reports them in the log.
 ContentVerdict contentVerdictFor({
   required bool isImage,
   required int attempts,
@@ -207,14 +206,7 @@ ContentVerdict contentVerdictFor({
   if (content == null) return ContentVerdict.accept;
   if (content.isImage != isImage) return ContentVerdict.rejectKind;
   if (content.playable == false) return ContentVerdict.rejectUnplayable;
-  if (!isImage || provenanceEmbeddableStill(content)) {
-    return ContentVerdict.accept;
-  }
-  // All candidates are HEIC/AVIF: never fail the item, save it in its own
-  // format (the provenance step is skipped for that container).
-  return attempts < candidateCount
-      ? ContentVerdict.deferUnembeddable
-      : ContentVerdict.accept;
+  return ContentVerdict.accept;
 }
 
 /// Short label of a candidate URL for the diagnostic log: where the bytes come
@@ -251,31 +243,58 @@ String candidateLabelOf(String url) {
   return safe.isEmpty ? source : '$source:$safe';
 }
 
-/// Format rank of a still candidate: the writable (provenance-capable)
-/// containers are tried before HEIC / AVIF / GIF. Unknown shapes stay in the
-/// middle so a CDN the parser does not know is never pushed to the end.
+/// Whether [url] is a preview-size derivative of a still: the `sns-webpic-*`
+/// bucket, a preview scene (`WB_PRV` / `H5_PRV`), a preview style
+/// (`!nd_prv_*` / `!h5_prv_*`) or a down-sizing `imageView2` query
+/// (`/w/`, `/h/`, `thumbnail`).
+///
+/// A preview candidate is the last resort: it is only downloaded once every
+/// original-resolution candidate of the item failed, and the file it delivers
+/// is saved with the existing "非原图" mark.
+bool isPreviewStillCandidate(String url) {
+  final uri = Uri.tryParse(url.trim());
+  if (uri == null) return false;
+  final host = uri.host.toLowerCase();
+  if (host.startsWith('sns-webpic-')) return true;
+  final path = uri.path.toLowerCase();
+  final bang = path.indexOf('!');
+  if (bang >= 0 && path.substring(bang + 1).contains('prv')) return true;
+  final query = uri.query.toLowerCase();
+  final all = '$path?$query';
+  if (all.contains('wb_prv') || all.contains('h5_prv')) return true;
+  if (query.contains('imageview2') &&
+      (query.contains('/w/') ||
+          query.contains('/h/') ||
+          query.contains('thumbnail'))) {
+    return true;
+  }
+  return false;
+}
+
+/// Format rank of a still candidate inside one quality class: the writable
+/// (provenance-capable) containers are tried before HEIC / AVIF / GIF. Unknown
+/// shapes stay in the middle so a CDN the parser does not know is never pushed
+/// to the end.
 int stillCandidateRank(String url) {
   final label = candidateLabelOf(url);
   final format = label.contains(':') ? label.split(':').last : '';
-  switch (format) {
-    case 'jpg':
-      return 0;
-    case 'png':
-      return 1;
-    case 'webp':
-      return 2;
-    case 'heic':
-    case 'avif':
-    case 'gif':
-      return 4;
-    default:
-      return 3;
-  }
+  final byFormat = switch (format) {
+    'jpg' => 0,
+    'png' => 1,
+    'webp' => 2,
+    'heic' || 'avif' || 'gif' => 4,
+    _ => 3,
+  };
+  // Quality class dominates the format: every original-resolution candidate
+  // ranks before every preview-size one, so a HEIC original always beats a
+  // WebP preview. Inside the original class the format decides, which is what
+  // puts a jpeg original before a HEIC one without an extra request.
+  return (isPreviewStillCandidate(url) ? 8 : 0) + byFormat;
 }
 
-/// Stable jpeg-first ordering of the still candidates of one item. Live photo
-/// stills and ordinary images share it, so a Live photo's still is never the
-/// only one in the batch that starts with an unwritable container.
+/// Stable quality-first ordering of the still candidates of one item:
+/// original-resolution candidates first (jpeg before HEIC / AVIF), then
+/// preview-size derivatives. Live photo stills and ordinary images share it.
 List<String> rankStillCandidates(Iterable<String> urls) {
   final indexed = urls.toList().indexed.toList();
   indexed.sort((a, b) {
