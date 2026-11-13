@@ -5,6 +5,7 @@ import 'package:easysave/services/gallery_locator_service.dart';
 import 'package:easysave/services/history_db.dart';
 import 'package:easysave/services/host_bridge.dart';
 import 'package:easysave/widgets/history_cards.dart';
+import 'package:easysave/widgets/balanced_masonry_view.dart';
 import 'package:easysave/widgets/history_masonry.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -36,6 +37,10 @@ Widget _host(List<String> ids, {String label = ''}) => MaterialApp(
 
 RenderObject _gridRender(WidgetTester tester) =>
     tester.renderObject(find.byType(MasonryGridView));
+
+/// The 帖子 waterfall's grid (v1.11 batch 1).
+RenderObject _balancedRender(WidgetTester tester) =>
+    tester.renderObject(find.byType(BalancedMasonry));
 
 /// Every card starts where its column currently ends, the shortest column
 /// first, so both columns are packed without holes.
@@ -163,8 +168,9 @@ void main() {
     await tester.pumpWidget(const MaterialApp(home: HistoryPage()));
     await settle();
     expect(cards().map((card) => card.record.postId), ['a', 'b', 'c', 'd', 'e']);
-    expect(find.byType(MasonryGridView), findsNWidgets(2));
-    final before = tester.renderObject(find.byType(MasonryGridView).first);
+    // v1.11 batch 1: the 帖子 waterfall uses the balanced two-column layout.
+    expect(find.byType(BalancedMasonry), findsNWidgets(2));
+    final before = tester.renderObject(find.byType(BalancedMasonry).first);
 
     await tester.runAsync(() async {
       await db.upsert(_record('e', DateTime.now(), files: 2), userSave: true);
@@ -174,8 +180,8 @@ void main() {
 
     final ordered = cards();
     expect(ordered.map((card) => card.record.postId), ['e', 'a', 'b', 'c', 'd']);
-    expect(find.byType(MasonryGridView), findsOneWidget);
-    expect(_gridRender(tester), isNot(same(before)));
+    expect(find.byType(BalancedMasonry), findsOneWidget);
+    expect(_balancedRender(tester), isNot(same(before)));
     final topLefts = [
       for (final card in ordered) tester.getTopLeft(find.byWidget(card)),
     ];

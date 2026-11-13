@@ -30,6 +30,7 @@ import '../services/parse_service.dart';
 import '../services/settings.dart';
 import '../services/site_registry.dart';
 import '../theme/app_theme.dart';
+import '../widgets/balanced_masonry_view.dart';
 import '../widgets/delete_records_sheet.dart';
 import '../widgets/download_sheet.dart';
 import '../widgets/gallery_browser.dart';
@@ -1712,11 +1713,14 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
   Widget _groupGrid({
     required List<String> itemKeys,
     required Widget Function(BuildContext, int) itemBuilder,
+    bool balanced = false,
   }) {
     return SliverToBoxAdapter(
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 16),
-        child: HistoryMasonryGrid(itemKeys: itemKeys, itemBuilder: itemBuilder),
+        child: balanced
+            ? BalancedMasonryGrid(itemKeys: itemKeys, itemBuilder: itemBuilder)
+            : HistoryMasonryGrid(itemKeys: itemKeys, itemBuilder: itemBuilder),
       ),
     );
   }
@@ -1732,6 +1736,7 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
               title: group.title,
               background: Theme.of(context).scaffoldBackgroundColor,
               content: _groupGrid(
+              balanced: true,
               itemKeys: [for (final record in group.posts) 'wf-${record.id}'],
               itemBuilder: (context, index) {
                 final record = group.posts[index];
