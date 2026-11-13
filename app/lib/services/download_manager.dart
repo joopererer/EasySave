@@ -29,6 +29,7 @@ import 'gallery_locator_service.dart';
 import 'history_db.dart';
 import 'history_io.dart';
 import 'image_dimensions.dart';
+import 'network_status.dart';
 import 'image_decode_probe.dart';
 import 'media_content_type.dart';
 import 'mp4_audio_probe.dart';
@@ -1072,6 +1073,7 @@ class DownloadManager extends ChangeNotifier {
   final _notifications = FlutterLocalNotificationsPlugin();
   static const _channelId = 'easysave_downloads';
   final Map<String, int> _lastShownPercent = {};
+  final Map<String, bool> _lastShownWaiting = {};
 
   // Retained: dropping the broadcast subscription would stop updates.
   Future<void> close() async {
@@ -1228,6 +1230,10 @@ class DownloadManager extends ChangeNotifier {
       // Notifications are best effort; downloads run regardless.
     }
     _updatesSub = FileDownloader().updates.listen(_onUpdate);
+    // Connectivity is display only (progress text, notification body). The
+    // downloader's queueing/retry/resume logic never reads it.
+    unawaited(NetworkStatus.instance.start());
+    NetworkStatus.instance.addListener(_onNetworkChanged);
     // Heartbeat: refresh the snapshot of running batches so the other engine
     // can tell "the owner is alive" from "the owner died mid-batch".
     _heartbeat?.cancel();
@@ -1236,6 +1242,16 @@ class DownloadManager extends ChangeNotifier {
       (_) => _heartbeatTick(),
     );
     await _loadAndReconcile();
+  }
+
+  /// The system connection came back (or went away): the notification body
+  /// follows it. Purely cosmetic — the downloader itself is never touched.
+  void _onNetworkChanged() {
+    for (final batch in _batches.values.toList()) {
+      if (batch.isTerminal) continue;
+      unawaited(_refreshNotification(batch));
+    }
+    notifyListeners();
   }
 
   /// Persist the running batches so their `updatedAt` stays fresh while the
@@ -1331,7 +1347,6 @@ class DownloadManager extends ChangeNotifier {
 
   int _notificationId(DownloadBatch batch) =>
       batch.batchId.hashCode & 0x7fffffff;
-
   /// Single merged notification per batch with byte-level percent.
   Future<void> _refreshNotification(DownloadBatch batch) async {
     final active = [
@@ -1350,8 +1365,14 @@ class DownloadManager extends ChangeNotifier {
             .round()
             .clamp(0, 100);
     final terminal = batch.isTerminal;
-    if (!terminal && _lastShownPercent[batch.batchId] == percent) return;
+    final waitingForNetwork = !NetworkStatus.instance.online;
+    if (!terminal &&
+        _lastShownPercent[batch.batchId] == percent &&
+        _lastShownWaiting[batch.batchId] == waitingForNetwork) {
+      return;
+    }
     _lastShownPercent[batch.batchId] = percent;
+    _lastShownWaiting[batch.batchId] = waitingForNetwork;
     try {
       if (terminal) {
         await _cancelNotification(batch);
@@ -1359,13 +1380,20 @@ class DownloadManager extends ChangeNotifier {
       }
       await _notifications.show(
         id: _notificationId(batch),
-        title: '正在下载 $done/${active.length}',
-        body: '$percent%',
+        title: downloadNotificationTitle(
+          done: done,
+          total: active.length,
+          waitingForNetwork: waitingForNetwork,
+        ),
+        body: downloadNotificationBody(
+          percent: percent,
+          waitingForNetwork: waitingForNetwork,
+        ),
         notificationDetails: NotificationDetails(
           android: AndroidNotificationDetails(
             _channelId,
             '下载进度',
-            showProgress: true,
+            showProgress: !waitingForNetwork,
             maxProgress: 100,
             progress: percent,
             ongoing: true,
@@ -1382,6 +1410,7 @@ class DownloadManager extends ChangeNotifier {
 
   Future<void> _cancelNotification(DownloadBatch batch) async {
     _lastShownPercent.remove(batch.batchId);
+    _lastShownWaiting.remove(batch.batchId);
     try {
       await historyStep(
         'cancel-notification',
@@ -3847,6 +3876,23 @@ class DownloadManager extends ChangeNotifier {
     }
   }
 }
+
+/// Title of the single merged download notification.
+///
+/// Offline the batch keeps waiting and continues by itself, so the title says
+/// that instead of "正在下载" (v1.11 batch 2). Display only.
+String downloadNotificationTitle({
+  required int done,
+  required int total,
+  required bool waitingForNetwork,
+}) => waitingForNetwork ? '等待网络 $done/$total' : '正在下载 $done/$total';
+
+/// Body of the single merged download notification (see
+/// [downloadNotificationTitle]).
+String downloadNotificationBody({
+  required int percent,
+  required bool waitingForNetwork,
+}) => waitingForNetwork ? '等待网络…联网后自动继续' : '$percent%';
 
 /// One `item failed` log line: the fixed reason token, and the attempts of the
 /// file over the budget it actually has ([retryCapFor]) — never the

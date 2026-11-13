@@ -163,6 +163,7 @@ class MainActivity : FlutterActivity() {
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         NativeLog.register(this, flutterEngine.dartExecutor.binaryMessenger)
+        NetworkStatusChannel.register(this, flutterEngine.dartExecutor.binaryMessenger)
         SharedPreviewBridge.register(this, flutterEngine.dartExecutor.binaryMessenger)
         super.configureFlutterEngine(flutterEngine)
         ProvenancePairWriter.register(this, flutterEngine.dartExecutor.binaryMessenger)

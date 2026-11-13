@@ -284,6 +284,7 @@ class DownloadingOverlay extends StatelessWidget {
     this.paused = false,
     this.stalled = false,
     this.failed = false,
+    this.waitingForNetwork = false,
     this.partial = false,
     this.failureReason,
     this.onTogglePause,
@@ -299,6 +300,12 @@ class DownloadingOverlay extends StatelessWidget {
   /// No sign of life for a while: the toggle becomes "retry".
   final bool stalled;
   final bool failed;
+
+  /// The system has no connection: the batch keeps its place in the queue and
+  /// resumes by itself, so the overlay explains the wait instead of spinning
+  /// silently (v1.11 batch 2). Display only — nothing here pauses anything.
+  final bool waitingForNetwork;
+
   final bool partial;
 
   /// Short failure reason ("存储空间不足", "HTTP 403", ...) shown in the label.
@@ -316,6 +323,9 @@ class DownloadingOverlay extends StatelessWidget {
     final size = compact ? 28.0 : 44.0;
     final reason = failureReason?.isNotEmpty == true ? '（$failureReason）' : '';
     final label = failed ? (partial ? '部分保存成功$reason，点击重试' : '下载失败$reason，点击重试') : paused ? '已暂停 $pct%' : (stalled ? '已停滞 $pct%' : '下载中 $pct%');
+    final shownLabel = !failed && !paused && waitingForNetwork
+        ? '等待网络…联网后自动继续'
+        : label;
     final toggleIcon = paused
         ? Icons.play_arrow_rounded
         : (stalled || failed ? Icons.refresh : Icons.pause_rounded);
@@ -339,7 +349,7 @@ class DownloadingOverlay extends StatelessWidget {
     }
 
     return Semantics(
-      label: label,
+      label: shownLabel,
       child: ColoredBox(
         color: Colors.black.withValues(alpha: 0.45),
         child: Center(
@@ -362,7 +372,8 @@ class DownloadingOverlay extends StatelessWidget {
               if (!compact) ...[
                 const SizedBox(height: 6),
                 Text(
-                  label,
+                  shownLabel,
+                  textAlign: TextAlign.center,
                   style: const TextStyle(
                     color: Colors.white,
                     fontSize: 12,
@@ -563,6 +574,7 @@ class WaterfallPostCard extends StatelessWidget {
     this.downloadPaused = false,
     this.downloadStalled = false,
     this.downloadFailed = false,
+    this.downloadWaitingForNetwork = false,
     this.downloadFailureReason,
     this.onToggleDownload,
     this.onCancelDownload,
@@ -580,6 +592,10 @@ class WaterfallPostCard extends StatelessWidget {
   final bool downloadPaused;
   final bool downloadStalled;
   final bool downloadFailed;
+
+  /// No system connection: the overlay explains the wait (display only).
+  final bool downloadWaitingForNetwork;
+
   final String? downloadFailureReason;
 
   /// Pause / resume (retry when stalled) and cancel of the running download.
@@ -685,6 +701,7 @@ class WaterfallPostCard extends StatelessWidget {
                           paused: downloadPaused,
                           stalled: downloadStalled,
                           failed: downloadFailed,
+                          waitingForNetwork: downloadWaitingForNetwork,
                           failureReason: downloadFailureReason,
                           partial: record.savedFiles.isNotEmpty,
                           // Hidden in multi-select so taps keep selecting.

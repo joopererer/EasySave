@@ -26,6 +26,7 @@ import '../services/history_io.dart';
 import '../services/host_bridge.dart';
 import '../services/live_pairs.dart';
 import '../services/media_delete_service.dart';
+import '../services/network_status.dart';
 import '../services/parse_service.dart';
 import '../services/settings.dart';
 import '../services/site_registry.dart';
@@ -114,6 +115,8 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
     GalleryLocatorService.instance.addListener(_onLocatorChanged);
     HostBridge.historyRevision.addListener(_onHostHistoryChanged);
     DownloadManager.instance.addListener(_refreshDownloads);
+    // Connectivity only changes what the cards say while a batch waits.
+    NetworkStatus.instance.addListener(_refreshDownloads);
     // Batches of the other engine only exist as snapshots, so poll them.
     _downloadPoll = Timer.periodic(
       const Duration(seconds: 3),
@@ -255,6 +258,7 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
     GalleryLocatorService.instance.removeListener(_onLocatorChanged);
     HostBridge.historyRevision.removeListener(_onHostHistoryChanged);
     DownloadManager.instance.removeListener(_refreshDownloads);
+    NetworkStatus.instance.removeListener(_refreshDownloads);
     _downloadPoll?.cancel();
     _searchController.dispose();
     super.dispose();
@@ -1755,6 +1759,10 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
                   downloadProgress: _downloadProgress[record.postId] ?? (_recordFailed(record) ? 0 : null),
                   downloadPaused: _isPaused(record.postId),
                   downloadStalled: _isStalled(record.postId),
+                  downloadWaitingForNetwork:
+                      !NetworkStatus.instance.online &&
+                      _downloadBatches[record.postId] != null &&
+                      !(_downloadBatches[record.postId]!.isTerminal),
                   downloadFailed: _isFailed(record.postId) || _recordFailed(record),
                   downloadFailureReason: _downloadBatches[record.postId]?.failureReason ?? record.downloadError,
                   onToggleDownload: _recordFailed(record) ? () => _reparse(record) : _downloadBatches[record.postId]?.supportsPause == false && !_isFailed(record.postId) ? null : () => _toggleDownload(record.postId),
