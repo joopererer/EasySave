@@ -3,8 +3,8 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:photo_manager/photo_manager.dart';
 import 'package:photo_manager_image_provider/photo_manager_image_provider.dart';
-import '../core/dev_log.dart';
 import '../services/gallery_locator_service.dart';
+import '../services/thumbnail_diagnostics.dart';
 import '../services/verified_media.dart';
 
 /// How long one local thumbnail may take before the card draws its fallback.
@@ -63,6 +63,15 @@ class _VerifiedAssetImageState extends State<VerifiedAssetImage> with WidgetsBin
   bool _frameSeen = false;
   bool _timedOut = false;
   Timer? _watchdog;
+
+  /// Diagnostic handle for the current request (v1.11 batch 1). Bookkeeping
+  /// only: it never decides what the widget draws.
+  ThumbnailRequest? _request;
+
+  String get _thumbKey =>
+      '${widget.asset.id}/${widget.isOriginal ? 'original' : 'thumb'}/'
+      '${widget.thumbnailSize.width}x${widget.thumbnailSize.height}';
+
   ImageProvider get _provider => VerifiedAssetImage.providerFor(widget.asset,
       isOriginal: widget.isOriginal, thumbnailSize: widget.thumbnailSize);
 
@@ -86,18 +95,21 @@ class _VerifiedAssetImageState extends State<VerifiedAssetImage> with WidgetsBin
   /// keeps running and its late frame is simply ignored.
   void _startWatchdog() {
     _watchdog?.cancel();
+    ThumbnailDiagnostics.instance.abandon(_request);
     _timedOut = false;
     _frameSeen = false;
     final id = widget.asset.id;
-    final watch = Stopwatch()..start();
+    _request = ThumbnailDiagnostics.instance.begin(_thumbKey);
     _watchdog = Timer(kLocalThumbnailTimeout, () {
       if (!mounted || _frameSeen || _failed) return;
       _timedOut = true;
-      unawaited(DevLog.write(
-        'ThumbLoad',
-        'event=local_decode_failed kind=${widget.isOriginal ? 'original' : 'thumb'} '
-            'reason=timeout ms=${watch.elapsedMilliseconds}',
-      ));
+      // The diagnosis only measures; the fallback below is the same one this
+      // widget already drew before v1.11.
+      ThumbnailDiagnostics.instance.timedOut(
+        _request,
+        timeout: kLocalThumbnailTimeout,
+      );
+      _request = null;
       if (mounted && widget.asset.id == id) setState(() {});
     });
   }
@@ -111,6 +123,7 @@ class _VerifiedAssetImageState extends State<VerifiedAssetImage> with WidgetsBin
   @override
   void dispose() {
     _watchdog?.cancel();
+    ThumbnailDiagnostics.instance.abandon(_request);
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
   }
@@ -136,11 +149,8 @@ class _VerifiedAssetImageState extends State<VerifiedAssetImage> with WidgetsBin
     _watchdog?.cancel();
     final id = widget.asset.id;
     VerifiedAssetImage._knownPresent.remove(id);
-    unawaited(DevLog.write(
-      'ThumbLoad',
-      'event=local_decode_failed kind=${widget.isOriginal ? 'original' : 'thumb'} '
-          'reason=decode',
-    ));
+    ThumbnailDiagnostics.instance.failed(_request);
+    _request = null;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       GalleryLocatorService.instance.markUnreadable(id);
       if (mounted && widget.asset.id == id) setState(() {});
@@ -155,11 +165,15 @@ class _VerifiedAssetImageState extends State<VerifiedAssetImage> with WidgetsBin
       if (snapshot.connectionState == ConnectionState.done && snapshot.data != true) {
         // A decoded thumbnail is display-only: a fresh negative lookup wins.
         PaintingBinding.instance.imageCache.evict(_provider);
+        ThumbnailDiagnostics.instance.abandon(_request);
+        _request = null;
         return widget.fallback;
       }
       if (snapshot.data != true && !PaintingBinding.instance.imageCache.statusForKey(_provider).keepAlive) {
         // Do not start a CDN image and then replace it with a local image a
         // frame later. On layout switches the decoded local image is reused.
+        // The request stays counted while the existence check is pending: from
+        // the card's point of view the thumbnail has not arrived yet.
         return SizedBox(width: widget.width, height: widget.height);
       }
       // A local original is decoded straight away. While it decodes the area
@@ -172,6 +186,8 @@ class _VerifiedAssetImageState extends State<VerifiedAssetImage> with WidgetsBin
           if (frame != null && !_frameSeen) {
             _frameSeen = true;
             _watchdog?.cancel();
+            ThumbnailDiagnostics.instance.succeeded(_request);
+            _request = null;
           }
           return child;
         },
