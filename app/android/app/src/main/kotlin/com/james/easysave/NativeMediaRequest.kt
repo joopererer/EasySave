@@ -1,6 +1,7 @@
 package com.james.easysave
 
 import android.media.MediaDataSource
+import com.bbflight.background_downloader.MediaPolicyRedirects
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.IOException
@@ -43,7 +44,7 @@ internal class NativeMediaRequest(
 
     val diagnosticHeaderNames: String
         get() = headers.keys.mapNotNull { (it as? String)?.lowercase(Locale.ROOT) }
-            .filter { it in setOf("referer", "origin", "user-agent", "range") }
+            .filter { it in MediaPolicyRedirects.PERMITTED_HEADERS }
             .sorted().joinToString(",").ifEmpty { "none" }
 
     internal class Rejected(val code: String, val host: String) : IOException("$code host=$host")
@@ -86,13 +87,18 @@ internal class NativeMediaRequest(
         val names = mapOf(
             "referer" to "Referer", "origin" to "Origin",
             "user-agent" to "User-Agent", "range" to "Range",
+            "accept-encoding" to "Accept-Encoding",
         )
         val result = LinkedHashMap<String, String>()
         for ((rawName, rawValue) in headers) {
-            val name = names[(rawName as? String)?.lowercase(Locale.ROOT)]
-                ?: deny("REQUEST_HEADER_REJECTED", host)
+            val normalized = (rawName as? String)?.lowercase(Locale.ROOT)
+            val name = names[normalized] ?: deny("REQUEST_HEADER_REJECTED", host)
             val value = rawValue as? String ?: deny("REQUEST_HEADER_REJECTED", host)
-            if (value.any { it == '\r' || it == '\n' || it == '\u0000' } || result.containsKey(name)) {
+            val allowedValues = MediaPolicyRedirects.PERMITTED_VALUES[normalized]
+            if (value.any { it == '\r' || it == '\n' || it == '\u0000' } ||
+                result.containsKey(name) ||
+                (allowedValues != null && value.lowercase(Locale.ROOT) !in allowedValues)
+            ) {
                 deny("REQUEST_HEADER_REJECTED", host)
             }
             result[name] = value

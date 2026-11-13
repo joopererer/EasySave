@@ -76,6 +76,18 @@ class GalleryLocatorService extends ChangeNotifier {
   bool _scanned = false;
   bool get scanned => _scanned;
 
+  /// Whether the current album index was built to the end.
+  ///
+  /// A scan whose queries timed out leaves this false, and [syncRecord] then
+  /// never downgrades a row: an album read that did not finish is not evidence
+  /// that a file disappeared. That distinction is what kept a slow HEIC post
+  /// from shrinking from 3 files to 1 to "未找到可查看的媒体文件".
+  bool _indexComplete = false;
+  bool get indexComplete => _indexComplete;
+
+  /// How long one row's album lookup may take before it counts as unanswered.
+  static Duration lookupTimeout = const Duration(seconds: 3);
+
   bool _isScanning = false;
   bool get isScanning => _isScanning;
 
@@ -158,8 +170,7 @@ class GalleryLocatorService extends ChangeNotifier {
   }
 
   /// Evict deleted media IDs from in-memory caches.
-  void evictMediaIds(Iterable<String> ids) {
-    for (final id in ids) {
+  void evictMediaIds(Iterable<String> ids) {    for (final id in ids) {
       final asset = _idMap.remove(id);
       final title = (asset?.title ?? '').trim().toLowerCase();
       if (title.isNotEmpty) {
@@ -171,6 +182,18 @@ class GalleryLocatorService extends ChangeNotifier {
       _stemMap.removeWhere((_, a) => a.id == id);
     }
     notifyListeners();
+  }
+
+  /// Which of [ids] the current album index still holds. Used right after a
+  /// delete request to tell "removed" from "approved but still there".
+  Set<String> remainingIds(Iterable<String> ids) {
+    final present = <String>{};
+    for (final id in ids) {
+      if (_idMap.containsKey(id) || (_nativeIds?.contains(id) ?? false)) {
+        present.add(id);
+      }
+    }
+    return present;
   }
 
   /// Check current permission state without prompting the user.
@@ -243,6 +266,7 @@ class GalleryLocatorService extends ChangeNotifier {
     if (_isScanning) return;
 
     _isScanning = true;
+    _indexComplete = false;
     notifyListeners();
 
     try {
@@ -252,6 +276,7 @@ class GalleryLocatorService extends ChangeNotifier {
         _lookupMethod = 'plugin';
         _nativeIds = null;
         _scanned = true;
+        _indexComplete = true;
         return;
       }
       final settings = await AppSettings.load();
@@ -318,6 +343,7 @@ class GalleryLocatorService extends ChangeNotifier {
       _lookupMethod = 'plugin';
       _nativeIds = null;
       _scanned = true;
+      _indexComplete = true;
     } catch (e) {
       debugPrint('GalleryLocatorService.scanAlbum error: $e');
     } finally {
@@ -388,6 +414,7 @@ class GalleryLocatorService extends ChangeNotifier {
       _nativePermission = raw['permission']?.toString() ?? 'unknown';
       _lookupMethod = 'native';
       _scanned = true;
+      _indexComplete = raw['error'] == null;
       if (raw['error'] != null) {
         unawaited(DevLog.write('SavedLookup',
             'event=native_query_error error=${raw['error']} sdk=${raw['sdk']}'));
@@ -481,6 +508,7 @@ class GalleryLocatorService extends ChangeNotifier {
     Map<String, String?>? relativePaths,
   }) {
     _scanned = scanned;
+    _indexComplete = scanned;
     _permission = permission;
     _replaceIndex(assets ?? const []);
     if (relativePaths != null) {
@@ -883,11 +911,21 @@ class GalleryLocatorService extends ChangeNotifier {
     final updatedFiles = <HistoryFile>[];
 
     for (final file in record.files) {
-      final asset = await locateAssetAsync(
-        file,
-        record.postId,
-        platform: record.platform,
-      );
+      AssetEntity? asset;
+      var answered = true;
+      try {
+        asset = await locateAssetAsync(
+          file,
+          record.postId,
+          platform: record.platform,
+        ).timeout(lookupTimeout);
+      } on TimeoutException {
+        // The album did not answer for this row. That is not a verdict: the
+        // row keeps its id and status, and the post keeps its file count.
+        answered = false;
+      } catch (_) {
+        answered = false;
+      }
       if (asset != null) {
         String? newRelPath = file.relativePath;
         if (newRelPath == null || newRelPath.isEmpty) {
@@ -906,7 +944,7 @@ class GalleryLocatorService extends ChangeNotifier {
           updatedFiles.add(file);
         }
       } else {
-        if (isFullyAuthorized && _scanned) {
+        if (answered && _indexComplete && isFullyAuthorized && _scanned) {
           if (file.status != FileStatus.notFound) {
             updatedFiles.add(file.copyWith(status: FileStatus.notFound));
             changed = true;
@@ -927,6 +965,12 @@ class GalleryLocatorService extends ChangeNotifier {
       final merged = await db.syncScannedFiles(record.id!, record.files, updatedFiles);
       record.files.clear();
       record.files.addAll(merged);
+    } else if (changed) {
+      // A record that is not in the database yet (a freshly built one, or a
+      // test fixture) still carries the resolved rows: the caller uses them to
+      // name the album files it is about to delete.
+      record.files.clear();
+      record.files.addAll(updatedFiles);
     }
   }
 

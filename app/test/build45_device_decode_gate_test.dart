@@ -45,6 +45,72 @@ Uint8List heicStillWithAlphaBrand() => Uint8List.fromList([
   ..._box('mdat', List.filled(64, 3)),
 ]);
 
+List<int> _u16(int value) => [(value >> 8) & 0xff, value & 0xff];
+
+List<int> _u32(int value) => [
+  (value >> 24) & 0xff,
+  (value >> 16) & 0xff,
+  (value >> 8) & 0xff,
+  value & 0xff,
+];
+
+Uint8List _fullBox(String type, List<int> body) =>
+    _box(type, [0, 0, 0, 0, ...body]);
+
+/// The shape build 47 decides from bytes: `iinf` declares an `auxl` item,
+/// `iref` links the primary image to it and `ipco` carries the alpha `auxC`
+/// property, associated through `ipma`. This is the HEIC an Android 12 decoder
+/// hangs on.
+Uint8List heicStillWithAlphaAux() => Uint8List.fromList([
+  ..._box('ftyp', [
+    ..._fourCc('heic'), 0, 0, 0, 0,
+    ..._fourCc('mif1'), ..._fourCc('heic'),
+  ]),
+  ..._fullBox('meta', [
+    ..._fullBox('iinf', [
+      ..._u16(2),
+      ..._fullBox('infe', [..._u16(1), ..._u16(0), ..._fourCc('hvc1'), 0]),
+      ..._fullBox('infe', [..._u16(2), ..._u16(0), ..._fourCc('auxl'), 0]),
+    ]),
+    ..._fullBox('iref', [
+      ..._u32(8 + 2 + 2 + 2),
+      ..._fourCc('auxl'),
+      ..._u16(1),
+      ..._u16(1),
+      ..._u16(2),
+    ]),
+    ..._box('iprp', [
+      ..._box('ipco', [
+        ..._box('hvcC', List.filled(12, 0)),
+        ..._fullBox('auxC', [...'urn:mpeg:hevc:2015:auxid:1'.codeUnits, 0]),
+      ]),
+      ..._fullBox('ipma', [..._u32(1), ..._u16(2), 1, 2]),
+    ]),
+  ]),
+  ..._box('mdat', List.filled(64, 3)),
+]);
+
+/// The same container without an alpha plane: `iinf` declares only the primary
+/// image, no `iref` and no `auxC`. This is the HEIC Android 12 shows fine.
+Uint8List heicStillPlain() => Uint8List.fromList([
+  ..._box('ftyp', [
+    ..._fourCc('heic'), 0, 0, 0, 0,
+    ..._fourCc('mif1'), ..._fourCc('heic'),
+  ]),
+  ..._fullBox('meta', [
+    ..._fullBox('iinf', [
+      ..._u16(1),
+      ..._fullBox('infe', [..._u16(1), ..._u16(0), ..._fourCc('hvc1'), 0]),
+    ]),
+    ..._box('iprp', [
+      ..._box('ipco', [
+        ..._box('hvcC', List.filled(12, 0)),
+      ]),
+    ]),
+  ]),
+  ..._box('mdat', List.filled(64, 3)),
+]);
+
 DownloadJob _job({int attempts = 1}) {
   final job = DownloadJob(
     key: 'job-1',
@@ -89,20 +155,23 @@ void main() {
     debugPrint = debugPrintThrottled;
     ImageDecodeProbe.stillGateForTesting = null;
     ImageDecodeProbe.callForTesting = null;
+    ImageDecodeProbe.setApiLevelForTesting(null);
     manager
       ..mediaContentTypeForTesting = null
       ..clearBatchesForTesting();
     if (await temp.exists()) await temp.delete(recursive: true);
   });
 
-  Future<File> writeHeic() async {
+  Future<File> writeHeic({bool alpha = false}) async {
     final file = File('${temp.path}/still.heic');
-    await file.writeAsBytes(heicStillWithAlphaBrand());
+    await file.writeAsBytes(
+      alpha ? heicStillWithAlphaAux() : heicStillWithAlphaBrand(),
+    );
     return file;
   }
 
-  /// The probe answer a device would give; the decision under test is the
-  /// production gate, never a stub of it.
+  /// The probe answer a device would give for a container this build still
+  /// asks the decoders about (AVIF). A HEIC is decided from its bytes.
   void answerWithDecodable(bool decodable, {String reason = 'ok'}) {
     ImageDecodeProbe.callForTesting = (method, arguments) async => {
       'decodable': decodable,
@@ -116,12 +185,18 @@ void main() {
     };
   }
 
-  group('HEIC originals are gated on the device decoders', () {
-    test('a sample this device cannot decode is rejected and logged', () async {
-      answerWithDecodable(false, reason: 'decode_failed');
+  group('HEIC originals are decided from their own bytes', () {
+    test('an alpha HEIC is rejected on Android 12 and logged', () async {
+      // build 47: no decoder is asked at all, so nothing can hang.
+      var probes = 0;
+      ImageDecodeProbe.callForTesting = (method, arguments) async {
+        probes++;
+        return null;
+      };
+      ImageDecodeProbe.setApiLevelForTesting(31);
       final job = _job();
-      final file = await writeHeic();
-      final content = detectMediaContentType(heicStillWithAlphaBrand());
+      final file = await writeHeic(alpha: true);
+      final content = detectMediaContentType(heicStillWithAlphaAux());
       expect(content?.extension, 'heic');
       expect(requiresDeviceDecode(content!), isTrue);
 
@@ -133,10 +208,12 @@ void main() {
       );
 
       expect(verdict, ContentVerdict.rejectUndecodableOnDevice);
+      expect(probes, 0, reason: 'a HEIC never reaches the native decoder');
       final line = logs.join('\n');
       expect(line, contains('result=rejected:undecodable_on_device'));
       expect(line, contains('device_probe=undecodable'));
-      expect(line, contains('device_reason=decode_failed'));
+      expect(line, contains('device_reason=alpha_aux'));
+      expect(line, contains('heif=alpha'));
       // No path, URL, host or token ever reaches the log.
       expect(line, isNot(contains(temp.path)));
       expect(line, isNot(contains('http')));
@@ -145,11 +222,12 @@ void main() {
           reason: 'the gate itself must not delete anything');
     });
 
-    test('a sample this device decodes is accepted as HEIC', () async {
-      answerWithDecodable(true);
+    test('the same alpha HEIC is accepted on a level that was not shown to '
+        'fail', () async {
+      ImageDecodeProbe.setApiLevelForTesting(33);
       final job = _job();
-      final file = await writeHeic();
-      final content = detectMediaContentType(heicStillWithAlphaBrand());
+      final file = await writeHeic(alpha: true);
+      final content = detectMediaContentType(heicStillWithAlphaAux());
 
       final verdict = await manager.gatedVerdictForTesting(
         _batch([job]),
@@ -163,6 +241,43 @@ void main() {
       expect(line, contains('result=ok:provenance_skipped'));
       expect(line, contains('device_probe=decodable'));
       expect(line, isNot(contains('rejected:')));
+    });
+
+    test('a HEIC without an alpha plane is accepted on Android 12', () async {
+      ImageDecodeProbe.setApiLevelForTesting(31);
+      final job = _job();
+      final file = File('${temp.path}/plain.heic');
+      await file.writeAsBytes(heicStillPlain());
+      final content = detectMediaContentType(heicStillPlain());
+
+      final verdict = await manager.gatedVerdictForTesting(
+        _batch([job]),
+        job,
+        file.path,
+        content: content,
+      );
+
+      expect(verdict, ContentVerdict.accept);
+      expect(logs.join('\n'), contains('device_probe=decodable'));
+    });
+
+    test('an AVIF still still asks the device decoders', () async {
+      answerWithDecodable(false, reason: 'decode_failed');
+      final job = _job();
+      final file = await writeHeic();
+      const content = MediaContentType(
+        MediaContentKind.image,
+        'avif',
+        'image/avif',
+      );
+      final verdict = await manager.gatedVerdictForTesting(
+        _batch([job]),
+        job,
+        file.path,
+        content: content,
+      );
+      expect(verdict, ContentVerdict.rejectUndecodableOnDevice);
+      expect(logs.join('\n'), contains('device_reason=decode_failed'));
     });
 
     test('a JPEG still is never probed', () async {
@@ -189,10 +304,9 @@ void main() {
       expect(logs.join('\n'), isNot(contains('device_probe=')));
     });
 
-    test('a timeout does not reject: the caller keeps its old behaviour',
-        () async {
-      // No channel answers at all, which is what a platform without the probe
-      // looks like. Rejecting on a guess would lose every iPhone HEIC.
+    test('a header this build cannot classify is not rejected', () async {
+      // A meta box this parser cannot read is not evidence that the phone
+      // cannot show the picture: rejecting on it would lose every iPhone HEIC.
       ImageDecodeProbe.callForTesting = (method, arguments) async => null;
       final job = _job();
       final file = await writeHeic();

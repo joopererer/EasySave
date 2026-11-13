@@ -307,19 +307,34 @@ bool isPreviewStillCandidate(String url) {
   return false;
 }
 
+/// Whether [url] asks the CDN for its default-quality re-encode: an
+/// `imageView2/format/jp*` transform that does not pin a quality. Measured on
+/// the live CDN (2026-11-12) the bare transform returned 245,672 bytes where
+/// the stored original was 1,007,645 and `/q/100` 1,030,648, all at the same
+/// 1290x1608. It is a preview-sized file at original dimensions, so it must
+/// never be the first candidate of an item.
+bool isDefaultQualityTranscode(String url) {
+  final lower = url.toLowerCase();
+  final query = Uri.tryParse(url.trim())?.query.toLowerCase() ?? '';
+  if (!query.contains('imageview2') && !lower.contains('imageview2')) return false;
+  if (!RegExp(r'/format/jp[e]?g').hasMatch(lower)) return false;
+  return !RegExp(r'/q/\d+').hasMatch(lower);
+}
+
 /// Format rank of a still candidate inside one quality class: the writable
-/// (provenance-capable) containers are tried before HEIC / AVIF / GIF. Unknown
-/// shapes stay in the middle so a CDN the parser does not know is never pushed
-/// to the end.
+/// (provenance-capable) containers are tried before HEIC / AVIF / GIF, and a
+/// full-quality JPEG transcode (`/q/100`) before the CDN's default-quality one.
+/// Unknown shapes stay in the middle so a CDN the parser does not know is never
+/// pushed to the end.
 int stillCandidateRank(String url) {
   final label = candidateLabelOf(url);
   final format = label.contains(':') ? label.split(':').last : '';
   final byFormat = switch (format) {
-    'jpg' => 0,
-    'png' => 1,
-    'webp' => 2,
-    'heic' || 'avif' || 'gif' => 4,
-    _ => 3,
+    'jpg' => isDefaultQualityTranscode(url) ? 1 : 0,
+    'png' => 2,
+    'webp' => 3,
+    'heic' || 'avif' || 'gif' => 5,
+    _ => 4,
   };
   // Quality class dominates the format: every original-resolution candidate
   // ranks before every preview-size one, so a HEIC original always beats a

@@ -128,7 +128,13 @@ void main() {
     // before that token, so a HEIC original is never the first JPEG-less
     // fallback. The parser's existing `ci:jpg` already covers that host and
     // path, so no second transcode is added for it.
-    expect(planned.urls, [_jpeg, _derivedJpeg, _original, _ci, _dft]);
+    //
+    // build 47: the full-quality transcode (`/q/100`, ~1.03 MB for this token)
+    // is asked for before the CDN's default-quality one (`ci:jpg`, ~246 KB at
+    // the same pixels). Both are original-resolution candidates; only the first
+    // one is the original's quality, and it was the second choice until the
+    // device log showed the preflight probing the small file.
+    expect(planned.urls, [_derivedJpeg, _jpeg, _original, _ci, _dft]);
     expect(planned.urls, isNot(contains(_preview)));
     expect((planned.expectedWidth, planned.expectedHeight), (1290, 1608));
     // The App keeps the order when items round-trip through history JSON.

@@ -19,6 +19,7 @@ import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
 import io.flutter.plugin.common.StandardMethodCodec
 import java.io.File
+import java.util.concurrent.Executors
 
 /**
  * MediaStore reads that need no Activity, shared by the foreground and the
@@ -31,6 +32,18 @@ import java.io.File
 class MediaStoreBridge(private val context: Context) {
     companion object {
         const val CHANNEL = "easysave/media"
+
+        /** Most bytes one header decision may read from one file. */
+        const val MAX_READ_BYTES = 256 * 1024
+
+        /**
+         * A pool of its own for bounded header reads: never the decode probe's
+         * executor (a stuck decode lives there) and never the disk executors
+         * used by the album scan.
+         */
+        private val headerPool = Executors.newFixedThreadPool(2) { runnable ->
+            Thread(runnable, "easysave-header-read").apply { isDaemon = true }
+        }
 
         /** Background engine: no Activity, so deletes and write grants are refused. */
         fun register(context: Context, messenger: BinaryMessenger) {
@@ -73,6 +86,8 @@ class MediaStoreBridge(private val context: Context) {
             "mediaSizes" -> mediaSizes(call, result)
             "probeImageDecodable" -> probeImageDecodable(call, result)
             "probeMediaDecodable" -> probeMediaDecodable(call, result)
+            "apiLevel" -> result.success(Build.VERSION.SDK_INT)
+            "readMediaBytes" -> readMediaBytes(call, result)
             "mediaDuration" -> mediaDuration(call, result)
             else -> return false
         }
@@ -121,9 +136,51 @@ class MediaStoreBridge(private val context: Context) {
         }
     }
 
-    /** MediaStore DURATION in ms of a saved video, or null when not visible. */
-    private fun mediaDuration(call: MethodCall, result: MethodChannel.Result) {
+    /**
+     * A bounded prefix of one saved file's bytes, for header-only decisions
+     * (a HEIF alpha auxiliary image is read from `meta`, never decoded).
+     *
+     * Reads at most [MAX_READ_BYTES] and runs on its own I/O executor: it must
+     * never queue behind a stuck decode, and it must never block the platform
+     * thread. Nothing is written, moved or deleted.
+     */
+    private fun readMediaBytes(call: MethodCall, result: MethodChannel.Result) {
         val mediaId = call.argument<String>("id")?.toLongOrNull()
+        if (mediaId == null) {
+            result.error("bad_args", "id must be a numeric media id", null)
+            return
+        }
+        val maxBytes = (call.argument<Int>("maxBytes") ?: MAX_READ_BYTES)
+            .coerceIn(1, MAX_READ_BYTES)
+        val mimeType = call.argument<String>("mimeType")
+        val collection = if (mimeType?.startsWith("video/") == true) {
+            MediaStore.Video.Media.EXTERNAL_CONTENT_URI
+        } else {
+            MediaStore.Images.Media.EXTERNAL_CONTENT_URI
+        }
+        val uri = ContentUris.withAppendedId(collection, mediaId)
+        val main = Handler(Looper.getMainLooper())
+        headerPool.execute {
+            val bytes = try {
+                context.contentResolver.openInputStream(uri)?.use { input ->
+                    val buffer = ByteArray(maxBytes)
+                    var total = 0
+                    while (total < maxBytes) {
+                        val read = input.read(buffer, total, maxBytes - total)
+                        if (read <= 0) break
+                        total += read
+                    }
+                    buffer.copyOf(total)
+                }
+            } catch (e: Exception) {
+                null
+            }
+            main.post { result.success(bytes) }
+        }
+    }
+
+    /** MediaStore DURATION in ms of a saved video, or null when not visible. */
+    private fun mediaDuration(call: MethodCall, result: MethodChannel.Result) {        val mediaId = call.argument<String>("id")?.toLongOrNull()
         if (mediaId == null) {
             result.error("bad_args", "id must be a numeric media id", null)
             return

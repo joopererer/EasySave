@@ -22,6 +22,7 @@ import '../services/history_db.dart';
 import '../services/host_bridge.dart';
 import '../services/links.dart';
 import '../services/live_pairs.dart';
+import '../services/login_navigation.dart';
 import '../services/preview_open_guard.dart';
 import '../services/preview_route_observer.dart';
 import '../services/parse_service.dart';
@@ -772,9 +773,13 @@ class ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
               builder: (_) => LoginPage(platform: platform),
             ),
           );
-          // Re-run the failed parse as soon as the session is confirmed.
+          // Re-run the failed parse as soon as the session is confirmed, and
+          // drop the card that sent the user to the login page: build 46 left
+          // "未能获取图片，请检查 Instagram 登录后重试" on screen after a
+          // successful login until 解析 was tapped again.
           if (loggedIn == true && mounted) {
-            _handleLinks(link, entry: 'login');
+            _clearErrorAfterLogin(platform);
+            await _handleLinks(link, entry: 'login');
           }
         }
       case ErrorAction.backHome:
@@ -787,6 +792,32 @@ class ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
       case ErrorAction.repaste:
         _inputFocus.requestFocus();
     }
+  }
+
+  /// Clears the error card once [platform] reported a session.
+  ///
+  /// The card describes the state before the login; keeping it also kept
+  /// `_busy`/`_resolving` from a parse that was cut short, which made the
+  /// re-parse below return early instead of running.
+  void _clearErrorAfterLogin(String? platform) {
+    if (!mounted) return;
+    final link = _currentLink.isNotEmpty
+        ? _currentLink
+        : _linkController.text.trim();
+    final errorPlatform = platformFromUrl(link);
+    if (!loginClearsErrorCard(
+      errorPlatform: errorPlatform,
+      loginPlatform: platform,
+    )) {
+      return;
+    }
+    setState(() {
+      _errorCode = null;
+      _errorMessage = null;
+      _busy = false;
+      _resolving = false;
+      _cancelRequested = false;
+    });
   }
 
   /// Fallback platform chooser (only shown when the link's platform is

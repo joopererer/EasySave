@@ -105,15 +105,22 @@ class HistoryThumb extends StatelessWidget {
             (index >= 0 && index < items.length ? items[index] : null);
 
     AssetEntity? asset;
+    HistoryFile? matched;
     for (final f in record.savedFiles) {
       if (itemIndex != null && f.itemIndex != itemIndex) continue;
+      matched ??= f;
       asset =
           locator.getAssetById(f.mediaId) ??
           locator.locateAsset(f, record.postId);
       if (asset != null) break;
     }
 
-    if (asset != null) {
+    // A still this device cannot show is never handed to the platform decoder:
+    // its thumbnail would stall the shared decode channel (build 46). The card
+    // shows the post's own cover instead, with the warning strip.
+    final undecodable = matched?.undecodable == true;
+
+    if (asset != null && !undecodable) {
       return _withDecodeWarning(
         VerifiedAssetImage(
           asset,

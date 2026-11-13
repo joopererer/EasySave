@@ -10,6 +10,30 @@ import 'site_registry.dart';
 typedef MediaCookieReader = Future<String> Function(Uri actualMediaUrl);
 typedef MediaPolicyRejectionLogger = void Function(String code, String host);
 
+/// Header names a request may declare, lower case. Nothing else is ever sent:
+/// a transfer needs a `Referer`/`Origin` for hot-link protection, the site's
+/// `User-Agent`, a `Range` for a ranged probe or a resume, and the transfer
+/// encoding that keeps a probe and the transfer byte-identical. The native
+/// consumers ([NativeMediaRequest], the background downloader's
+/// `MediaPolicyRedirects`) re-check the same set on every hop, so this list is
+/// the single source of truth for all three.
+const Set<String> kAllowedRequestHeaderNames = {
+  'referer',
+  'origin',
+  'user-agent',
+  'range',
+  'accept-encoding',
+};
+
+/// Values a whitelisted header may carry when its value changes the bytes on
+/// the wire. `identity` is the only encoding a transfer may ask for: it is
+/// what makes `Content-Length` / `Content-Range` describe the stored bytes, so
+/// a ranged probe, a resumed transfer and a full transfer agree on the size.
+/// A compression this build did not ask for would silently change it.
+const Map<String, Set<String>> kAllowedRequestHeaderValues = {
+  'accept-encoding': {'identity'},
+};
+
 /// Only a fixed code and validated hostname may leave a rejection.
 class MediaPolicyException implements Exception {
   const MediaPolicyException(this.code, this.host);
@@ -66,6 +90,7 @@ class MediaRequestPolicy {
     'origin': 'Origin',
     'user-agent': 'User-Agent',
     'range': 'Range',
+    'accept-encoding': 'Accept-Encoding',
   };
 
   static Future<String> _systemCookie(Uri actualMediaUrl) async {
@@ -95,19 +120,24 @@ class MediaRequestPolicy {
     return match == null ? 'relative' : 'scheme=${match.group(1)!.toLowerCase()}';
   }
 
-  Never _reject(String code, String raw, {String field = 'unknown', String? itemType}) {
+  Never _reject(String code, String raw, {String field = 'unknown', String? itemType, String? header}) {
     final host = _host(raw);
     final download = site.data['download'] as Map;
     final hostClass = host.isEmpty ? 'none' :
         (download['mediaHosts'] as List).cast<Map>().any((h) => matchesHost(host, h))
         ? 'media' : site.hasHost(host) ? 'site' : 'other';
+    // A header name is a fixed token, never a value: the log names which header
+    // was refused without ever carrying what it contained.
+    final headerField = header == null
+        ? ''
+        : ' header=${RegExp(r'^[a-z0-9-]{1,32}$').hasMatch(header) ? header : 'unnamed'}';
     final logger = _logRejection;
     if (logger != null) {
       logger(code, host);
     } else {
       unawaited(DevLog.write(
         'RequestPolicy',
-        '$code host=$host field=$field shape=${_shape(raw)} hostClass=$hostClass${itemType == null ? '' : ' itemType=$itemType'}',
+        '$code host=$host field=$field shape=${_shape(raw)} hostClass=$hostClass$headerField${itemType == null ? '' : ' itemType=$itemType'}',
       ));
     }
     throw MediaPolicyException(code, host);
@@ -125,13 +155,22 @@ class MediaRequestPolicy {
       final key = entry.key is String
           ? _headerNames[(entry.key as String).toLowerCase()]
           : null;
+      final value = entry.value;
+      final allowed = entry.key is String
+          ? kAllowedRequestHeaderValues[(entry.key as String).toLowerCase()]
+          : null;
       if (key == null ||
-          entry.value is! String ||
-          _controls.hasMatch(entry.value as String) ||
-          result.containsKey(key)) {
-        _reject('REQUEST_HEADER_REJECTED', url);
+          value is! String ||
+          _controls.hasMatch(value) ||
+          result.containsKey(key) ||
+          (allowed != null && !allowed.contains(value.toLowerCase()))) {
+        _reject(
+          'REQUEST_HEADER_REJECTED',
+          url,
+          header: entry.key is String ? (entry.key as String).toLowerCase() : null,
+        );
       }
-      result[key] = entry.value as String;
+      result[key] = value;
     }
     return result;
   }

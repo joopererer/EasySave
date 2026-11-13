@@ -35,6 +35,23 @@ class NativeMediaRequestTest {
             rejected("https://tiktok.com/video", mapOf("Referer" to "ok\r\nCookie: secret")))
     }
 
+    // v1.10.3 build 47: the Dart policy whitelists `Accept-Encoding: identity`
+    // because every transfer sends it. The native preview fetch re-checks the
+    // same list, so it must accept that pair and still refuse any other value.
+    @Test fun acceptsIdentityEncodingAndRejectsAnyOther() {
+        assertEquals("REQUEST_HEADER_REJECTED" to "tiktok.com",
+            rejected("https://tiktok.com/video", mapOf("Accept-Encoding" to "gzip")))
+        val request = NativeMediaRequest(
+            mapOf(
+                "url" to "https://tiktok.com/video",
+                "headers" to mapOf("Accept-Encoding" to "identity"),
+                "mediaHosts" to hosts,
+            ),
+            "imageRequest",
+        ) { _, _, _, _ -> }
+        assertEquals("accept-encoding", request.diagnosticHeaderNames)
+    }
+
     @Test fun rejectionIncludesFieldAndShapeWithoutTheAddress() {
         val events = mutableListOf<List<String>>()
         val request = NativeMediaRequest(

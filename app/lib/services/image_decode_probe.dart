@@ -14,9 +14,11 @@
 
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 
 import '../core/dev_log.dart';
+import 'heif_bytes.dart';
 import 'media_content_type.dart';
 
 /// What the platform decoders said about one file.
@@ -85,6 +87,10 @@ class StillDecodeGate {
 
   /// Gate of a finished download: probes [path] only when its own header says
   /// the container depends on the device codecs ([requiresDeviceDecode]).
+  ///
+  /// A HEIC/HEIF is decided from its own bytes ([readHeifHeaderOfFile]): the
+  /// device decoder is never asked, because asking it is what stalled the
+  /// history page and cost build 46 every thumbnail behind the stuck decode.
   static Future<StillDecodeGate> forStoredStill(
     MediaContentType? content,
     String path,
@@ -92,9 +98,45 @@ class StillDecodeGate {
     if (content == null || !requiresDeviceDecode(content)) {
       return const StillDecodeGate.notRequired();
     }
+    if (isHeifExtension(content.extension)) {
+      final header = await readHeifHeaderOfFile(path);
+      final sdk = await ImageDecodeProbe.apiLevel();
+      unawaited(DevLog.write('HeifBytes', 'source=temp ${header.logFields}'));
+      if (header.verdict == HeifVerdict.unknown) {
+        return const StillDecodeGate.probed(
+          ImageDecodeResult(ImageDecodeVerdict.unknown, reason: 'heif_unread'),
+        );
+      }
+      if (heifAlphaUndisplayable(header, sdk)) {
+        return StillDecodeGate.probed(
+          ImageDecodeResult(
+            ImageDecodeVerdict.undecodable,
+            decoder: heifByteDecoder,
+            reason: heifAlphaReason,
+            bytes: header.bytes,
+          ),
+        );
+      }
+      return StillDecodeGate.probed(
+        ImageDecodeResult(
+          ImageDecodeVerdict.decodable,
+          decoder: heifByteDecoder,
+          bytes: header.bytes,
+        ),
+      );
+    }
     return StillDecodeGate.probed(await ImageDecodeProbe.probeTempFile(path));
   }
 }
+
+/// The decision came from the container bytes, not from a decoder.
+const String heifByteDecoder = 'heif_bytes';
+
+/// Fixed reason token of a still this device cannot show.
+const String heifAlphaReason = 'alpha_aux';
+
+/// Why an album still was rejected, from its own bytes.
+const String heifAlphaUnknownReason = 'heif_unread';
 
 class ImageDecodeProbe {
   ImageDecodeProbe._();
@@ -109,6 +151,24 @@ class ImageDecodeProbe {
   /// keeps running on its own thread; its answer is simply not waited for.
   static Duration timeout = const Duration(seconds: 4);
 
+  /// The device's Android API level, asked once and cached. Null when the
+  /// platform has no answer (tests, desktop): an unknown level never rejects a
+  /// file, it keeps the previous behaviour.
+  static int? _apiLevel;
+
+  @visibleForTesting
+  static void setApiLevelForTesting(int? value) => _apiLevel = value;
+
+  static Future<int?> apiLevel() async {
+    if (_apiLevel != null) return _apiLevel;
+    try {
+      _apiLevel = await channel.invokeMethod<int>('apiLevel');
+    } catch (_) {
+      // No channel (tests / other platforms) leaves the level unknown.
+    }
+    return _apiLevel;
+  }
+
   /// Test seam: replaces the platform call only, never the decision logic.
   static DecodeProbeCall? callForTesting;
 
@@ -118,6 +178,23 @@ class ImageDecodeProbe {
     String method,
     Map<String, Object?> arguments,
   ) => channel.invokeMapMethod<Object?, Object?>(method, arguments);
+
+  /// A bounded prefix of an album file's bytes, for header-only decisions.
+  /// Returns an empty list when the platform cannot read it.
+  static Future<Uint8List> readMediaBytes(
+    String mediaId, {
+    int maxBytes = kHeifHeadBytes,
+  }) async {
+    try {
+      final raw = await channel.invokeMethod<Uint8List>('readMediaBytes', {
+        'id': mediaId,
+        'maxBytes': maxBytes,
+      });
+      return raw ?? Uint8List(0);
+    } catch (_) {
+      return Uint8List(0);
+    }
+  }
 
   /// Probes a downloaded still in EasySave's own temp storage before import.
   static Future<ImageDecodeResult> probeTempFile(String path) =>

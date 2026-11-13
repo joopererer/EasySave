@@ -255,12 +255,16 @@ class _UndecodableView extends StatelessWidget {
     if (confirmed != true) return;
     final asset = item.asset;
     if (asset != null) {
-      final deleted = await MediaDeleteService.instance.deleteMedia([
+      final outcome = await MediaDeleteService.instance.deleteMedia([
         MediaRef(mediaId: asset.id, isImage: true),
       ]);
-      if (!deleted && context.mounted) {
+      if (!outcome.deletedAll && context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('未删除相册中的旧文件，仍会下载新文件')),
+          SnackBar(
+            content: Text(
+              '${outcome.problem ?? '未删除相册中的旧文件'}，仍会下载新文件',
+            ),
+          ),
         );
       }
     }

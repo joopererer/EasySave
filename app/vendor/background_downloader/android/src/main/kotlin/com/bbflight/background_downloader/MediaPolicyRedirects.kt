@@ -42,14 +42,31 @@ object MediaPolicyRedirects {
     }
 
     fun rejectHeaders(headers: Map<String, String>, host: String): Rejection? {
-        val permitted = setOf("referer", "origin", "user-agent", "range")
         val seen = HashSet<String>()
         for ((name, value) in headers) {
             val normalized = name.lowercase(Locale.ROOT)
-            if (normalized !in permitted || !seen.add(normalized) ||
+            if (normalized !in PERMITTED_HEADERS || !seen.add(normalized) ||
                 value.any { it == '\r' || it == '\n' || it == '\u0000' }
+            ) return Rejection("REQUEST_HEADER_REJECTED", host)
+            val allowedValues = PERMITTED_VALUES[normalized]
+            if (allowedValues != null &&
+                value.lowercase(Locale.ROOT) !in allowedValues
             ) return Rejection("REQUEST_HEADER_REJECTED", host)
         }
         return null
     }
+
+    /**
+     * The names a transfer may carry. Mirrors `kAllowedRequestHeaderNames` in
+     * `lib/services/media_request_policy.dart`: a Referer/Origin for hot-link
+     * protection, the site's User-Agent, a ranged probe and the transfer
+     * encoding that keeps a probe and the transfer byte-identical.
+     */
+    val PERMITTED_HEADERS = setOf("referer", "origin", "user-agent", "range", "accept-encoding")
+
+    /**
+     * Values a permitted header may carry when its value changes the bytes on
+     * the wire. `identity` is the only encoding a transfer may ask for.
+     */
+    val PERMITTED_VALUES = mapOf("accept-encoding" to setOf("identity"))
 }

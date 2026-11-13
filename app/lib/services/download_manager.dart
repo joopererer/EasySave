@@ -78,6 +78,20 @@ const int kCandidateRetryLimit = 3;
 /// First backoff, kept as the documented short wait of a reset retry.
 const Duration kResetRetryBackoff = Duration(milliseconds: 600);
 
+/// Machine-readable mark of a file the request policy refused. Such a job is
+/// final: the reader that produced it is re-checked on every hop, so another
+/// attempt asks the same CDN the same forbidden question.
+const String policyRejectedCode = 'REQUEST_POLICY_REJECTED';
+
+/// Diagnostic shapes a native consumer may report for a policy rejection. Only
+/// a fixed code and a hostname may be matched, never a URL or a header value.
+final RegExp _diagnosticPolicyCode = RegExp(
+  r'^REQUEST_(?:URL_REJECTED|HOST_REJECTED|HEADER_REJECTED|COOKIE_DOMAIN_REJECTED|REDIRECT_REJECTED|POLICY_MISSING|EXPIRED) host=[a-z0-9.:-]*$',
+);
+
+/// Whether [job] must never be enqueued again in this batch.
+bool isPolicyRejected(DownloadJob job) => job.errorCode == policyRejectedCode;
+
 /// Overrides the backoff ladder in unit tests.
 @visibleForTesting
 List<Duration> candidateRetryBackoffsForTesting = kCandidateRetryBackoffs;
@@ -1691,6 +1705,10 @@ class DownloadManager extends ChangeNotifier {
   }
 
   Future<void> _enqueueAttemptOnce(DownloadBatch batch, DownloadJob job) async {
+    if (isPolicyRejected(job)) {
+      job.state = JobState.failed;
+      return;
+    }
     if (batch.cancelledByDeletion ||
         await DownloadClaims.isCancelled(batch.batchId)) {
       batch.cancelledByDeletion = true;
@@ -1874,8 +1892,10 @@ class DownloadManager extends ChangeNotifier {
       if (size != null && size > 0) job.expectedBytes = size;
     }
     final required = await StorageGuard.shortfall(size);
-    _log('preflight index=${job.itemIndex} size=${size ?? -1} '
-        'result=${required == null ? 'ok' : storageFullCode}');
+    _log('preflight index=${job.itemIndex} role=${roleOf(job)} '
+        'label=${candidateLabelOf(job.urls[index])} '
+        'candidate_seq=${index + 1}/${job.urls.length} '
+        'size=${size ?? -1} result=${required == null ? 'ok' : storageFullCode}');
     if (required == null) return false;
     await _failForStorage(batch, job, required);
     return true;
@@ -2886,11 +2906,13 @@ class DownloadManager extends ChangeNotifier {
     TaskStatusUpdate update,
   ) async {
     final diagnostic = update.exception?.description ?? '';
-    if (RegExp(
-      r'^REQUEST_(?:URL_REJECTED|HOST_REJECTED|HEADER_REJECTED|COOKIE_DOMAIN_REJECTED|REDIRECT_REJECTED|POLICY_MISSING|EXPIRED) host=[a-z0-9.:-]*$',
-    ).hasMatch(diagnostic)) {
+    if (_diagnosticPolicyCode.hasMatch(diagnostic)) {
       unawaited(DevLog.write('RequestPolicy', diagnostic));
       job.state = JobState.failed;
+      // A policy rejection is final: retrying the same URL cannot pass a rule
+      // that exists to keep it out, and build 46 showed what re-enqueuing it
+      // costs (220 rejections for one batch, `attempt=5/3` in the item log).
+      job.errorCode = policyRejectedCode;
       job.error = diagnostic.startsWith('REQUEST_EXPIRED ')
           ? expiredMediaMessage
           : '该资源地址不在允许范围内';
@@ -3733,7 +3755,10 @@ class DownloadManager extends ChangeNotifier {
         changed = true;
       } else if (record.status == TaskStatus.failed ||
           record.status == TaskStatus.notFound) {
-        if (job.attempts < retryCapFor(batch, job)) {
+        // A policy rejection is final (see [policyRejectedCode]): re-enqueueing
+        // it produced the 220 repeated `REQUEST_HEADER_REJECTED` lines of build
+        // 46 and pushed the attempt counter past the displayed limit.
+        if (!isPolicyRejected(job) && job.attempts < retryCapFor(batch, job)) {
           await _enqueueAttempt(batch, job);
         } else {
           job.state = JobState.failed;
@@ -3759,20 +3784,7 @@ class DownloadManager extends ChangeNotifier {
     for (final job in batch.jobs.where((j) => j.state == JobState.failed)) {
       if (_loggedFailures[job.key] == job.attempts) continue;
       _loggedFailures[job.key] = job.attempts;
-      final error = job.error ?? '';
-      final reason = job.errorCode == storageFullCode ? storageFullCode
-          : error.contains('403') ? 'HTTP_403' : error.contains('404') ? 'HTTP_404'
-          : error.contains('超时') || error.contains('Timeout') ? 'TIMEOUT'
-          : error.contains('REQUEST_') ? 'POLICY'
-          : error.contains('不是图片') || error.contains('不是视频') ||
-              error.contains('下载失败') ? 'CONTENT'
-          : error.contains('保存') || error.contains('import') ? 'IMPORT'
-          : 'TRANSFER';
-      unawaited(DevLog.write(
-        'V16DL', // i18n:ignore 日志
-        'item failed index=${job.itemIndex} role=${roleOf(job)} '
-            'reason=$reason attempt=${job.attempts}/${maxAttemptsFor(batch, job)}',
-      ));
+      unawaited(DevLog.write('V16DL', failedJobLogLine(batch, job))); // i18n:ignore 日志
     }
   }
 
@@ -3800,6 +3812,34 @@ class DownloadManager extends ChangeNotifier {
       // Snapshots are best effort; in-memory state still drives the UI.
     }
   }
+}
+
+/// One `item failed` log line: the fixed reason token, and the attempts of the
+/// file over the budget it actually has ([retryCapFor]) — never the
+/// per-candidate transfer limit, which made build 46 print `attempt=5/3`.
+String failedJobLogLine(DownloadBatch batch, DownloadJob job) {
+  final error = job.error ?? '';
+  final reason = job.errorCode == storageFullCode
+      ? storageFullCode
+      : job.errorCode == policyRejectedCode
+      ? 'POLICY'
+      : error.contains('403')
+      ? 'HTTP_403'
+      : error.contains('404')
+      ? 'HTTP_404'
+      : error.contains('超时') || error.contains('Timeout')
+      ? 'TIMEOUT'
+      : error.contains('REQUEST_')
+      ? 'POLICY'
+      : error.contains('不是图片') ||
+            error.contains('不是视频') ||
+            error.contains('下载失败')
+      ? 'CONTENT'
+      : error.contains('保存') || error.contains('import')
+      ? 'IMPORT'
+      : 'TRANSFER';
+  return 'item failed index=${job.itemIndex} role=${DownloadManager.roleOf(job)} '
+      'reason=$reason attempt=${job.attempts}/${retryCapFor(batch, job)}';
 }
 
 /// Fresh CDN URLs for a single item after re-parsing (manual retry path).
