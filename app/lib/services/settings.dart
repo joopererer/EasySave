@@ -2,6 +2,8 @@
 
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'creator_sort.dart';
+
 /// History page view modes (ui-spec §2.4.1).
 enum HistoryView { posts, all, creators }
 
@@ -56,6 +58,11 @@ class AppSettings {
   HistoryView historyView = HistoryView.posts;
   HistoryLayout historyLayout = HistoryLayout.waterfall;
   HistorySort historySort = HistorySort.latest;
+
+  /// 创作者 view ordering (v1.11 batch 1): key plus direction, remembered
+  /// across launches. 最近保存 descending is the default.
+  CreatorSort creatorSort = CreatorSortState.defaults.mode;
+  bool creatorSortDescending = CreatorSortState.defaults.descending;
 
   /// User-chosen directory tree URI for external automatic backups (v1.8).
   String? backupTreeUri;
@@ -117,6 +124,14 @@ class AppSettings {
         prefs.getString('historySort'),
         HistorySort.latest,
       )
+      ..creatorSort = _enumFromName(
+        CreatorSort.values,
+        prefs.getString('creatorSort'),
+        CreatorSortState.defaults.mode,
+      )
+      ..creatorSortDescending =
+          prefs.getBool('creatorSortDescending') ??
+              CreatorSortState.defaults.descending
       ..saveProvenanceInImages = prefs.getBool('saveProvenanceInImages') ?? true
       ..usedAlbumNames = List<String>.from(
         prefs.getStringList('usedAlbumNames') ?? const <String>[],
@@ -143,6 +158,8 @@ class AppSettings {
     await prefs.setString('historyView', historyView.name);
     await prefs.setString('historyLayout', historyLayout.name);
     await prefs.setString('historySort', historySort.name);
+    await prefs.setString('creatorSort', creatorSort.name);
+    await prefs.setBool('creatorSortDescending', creatorSortDescending);
     await prefs.setBool('saveProvenanceInImages', saveProvenanceInImages);
     await prefs.setStringList('usedAlbumNames', usedAlbumNames);
     // The backup folder is only ever forgotten by clearBackupFolder(). A

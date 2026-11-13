@@ -15,6 +15,7 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../core/models.dart';
 import '../services/auth.dart';
+import '../services/creator_sort.dart';
 import '../services/download_manager.dart';
 import '../services/gallery_locator_service.dart';
 import '../services/history_backfill_service.dart';
@@ -90,6 +91,11 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
   HistoryView _view = HistoryView.posts;
   HistoryLayout _layout = HistoryLayout.waterfall;
   HistorySort _sort = HistorySort.latest;
+
+  /// 创作者 view ordering. A pure in-memory sort over the groups already
+  /// derived from [_records]; it never adds a query or a native call.
+  CreatorSort _creatorSort = CreatorSortState.defaults.mode;
+  bool _creatorSortDescending = CreatorSortState.defaults.descending;
 
   bool _searchOpen = false;
   String _query = '';
@@ -279,6 +285,8 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
       _view = settings.historyView;
       _layout = settings.historyLayout;
       _sort = settings.historySort;
+      _creatorSort = settings.creatorSort;
+      _creatorSortDescending = settings.creatorSortDescending;
     });
     await _initPermissionsAndLoad();
   }
@@ -289,6 +297,8 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
     settings.historyView = _view;
     settings.historyLayout = _layout;
     settings.historySort = _sort;
+    settings.creatorSort = _creatorSort;
+    settings.creatorSortDescending = _creatorSortDescending;
     await settings.save();
   }
 
@@ -1092,7 +1102,10 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
           }),
         ),
         _platformMenu(),
-        if (_view != HistoryView.creators) _sortMenu(),
+        if (_view == HistoryView.creators)
+          _creatorSortMenu()
+        else
+          _sortMenu(),
         if (_view == HistoryView.posts)
           _toolbarButton(
             icon: _layout == HistoryLayout.waterfall
@@ -1552,6 +1565,45 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
     );
   }
 
+  /// 创作者 sort menu (v1.11 batch 1): three keys, each with both directions.
+  /// Only shown in the 创作者 view; the choice is persisted with the other
+  /// history preferences.
+  Widget _creatorSortMenu() {
+    String label(CreatorSort mode) => switch (mode) {
+      CreatorSort.postCount => '帖子数',
+      CreatorSort.latestSaved => '最近保存',
+      CreatorSort.name => '名称',
+    };
+    final atDefault = _creatorSort == CreatorSortState.defaults.mode &&
+        _creatorSortDescending == CreatorSortState.defaults.descending;
+    return PopupMenuButton<CreatorSortState>(
+      key: const ValueKey('creator-sort-menu'),
+      tooltip: '创作者排序',
+      onSelected: (value) {
+        setState(() {
+          _creatorSort = value.mode;
+          _creatorSortDescending = value.descending;
+        });
+        _persistPrefs();
+      },
+      itemBuilder: (_) => [
+        for (final mode in CreatorSort.values)
+          for (final descending in const [true, false])
+            PopupMenuItem<CreatorSortState>(
+              value: CreatorSortState(mode: mode, descending: descending),
+              child: Text('${label(mode)} · ${descending ? '降序' : '升序'}'
+                  '${_creatorSort == mode && _creatorSortDescending == descending
+                      ? ' （当前）'
+                      : ''}'),
+            ),
+      ],
+      child: _toolbarButtonInner(
+        icon: Icons.swap_vert,
+        active: !atDefault,
+      ),
+    );
+  }
+
   Widget _toolbarButtonInner({required IconData icon, required bool active}) {
     return Container(
       width: 34,
@@ -1865,19 +1917,22 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
       );
       group.postCount++;
       group.fileCount += r.savedFiles.length;
-      if (group.thumbs.length < 4) {
-        for (final f in r.savedFiles) {
-          if (group.thumbs.length >= 4) break;
+      final createdMs = r.createdAt.millisecondsSinceEpoch;
+      if (createdMs > group.latestSavedMs) group.latestSavedMs = createdMs;
+      for (final f in r.savedFiles) {
+        if (f.savedAt > group.latestSavedMs) group.latestSavedMs = f.savedAt;
+        if (group.thumbs.length < 4) {
           group.thumbs.add(HistThumbRef(r, f.itemIndex));
         }
       }
     }
-    final list = map.values.toList()
-      ..sort(
-        (a, b) =>
-            a.authorName.toLowerCase().compareTo(b.authorName.toLowerCase()),
-      );
-    return list;
+    // Ordering runs on the grouped data already in memory: no query and no
+    // native sort-key call (build 35).
+    return sortCreators(
+      map.values.toList(),
+      mode: _creatorSort,
+      descending: _creatorSortDescending,
+    );
   }
 
   Future<void> _confirmClearAll() async {
@@ -1920,13 +1975,29 @@ class _MediaGroup {
   final List<HistThumbRef> media;
 }
 
-class _CreatorGroup {
+class _CreatorGroup implements CreatorSortable {
   _CreatorGroup({required this.authorName, required this.platform});
   final String authorName;
   final String platform;
   int postCount = 0;
   int fileCount = 0;
+
+  /// Newest save among this creator's files (falls back to the post time), the
+  /// 创作者 view's "最近保存" key.
+  int latestSavedMs = 0;
   final List<HistThumbRef> thumbs = [];
+
+  @override
+  String get sortName => authorName;
+
+  @override
+  String get sortPlatform => platform;
+
+  @override
+  int get sortPostCount => postCount;
+
+  @override
+  int get sortLatestSavedMs => latestSavedMs;
 }
 
 class _StickyHeaderDelegate extends SliverPersistentHeaderDelegate {
