@@ -1776,6 +1776,10 @@ class DownloadManager extends ChangeNotifier {
     bool requestGalleryAccess = true,
     void Function(DownloadBatch)? onBatchReady,
   }) async {
+    // The "下一次下载模拟失败" switch lives in SharedPreferences, so the engine
+    // that starts a batch (main UI, bubble, share) reads the state the other
+    // engine left behind instead of its own stale copy (v1.11 batch 4).
+    await DevDownloadFailure.refresh();
     // The batch id carries the owner so ownership is visible in the shared
     // snapshot store (SharedPreferences) and in the plugin's task groups.
     final batchId =

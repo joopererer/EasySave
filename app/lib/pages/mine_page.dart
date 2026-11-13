@@ -215,8 +215,28 @@ class _MinePageState extends State<MinePage> with WidgetsBindingObserver {
     });
   }
 
+  /// Consecutive taps on the version row. Seven of them reveal (or hide) the
+  /// 开发者选项 group; the state is persisted in the settings (v1.11 batch 4).
+  int _versionTaps = 0;
+
+  Future<void> _onVersionTap() async {
+    _versionTaps++;
+    if (_versionTaps < 7) return;
+    _versionTaps = 0;
+    final show = !_settings.developerOptionsVisible;
+    setState(() => _settings.developerOptionsVisible = show);
+    await _saveSettings();
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(show ? '已开启开发者选项' : '已隐藏开发者选项')),
+    );
+  }
+
   Future<void> _load() async {
     final settings = await AppSettings.load();
+    // The switch may have been armed or consumed by the other engine, so show
+    // the stored value, not this isolate's copy (v1.11 batch 4).
+    await DevDownloadFailure.refresh();
     final states = <String, bool>{};
     SessionStatus? xhsStatus;
     for (final platform in loginSiteIds) {
@@ -994,26 +1014,21 @@ class _MinePageState extends State<MinePage> with WidgetsBindingObserver {
                 ),
                 ListTile(title: const Text('清空日志'), onTap: _clearLog),
                 // Developer switch for the failure-snapshot path (v1.11 batch
-                // 2): the next download batch fails its first file on purpose,
-                // once, so a real device can produce a snapshot on demand.
-                SwitchListTile(
-                  key: const Key('simulate_download_failure'),
-                  title: const Text('下一次下载模拟失败'),
-                  subtitle: const Text(
-                    '开发者开关：下一个下载批次的第一个文件在写入相册前模拟失败，'
-                    '仅生效一次，重启 App 自动关闭',
+                // 2, moved into 开发者选项 in batch 4): the next download batch
+                // fails its first file on purpose, once, so a real device can
+                // produce a snapshot on demand. The flag is persisted, so the
+                // engine that starts the download (main UI, bubble or share)
+                // sees it too.
+                ListTile(
+                  key: const Key('version_entry'),
+                  title: const Text('版本号'),
+                  subtitle: Text(
+                    _settings.developerOptionsVisible
+                        ? '$_version · 开发者选项已开启'
+                        : _version,
                   ),
-                  value: DevDownloadFailure.armed,
-                  onChanged: (on) {
-                    if (on) {
-                      DevDownloadFailure.arm();
-                    } else {
-                      DevDownloadFailure.disarm();
-                    }
-                    setState(() {});
-                  },
+                  onTap: _onVersionTap,
                 ),
-                ListTile(title: const Text('版本号'), subtitle: Text(_version)),
                 ListTile(
                   title: const Text('解析器版本'),
                   subtitle: Text(
@@ -1042,6 +1057,37 @@ class _MinePageState extends State<MinePage> with WidgetsBindingObserver {
               ],
             ),
           ),
+          if (_settings.developerOptionsVisible) ...[
+            const _GroupTitle('开发者选项'),
+            Card(
+              child: Column(
+                children: [
+                  ListTile(
+                    title: const Text('开发者选项'),
+                    subtitle: const Text('连点版本号七次可隐藏此分组'),
+                    dense: true,
+                  ),
+                  SwitchListTile(
+                    key: const Key('simulate_download_failure'),
+                    title: const Text('下一次下载模拟失败'),
+                    subtitle: const Text(
+                      '开发者开关：下一个下载批次的第一个文件在写入相册前模拟失败，'
+                      '仅生效一次。重启 App 后仍保持开启，触发一次或手动关闭后清除',
+                    ),
+                    value: DevDownloadFailure.armed,
+                    onChanged: (on) {
+                      if (on) {
+                        DevDownloadFailure.arm();
+                      } else {
+                        DevDownloadFailure.disarm();
+                      }
+                      setState(() {});
+                    },
+                  ),
+                ],
+              ),
+            ),
+          ],
         ],
       ),
     );

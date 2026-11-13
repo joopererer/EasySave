@@ -98,6 +98,11 @@ class AppSettings {
   /// Whether user has dismissed the one-time video provenance backfill hint (v1.8.2).
   bool videoBackfillHintDismissed = false;
 
+  /// Whether the 开发者选项 group on the 我的 page is visible. Hidden for
+  /// normal users and revealed by tapping the version number seven times
+  /// (v1.11 batch 4); the state is persisted so it stays revealed.
+  bool developerOptionsVisible = false;
+
   /// Set only by [clearBackupFolder]: a regular [save] must keep the folder.
   bool _forgetBackupFolder = false;
 
@@ -147,6 +152,7 @@ class AppSettings {
       ..lastBackupTime = prefs.getInt('lastBackupTime')
       ..skipRestoreHint = prefs.getBool('skipRestoreHint') ?? false
       ..backupFolderHintDismissed = prefs.getBool('backupFolderHintDismissed') ?? false
+      ..developerOptionsVisible = prefs.getBool('developerOptionsVisible') ?? false
       ..videoBackfillHintDismissed = prefs.getBool('videoBackfillHintDismissed') ?? false;
   }
 
@@ -193,6 +199,7 @@ class AppSettings {
     }
     await prefs.setBool('skipRestoreHint', skipRestoreHint);
     await prefs.setBool('backupFolderHintDismissed', backupFolderHintDismissed);
+    await prefs.setBool('developerOptionsVisible', developerOptionsVisible);
     await prefs.setBool('videoBackfillHintDismissed', videoBackfillHintDismissed);
   }
 
