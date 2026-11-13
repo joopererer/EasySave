@@ -1,17 +1,22 @@
 // What a HEIC/HEIF header says about itself, decided from its own bytes.
 //
-// Android 12's platform HEIF decoder rejects the HEIC files an iPhone writes
-// when they carry an alpha auxiliary image (`urn:mpeg:hevc:2015:auxid:1` or
-// `urn:mpeg:mpegB:cicp:systems:auxiliary:alpha`). Asking the system decoder
-// whether it can show such a file is what stalled the history page in build 46:
-// the decode never returned, the watchdog gave up on it, and the abandoned
-// native decode kept the shared channel busy for every thumbnail behind it.
+// Android's platform HEIF decoder up to 12L (SDK 32) rejects the HEIC files an
+// iPhone writes when they carry an alpha auxiliary image
+// (`urn:mpeg:hevc:2015:auxid:1` or `urn:mpeg:mpegB:cicp:systems:auxiliary:alpha`),
+// and Android 12 does it by hanging instead of failing. Asking the system
+// decoder whether it can show such a file is what stalled the history page in
+// build 46: the decode never returned, the watchdog gave up on it, and the
+// abandoned native decode kept the shared channel busy for every thumbnail
+// behind it.
 //
-// So the format question is answered from the container structure instead —
-// `ftyp`, `meta`/`iinf`, `meta`/`iref`, `meta`/`iprp`/`ipco`/`auxC`, with the
-// `ipma` associations — by reading a bounded prefix of the file. No decoder is
-// involved, nothing can hang, and the same parser serves a downloaded temp file
-// and an album file read through MediaStore.
+// So on those levels the format question is answered from the container
+// structure instead — `ftyp`, `meta`/`iinf`, `meta`/`iref`,
+// `meta`/`iprp`/`ipco`/`auxC`, with the `ipma` associations — by reading a
+// bounded prefix of the file. No decoder is involved, nothing can hang, and
+// the same parser serves a downloaded temp file and an album file read through
+// MediaStore. From Android 13 (SDK 33) on the decoder handles an alpha HEIC,
+// so those files are handed to the device probe instead, under its own
+// timeout: only its answer may reject one, and no answer rejects nothing.
 //
 // Only fixed tokens leave this file (a brand, an alpha URN kind, a verdict), so
 // a log line can never carry a path, a filename or a file size.
@@ -39,13 +44,19 @@ const int kHeifHeadBytes = 256 * 1024;
 /// item data inside `meta`, so this bound is generous.
 const int kHeifMetaBytes = 128 * 1024;
 
-/// Android SDK levels whose platform HEIF decoder rejects an alpha HEIC.
+/// Highest Android SDK level whose platform HEIF decoder rejects an alpha HEIC.
 ///
-/// 31 is Android 12, reproduced on the reference device. Add a level here only
-/// after the same failure was reproduced on a device of that level: a level
-/// that is not listed keeps the old behaviour instead of rejecting files the
-/// device may well show.
-const Set<int> kHeicAlphaUnsupportedSdk = {31};
+/// Every level from Android 9 (28) through Android 12L (32) is treated as
+/// unsupported: the failure below was reproduced on Android 12 (31) on the
+/// reference device, and the whole 28–32 range ships the same platform HEIF
+/// decoder, so the product rule covers all of them. Android 13 (33) and later
+/// are not assumed either way — [heifAlphaNeedsDeviceProbe] hands those files
+/// to the device decoder, and only its answer may reject one.
+const int kHeicAlphaUnsupportedMaxSdk = 32;
+
+/// First Android SDK level whose HEIF decoder is asked about an alpha HEIC
+/// instead of being assumed to reject it (Android 13).
+const int kHeicAlphaProbeMinSdk = kHeicAlphaUnsupportedMaxSdk + 1;
 
 enum HeifVerdict {
   /// The bytes are not a HEIF/HEIC container at all.
@@ -104,11 +115,22 @@ class HeifHeader {
       'aux_refs=$auxReferences aux_items=$auxItems head_bytes=$bytes';
 }
 
-/// Whether this device cannot show [header] even though the file is intact.
+/// Whether this device rejects [header] by the container rule alone.
+///
+/// True for every level up to [kHeicAlphaUnsupportedMaxSdk] (Android 9–12L).
+/// An unknown level never rejects a file: it keeps the previous behaviour.
 bool heifAlphaUndisplayable(HeifHeader header, int? sdkInt) =>
     header.hasAlpha &&
     sdkInt != null &&
-    kHeicAlphaUnsupportedSdk.contains(sdkInt);
+    sdkInt <= kHeicAlphaUnsupportedMaxSdk;
+
+/// Whether only this device's decoder can answer for an alpha still.
+///
+/// True from [kHeicAlphaProbeMinSdk] (Android 13) on. The caller must run the
+/// probe on its own executor under a timeout, and an answer that never arrives
+/// stays `unknown`: such a file is neither rejected nor treated as missing.
+bool heifAlphaNeedsDeviceProbe(HeifHeader header, int? sdkInt) =>
+    header.hasAlpha && sdkInt != null && sdkInt >= kHeicAlphaProbeMinSdk;
 
 /// Reads and decides the header of [path]. Never reads the whole file: at most
 /// [headBytes], plus one bounded read of a `meta` box that sits past the head.

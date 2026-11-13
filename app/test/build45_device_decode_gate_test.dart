@@ -222,25 +222,35 @@ void main() {
           reason: 'the gate itself must not delete anything');
     });
 
-    test('the same alpha HEIC is accepted on a level that was not shown to '
-        'fail', () async {
+    test('from Android 13 on the device decoder decides an alpha HEIC', () async {
+      // Android 13+ decodes alpha HEICs, so the gate asks instead of assuming.
+      answerWithDecodable(true);
       ImageDecodeProbe.setApiLevelForTesting(33);
       final job = _job();
       final file = await writeHeic(alpha: true);
       final content = detectMediaContentType(heicStillWithAlphaAux());
 
-      final verdict = await manager.gatedVerdictForTesting(
+      final accepted = await manager.gatedVerdictForTesting(
         _batch([job]),
         job,
         file.path,
         content: content,
       );
+      expect(accepted, ContentVerdict.accept);
+      expect(logs.join('\n'), contains('device_probe=decodable'));
+      expect(logs.join('\n'), isNot(contains('rejected:')));
 
-      expect(verdict, ContentVerdict.accept);
-      final line = logs.join('\n');
-      expect(line, contains('result=ok:provenance_skipped'));
-      expect(line, contains('device_probe=decodable'));
-      expect(line, isNot(contains('rejected:')));
+      // The same file is refused when this phone really cannot decode it.
+      answerWithDecodable(false, reason: 'decode_failed');
+      ImageDecodeProbe.setApiLevelForTesting(34);
+      final refused = await manager.gatedVerdictForTesting(
+        _batch([_job()]),
+        _job(),
+        file.path,
+        content: content,
+      );
+      expect(refused, ContentVerdict.rejectUndecodableOnDevice);
+      expect(logs.join('\n'), contains('device_reason=decode_failed'));
     });
 
     test('a HEIC without an alpha plane is accepted on Android 12', () async {

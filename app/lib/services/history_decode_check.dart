@@ -133,12 +133,15 @@ class HistoryDecodeCheck {
 
   /// Decides a stored still from its own header bytes.
   ///
-  /// A HEIC/HEIF is never handed to the platform decoder here: an alpha HEIC
-  /// makes that decoder hang, and a hung decode is what kept every thumbnail
-  /// behind it waiting in build 46. The album file is opened read-only, at most
-  /// [kHeifHeadBytes] of it, on the native header reader — no photo_manager
-  /// call, no thumbnail request, nothing written. A container this build does
-  /// not read itself (AVIF) keeps the previous native probe.
+  /// On the levels whose decoder hangs or fails on an alpha auxiliary image
+  /// (SDK ≤ 32) a HEIC/HEIF is never handed to the platform decoder here: an
+  /// alpha HEIC makes that decoder hang, and a hung decode is what kept every
+  /// thumbnail behind it waiting in build 46. The album file is opened
+  /// read-only, at most [kHeifHeadBytes] of it, on the native header reader —
+  /// no photo_manager call, no thumbnail request, nothing written. From SDK 33
+  /// on an alpha HEIC is asked of the device probe under its own timeout, and a
+  /// container this build does not read itself (AVIF) keeps the previous native
+  /// probe.
   static Future<ImageDecodeResult> probeStoredStill(
     String mediaId, {
     String filename = '',
@@ -165,6 +168,13 @@ class HistoryDecodeCheck {
         reason: heifAlphaReason,
         bytes: header.bytes,
       );
+    }
+    if (heifAlphaNeedsDeviceProbe(header, sdk)) {
+      // Android 13 and later decode an alpha HEIC, so the byte rule has nothing
+      // to say about it: ask this phone. The probe runs on its own executor and
+      // is bounded; a timeout comes back `unknown`, which leaves the row
+      // untouched — never marked undecodable and never treated as missing.
+      return ImageDecodeProbe.probeMediaId(mediaId);
     }
     if (header.verdict == HeifVerdict.unknown ||
         header.verdict == HeifVerdict.notHeif) {

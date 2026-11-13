@@ -114,7 +114,11 @@ Uint8List _heic({required bool alpha, String urn = kAlphaAuxUrnHevc}) {
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
-  tearDown(() => ImageDecodeProbe.setApiLevelForTesting(null));
+  tearDown(() {
+    ImageDecodeProbe.setApiLevelForTesting(null);
+    ImageDecodeProbe.callForTesting = null;
+    ImageDecodeProbe.timeout = const Duration(seconds: 4);
+  });
 
   test('a HEIC with an alpha auxiliary image is detected', () {
     final header = parseHeifHeader(_heic(alpha: true));
@@ -178,15 +182,41 @@ void main() {
     expect(parseHeifHeader(truncated).verdict, HeifVerdict.unknown);
   });
 
-  test('only the listed Android levels reject an alpha HEIC', () {
+  group('the alpha HEIC rule by Android level', () {
     final alpha = parseHeifHeader(_heic(alpha: true));
     final plain = parseHeifHeader(_heic(alpha: false));
-    expect(heifAlphaUndisplayable(alpha, 31), isTrue, reason: 'Android 12');
-    expect(heifAlphaUndisplayable(alpha, 30), isFalse);
-    expect(heifAlphaUndisplayable(alpha, 33), isFalse);
-    expect(heifAlphaUndisplayable(alpha, null), isFalse);
-    expect(heifAlphaUndisplayable(plain, 31), isFalse);
-    expect(kHeicAlphaUnsupportedSdk, {31});
+
+    test('every level from Android 9 to 12L rejects an alpha HEIC', () {
+      for (final sdk in [28, 29, 30, 31, 32]) {
+        expect(heifAlphaUndisplayable(alpha, sdk), isTrue,
+            reason: 'SDK $sdk is Android 9–12L');
+        expect(heifAlphaNeedsDeviceProbe(alpha, sdk), isFalse,
+            reason: 'SDK $sdk is decided from bytes, no decoder is asked');
+      }
+      expect(kHeicAlphaUnsupportedMaxSdk, 32);
+      expect(kHeicAlphaProbeMinSdk, 33);
+    });
+
+    test('from Android 13 on only the device decoder may answer', () {
+      for (final sdk in [33, 34]) {
+        expect(heifAlphaUndisplayable(alpha, sdk), isFalse,
+            reason: 'SDK $sdk is not rejected by the container rule');
+        expect(heifAlphaNeedsDeviceProbe(alpha, sdk), isTrue,
+            reason: 'SDK $sdk has to be probed on the device');
+      }
+    });
+
+    test('an unknown level neither rejects nor probes', () {
+      expect(heifAlphaUndisplayable(alpha, null), isFalse);
+      expect(heifAlphaNeedsDeviceProbe(alpha, null), isFalse);
+    });
+
+    test('a HEIC without an alpha plane is never rejected nor probed', () {
+      for (final sdk in [28, 30, 31, 32, 33, 34, null]) {
+        expect(heifAlphaUndisplayable(plain, sdk), isFalse, reason: 'SDK $sdk');
+        expect(heifAlphaNeedsDeviceProbe(plain, sdk), isFalse, reason: 'SDK $sdk');
+      }
+    });
   });
 
   test('a file is read from its head, and a meta box past the head is found by '
@@ -230,7 +260,7 @@ void main() {
     }
   });
 
-  test('the download gate rejects an alpha HEIC on Android 12 without ever '
+  test('the download gate rejects an alpha HEIC on Android 9–12L without ever '
       'calling a decoder', () async {
     final dir = await Directory.systemTemp.createTemp('easysave_gate');
     const heic = MediaContentType(
@@ -244,24 +274,128 @@ void main() {
       final plain = File('${dir.path}/plain.heic');
       await plain.writeAsBytes(_heic(alpha: false));
 
-      ImageDecodeProbe.setApiLevelForTesting(31);
-      final rejected = await StillDecodeGate.forStoredStill(heic, alpha.path);
-      expect(rejected.probed, isTrue);
-      expect(rejected.rejected, isTrue);
-      expect(rejected.result!.decoder, heifByteDecoder);
-      expect(rejected.result!.reason, heifAlphaReason);
-      expect(rejected.logFields, contains('device_probe=undecodable'));
+      var probes = 0;
+      ImageDecodeProbe.callForTesting = (method, arguments) async {
+        probes++;
+        return null;
+      };
 
-      // The same file on a level that is not listed keeps the old behaviour.
-      ImageDecodeProbe.setApiLevelForTesting(33);
-      final allowed = await StillDecodeGate.forStoredStill(heic, alpha.path);
-      expect(allowed.rejected, isFalse);
+      for (final sdk in [28, 30, 31, 32]) {
+        ImageDecodeProbe.setApiLevelForTesting(sdk);
+        final rejected = await StillDecodeGate.forStoredStill(heic, alpha.path);
+        expect(rejected.probed, isTrue, reason: 'SDK $sdk');
+        expect(rejected.rejected, isTrue, reason: 'SDK $sdk');
+        expect(rejected.result!.decoder, heifByteDecoder, reason: 'SDK $sdk');
+        expect(rejected.result!.reason, heifAlphaReason, reason: 'SDK $sdk');
+        expect(rejected.logFields, contains('device_probe=undecodable'));
+      }
+      expect(probes, 0,
+          reason: 'a HEIC on SDK ≤ 32 never reaches the native decoder');
 
       // A HEIC without an alpha plane is accepted even on Android 12.
       ImageDecodeProbe.setApiLevelForTesting(31);
       final fine = await StillDecodeGate.forStoredStill(heic, plain.path);
       expect(fine.probed, isTrue);
       expect(fine.rejected, isFalse);
+    } finally {
+      await dir.delete(recursive: true);
+    }
+  });
+
+  test('from Android 13 on the gate asks the device decoder', () async {
+    final dir = await Directory.systemTemp.createTemp('easysave_gate_probe');
+    const heic = MediaContentType(
+      MediaContentKind.image,
+      'heic',
+      'image/heic',
+    );
+    try {
+      final alpha = File('${dir.path}/alpha.heic');
+      await alpha.writeAsBytes(_heic(alpha: true));
+
+      var probes = 0;
+      for (final (sdk, decodable) in [(33, true), (33, false), (34, true), (34, false)]) {
+        probes = 0;
+        ImageDecodeProbe.setApiLevelForTesting(sdk);
+        ImageDecodeProbe.callForTesting = (method, arguments) async {
+          probes++;
+          expect(method, 'probeImageDecodable');
+          return {
+            'decodable': decodable,
+            'width': 1536,
+            'height': 2560,
+            'sampleWidth': decodable ? 192 : 0,
+            'sampleHeight': decodable ? 320 : 0,
+            'decoder': 'bitmapfactory',
+            'reason': decodable ? 'ok' : 'decode_failed',
+            'bytes': 78054,
+          };
+        };
+        final gate = await StillDecodeGate.forStoredStill(heic, alpha.path);
+        expect(probes, 1, reason: 'SDK $sdk decodable=$decodable');
+        expect(gate.probed, isTrue);
+        expect(gate.rejected, decodable ? isFalse : isTrue,
+            reason: 'SDK $sdk decodable=$decodable');
+        expect(gate.result!.verdict,
+            decodable ? ImageDecodeVerdict.decodable : ImageDecodeVerdict.undecodable);
+      }
+    } finally {
+      await dir.delete(recursive: true);
+    }
+  });
+
+  test('a probe that does not answer stays unknown: never rejected, never '
+      'treated as missing', () async {
+    final dir = await Directory.systemTemp.createTemp('easysave_gate_timeout');
+    const heic = MediaContentType(
+      MediaContentKind.image,
+      'heic',
+      'image/heic',
+    );
+    try {
+      final alpha = File('${dir.path}/alpha.heic');
+      await alpha.writeAsBytes(_heic(alpha: true));
+      ImageDecodeProbe.setApiLevelForTesting(33);
+      ImageDecodeProbe.timeout = const Duration(milliseconds: 10);
+      ImageDecodeProbe.callForTesting = (method, arguments) async {
+        // A decode that never comes back inside the timeout.
+        await Future<void>.delayed(const Duration(milliseconds: 200));
+        return {'decodable': false};
+      };
+
+      final gate = await StillDecodeGate.forStoredStill(heic, alpha.path);
+      expect(gate.probed, isTrue);
+      expect(gate.rejected, isFalse, reason: 'no answer must not reject');
+      expect(gate.result!.verdict, ImageDecodeVerdict.unknown);
+      expect(gate.result!.reason, 'timeout');
+      expect(await alpha.exists(), isTrue,
+          reason: 'the gate itself must not delete anything');
+    } finally {
+      await dir.delete(recursive: true);
+    }
+  });
+
+  test('an unknown level does not probe and does not reject', () async {
+    final dir = await Directory.systemTemp.createTemp('easysave_gate_nullsdk');
+    const heic = MediaContentType(
+      MediaContentKind.image,
+      'heic',
+      'image/heic',
+    );
+    try {
+      final alpha = File('${dir.path}/alpha.heic');
+      await alpha.writeAsBytes(_heic(alpha: true));
+      var probes = 0;
+      ImageDecodeProbe.callForTesting = (method, arguments) async {
+        probes++;
+        return null;
+      };
+      ImageDecodeProbe.setApiLevelForTesting(null);
+
+      final gate = await StillDecodeGate.forStoredStill(heic, alpha.path);
+      expect(probes, 0, reason: 'no platform answer, so nothing is asked');
+      expect(gate.rejected, isFalse);
+      expect(gate.result!.verdict, ImageDecodeVerdict.decodable);
     } finally {
       await dir.delete(recursive: true);
     }

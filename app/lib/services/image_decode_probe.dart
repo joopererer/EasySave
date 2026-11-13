@@ -88,9 +88,13 @@ class StillDecodeGate {
   /// Gate of a finished download: probes [path] only when its own header says
   /// the container depends on the device codecs ([requiresDeviceDecode]).
   ///
-  /// A HEIC/HEIF is decided from its own bytes ([readHeifHeaderOfFile]): the
-  /// device decoder is never asked, because asking it is what stalled the
-  /// history page and cost build 46 every thumbnail behind the stuck decode.
+  /// A HEIC/HEIF is decided from its own bytes ([readHeifHeaderOfFile]) on the
+  /// levels whose decoder is known to hang or fail on an alpha auxiliary image
+  /// (SDK ≤ 32), because asking that decoder is what stalled the history page
+  /// and cost build 46 every thumbnail behind the stuck decode. From SDK 33 on
+  /// an alpha HEIC is handed to the device probe, bounded by
+  /// [ImageDecodeProbe.timeout]; a probe that does not answer stays `unknown`
+  /// and never rejects the file.
   static Future<StillDecodeGate> forStoredStill(
     MediaContentType? content,
     String path,
@@ -113,6 +117,23 @@ class StillDecodeGate {
             ImageDecodeVerdict.undecodable,
             decoder: heifByteDecoder,
             reason: heifAlphaReason,
+            bytes: header.bytes,
+          ),
+        );
+      }
+      if (heifAlphaNeedsDeviceProbe(header, sdk)) {
+        // Android 13 and later decode an alpha HEIC: ask this phone instead of
+        // guessing. The probe keeps its own executor and its own timeout, and
+        // an answer that never arrives stays `unknown`, so the file is neither
+        // rejected nor counted as missing.
+        final device = await ImageDecodeProbe.probeTempFile(path);
+        return StillDecodeGate.probed(
+          ImageDecodeResult(
+            device.verdict,
+            width: device.width,
+            height: device.height,
+            decoder: device.decoder,
+            reason: device.reason,
             bytes: header.bytes,
           ),
         );
