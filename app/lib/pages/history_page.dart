@@ -33,8 +33,8 @@ import '../services/site_registry.dart';
 import '../theme/app_theme.dart';
 import '../widgets/balanced_masonry_view.dart';
 import '../widgets/delete_records_sheet.dart';
-import '../widgets/download_sheet.dart';
 import '../widgets/gallery_browser.dart';
+import '../widgets/history_browser_flow.dart';
 import '../widgets/history_cards.dart';
 import 'download_queue_page.dart';
 import 'login_page.dart';
@@ -636,11 +636,15 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
     _opening = true;
 
     try {
-      final post = record.toPost();
-      final locator = GalleryLocatorService.instance;
+      final record0 = record;
+      final post = record0.toPost();
+      // Everything the browser may show: present files **and** the ones the
+      // album confirmed as gone. A post whose files all left the device still
+      // opens, with a placeholder per item, instead of silently doing nothing
+      // (v1.11 batch 4).
       final built = await savedBrowserItems(
-        record: record,
-        files: record.savedFiles,
+        record: record0,
+        files: record0.visibleFiles,
         post: post,
         highlightItemIndex: highlightItemIndex,
       );
@@ -655,30 +659,42 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
         }
         return;
       }
+      if (mounted && items.every((item) => item.missing)) {
+        // Every file left the device: still open the viewer (the placeholders
+        // and the re-download button are the useful screen), but say why
+        // nothing can be shown (v1.11 batch 4).
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('未找到可查看的媒体文件')),
+        );
+      }
 
       if (!mounted) return;
       await Navigator.of(context).push(
         MaterialPageRoute<void>(
-          builder: (_) => GalleryBrowserPage(
+          builder: (browserContext) => GalleryBrowserPage(
             items: items,
             initialIndex: initial,
-            authorName: record.authorName ?? '',
-            title: (record.title?.isNotEmpty == true)
-                ? record.title!
-                : record.postId,
-            platform: record.platform,
-            postUrl: record.postUrl,
-            aiLabel: record.aiLabel,
-            aiLabelSource: record.aiLabelSource,
+            originalTotal: record0.originalItemCount,
+            authorName: record0.authorName ?? '',
+            title: (record0.title?.isNotEmpty == true)
+                ? record0.title!
+                : record0.postId,
+            platform: record0.platform,
+            postUrl: record0.postUrl,
+            aiLabel: record0.aiLabel,
+            aiLabelSource: record0.aiLabelSource,
+            onRedownloadItems: (indices) =>
+                redownloadRecordItems(browserContext, record0, indices),
+            onDeleteItem: (item, {required bool deleteAlbumFiles}) =>
+                _deleteBrowserItem(
+                  record0,
+                  item,
+                  deleteAlbumFiles: deleteAlbumFiles,
+                ),
+            onDeletePost: () => _deleteWholeRecord(record0),
             onReparse: () {
               Navigator.of(context).pop();
-              _reparse(record);
-            },
-            onRedownload: (index) async {
-              await DownloadSheet.show(context, post, [index]);
-              await locator.scanAlbum(force: true);
-              await locator.syncRecord(record);
-              if (mounted) setState(() {});
+              _reparse(record0);
             },
           ),
         ),
@@ -687,6 +703,32 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
     } finally {
       _opening = false;
     }
+  }
+
+  /// Delete one item from the open viewer (v1.11 batch 4).
+  ///
+  /// The row state is written by the shared flow so both browser entry points
+  /// behave the same; the history page only refreshes its cards.
+  Future<GalleryBrowserItemDeletion?> _deleteBrowserItem(
+    HistoryRecord record,
+    GalleryBrowserItem item, {
+    required bool deleteAlbumFiles,
+  }) => deleteBrowserItemForRecord(
+    record,
+    item,
+    deleteAlbumFiles: deleteAlbumFiles,
+    onChanged: () {
+      if (mounted) unawaited(_reload());
+    },
+  );
+
+  /// Every item of the post was deleted and the user agreed to drop the record.
+  Future<void> _deleteWholeRecord(HistoryRecord record) async {
+    final db = await HistoryDb.instance();
+    await deleteRecordForGood(
+      record,
+      delete: (fresh) => _deleteDatabaseRecords(db, [fresh]),
+    );
   }
 
   Future<void> _shareRecords(List<HistoryRecord> records) async {

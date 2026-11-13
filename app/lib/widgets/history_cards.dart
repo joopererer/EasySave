@@ -33,12 +33,17 @@ String formatSavedAt(DateTime time) {
 
 /// The representative (cover) media item of a post: the item matching the
 /// lowest-index saved file, else the first parsed item.
+///
+/// Built from the rows the browser may show, so a post whose first file left
+/// the device still points at that same item (its placeholder) instead of
+/// silently jumping to another one.
 MediaItem? coverItemFor(HistoryRecord record) {
   final post = record.toPost();
   if (post.items.isEmpty) return null;
-  if (record.savedFiles.isNotEmpty) {
-    final idx = record.savedFiles.first.itemIndex;
-    final is1Based = record.savedFiles.every((f) => f.itemIndex > 0);
+  final visible = record.visibleFiles;
+  if (visible.isNotEmpty) {
+    final idx = visible.first.itemIndex;
+    final is1Based = visible.every((f) => f.itemIndex > 0);
     final zeroBased = is1Based ? idx - 1 : idx;
     if (zeroBased >= 0 && zeroBased < post.items.length) {
       return post.items[zeroBased];
@@ -91,8 +96,9 @@ double allMediaCardHeight(MediaItem? item, double width) =>
 /// The media item an [AllMediaCard] shows for [itemIndex].
 MediaItem? allMediaItemFor(HistoryRecord record, int itemIndex) {
   final post = record.toPost();
-  final is1Based = record.savedFiles.isNotEmpty &&
-      record.savedFiles.every((f) => f.itemIndex > 0);
+  final visible = record.visibleFiles;
+  final is1Based = visible.isNotEmpty &&
+      visible.every((f) => f.itemIndex > 0);
   final zeroBased = is1Based ? itemIndex - 1 : itemIndex;
   if (zeroBased >= 0 && zeroBased < post.items.length) {
     return post.items[zeroBased];
@@ -128,9 +134,10 @@ class HistoryThumb extends StatelessWidget {
   Widget build(BuildContext context) {
     final locator = GalleryLocatorService.instance;
     final items = record.toPost().items;
+    final visible = record.visibleFiles;
     final index = itemIndex == null
         ? 0
-        : (record.savedFiles.every((f) => f.itemIndex > 0)
+        : (visible.every((f) => f.itemIndex > 0)
               ? itemIndex! - 1
               : itemIndex!);
     final remote = itemIndex == null ? coverItemFor(record)
@@ -139,7 +146,7 @@ class HistoryThumb extends StatelessWidget {
 
     AssetEntity? asset;
     HistoryFile? matched;
-    for (final f in record.savedFiles) {
+    for (final f in visible) {
       if (itemIndex != null && f.itemIndex != itemIndex) continue;
       matched ??= f;
       asset =
@@ -152,6 +159,12 @@ class HistoryThumb extends StatelessWidget {
     // its thumbnail would stall the shared decode channel (build 46). The card
     // shows the post's own cover instead, with the warning strip.
     final undecodable = matched?.undecodable == true;
+
+    // The album already answered that this item is not on the device: the card
+    // keeps its broken-file icon and never falls back to the network cover
+    // (v1.11 batch 4). A lookup that merely failed produces no such row.
+    final coverMissing =
+        asset == null && matched != null && isMissingHistoryFile(matched);
 
     if (asset != null && !undecodable) {
       return _withDecodeWarning(
@@ -177,7 +190,7 @@ class HistoryThumb extends StatelessWidget {
       );
     }
 
-    if (remote != null && remote.url.startsWith('http')) {
+    if (!coverMissing && remote != null && remote.url.startsWith('http')) {
       return _withDecodeWarning(
         CoverImage(
           item: remote,
@@ -193,19 +206,20 @@ class HistoryThumb extends StatelessWidget {
       );
     }
 
-    final isUnlocated = record.files.any(
+    final isUnlocated = visible.any(
       (f) =>
           f.status == FileStatus.unknown &&
           (f.mediaId == null || f.mediaId!.isEmpty),
     );
-    if (isUnlocated && (locator.isScanning || !locator.scanned)) {
+    if (!coverMissing && isUnlocated && (locator.isScanning || !locator.scanned)) {
       return ShimmerBox(width: width, height: height);
     }
 
     final allNotFound =
-        record.files.isNotEmpty &&
-        record.files.every((f) => f.status == FileStatus.notFound);
-    final missing = locator.isFullyAuthorized && locator.scanned && allNotFound;
+        visible.isNotEmpty && visible.every((f) => f.status == FileStatus.notFound);
+    final missing =
+        coverMissing ||
+        (locator.isFullyAuthorized && locator.scanned && allNotFound);
 
     return _withDecodeWarning(
       ColoredBox(
@@ -1077,7 +1091,7 @@ class AllMediaCard extends StatelessWidget {
                   left: 6,
                   child: _TranslucentBadge(label: badge),
                 ),
-              if (record.savedFiles.any(
+              if (record.visibleFiles.any(
                 (f) => f.itemIndex == itemIndex && f.notOriginal,
               ))
                 const Positioned(

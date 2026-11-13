@@ -40,6 +40,7 @@ class GalleryBrowserItem {
     this.asset,
     this.liveVideoAsset,
     this.status = FileStatus.found,
+    this.missing = false,
     this.filename,
     this.cachePostId,
     this.cacheItemIndex,
@@ -53,6 +54,7 @@ class GalleryBrowserItem {
     AssetEntity? asset,
     AssetEntity? liveVideoAsset,
     FileStatus status = FileStatus.found,
+    bool missing = false,
     String? filename,
   }) => GalleryBrowserItem(
     index: index,
@@ -69,6 +71,7 @@ class GalleryBrowserItem {
     asset: asset,
     liveVideoAsset: liveVideoAsset,
     status: status,
+    missing: missing,
     filename: filename ?? item.localFilename,
   );
 
@@ -88,6 +91,13 @@ class GalleryBrowserItem {
   final AssetEntity? asset;
   final AssetEntity? liveVideoAsset;
   final FileStatus status;
+
+  /// The album answered and this item is not on the device any more ("不在本机").
+  ///
+  /// A separate flag on purpose: the post may still carry a network URL for the
+  /// item, and a missing file must show the placeholder instead of quietly
+  /// falling back to the CDN (v1.11 batch 4).
+  final bool missing;
   final String? filename;
   final String? cachePostId;
   final int? cacheItemIndex;
@@ -117,6 +127,26 @@ class GalleryBrowserItem {
 /// item indices ([GalleryBrowserItem.index]); null means nothing is selected.
 Set<int> initialGallerySelection(Set<int>? selectedIndices) =>
     Set<int>.from(selectedIndices ?? const <int>{});
+
+/// What deleting one item of a post did, so the viewer can say it and offer the
+/// undo that "仅删除记录" supports.
+class GalleryBrowserItemDeletion {
+  const GalleryBrowserItemDeletion({
+    required this.ok,
+    this.message,
+    this.undo,
+  });
+
+  /// The change was written (or the album deletion was confirmed).
+  final bool ok;
+
+  /// Short user-facing sentence (e.g. that the album file was kept).
+  final String? message;
+
+  /// Restores the records the deletion removed. Null when the deletion cannot
+  /// be undone (an album file already went to the system trash).
+  final Future<void> Function()? undo;
+}
 
 /// Locates the album asset behind one stored history row.
 typedef HistoryAssetLocator = Future<AssetEntity?> Function(HistoryFile file);
@@ -173,6 +203,19 @@ Future<({List<GalleryBrowserItem> items, int initial})> savedBrowserItems({
     final imageAsset = entry.image == null ? null : await resolver(entry.image!);
     final videoAsset = entry.video == null ? null : await resolver(entry.video!);
 
+    // "不在本机" is only ever read from a row the album already confirmed as
+    // gone. A row whose lookup merely failed (no permission, no scan) keeps its
+    // status, so an unanswered album never turns an item into a missing one.
+    // A Live photo counts as missing when **either** half is: the pair cannot
+    // be viewed or re-downloaded by halves.
+    final imageMissing = entry.image != null &&
+        imageAsset == null &&
+        isMissingHistoryFile(entry.image!);
+    final videoMissing = entry.video != null &&
+        videoAsset == null &&
+        isMissingHistoryFile(entry.video!);
+    final missing = imageMissing || videoMissing;
+
     if (highlightItemIndex != null &&
         (rawIndex == highlightItemIndex || zeroBased == highlightItemIndex)) {
       initial = items.length;
@@ -203,9 +246,12 @@ Future<({List<GalleryBrowserItem> items, int initial})> savedBrowserItems({
         isGif: postItem?.isGif ?? false,
         asset: coverAsset,
         liveVideoAsset: entry.isLive ? videoAsset : null,
-        status: coverAsset != null
-            ? FileStatus.found
-            : (scanned ? coverFile.status : FileStatus.unknown),
+        status: missing
+            ? FileStatus.notFound
+            : (coverAsset != null
+                  ? FileStatus.found
+                  : (scanned ? coverFile.status : FileStatus.unknown)),
+        missing: missing,
         filename: coverFile.filename,
         undecodable: coverFile.undecodable == true,
       ),
@@ -347,9 +393,13 @@ class GalleryBrowserPage extends StatefulWidget {
     required this.title,
     required this.platform,
     required this.postUrl,
+    this.originalTotal,
     this.selectedIndices,
     this.onSelectionChanged,
     this.onRedownload,
+    this.onRedownloadItems,
+    this.onDeleteItem,
+    this.onDeletePost,
     this.onReparse,
     this.showSave = false,
     this.aiLabel,
@@ -364,9 +414,33 @@ class GalleryBrowserPage extends StatefulWidget {
   final String postUrl;
   final String? aiLabel;
   final String? aiLabelSource;
+
+  /// How many media items the post had when it was parsed. The top counter
+  /// reads "original position / original total" (e.g. 3 / 8) so a post whose
+  /// files were mostly deleted still says where the current item sits.
+  /// Null keeps the number of [items] (a remote preview shows them all).
+  final int? originalTotal;
   final Set<int>? selectedIndices;
   final ValueChanged<Set<int>>? onSelectionChanged;
+
+  /// Legacy single-item re-download, addressed by the item's original index.
   final Future<void> Function(int index)? onRedownload;
+
+  /// Preferred re-download entry: asks the caller to re-parse the post and open
+  /// the selection panel with exactly these items preselected. Returning a new
+  /// item list replaces what the viewer shows, so the state updates in place.
+  final Future<List<GalleryBrowserItem>?> Function(Set<int> indices)?
+      onRedownloadItems;
+
+  /// Deletes one item of the post (v1.11 batch 4). Null hides the action.
+  final Future<GalleryBrowserItemDeletion?> Function(
+    GalleryBrowserItem item, {
+    required bool deleteAlbumFiles,
+  })? onDeleteItem;
+
+  /// Called when every remaining item of the post has been deleted and the user
+  /// agrees to drop the post record as well.
+  final Future<void> Function()? onDeletePost;
   final VoidCallback? onReparse;
 
   /// When opened from the parse-preview flow, shows a 保存 button that closes
@@ -378,6 +452,11 @@ class GalleryBrowserPage extends StatefulWidget {
 }
 
 class _GalleryBrowserPageState extends State<GalleryBrowserPage> {
+  /// The pages shown right now. A delete or a re-download replaces this, so the
+  /// viewer updates in place instead of asking the user to open the post again.
+  late List<GalleryBrowserItem> _items = List<GalleryBrowserItem>.of(
+    widget.items,
+  );
   late int _currentIndex = widget.initialIndex;
   late final PageController _pageController = PageController(
     initialPage: widget.initialIndex,
@@ -389,6 +468,219 @@ class _GalleryBrowserPageState extends State<GalleryBrowserPage> {
   late final Set<int> _selected = initialGallerySelection(
     widget.selectedIndices,
   );
+
+  /// A re-download or a delete is running; the buttons stay disabled.
+  bool _busy = false;
+
+  /// Original post item index of the page in view.
+  int? get _currentItemIndex {
+    if (_items.isEmpty) return null;
+    final i = _currentIndex.clamp(0, _items.length - 1);
+    return _items[i].index;
+  }
+
+  GalleryBrowserItem? get _currentItem {
+    if (_items.isEmpty) return null;
+    return _items[_currentIndex.clamp(0, _items.length - 1)];
+  }
+
+  /// Items the album confirmed as gone. A Live photo whose still or motion clip
+  /// is gone counts once, because the pair is re-downloaded whole.
+  List<int> get _missingIndices => [
+    for (final item in _items)
+      if (item.missing) item.index,
+  ];
+
+  /// How many media items the post had when it was parsed.
+  int get _originalTotal {
+    final declared = widget.originalTotal;
+    if (declared != null && declared > 0) return declared;
+    return _items.isEmpty ? 1 : _items.length;
+  }
+
+  /// "original position / original total", e.g. `3 / 8`.
+  ///
+  /// The position is the item's own place in the post, not its place in this
+  /// list: a post whose first two files were deleted still says `3 / 8` for the
+  /// third item instead of `1 / 6`.
+  String get _counterLabel {
+    final total = _originalTotal;
+    final position = (_currentItemIndex ?? _currentIndex) + 1;
+    final shown = position < 1
+        ? 1
+        : (position > total ? total : position);
+    return '$shown / $total';
+  }
+
+  /// Re-download [indices]: the caller re-parses the post and opens the preview
+  /// selection with exactly those items ticked. The refreshed items replace what
+  /// this viewer shows, so the counts and placeholders update in place.
+  Future<void> _redownload(Set<int> indices) async {
+    if (indices.isEmpty || _busy) return;
+    setState(() => _busy = true);
+    try {
+      final refresh = widget.onRedownloadItems;
+      if (refresh != null) {
+        final rebuilt = await refresh(indices);
+        if (rebuilt != null && mounted) _replaceItems(rebuilt);
+        return;
+      }
+      for (final index in indices) {
+        await widget.onRedownload?.call(index);
+      }
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  /// Ask how the current item should be deleted. Returns false for "仅删除
+  /// 记录" (the default), true for "同时删除相册文件", null when cancelled.
+  Future<bool?> _askDeleteMode(String title) => showModalBottomSheet<bool>(
+    context: context,
+    builder: (sheetContext) => SafeArea(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(20, 16, 20, 8),
+            child: Text(
+              '删除「$title」',
+              style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+            ),
+          ),
+          ListTile(
+            leading: const Icon(Icons.delete_outline),
+            title: const Text('仅删除记录'),
+            subtitle: const Text('相册中的文件保留，可撤销'),
+            onTap: () => Navigator.of(sheetContext).pop(false),
+          ),
+          ListTile(
+            leading: const Icon(Icons.delete_forever),
+            title: const Text('同时删除相册文件'),
+            subtitle: const Text('会先请求系统确认，删除后无法撤销'),
+            onTap: () => Navigator.of(sheetContext).pop(true),
+          ),
+          const SizedBox(height: 8),
+        ],
+      ),
+    ),
+  );
+
+  /// Delete the page in view and move on to the next item.
+  Future<void> _deleteCurrentItem() async {
+    final item = _currentItem;
+    final remove = widget.onDeleteItem;
+    if (item == null || remove == null || _busy) return;
+    final label = (item.index + 1).toString();
+    final withFile = await _askDeleteMode('第 $label 项');
+    if (withFile == null || !mounted) return;
+    setState(() => _busy = true);
+    GalleryBrowserItemDeletion? result;
+    try {
+      result = await remove(item, deleteAlbumFiles: withFile);
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+    if (!mounted) return;
+    if (result == null || !result.ok) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('删除失败，请重试')),
+      );
+      return;
+    }
+    final at = _items.indexWhere((it) => it.index == item.index);
+    _removeItem(item.index);
+    final messenger = ScaffoldMessenger.of(context);
+    messenger.hideCurrentSnackBar();
+    final undo = result.undo;
+    messenger.showSnackBar(
+      SnackBar(
+        content: Text(result.message ?? '已删除这张'),
+        duration: const Duration(seconds: 6),
+        action: undo == null
+            ? null
+            : SnackBarAction(
+                label: '撤销',
+                onPressed: () async {
+                  await undo();
+                  if (!mounted) return;
+                  _insertItem(item, at);
+                },
+              ),
+      ),
+    );
+    if (_items.isEmpty) await _askDeletePost();
+  }
+
+  void _removeItem(int index) {
+    final at = _items.indexWhere((it) => it.index == index);
+    if (at < 0) return;
+    setState(() {
+      _items.removeAt(at);
+      _currentIndex = _items.isEmpty
+          ? 0
+          : (at >= _items.length ? _items.length - 1 : at);
+    });
+    if (_items.isNotEmpty && _pageController.hasClients) {
+      _pageController.jumpToPage(_currentIndex);
+    }
+  }
+
+  void _insertItem(GalleryBrowserItem item, int at) {
+    if (_items.any((it) => it.index == item.index)) return;
+    setState(() {
+      final position = at < 0 || at > _items.length ? _items.length : at;
+      _items.insert(position, item);
+      _currentIndex = position;
+    });
+    if (_pageController.hasClients) _pageController.jumpToPage(_currentIndex);
+  }
+
+  /// Nothing of the post is left: offer to drop the record as well.
+  Future<void> _askDeletePost() async {
+    final agreed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('这个帖子已经全部删除'),
+        content: const Text('帖子里的媒体都已删除，是否同时删除整条历史记录？'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('保留记录'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: const Text('删除记录'),
+          ),
+        ],
+      ),
+    );
+    if (!mounted) return;
+    if (agreed == true) await widget.onDeletePost?.call();
+    if (mounted) Navigator.of(context).pop();
+  }
+
+  /// Swap the visible pages, keeping the page the user was looking at.
+  void _replaceItems(List<GalleryBrowserItem> rebuilt) {
+    final keep = _currentItemIndex;
+    final keepSelection = Set<int>.of(_selected);
+    setState(() {
+      _items = List<GalleryBrowserItem>.of(rebuilt);
+      final at = keep == null
+          ? -1
+          : _items.indexWhere((item) => item.index == keep);
+      _currentIndex = at >= 0
+          ? at
+          : (_currentIndex.clamp(0, _items.isEmpty ? 0 : _items.length - 1));
+      _selected
+        ..clear()
+        ..addAll(keepSelection.where((i) => _items.any((it) => it.index == i)));
+    });
+    if (_pageController.hasClients && _items.isNotEmpty) {
+      _pageController.jumpToPage(_currentIndex);
+    }
+  }
 
   double _dragOffset = 0.0;
   bool _isZoomed = false;
@@ -411,8 +703,8 @@ class _GalleryBrowserPageState extends State<GalleryBrowserPage> {
   void _keepDecodedAround(int index) {
     final configuration = createLocalImageConfiguration(context);
     for (final i in [index, index + 1, index - 1]) {
-      if (i < 0 || i >= widget.items.length) continue;
-      final item = widget.items[i];
+      if (i < 0 || i >= _items.length) continue;
+      final item = _items[i];
       final asset = item.asset;
       if (asset == null || item.type == 'video' || item.isGif) continue;
       _decoded.keep(VerifiedAssetImage.providerFor(asset, isOriginal: true), configuration);
@@ -439,7 +731,7 @@ class _GalleryBrowserPageState extends State<GalleryBrowserPage> {
   }
 
   Future<void> _shareCurrent() async {
-    final item = widget.items[_currentIndex];
+    final item = _items[_currentIndex];
     if (item.asset != null) {
       try {
         final file = await item.asset!.file;
@@ -463,8 +755,8 @@ class _GalleryBrowserPageState extends State<GalleryBrowserPage> {
 
   @override
   Widget build(BuildContext context) {
-    final currentItem = widget.items.isNotEmpty
-        ? widget.items[_currentIndex.clamp(0, widget.items.length - 1)]
+    final currentItem = _items.isNotEmpty
+        ? _items[_currentIndex.clamp(0, _items.length - 1)]
         : null;
     final isSelected =
         currentItem != null && _selected.contains(currentItem.index);
@@ -550,7 +842,7 @@ class _GalleryBrowserPageState extends State<GalleryBrowserPage> {
                   physics: (_isZoomed || _pointerCount > 1)
                       ? const NeverScrollableScrollPhysics()
                       : const BouncingScrollPhysics(),
-                  itemCount: widget.items.length,
+                  itemCount: _items.length,
                   onPageChanged: (idx) {
                     setState(() {
                       _currentIndex = idx;
@@ -567,8 +859,13 @@ class _GalleryBrowserPageState extends State<GalleryBrowserPage> {
                     }
                   },
                   itemBuilder: (context, idx) {
-                    final item = widget.items[idx];
+                    final item = _items[idx];
                     return _BrowserItemView(
+                      // A replaced list must rebuild the page state, not reuse
+                      // the state of whatever item used to sit at this index.
+                      key: ValueKey<String>(
+                        '${item.index}:${item.asset?.id ?? (item.missing ? 'missing' : 'remote')}',
+                      ),
                       item: item,
                       platform: widget.platform,
                       onZoomChanged: (zoomed) {
@@ -576,8 +873,10 @@ class _GalleryBrowserPageState extends State<GalleryBrowserPage> {
                           setState(() => _isZoomed = zoomed);
                         }
                       },
-                      onRedownload: widget.onRedownload != null
-                          ? () => widget.onRedownload!(item.index)
+                      onRedownload:
+                          widget.onRedownload != null ||
+                              widget.onRedownloadItems != null
+                          ? () => _redownload({item.index})
                           : null,
                       onToggleSelect: () => _toggleSelect(item.index),
                     );
@@ -623,7 +922,8 @@ class _GalleryBrowserPageState extends State<GalleryBrowserPage> {
                             mainAxisSize: MainAxisSize.min,
                             children: [
                               Text(
-                                '${_currentIndex + 1} / ${widget.items.length}',
+                                _counterLabel,
+                                key: const Key('browser_counter'),
                                 style: const TextStyle(
                                   color: Colors.white,
                                   fontSize: 16,
@@ -715,7 +1015,7 @@ class _GalleryBrowserPageState extends State<GalleryBrowserPage> {
                       mainAxisSize: MainAxisSize.min,
                       children: [
                         // Thumbnails strip
-                        if (widget.items.length > 1)
+                        if (_items.length > 1)
                           SizedBox(
                             height: 56,
                             child: ListView.builder(
@@ -724,9 +1024,9 @@ class _GalleryBrowserPageState extends State<GalleryBrowserPage> {
                               padding: const EdgeInsets.symmetric(
                                 horizontal: 16,
                               ),
-                              itemCount: widget.items.length,
+                              itemCount: _items.length,
                               itemBuilder: (context, idx) {
-                                final it = widget.items[idx];
+                                final it = _items[idx];
                                 final isCur = idx == _currentIndex;
                                 final isSel = _selected.contains(it.index);
 
@@ -806,15 +1106,60 @@ class _GalleryBrowserPageState extends State<GalleryBrowserPage> {
                                 ),
                               ),
                               const Spacer(),
+                              // Items whose files the album no longer holds:
+                              // one tap re-downloads all of them.
+                              if (_missingIndices.isNotEmpty &&
+                                  (widget.onRedownloadItems != null ||
+                                      widget.onRedownload != null))
+                                Padding(
+                                  padding: const EdgeInsets.only(right: 8),
+                                  child: TextButton.icon(
+                                    key: const Key('redownload_missing'),
+                                    style: TextButton.styleFrom(
+                                      backgroundColor: Colors.white12,
+                                      foregroundColor: Colors.white,
+                                      shape: const StadiumBorder(),
+                                      padding: const EdgeInsets.symmetric(
+                                        horizontal: 12,
+                                        vertical: 6,
+                                      ),
+                                    ),
+                                    onPressed: _busy
+                                        ? null
+                                        : () => _redownload(
+                                            _missingIndices.toSet(),
+                                          ),
+                                    icon: const Icon(
+                                      Icons.download_outlined,
+                                      size: 16,
+                                    ),
+                                    label: Text(
+                                      '重新下载缺失的 ${_missingIndices.length} 张',
+                                      style: const TextStyle(fontSize: 12),
+                                    ),
+                                  ),
+                                ),
                               // Actions
-                              if (widget.onRedownload != null &&
-                                  currentItem != null)
+                              if ((widget.onRedownload != null ||
+                                      widget.onRedownloadItems != null) &&
+                                  currentItem != null &&
+                                  _missingIndices.length <= 1)
                                 IconButton(
                                   tooltip: '重新下载',
                                   color: Colors.white,
                                   icon: const Icon(Icons.download_outlined),
-                                  onPressed: () =>
-                                      widget.onRedownload!(currentItem.index),
+                                  onPressed: _busy
+                                      ? null
+                                      : () => _redownload({currentItem.index}),
+                                ),
+                              if (widget.onDeleteItem != null &&
+                                  currentItem != null)
+                                IconButton(
+                                  key: const Key('delete_item'),
+                                  tooltip: '删除这张',
+                                  color: Colors.white,
+                                  icon: const Icon(Icons.delete_outline),
+                                  onPressed: _busy ? null : _deleteCurrentItem,
                                 ),
                               if (!widget.showSave && widget.onReparse != null)
                                 Padding(
@@ -950,7 +1295,7 @@ class _ThumbnailImage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    if (item.status == FileStatus.notFound && !item.url.startsWith('http')) {
+    if (item.missing || item.status == FileStatus.notFound) {
       return Container(
         color: Colors.grey.shade800,
         child: const Icon(Icons.broken_image, size: 18, color: Colors.white54),
@@ -980,6 +1325,7 @@ class _ThumbnailImage extends StatelessWidget {
 
 class _BrowserItemView extends StatefulWidget {
   const _BrowserItemView({
+    super.key,
     required this.item,
     required this.platform,
     this.onZoomChanged,
@@ -1246,9 +1592,8 @@ class _BrowserItemViewState extends State<_BrowserItemView> {
       );
     }
 
-    // 1. Missing file: "已从相册删除" placeholder + [重新下载]
-    if ((it.status == FileStatus.notFound || _isNotFound) &&
-        !it.url.startsWith('http')) {
+    // 1. Missing file: "不在本机" placeholder + [重新下载这张]
+    if (it.missing || _isNotFound || it.status == FileStatus.notFound) {
       return Center(
         child: Column(
           mainAxisSize: MainAxisSize.min,
@@ -1267,7 +1612,7 @@ class _BrowserItemViewState extends State<_BrowserItemView> {
             ),
             const SizedBox(height: 16),
             const Text(
-              '已从相册删除',
+              '不在本机',
               style: TextStyle(
                 color: Colors.white,
                 fontSize: 16,
@@ -1311,7 +1656,7 @@ class _BrowserItemViewState extends State<_BrowserItemView> {
                         ),
                       )
                     : const Icon(Icons.download, size: 18),
-                label: Text(_redownloading ? '下载中...' : '重新下载'),
+                label: Text(_redownloading ? '下载中...' : '重新下载这张'),
               ),
             ],
           ],

@@ -19,6 +19,7 @@ import '../services/site_registry.dart';
 import '../services/clipboard_guard.dart';
 import '../services/gallery_locator_service.dart';
 import '../services/history_db.dart';
+import '../services/history_deletion.dart';
 import '../services/host_bridge.dart';
 import '../services/links.dart';
 import '../services/live_pairs.dart';
@@ -30,8 +31,8 @@ import '../services/seal.dart';
 import '../services/settings.dart';
 import '../services/update_service.dart';
 import '../theme/app_theme.dart';
-import '../widgets/download_sheet.dart';
 import '../widgets/gallery_browser.dart';
+import '../widgets/history_browser_flow.dart';
 import '../widgets/parse_feedback.dart';
 import '../widgets/shared.dart';
 import 'batch_page.dart';
@@ -1172,11 +1173,13 @@ class ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
 
     try {
       final post = PreviewPage.postFromRecord(record);
-      final locator = GalleryLocatorService.instance;
 
       final built = await savedBrowserItems(
         record: record,
-        files: record.files,
+        // Everything the viewer may show, missing items included: a post whose
+        // files left the device still opens on placeholders with their
+        // re-download button (v1.11 batch 4).
+        files: record.visibleFiles,
         post: post,
       );
       final items = built.items;
@@ -1203,12 +1206,21 @@ class ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
         }
         return;
       }
+      if (mounted && items.every((item) => item.missing)) {
+        // All of it is off the device: open the viewer anyway, with the
+        // placeholders and the re-download button (v1.11 batch 4).
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('未找到可查看的媒体文件')));
+      }
 
       if (!mounted) return;
       await Navigator.of(context).push(
         MaterialPageRoute<void>(
-          builder: (_) => GalleryBrowserPage(
+          builder: (browserContext) => GalleryBrowserPage(
             items: items,
+            initialIndex: built.initial,
+            originalTotal: record.originalItemCount,
             authorName: record.authorName ?? '',
             title: (record.title?.isNotEmpty == true)
                 ? record.title!
@@ -1222,12 +1234,23 @@ class ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
               Navigator.of(context).pop();
               _reparseRecord(record);
             },
-            onRedownload: (index) async {
-              await DownloadSheet.show(context, post, [index]);
-              await locator.scanAlbum(force: true);
-              await locator.syncRecord(record);
-              if (mounted) setState(() {});
-            },
+            onRedownloadItems: (indices) =>
+                redownloadRecordItems(browserContext, record, indices),
+            onDeleteItem: (item, {required bool deleteAlbumFiles}) =>
+                deleteBrowserItemForRecord(
+                  record,
+                  item,
+                  deleteAlbumFiles: deleteAlbumFiles,
+                  onChanged: _reloadRecent,
+                ),
+            onDeletePost: () => deleteRecordForGood(
+              record,
+              delete: (fresh) async {
+                final db = await HistoryDb.instance();
+                await deleteHistoryRecords(db, [fresh]);
+                _reloadRecent();
+              },
+            ),
           ),
         ),
       );
