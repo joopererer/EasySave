@@ -67,6 +67,11 @@ class AppSettings {
   /// User-chosen directory tree URI for external automatic backups (v1.8).
   String? backupTreeUri;
 
+  /// Display name of [backupTreeUri] (e.g. the folder name as the system shows
+  /// it). Written into the backup so a restore can ask the user to re-authorise
+  /// the same folder; the URI grant itself is never backed up.
+  String? backupFolderName;
+
   /// Whether automatic backup to external SAF folder is enabled (v1.8).
   ///
   /// The backing value is only written back by a [save] of an instance that
@@ -137,6 +142,7 @@ class AppSettings {
         prefs.getStringList('usedAlbumNames') ?? const <String>[],
       )
       ..backupTreeUri = prefs.getString('backupTreeUri')
+      ..backupFolderName = prefs.getString('backupFolderName')
       ..autoFolderBackupEnabled = prefs.getBool('autoFolderBackupEnabled') ?? false
       ..lastBackupTime = prefs.getInt('lastBackupTime')
       ..skipRestoreHint = prefs.getBool('skipRestoreHint') ?? false
@@ -172,6 +178,11 @@ class AppSettings {
     } else if (_forgetBackupFolder) {
       await prefs.remove('backupTreeUri');
     }
+    if (backupFolderName != null && backupFolderName!.isNotEmpty) {
+      await prefs.setString('backupFolderName', backupFolderName!);
+    } else if (_forgetBackupFolder) {
+      await prefs.remove('backupFolderName');
+    }
     if (_autoFolderBackupKnown) {
       await prefs.setBool('autoFolderBackupEnabled', _autoFolderBackup);
     }
@@ -205,6 +216,7 @@ class AppSettings {
   /// grant keeps both values so the user can re-authorise the same directory.
   Future<void> clearBackupFolder() async {
     backupTreeUri = null;
+    backupFolderName = null;
     autoFolderBackupEnabled = false;
     _forgetBackupFolder = true;
     try {

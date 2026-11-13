@@ -166,6 +166,8 @@ abstract final class BackupService {
       historyView: appSettings.historyView.name,
       historyLayout: appSettings.historyLayout.name,
       historySort: appSettings.historySort.name,
+      autoFolderBackupEnabled: appSettings.autoFolderBackupEnabled,
+      autoBackupFolderName: appSettings.backupFolderName,
     );
 
     final exportedAtStr = formatDateTimeWithTimezone(now ?? DateTime.now());
@@ -383,6 +385,15 @@ abstract final class BackupService {
         ...data.settings.usedAlbumNames,
       };
       settings.usedAlbumNames = mergedAlbums.toList();
+
+      // v1.11 batch 1: the backup records whether auto folder backup was on
+      // and the folder's display name, never the URI grant. Restoring leaves
+      // the switch off; the page then asks the user and re-authorises the
+      // folder (AutoBackupResume). A pre-v1.11 backup has neither field, so
+      // the current setting is left untouched.
+      if (data.settings.hasAutoBackupFields) {
+        settings.autoFolderBackupEnabled = false;
+      }
 
       // Bubble permission safeguard
       if (data.settings.bubbleEnabled) {

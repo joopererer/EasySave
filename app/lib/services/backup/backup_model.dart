@@ -211,6 +211,15 @@ class BackupSettings {
   final String historyLayout;
   final String historySort;
 
+  /// v1.11 batch 1: the automatic folder backup switch and the folder's
+  /// display name. The SAF tree URI (the permission grant itself) is never
+  /// written — a restore has to re-authorise the folder.
+  ///
+  /// Both are nullable so a backup written before v1.11 can be told apart
+  /// from one that says "auto backup was off".
+  final bool? autoFolderBackupEnabled;
+  final String? autoBackupFolderName;
+
   BackupSettings({
     this.albumName = 'EasySave',
     List<String>? usedAlbumNames,
@@ -225,9 +234,14 @@ class BackupSettings {
     this.historyView = 'posts',
     this.historyLayout = 'waterfall',
     this.historySort = 'latest',
+    this.autoFolderBackupEnabled,
+    this.autoBackupFolderName,
   }) : usedAlbumNames = usedAlbumNames != null
             ? List<String>.from(usedAlbumNames)
             : <String>[];
+
+  /// True when the backup carries the auto-backup fields at all.
+  bool get hasAutoBackupFields => autoFolderBackupEnabled != null;
 
   Map<String, dynamic> toMap() => {
         'albumName': albumName,
@@ -243,6 +257,10 @@ class BackupSettings {
         'historyView': historyView,
         'historyLayout': historyLayout,
         'historySort': historySort,
+        if (autoFolderBackupEnabled != null)
+          'autoFolderBackupEnabled': autoFolderBackupEnabled,
+        if (autoBackupFolderName != null)
+          'autoBackupFolderName': autoBackupFolderName,
       };
 
   factory BackupSettings.fromMap(Map<String, dynamic> map) {
@@ -270,6 +288,8 @@ class BackupSettings {
       historyView: map['historyView'] as String? ?? 'posts',
       historyLayout: map['historyLayout'] as String? ?? 'waterfall',
       historySort: map['historySort'] as String? ?? 'latest',
+      autoFolderBackupEnabled: map['autoFolderBackupEnabled'] as bool?,
+      autoBackupFolderName: (map['autoBackupFolderName'] as String?)?.trim(),
     );
   }
 }

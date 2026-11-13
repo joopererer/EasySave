@@ -5,6 +5,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import '../services/backup/auto_backup_resume.dart';
 import '../services/backup/backup_folder_guard.dart';
 import '../services/backup/backup_model.dart';
 import '../services/backup/backup_service.dart';
@@ -119,6 +120,12 @@ class _BackupRestorePageState extends State<BackupRestorePage> with WidgetsBindi
       );
       if (uri != null && mounted) {
         _settings.backupTreeUri = uri;
+        // Remember the display name (never the grant itself) so a backup can
+        // name the folder later on.
+        final parsed = parseTreeDocumentPath(uri);
+        _settings.backupFolderName = (parsed != null && parsed.isNotEmpty)
+            ? parsed
+            : await SafService.getDirectoryDisplayName(uri);
         if (enableAutoBackupOnSuccess) {
           _settings.autoFolderBackupEnabled = true;
           _settings.backupFolderHintDismissed = true;
@@ -418,7 +425,55 @@ class _BackupRestorePageState extends State<BackupRestorePage> with WidgetsBindi
         ),
       );
 
-      // 8. Ask whether to scan and rebuild immediately
+      // 8. Ask whether to keep automatic backup running into the folder the
+      // backup was written to. The file only carries the switch and the
+      // folder's display name; the picker re-creates the grant and only a
+      // successful pick switches the feature on.
+      final resume = await AutoBackupResume.offer(
+        backupSettings: preview.settings,
+        settings: _settings,
+        ask: (folderName) async {
+          if (!mounted) return false;
+          final answer = await showDialog<bool>(
+            context: context,
+            builder: (ctx) => AlertDialog(
+              title: const Text('自动备份'),
+              content: Text('是否继续自动备份到“$folderName”？'),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(ctx).pop(false),
+                  child: const Text('取消'),
+                ),
+                FilledButton(
+                  onPressed: () => Navigator.of(ctx).pop(true),
+                  child: const Text('继续自动备份'),
+                ),
+              ],
+            ),
+          );
+          return answer == true;
+        },
+        pickFolder: (initialUri) => SafService.pickDirectory(initialUri: initialUri),
+        displayNameOf: (uri) async {
+          final parsed = parseTreeDocumentPath(uri);
+          if (parsed != null && parsed.isNotEmpty) return parsed;
+          final docName = await SafService.getDirectoryDisplayName(uri);
+          return SafService.formatReadableDirectoryPath(uri, fallbackName: docName);
+        },
+      );
+      if (mounted && resume.outcome == AutoBackupResumeOutcome.resumed) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('已重新开启自动备份到“${resume.folderName}”')),
+        );
+      } else if (mounted &&
+          resume.outcome == AutoBackupResumeOutcome.grantFailed) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('未获得文件夹授权，自动备份保持关闭')),
+        );
+      }
+      if (resume.asked) await _loadState();
+
+      // 9. Ask whether to scan and rebuild immediately
       if (!mounted) return;
       final shouldScan = await showDialog<bool>(
         context: context,
