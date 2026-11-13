@@ -29,6 +29,40 @@ enum BackupPostStatus {
       .firstWhere((s) => s.name == value, orElse: () => BackupPostStatus.success);
 }
 
+/// Local state of one backed-up file, as the exporting device knew it.
+///
+/// Written so a restore can tell three situations apart (v1.11 batch 4):
+/// * [inDevice] — the album held the file;
+/// * [missing] — the album answered and the file was gone ("不在本机");
+/// * [deleted] — the user deleted the item inside the app, so it is neither
+///   saved nor missing and must never be offered for a re-download.
+///
+/// [unknown] covers rows that were never resolved against an album and is
+/// written as "no field at all", which is exactly how a pre-v1.11 backup reads.
+enum BackupFileStatus {
+  unknown,
+  inDevice,
+  missing,
+  deleted;
+
+  static BackupFileStatus parse(Object? value) {
+    switch (value) {
+      case 'inDevice':
+      case 'found':
+        return BackupFileStatus.inDevice;
+      case 'missing':
+      case 'notFound':
+        return BackupFileStatus.missing;
+      case 'deleted':
+        return BackupFileStatus.deleted;
+      default:
+        return BackupFileStatus.unknown;
+    }
+  }
+
+  bool get isDeleted => this == BackupFileStatus.deleted;
+}
+
 class BackupFile {
   final int itemIndex;
 
@@ -54,6 +88,9 @@ class BackupFile {
   final int? itemCount;
   final String? capturedBy;
 
+  /// On-device state at export time (v1.11 batch 4).
+  final BackupFileStatus status;
+
   BackupFile({
     required this.itemIndex,
     required this.mediaType,
@@ -65,6 +102,7 @@ class BackupFile {
     required this.savedAt,
     this.itemCount,
     this.capturedBy,
+    this.status = BackupFileStatus.unknown,
   });
 
   Map<String, dynamic> toMap() => {
@@ -78,6 +116,9 @@ class BackupFile {
         'savedAt': savedAt,
         if (itemCount != null) 'itemCount': itemCount,
         if (capturedBy != null) 'capturedBy': capturedBy,
+        // Unknown is left out on purpose: a reader that predates the field
+        // behaves exactly like the device that wrote it did.
+        if (status != BackupFileStatus.unknown) 'status': status.name,
       };
 
   /// Reads v2 files and v1 files. From v1 only identity fields are kept: its
@@ -101,6 +142,7 @@ class BackupFile {
           (source is Map ? (source['itemCount'] as num?)?.toInt() : null),
       capturedBy: map['capturedBy'] as String? ??
           (provenance is Map ? provenance['capturedBy'] as String? : null),
+      status: BackupFileStatus.parse(map['status']),
     );
   }
 }

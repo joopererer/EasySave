@@ -65,19 +65,30 @@ abstract final class BackupService {
     }
   }
 
-  /// Files worth backing up: located files and files with a physical identity
-  /// (mediaId / assetId), including ones missing on this device. Unbound
-  /// filename guesses are left out.
+  /// Files worth backing up: located files, files with a physical identity
+  /// (mediaId / assetId) including ones missing on this device, and every item
+  /// the user deleted in the app — that last one carries no album identity any
+  /// more, but the state itself is what a restore must keep.
   static bool _exportable(HistoryFile f) =>
       f.status == FileStatus.found ||
+      f.status == FileStatus.deleted ||
       f.mediaId?.trim().isNotEmpty == true ||
       f.assetId?.trim().isNotEmpty == true;
+
+  /// The on-device state written into a backup file (v1.11 batch 4).
+  static BackupFileStatus backupStatusOf(HistoryFile file) => switch (file.status) {
+    FileStatus.found => BackupFileStatus.inDevice,
+    FileStatus.notFound => BackupFileStatus.missing,
+    FileStatus.deleted => BackupFileStatus.deleted,
+    FileStatus.unknown => BackupFileStatus.unknown,
+  };
 
   static BackupPostStatus statusOf(HistoryRecord record) {
     // Judged by the stored rows, not by the rows confirmed in the album: a file
     // this device cannot locate is still part of the post and is exported as an
-    // identity the restoring device may verify.
-    if (record.files.isEmpty) return BackupPostStatus.failed;
+    // identity the restoring device may verify. An item the user deleted is not
+    // part of the post any more, so it does not make the post "saved" either.
+    if (record.visibleFiles.isEmpty) return BackupPostStatus.failed;
     return record.downloadError != null
         ? BackupPostStatus.partial
         : BackupPostStatus.success;
@@ -128,6 +139,7 @@ abstract final class BackupService {
             ),
             itemCount: f.itemCount,
             capturedBy: f.capturedBy,
+            status: backupStatusOf(f),
           ),
       ];
       backupPosts.add(
@@ -191,7 +203,12 @@ abstract final class BackupService {
       throw const FormatException('Root of backup is not a valid JSON object');
     }
     final data = BackupData.fromMap(decoded.cast<String, dynamic>());
-    final totalFiles = data.posts.fold<int>(0, (sum, p) => sum + p.files.length);
+    // An item the user deleted is not a file a restore will bring back, so it
+    // is not part of the "N 个文件" the preview promises (v1.11 batch 4).
+    final totalFiles = data.posts.fold<int>(
+      0,
+      (sum, p) => sum + p.files.where((f) => !f.status.isDeleted).length,
+    );
 
     return BackupPreview(
       exportedAt: data.exportedAt,
@@ -260,13 +277,17 @@ abstract final class BackupService {
         mergedPosts++;
       }
 
-      // Files this device already located stay as they are.
+      // Files this device already located stay as they are, and so does an item
+      // the user deleted here: a restore must not bring it back (v1.11 batch 4).
+      final localRows = existing?.files ?? const <HistoryFile>[];
       final located = <String, HistoryFile>{
-        for (final f in existing?.files ?? const <HistoryFile>[])
-          if (f.status == FileStatus.found && f.mediaId?.isNotEmpty == true)
+        for (final f in localRows)
+          if (f.status == FileStatus.deleted ||
+              (f.status == FileStatus.found && f.mediaId?.isNotEmpty == true))
             '${f.itemIndex}_${f.isImage}': f,
       };
-      for (final f in located.values) {
+      for (final f in localRows) {
+        if (f.status != FileStatus.found) continue;
         matcher.reserve(f.mediaId);
       }
 
@@ -274,6 +295,27 @@ abstract final class BackupService {
       final ordered = [...post.files]..sort((a, b) => a.itemIndex.compareTo(b.itemIndex));
       for (final f in ordered) {
         final isImage = f.mediaType != 'video';
+        // An item the user deleted in the app comes back as deleted: it is not
+        // missing, so it is never matched against the album and never offered
+        // for a re-download (v1.11 batch 4).
+        if (f.status.isDeleted) {
+          files.add(
+            HistoryFile(
+              filename: f.filename,
+              savedAt: DateTime.tryParse(f.savedAt)?.millisecondsSinceEpoch ?? 0,
+              mediaId: f.mediaIdHint,
+              status: FileStatus.deleted,
+              itemIndex: f.itemIndex,
+              isImage: isImage,
+              assetId: f.assetId,
+              relativePath: f.relativePath,
+              itemCount: f.itemCount,
+              capturedBy: f.capturedBy,
+              size: f.size,
+            ),
+          );
+          continue;
+        }
         final known = located['${f.itemIndex}_$isImage'];
         if (known != null) {
           files.add(known);
@@ -304,7 +346,7 @@ abstract final class BackupService {
         );
       }
       final restoredFiles = repairHistoryFiles(files) ?? files;
-      restoredFilesCount += restoredFiles.length;
+      restoredFilesCount += restoredFiles.where(isVisibleHistoryFile).length;
 
       DateTime? resolvedCreatedAt = DateTime.tryParse(post.savedAt);
       if (resolvedCreatedAt == null && files.isNotEmpty) {
