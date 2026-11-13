@@ -241,7 +241,7 @@ class _DownloadSheetState extends State<DownloadSheet> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(
-            _statusText(job),
+            _statusText(batch, job),
             style: TextStyle(
               color: isFailed
                   ? Theme.of(context).colorScheme.error
@@ -270,7 +270,7 @@ class _DownloadSheetState extends State<DownloadSheet> {
     );
   }
 
-  String _statusText(DownloadJob job) {
+  String _statusText(DownloadBatch batch, DownloadJob job) {
     switch (job.state) {
       case JobState.queued:
         return '等待中';
@@ -281,7 +281,10 @@ class _DownloadSheetState extends State<DownloadSheet> {
       case JobState.done:
         return job.metadataNotice ?? '已完成';
       case JobState.failed:
-        final attempt = '（已试 ${job.attempts}/$kMaxAttempts）';
+        // The real budget of this file, not the per-candidate transfer limit:
+        // a still walks several candidates, so "已试 5/3" was showing a
+        // denominator the file never had.
+        final attempt = '（已试 ${job.attempts}/${retryCapFor(batch, job)}）';
         return '失败$attempt：${job.error ?? '未知错误'}';
       case JobState.canceled:
         return '已取消';

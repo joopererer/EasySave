@@ -7,12 +7,49 @@ This file documents notable user-facing changes following [Keep a Changelog](htt
 
 ## [Unreleased]
 
+## [1.10.3] - 2026-11-12
+
 ### 修复 / Fixed
+
+- 启动时比较 App 内置的 parser 清单与已下载的在线版本，启用 `manifestVersion` 较高的一份：此前只要设备下载过在线 parser 就永远使用它，APK 里更新的解析器永远不会生效（真机日志 `activeVersion=1.4.15 activeManifest=11` 而 `builtinManifest=12`）。内置版本同样经过校验（APK 签名 + 清单结构与 parser 哈希），选择结果写入一行 `[ParserUpdate] event=select builtin=… stored=… chosen=… reason=…`。
+  Startup now compares the parser manifest bundled in the App with the downloaded one and uses whichever has the higher `manifestVersion`: a device that had ever downloaded a parser kept using it forever, so a newer parser inside the APK never took effect (device log showed `activeVersion=1.4.15 activeManifest=11` while `builtinManifest=12`). The bundled manifest is verified the same way (APK signature plus manifest structure and parser hash), and the choice is logged as one `[ParserUpdate] event=select builtin=… stored=… chosen=… reason=…` line.
+- 选中内置 parser 时防回滚水位线同步提升到该版本，之后在线通道发来同号同内容的版本按「相同」处理（`result=same reason=same_as_builtin`），不再报冲突；同号但内容不同时保持现状并记录 `reason=same_sequence_different_content`，不启用另一份。
+  When the bundled parser wins, the anti-rollback watermark rises with it, so a later online release with the same sequence and the same signed content counts as a match (`result=same reason=same_as_builtin`) instead of a conflict; a same-sequence release with different content keeps the current source and is logged as `reason=same_sequence_different_content`.
+- 某站点的登录状态变化（登录成功、退出、检测到会话失效）时清除该站点的解析缓存，日志 `[ParseCache] event=cleared site=… reason=login|logout|session_invalid`；此前 Instagram 登录后仍会命中登录前的封面结果，需要悬浮球重新解析才正确。
+  A site's parsed cache is now cleared whenever its login state changes — a confirmed login, a logout, or a detected expired session — logged as `[ParseCache] event=cleared site=… reason=login|logout|session_invalid`. Before this, Instagram kept answering with the cover parsed before login, and only a manual re-parse from the floating ball got the real media.
+- 解析失败与降级结果（例如登录墙上仅有的封面图）不再写入解析缓存（`[ParseCache] event=degraded reason=og_cover_only`）；解析过程中若登录状态变化，这一次的结果照常显示但不会写入缓存。
+  A failed parse and a degraded answer (for example the only cover a login wall exposes) are no longer written to the parse cache (`[ParseCache] event=degraded reason=og_cover_only`); a parse whose site changed login state while the page was loading is still shown but never published to the cache.
+- 历史页与首页的「刷新」一定重新解析：强制刷新不再并入正在进行的缓存命中请求；命中缓存的日志仍为 `ParseCache event=hit`。
+  「刷新」 in history and on the home page always re-parses: a forced refresh no longer joins an in-flight task that is about to answer from the cache. A cached answer still logs `ParseCache event=hit`.
+
+- 保存时不接受本机无法显示的 HEIC / AVIF 原图：iPhone 写的带透明通道的 HEIC（alpha 辅助图）在 Android 9–12L（SDK 28–32）上无法显示，这类原图不再保存进相册，改为优先使用 jpg 全质量转码（`imageView2/format/jpg/q/100`，原尺寸），全部原图候选都不可用时才退回预览图并标「非原图」。HEIC 的判定改为只读文件头（`ftyp` / `meta` / `iinf` / `iref` / `auxC`），不调用系统解码器，因此不会把解码通道占住；Android 13 及以上交给本机解码器判断，独立线程、带超时，超时按「未知」处理（既不拒收也不判为缺失）。AVIF 仍走原生解码自检（BitmapFactory / ImageDecoder，只取边界并小尺寸采样）。日志 `result=rejected:undecodable_on_device`。
+  A HEIC / AVIF original this device cannot display is no longer saved: an iPhone HEIC that carries an alpha auxiliary image cannot be shown on Android 9–12L (SDK 28–32), so such an original no longer reaches the album and the Xiaohongshu CDN's full-quality jpg transcode (`imageView2/format/jpg/q/100`, original pixel size) is preferred instead; only when every original candidate fails does the item fall back to the preview still, marked 「非原图」. A HEIC is now decided by reading its container header (`ftyp` / `meta` / `iinf` / `iref` / `auxC`) and never by calling the platform decoder, so nothing can hold the decode channel; Android 13 and later ask the device decoder instead, on its own thread under a timeout, and a timeout counts as "unknown" — the file is neither rejected nor treated as missing. AVIF still goes through the native decode check (BitmapFactory / ImageDecoder, bounds plus a small sampled decode only). Logged as `result=rejected:undecodable_on_device`.
+- jpg 原图优先，并新增小红书 CDN 的 JPEG 原图候选（`imageView2/format/jpg/q/100`，原尺寸），排在 HEIC 原图之前；实测 `format/jpeg` 与 `format/jpg` 字节一致，仅 `format/jpg` 会把 1290×1608 的图压到约 245KB，加 `/q/100` 后回到约 1.03MB，与 1.01MB 的原始字节接近。
+  JPEG originals are preferred, with an extra Xiaohongshu CDN JPEG original candidate (`imageView2/format/jpg/q/100`, original pixel size) ranked before the HEIC original: `format/jpeg` and `format/jpg` return identical bytes, while plain `format/jpg` re-encodes 1290x1608 down to about 245KB and adding `/q/100` restores about 1.03MB against the 1.01MB stored original.
+- 对连接重置与超时的重试由 1 次提高到最多 3 次指数退避（0.6s、1.2s、2.4s）再换下一个候选；预检改用与正式下载相同的 GET + Range 请求、同一套请求头（浏览器 UA、`Accept-Encoding: identity`），使预检与下载在 CDN 侧不再像两个不同客户端。
+  Retries on a connection reset or timeout went from one to up to three exponential backoffs (0.6s, 1.2s, 2.4s) before switching candidates. The preflight now uses the same GET + Range request and the same headers as the download (browser User-Agent, `Accept-Encoding: identity`), so the CDN no longer sees the preflight and the transfer as two different clients.
+- 修复同一帖子序号下旧封面图与新下载视频被当成一张实况的问题：图片与视频只有在双方 pair_id 一致、或由同一次下载写入时才配对，扩展名不同的旧文件不再顶替新文件的 assetId。
+  Fixed an old cover still and a freshly downloaded video of the same post sequence being treated as one Live photo: a still and a clip only pair when both carry the same pair_id or were written by one download, and an older file of another extension no longer answers the new file's assetId lookup.
+- 视频写入相册时显式写入时长与像素尺寸，写入后读回 DURATION 并在仍为 0 时触发一次扫描，日志打印导入前后的时长，避免相册显示 0 秒。
+  A saved video now carries its duration and pixel size from the start; after publishing, DURATION is read back, a rescan is triggered when it is still 0, and the duration before/after is logged, so the album no longer shows a 0-second entry.
+- 视频与实况播放失败时记录播放器错误类型（不含 URL），静态图不会再被当作视频交给播放器。
+  Player failures now log the player error type (never the URL), and a still is never handed to the player as a video.
+- 本地缩略图增加每项独立超时：单个文件解码失败或超时不再留白，回退到网络封面或占位图并记录 `[ThumbLoad] event=local_decode_failed`；不使用共享加载闸门，也不读取整份原图。
+  Local thumbnails now have a per-item deadline: a file that fails or stalls falls back to the network cover or a placeholder and logs `[ThumbLoad] event=local_decode_failed`, without a shared gate and without reading a whole original.
+- 已保存但本机无法解码的 HEIC 会在历史卡片上标注「本机无法显示此格式」，点开后可「重新下载」：先确认再删除相册中的旧文件，并按新规则替换该项；检测为后台只读、带超时、一次一个文件。此前这类旧帖子会让历史页卡死：缩略图排在一个永不返回的解码后面一直等待。
+  A saved HEIC this device cannot decode is marked 「本机无法显示此格式」 on its history card, and opening it offers 「重新下载」: the old album file is deleted only after the user confirms, and the item is replaced under the new rules. The detection is a background, read-only, one-file-at-a-time pass with a timeout. Such a post used to stall the history page: every thumbnail behind a decode that never returned waited for it.
+- 登录成功后错误卡片自动消失并重新解析当前链接，无需再点一次「解析」；`MEDIA_UNAVAILABLE`（解析器要求 App 具备相应能力）与 `LOGIN_REQUIRED`（会话失效）两种卡片都按此处理。
+  A successful login now clears its error card and re-parses the current link on its own, with no second tap on 「解析」; this holds for both `MEDIA_UNAVAILABLE` (the parser needs a capability this App lacks) and `LOGIN_REQUIRED` (expired session).
+- 删除帖子按真实文件数统计、先把相册 id 解析出来再请求删除，部分失败如实报告，删除后列表不再残留该帖。
+  Deleting a post now counts its real files, resolves the album ids before requesting deletion, reports a partial failure as such, and leaves no stale post behind in the list.
+- 尝试次数显示文件真实的预算，被自身策略拒绝即视为最终结果，不再出现 `attempt=5/3` 这类越界计数或同一条 220 次重复拒绝。
+  The attempt counter now reports the file's real budget, and a rejection by the request policy is final, so `attempt=5/3` style overruns and the 220 repeated rejections of one item cannot recur.
 
 - Instagram：当页面未返回完整媒体（登录失效或被限制）时，解析不再把网页分享封面（og:image）当作帖子媒体交出；reel/电视页或 /p/ 页仅拿到封面时返回错误，提示在“我的”页检查 Instagram 登录后重试；只有确认公开单图只能通过 og_meta 获取的情况才会先停止并报告，再决定是否标注“非原图”。
   When Instagram returns no complete media (login expired or limited), the parser no longer hands out the OpenGraph share cover (og:image) as the post media: a reel/video page or /p/ page with only a cover now fails and prompts the user to re-check Instagram login in "My", instead of presenting one cover as the whole post. Public single-image posts that can only be obtained through og_meta are reported first for a decision on keeping them marked as "non-original".
 - 新增解析诊断日志 `[IgParse] source=api|graphql|embedded_json|og_meta mediaType=image|video|carousel items=N loginWall=0|1`，可区分数据来自接口、嵌入 JSON 还是 OpenGraph 元数据；`hook=probe` 对 Instagram 是无效探针，已改为空探针，不再把它当成 mismatch 记录。
   Adds parse diagnostics `[IgParse] ...` telling whether Instagram data came from the API/GraphQL, embedded JSON or OpenGraph meta; `hook=probe` is an invalid probe for Instagram and is now a null probe, no longer recorded as a mismatch.
+
 ## [1.10.2] - 2026-11-12
 
 ### 修复 / Fixed

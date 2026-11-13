@@ -104,7 +104,7 @@ void main() {
 
   tearDown(() async {
     debugPrint = debugPrintThrottled;
-    resetRetryBackoffForTesting = kResetRetryBackoff;
+    candidateRetryBackoffsForTesting = kCandidateRetryBackoffs;
     manager
       ..enqueueForTesting = null
       ..mediaContentTypeForTesting = null
@@ -271,10 +271,10 @@ void main() {
           TaskException('Connection reset by peer'),
         );
 
-    test('reset or timeout retries the same candidate once after a short '
-        'backoff, then moves on; every other failure rotates at once', ()
+    test('reset retries the same candidate up to three times, then rotates; '
+        'every other failure rotates at once', ()
         async {
-      resetRetryBackoffForTesting = Duration.zero;
+      candidateRetryBackoffsForTesting = const [Duration.zero];
       final job = _job(
         urls: [_cjpeg, _cImgHeic, _cImgJpg, _cWebp],
         isImage: true,
@@ -282,23 +282,28 @@ void main() {
       manager.setBatchForTesting(_batch([job]));
       manager.enqueueForTesting = (_, j) async => j.attempts++;
 
-      // ci:jpg is reset: the same candidate is retried once after backoff.
+      // ci:jpg is reset three times: every retry keeps the same candidate.
       final first = DownloadManager.candidateUrlOf(job)!;
-      await manager.taskFailureForTesting(
-        _batch([job]), job,
-        failureFor(first, 1),
-      );
-      expect(DownloadManager.candidateUrlOf(job), first,
-          reason: 'backoff retry keeps the same candidate');
+      for (var retry = 1; retry <= kCandidateRetryLimit; retry++) {
+        await manager.taskFailureForTesting(
+          _batch([job]), job,
+          failureFor(first, retry),
+        );
+        expect(DownloadManager.candidateUrlOf(job), first,
+            reason: 'reset retry $retry keeps the same candidate');
+      }
       final log1 = logs.join('\n');
       expect(log1, contains('cause=reset'));
       expect(log1, contains('retry=backoff'));
+      expect(log1, contains('retry_index=1/$kCandidateRetryLimit'));
+      expect(log1,
+          contains('retry_index=$kCandidateRetryLimit/$kCandidateRetryLimit'));
       expect(log1, isNot(contains('http')));
 
-      // A second reset on the same candidate retires it: move to img:heic.
+      // The next reset on the same candidate retires it: move to img:heic.
       await manager.taskFailureForTesting(
         _batch([job]), job,
-        failureFor(first, 2),
+        failureFor(first, 20),
       );
       expect(DownloadManager.candidateUrlOf(job), _cImgHeic);
 
@@ -306,36 +311,39 @@ void main() {
       await manager.taskFailureForTesting(
         _batch([job]), job,
         TaskStatusUpdate(
-          DownloadTask(taskId: 'job-1-try3', url: _cImgHeic, filename: 'x.jpg'),
+          DownloadTask(taskId: 'job-1-try21', url: _cImgHeic, filename: 'x.jpg'),
           TaskStatus.failed,
           TaskException('boom'),
         ),
       );
       expect(DownloadManager.candidateUrlOf(job), _cImgJpg);
 
-      // img:jpg is reset: backoff keeps it, then retires it to webpic.
+      // img:jpg is reset: the ladder keeps it on the same candidate.
       await manager.taskFailureForTesting(
         _batch([job]), job,
-        failureFor(_cImgJpg, 4),
+        failureFor(_cImgJpg, 22),
       );
       expect(DownloadManager.candidateUrlOf(job), _cImgJpg);
-      await manager.taskFailureForTesting(
-        _batch([job]), job,
-        failureFor(_cImgJpg, 5),
-      );
-      expect(DownloadManager.candidateUrlOf(job), _cWebp);
+    });
 
-      // webpic uses its retry too, then the ladder ends: no wrap-around to
-      // ci:jpg, the item fails with readable per-item text.
-      await manager.taskFailureForTesting(
-        _batch([job]), job,
-        failureFor(_cWebp, 6),
+    test('the ladder ends without wrap-around: readable failure and one log '
+        'line per attempt', ()
+        async {
+      candidateRetryBackoffsForTesting = const [Duration.zero];
+      final job = _job(
+        urls: [_cWebp],
+        isImage: true,
       );
-      expect(DownloadManager.candidateUrlOf(job), _cWebp);
-      await manager.taskFailureForTesting(
-        _batch([job]), job,
-        failureFor(_cWebp, 7),
-      );
+      manager.setBatchForTesting(_batch([job]));
+      manager.enqueueForTesting = (_, j) async => j.attempts++;
+
+      // 1 transfer + three retries on the only candidate, then the item fails.
+      for (var i = 0; i <= kCandidateRetryLimit; i++) {
+        await manager.taskFailureForTesting(
+          _batch([job]), job,
+          failureFor(_cWebp, i + 1),
+        );
+      }
 
       expect(job.state, JobState.failed);
       expect(job.error, '第1项图片下载失败');
@@ -344,7 +352,8 @@ void main() {
 
       // Every attempt logged one line; no URL, host, query or token leaked.
       final failureLines = logs.where((line) => line.contains('result=transfer_failed')).toList();
-      expect(failureLines, hasLength(7), reason: 'one line per attempt');
+      expect(failureLines, hasLength(1 + kCandidateRetryLimit),
+          reason: 'one line per attempt');
       for (final line in failureLines) {
         expect(line, isNot(contains('http')));
         expect(line, isNot(contains('sign')));
@@ -354,23 +363,33 @@ void main() {
       }
     });
 
-    test('retry cap: one attempt per stored candidate, plus one backoff '
-        'retry each', () {
+    test('retry cap: one attempt per stored candidate, plus three backoff '
+        'retries each', () {
       final job = _job(
         urls: [_cjpeg, _cImgHeic, _cImgJpg, _cWebp],
         isImage: true,
       );
-      expect(retryCapFor(_batch([job]), job), 8);
+      // 4 candidates x (1 transfer + 3 reset/timeout retries).
+      expect(retryCapFor(_batch([job]), job), 4 * (1 + kCandidateRetryLimit));
 
-      // A video keeps the site rule (max 3 attempts per file).
+      // A video keeps the site rule (max 3 attempts per file) with the same
+      // retry allowance.
       final videoJob = _job(
         urls: [_cClip],
         isImage: false,
       );
-      expect(retryCapFor(_batch([videoJob]), videoJob), attemptCapFor(
-        _batch([videoJob]),
-        videoJob,
-      ));
+      expect(
+        retryCapFor(_batch([videoJob]), videoJob),
+        attemptCapFor(_batch([videoJob]), videoJob) *
+            (1 + kCandidateRetryLimit),
+      );
+    });
+
+    test('the reset ladder is 0.6s, 1.2s, 2.4s and then stops', () {
+      expect(candidateBackoffFor(1), const Duration(milliseconds: 600));
+      expect(candidateBackoffFor(2), const Duration(milliseconds: 1200));
+      expect(candidateBackoffFor(3), const Duration(milliseconds: 2400));
+      expect(kCandidateRetryLimit, 3);
     });
 
     test('a preview accepted after the originals failed marks 非原图',

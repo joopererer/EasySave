@@ -263,6 +263,7 @@ class ParserManager {
   Map<String, dynamic>? _schema;
   SignedParserManifest? _builtin;
   String? _lastActivation;
+  String? _lastSelection;
   bool _canUpdate = false;
   Future<bool>? _updating;
 
@@ -429,14 +430,21 @@ class ParserManager {
     try {
       final store = await _store();
       if (_canUpdate) await store.recoverStateIfNeeded();
-      final release = await store.load();
-      if (release != null) {
+      final selection = await store.select();
+      _logSelection(selection);
+      final stored = selection.stored;
+      if (selection.chosen == ParserSelectionChoice.stored && stored != null) {
         // A cached bundle that predates this App's required configuration is
         // rejected inside `_useRemote` (logged as event=rejected with the
         // missing field), and the embedded parser takes over. That keeps the
         // activation log unambiguous: `source=builtin` always means the APK.
-        _useRemote(release);
-        return release;
+        _useRemote(stored);
+        return stored;
+      }
+      if (selection.chosen == ParserSelectionChoice.builtin &&
+          selection.builtin != null &&
+          _canUpdate) {
+        store.commitBuiltin(selection.builtin!, previous: stored?.reference);
       }
     } catch (error) {
       _logMissingConfig(error);
@@ -444,6 +452,23 @@ class ParserManager {
     }
     _useBuiltin();
     return null;
+  }
+
+  /// Report which of the two verified sources startup picked, and why.
+  ///
+  /// `table` is `parserVersion/manifestVersion` (or `-` when that source is not
+  /// present). The line is written once per distinct outcome, because
+  /// [getActiveScript] re-runs the selection before every parse.
+  void _logSelection(ParserSelection selection) {
+    String describe(SignedParserManifest? manifest) =>
+        manifest == null ? '-' : '${manifest.parserVersion}/${manifest.version}';
+    final line =
+        'event=select builtin=${describe(selection.builtin)} '
+        'stored=${describe(selection.stored?.manifest)} '
+        'chosen=${selection.chosen.name} reason=${selection.reason}';
+    if (_lastSelection == line) return;
+    _lastSelection = line;
+    unawaited(DevLog.write('ParserUpdate', line));
   }
 
   Future<void> _refreshRecognitionView() async {
@@ -586,13 +611,19 @@ class ParserManager {
       rethrow;
     }
     final current = await store.load();
-    if (current != null &&
-        current.manifest.version == manifest.version &&
-        current.manifest.payloadHash == manifest.payloadHash) {
+    // With no stored release active, the APK's own manifest is what the device
+    // runs: after the builtin wins a startup selection the online channel still
+    // serves the same sequence with the same signed content, and that is a
+    // match, not a second activation.
+    final running = current?.manifest ?? _builtin;
+    if (running != null &&
+        running.version == manifest.version &&
+        running.payloadHash == manifest.payloadHash) {
       return ParserCheckOutcome(
         'same',
         remoteVersion: remoteVersion,
         remoteManifest: remoteManifest,
+        reason: current == null ? 'same_as_builtin' : null,
       );
     }
     final parser = await downloadParserHttps(

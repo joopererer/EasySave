@@ -13,10 +13,12 @@ import 'package:url_launcher/url_launcher.dart';
 import 'package:video_player/video_player.dart';
 
 import '../core/models.dart';
+import '../core/dev_log.dart';
 import '../core/media_request.dart';
 import '../services/gallery_locator_service.dart';
 import '../services/history_db.dart';
 import '../services/live_pairs.dart';
+import '../services/media_delete_service.dart';
 import '../services/preview_video.dart';
 import '../services/media_request_policy.dart';
 import 'shared.dart';
@@ -41,6 +43,7 @@ class GalleryBrowserItem {
     this.filename,
     this.cachePostId,
     this.cacheItemIndex,
+    this.undecodable = false,
   });
 
   factory GalleryBrowserItem.fromMediaItem(
@@ -88,6 +91,11 @@ class GalleryBrowserItem {
   final String? filename;
   final String? cachePostId;
   final int? cacheItemIndex;
+
+  /// This device cannot decode the saved still (a HEIC with an alpha
+  /// auxiliary image on Android 12). The page then offers a replacement
+  /// instead of trying to draw a file the platform rejects.
+  final bool undecodable;
 
   /// Build the [MediaItem] that drives [CoverImage] with the full URL set.
   MediaItem toMediaItem() =>
@@ -199,10 +207,135 @@ Future<({List<GalleryBrowserItem> items, int initial})> savedBrowserItems({
             ? FileStatus.found
             : (scanned ? coverFile.status : FileStatus.unknown),
         filename: coverFile.filename,
+        undecodable: coverFile.undecodable == true,
       ),
     );
   }
   return (items: items, initial: initial);
+}
+
+/// Placeholder for a saved still this device cannot decode.
+///
+/// The file stays in the album until the user agrees to replace it: the dialog
+/// names the file and the reason, and only then is the album deletion asked
+/// for. Declining leaves everything untouched.
+class _UndecodableView extends StatelessWidget {
+  const _UndecodableView({
+    required this.item,
+    required this.redownloading,
+    required this.onRedownload,
+  });
+
+  final GalleryBrowserItem item;
+  final bool redownloading;
+  final Future<void> Function()? onRedownload;
+
+  Future<void> _confirmAndReplace(BuildContext context) async {
+    final name = item.filename ?? '该文件';
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('本机无法显示此格式'),
+        content: Text(
+          '相册中的 $name 是这台手机无法解码的图片格式。\n'
+          '重新下载会按新规则保存为 JPG 原图，并删除相册里的旧文件。',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('取消'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: const Text('删除并重新下载'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+    final asset = item.asset;
+    if (asset != null) {
+      final outcome = await MediaDeleteService.instance.deleteMedia([
+        MediaRef(mediaId: asset.id, isImage: true),
+      ]);
+      if (!outcome.deletedAll && context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              '${outcome.problem ?? '未删除相册中的旧文件'}，仍会下载新文件',
+            ),
+          ),
+        );
+      }
+    }
+    await onRedownload?.call();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            padding: const EdgeInsets.all(20),
+            decoration: BoxDecoration(
+              color: Colors.white10,
+              borderRadius: BorderRadius.circular(20),
+            ),
+            child: const Icon(
+              Icons.image_not_supported_outlined,
+              color: Colors.white60,
+              size: 64,
+            ),
+          ),
+          const SizedBox(height: 16),
+          const Text(
+            '本机无法显示此格式',
+            style: TextStyle(
+              color: Colors.white,
+              fontSize: 16,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+          const SizedBox(height: 8),
+          const Text(
+            '文件已保存在相册，但这台手机的相册无法预览它',
+            textAlign: TextAlign.center,
+            style: TextStyle(color: Colors.white54, fontSize: 13),
+          ),
+          if (onRedownload != null) ...[
+            const SizedBox(height: 20),
+            ElevatedButton.icon(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFFFF2442),
+                foregroundColor: Colors.white,
+                shape: const StadiumBorder(),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 20,
+                  vertical: 10,
+                ),
+              ),
+              onPressed: redownloading
+                  ? null
+                  : () => _confirmAndReplace(context),
+              icon: redownloading
+                  ? const SizedBox(
+                      width: 16,
+                      height: 16,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        color: Colors.white,
+                      ),
+                    )
+                  : const Icon(Icons.download, size: 18),
+              label: Text(redownloading ? '下载中...' : '重新下载'),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
 }
 
 class GalleryBrowserPage extends StatefulWidget {
@@ -920,6 +1053,13 @@ class _BrowserItemViewState extends State<_BrowserItemView> {
     final c = _videoController;
     if (c == null || !mounted) return;
     if (c.value.hasError) {
+      if (_error == null) {
+        unawaited(DevLog.write(
+          'PreviewPlayer',
+          'event=failed source=local item_kind=${widget.item.type} '
+              'type=player_state',
+        ));
+      }
       setState(() => _error = previewPlaybackError(widget.platform));
       return;
     }
@@ -948,8 +1088,17 @@ class _BrowserItemViewState extends State<_BrowserItemView> {
     final it = widget.item;
     try {
       VideoPlayerController controller;
-      if (it.asset != null) {
-        final f = await it.asset!.file;
+      // A still can never be played as a video. The row's asset must be a
+      // movie: when an older file of the same album sequence answered the
+      // lookup (an `…_1.jpg` cover next to the new `…_1.mp4`), fall through to
+      // the motion clip or the network instead of handing the still to the
+      // decoder, which is what produced "播放失败".
+      final playableAsset = it.asset != null &&
+              (it.type == 'image' || it.asset!.type == AssetType.video)
+          ? it.asset
+          : null;
+      if (playableAsset != null) {
+        final f = await playableAsset.file;
         if (f != null && await f.exists()) {
           controller = VideoPlayerController.file(f);
         } else {
@@ -991,6 +1140,12 @@ class _BrowserItemViewState extends State<_BrowserItemView> {
       setState(() => _videoController = controller);
       _attachVideoListener(controller);
     } catch (e) {
+      unawaited(DevLog.write(
+        'PreviewPlayer',
+        'event=failed source=${it.asset == null ? 'network' : 'local'} '
+            'asset_kind=${it.asset == null ? '-' : (it.asset!.type == AssetType.image ? 'image' : 'video')} '
+            'item_kind=${it.type} type=${playbackFailureType(e)}',
+      ));
       if (mounted) {
         setState(() => _error = previewFailureMessage(e, widget.platform));
       }
@@ -1070,6 +1225,26 @@ class _BrowserItemViewState extends State<_BrowserItemView> {
   @override
   Widget build(BuildContext context) {
     final it = widget.item;
+
+    // 0. Saved but undecodable on this device: a HEIC the platform decoders
+    //    reject. Offer the replacement the new rules would have downloaded,
+    //    and ask before the old album file is deleted.
+    if (it.undecodable) {
+      return _UndecodableView(
+        item: it,
+        redownloading: _redownloading,
+        onRedownload: widget.onRedownload == null
+            ? null
+            : () async {
+                setState(() => _redownloading = true);
+                try {
+                  await widget.onRedownload!();
+                } finally {
+                  if (mounted) setState(() => _redownloading = false);
+                }
+              },
+      );
+    }
 
     // 1. Missing file: "已从相册删除" placeholder + [重新下载]
     if ((it.status == FileStatus.notFound || _isNotFound) &&

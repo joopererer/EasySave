@@ -9,6 +9,7 @@ import 'services/backup/startup_backup_coordinator.dart';
 import 'services/bubble_service.dart';
 import 'services/download_manager.dart';
 import 'services/gallery_locator_service.dart';
+import 'services/heic_self_check.dart';
 import 'services/host_bridge.dart';
 import 'services/preview_route_observer.dart';
 import 'services/settings.dart';
@@ -39,6 +40,9 @@ Future<void> main() async {
   unawaited(ParserManager.instance.checkForUpdates(trigger: 'startup'));
   // v1.8: Cold-start backup evaluation (ensures empty history check runs before auto-backup)
   unawaited(StartupBackupCoordinator.evaluateAndRunStartupBackup());
+  // Verification-only build switch; a release build without the dart-define
+  // never reaches this code.
+  unawaited(HeicSelfCheck.runIfEnabled());
   runApp(const EasySaveApp());
   // Ask for album access up-front (first launch only) so the first history
   // view and "recent" thumbnails don't stall on a mid-flow permission prompt.

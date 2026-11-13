@@ -57,8 +57,8 @@ String pairingKeyOf(HistoryFile file) {
 ///   same entry;
 /// * a group pairs into one Live entry only when it holds exactly one image and
 ///   exactly one video, so an ambiguous set is never silently merged;
-/// * two rows that both carry a `prov:pairId` must agree before they pair,
-///   mirroring the rebuild scan;
+/// * two rows only pair when both carry the same `prov:pairId`, or when one
+///   download wrote both (see [_samePairId]);
 /// * the still comes before its clip and entries keep their input order.
 List<SavedMediaEntry> pairSavedMedia(Iterable<HistoryFile> files) {
   final order = <String>[];
@@ -104,14 +104,28 @@ List<SavedMediaEntry> pairSavedMedia(Iterable<HistoryFile> files) {
 int savedMediaEntryCount(Iterable<HistoryFile> files) =>
     pairSavedMedia(files).length;
 
-/// Both rows may carry `prov:pairId`; they only conflict when both are set and
-/// differ (old rows have none at all).
+/// Both rows may carry `prov:pairId`; they only pair when they agree *and*
+/// both carry one, or when the same download wrote both.
+///
+/// The single case this must never allow is the one that broke an Instagram
+/// Reel: an old `…_1.jpg` cover from an earlier download left in the album next
+/// to a freshly downloaded `…_1.mp4` shares the album sequence and shares
+/// "no pairId", which used to turn two unrelated files into one Live entry and
+/// point the video at the still. A Live pair written by one download either
+/// carries the same `prov:pairId` on both rows (v1.10.1 and later) or was
+/// written in one pass, which the save instant shows.
 bool _samePairId(HistoryFile image, HistoryFile video) {
   final a = image.pairId;
   final b = video.pairId;
-  if (a == null || a.isEmpty || b == null || b.isEmpty) return true;
-  return a == b;
+  final hasA = a != null && a.isNotEmpty;
+  final hasB = b != null && b.isNotEmpty;
+  if (hasA || hasB) return hasA && hasB && a == b;
+  return (image.savedAt - video.savedAt).abs() <= kSameDownloadPairWindowMs;
 }
+
+/// Two rows written by one download land in the history together; a file left
+/// over from an earlier download of the same post is minutes or days older.
+const int kSameDownloadPairWindowMs = 60 * 1000;
 
 int _itemIndexOf(HistoryFile image, HistoryFile video) {
   final index = image.itemIndex >= 1 ? image.itemIndex : video.itemIndex;

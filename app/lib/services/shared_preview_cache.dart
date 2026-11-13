@@ -51,6 +51,18 @@ class SharedParseCache<T> {
     return null;
   }
 
+  /// Drop every entry [test] accepts, e.g. one site's posts after a login change.
+  int removeWhere(bool Function(T value) test) {
+    final drop = [
+      for (final entry in _entries.entries)
+        if (test(entry.value.value)) entry.key,
+    ];
+    for (final key in drop) {
+      _entries.remove(key);
+    }
+    return drop.length;
+  }
+
   void _prune() =>
       _entries.removeWhere((_, value) => !value.expires.isAfter(now()));
 }

@@ -120,6 +120,8 @@ class _LoginPageState extends State<LoginPage> {
           )
           .then((loggedIn) {
             if (loggedIn == true && mounted) {
+              // The window opened above runs its own LoginPage, which already
+              // invalidated this site's cache when it confirmed the session.
               LoginExpiredBus.clear(widget.platform);
               Navigator.of(context).pop(true);
             }
@@ -151,7 +153,7 @@ class _LoginPageState extends State<LoginPage> {
       await AccountCache.save(widget.platform, account);
       if (!mounted) return;
       _pollTimer?.cancel();
-      LoginExpiredBus.clear(widget.platform);
+      LoginExpiredBus.markLoggedIn(widget.platform);
       Navigator.of(context).pop(true);
     });
   }
@@ -189,7 +191,7 @@ class _LoginPageState extends State<LoginPage> {
     setState(() => _verifying = false);
 
     if (ok) {
-      LoginExpiredBus.clear(widget.platform);
+      LoginExpiredBus.markLoggedIn(widget.platform);
       Navigator.of(context).pop(true);
       return true;
     }
@@ -237,7 +239,7 @@ class _LoginPageState extends State<LoginPage> {
           await checkLogin(widget.platform, webViewController: _controller);
       if (!mounted) return;
       if (ok) {
-        LoginExpiredBus.clear(widget.platform);
+        LoginExpiredBus.markLoggedIn(widget.platform);
         Navigator.of(context).pop(true);
         return;
       }

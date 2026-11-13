@@ -105,37 +105,56 @@ class HistoryThumb extends StatelessWidget {
             (index >= 0 && index < items.length ? items[index] : null);
 
     AssetEntity? asset;
+    HistoryFile? matched;
     for (final f in record.savedFiles) {
       if (itemIndex != null && f.itemIndex != itemIndex) continue;
+      matched ??= f;
       asset =
           locator.getAssetById(f.mediaId) ??
           locator.locateAsset(f, record.postId);
       if (asset != null) break;
     }
 
-    if (asset != null) {
-      return VerifiedAssetImage(
-        asset,
-        fallback: CoverImage(
-          item: remote ?? MediaItem(type: 'image', url: ''),
-          platform: (record.platform),
+    // A still this device cannot show is never handed to the platform decoder:
+    // its thumbnail would stall the shared decode channel (build 46). The card
+    // shows the post's own cover instead, with the warning strip.
+    final undecodable = matched?.undecodable == true;
+
+    if (asset != null && !undecodable) {
+      return _withDecodeWarning(
+        VerifiedAssetImage(
+          asset,
+          fallback: CoverImage(
+            item: remote ?? MediaItem(type: 'image', url: ''),
+            platform: (record.platform),
+            fit: fit,
+            width: width,
+            height: height,
+          ),
+          isOriginal: false,
+          thumbnailSize: const ThumbnailSize.square(400),
           fit: fit,
           width: width,
           height: height,
         ),
-        isOriginal: false,
-        thumbnailSize: const ThumbnailSize.square(400),
-        fit: fit,
+        record: record,
+        itemIndex: itemIndex,
         width: width,
         height: height,
       );
     }
 
     if (remote != null && remote.url.startsWith('http')) {
-      return CoverImage(
-        item: remote,
-        platform: (record.platform),
-        fit: fit,
+      return _withDecodeWarning(
+        CoverImage(
+          item: remote,
+          platform: (record.platform),
+          fit: fit,
+          width: width,
+          height: height,
+        ),
+        record: record,
+        itemIndex: itemIndex,
         width: width,
         height: height,
       );
@@ -155,19 +174,68 @@ class HistoryThumb extends StatelessWidget {
         record.files.every((f) => f.status == FileStatus.notFound);
     final missing = locator.isFullyAuthorized && locator.scanned && allNotFound;
 
-    return ColoredBox(
-      color: missing
-          ? (Theme.of(context).brightness == Brightness.dark
-                ? Colors.white10
-                : Colors.grey.shade200)
-          : SecondaryBg.beige(context),
-      child: Center(
-        child: Icon(
-          missing ? Icons.broken_image : Icons.photo_outlined,
-          size: brokenIconSize,
-          color: AppTokens.textSecondary,
+    return _withDecodeWarning(
+      ColoredBox(
+        color: missing
+            ? (Theme.of(context).brightness == Brightness.dark
+                  ? Colors.white10
+                  : Colors.grey.shade200)
+            : SecondaryBg.beige(context),
+        child: Center(
+          child: Icon(
+            missing ? Icons.broken_image : Icons.photo_outlined,
+            size: brokenIconSize,
+            color: AppTokens.textSecondary,
+          ),
         ),
       ),
+      record: record,
+      itemIndex: itemIndex,
+      width: width,
+      height: height,
+    );
+  }
+
+  /// Adds the "this device cannot display it" strip over a card whose still the
+  /// platform decoders reject. Purely presentational: the replacement path is
+  /// the viewer's re-download, which asks before deleting the old file.
+  Widget _withDecodeWarning(
+    Widget child, {
+    required HistoryRecord record,
+    required int? itemIndex,
+    double? width,
+    double? height,
+  }) {
+    final flagged = record.files.any(
+      (f) =>
+          (itemIndex == null || f.itemIndex == itemIndex) &&
+          f.undecodable == true,
+    );
+    if (!flagged) return child;
+    return Stack(
+      fit: StackFit.passthrough,
+      children: [
+        child,
+        Positioned(
+          left: 0,
+          right: 0,
+          bottom: 0,
+          child: IgnorePointer(
+            child: ColoredBox(
+              color: Colors.black.withValues(alpha: 0.55),
+              child: const Padding(
+                padding: EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+                child: Text(
+                  '本机无法显示此格式',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(color: Colors.white, fontSize: 10),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ],
     );
   }
 }

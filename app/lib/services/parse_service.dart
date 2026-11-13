@@ -37,9 +37,18 @@ class ParseFailure implements Exception {
 }
 
 class ParseOutcome {
-  ParseOutcome({required this.data, required this.rawImages});
+  ParseOutcome({
+    required this.data,
+    required this.rawImages,
+    this.degraded = false,
+  });
   final ParsedPost data;
   final List<RawImageEntry> rawImages;
+
+  /// True when the answer is a placeholder rather than the post's media — e.g.
+  /// only the page's OpenGraph cover on a login-gated page. It is shown to the
+  /// user but never cached: the next parse (after login) must not reuse it.
+  final bool degraded;
 }
 
 /// Polling tolerates transient document replacement; parsing supplies the final error.
@@ -263,10 +272,31 @@ class CachedPostParser {
   final _fallback = SharedParseCache<Map<String, dynamic>>();
   final _running = <String, Future<ParseOutcome>>{};
 
+  /// Per-site generation. A login-state change bumps it, so a parse that was
+  /// already running cannot publish its pre-change answer afterwards.
+  final _generations = <String, int>{};
+
   String keyFor(String url) {
     final site = SiteRegistry.current.match(url);
     final id = site?.sourceId(Uri.parse(url));
     return id == null ? opaquePreviewKey(url) : '${site!.id}:$id';
+  }
+
+  /// Forget every parsed post of [site] in the shared and the local store.
+  ///
+  /// A login-state change makes the previous answer a guess: the guest parse of
+  /// a login-gated post is a cover, and reusing it after login hides the media.
+  Future<void> invalidateSite(String site) async {
+    _generations[site] = (_generations[site] ?? 0) + 1;
+    _fallback.removeWhere((value) => value['site'] == site);
+    _running.removeWhere((key, _) => key.startsWith('$site:'));
+    try {
+      await channel.invokeMethod<void>('clearParsed', {'site': site});
+    } on MissingPluginException {
+      // The local RAM store is already cleared.
+    } on PlatformException {
+      // A failed clear cannot be repaired here; the next parse overwrites.
+    }
   }
 
   Future<Map<String, dynamic>?> lookup(String key) async {
@@ -290,7 +320,9 @@ class CachedPostParser {
     void Function()? onCacheHit,
   }) {
     final key = keyFor(url);
-    final existing = _running[key];
+    // A forced refresh never joins an in-flight task: that task may be about to
+    // answer from the cache, which is exactly what "刷新" must not accept.
+    final existing = forceRefresh ? null : _running[key];
     if (existing != null) return existing;
     final task = _parse(url, entry: entry, forceRefresh: forceRefresh,
         onCacheMiss: onCacheMiss, onCacheHit: onCacheHit);
@@ -312,6 +344,7 @@ class CachedPostParser {
   }) async {
     final site = SiteRegistry.current.match(url);
     if (site == null || !site.enabled) return parseNetwork(url, entry);
+    final generation = _generations[site.id] ?? 0;
     final originalKey = keyFor(url);
     var key = originalKey;
     var postId = site.sourceId(Uri.parse(url)) ?? '-';
@@ -335,8 +368,9 @@ class CachedPostParser {
           /* Preserve the existing parser's short-link fallback. */
         }
       }
+      // The lookup itself can overlap a login change; its answer is unusable then.
       final value = response?['value'];
-      if (value is Map) {
+      if (value is Map && (_generations[site.id] ?? 0) == generation) {
         try {
           final cached = _decodeSharedOutcome(value);
           postId = cached.data.id;
@@ -369,6 +403,18 @@ class CachedPostParser {
     await onCacheMiss?.call();
     final outcome = await parseNetwork(url, entry);
     postId = outcome.data.id;
+    if ((_generations[site.id] ?? 0) != generation) {
+      // The login state changed while this page was loading: the answer belongs
+      // to the previous session, so it is returned but never published.
+      await log('dropped');
+      return outcome;
+    }
+    if (outcome.degraded) {
+      // Failures and placeholders are not answers: a cover kept here would be
+      // handed out again after the user logs in.
+      await log('degraded');
+      return outcome;
+    }
     final canonical =
         '${SiteRegistry.current.canonicalId(outcome.data.platform)}:$postId';
     final post = outcome.data.toJson();
@@ -386,6 +432,9 @@ class CachedPostParser {
     ];
     final value = <String, dynamic>{
       'canonical': canonical,
+      // Which site this answer belongs to, so a login change can drop exactly
+      // that site's entries from the shared store.
+      'site': site.id,
       'keys': [canonical, key, originalKey, opaquePreviewKey(url)],
       'expires': now().add(const Duration(minutes: 10)).millisecondsSinceEpoch,
       'post': post,
@@ -422,6 +471,22 @@ final cachedPostParser = CachedPostParser(
     return resolveShortLink(url);
   },
 );
+
+/// Drop one site's parsed RAM cache because its login state changed.
+///
+/// Successful login, logout and a detected expired session all invalidate what
+/// was parsed before them: the guest answer of a login-gated post is a cover,
+/// and the App must not keep serving it once the session is different.
+void clearParsedCacheForSite(String platform, {required String reason}) {
+  unawaited(
+    cachedPostParser.invalidateSite(platform).then<void>(
+      (_) => DevLog.write(
+        'ParseCache',
+        'event=cleared site=${safeCacheLabel(platform)} reason=$reason',
+      ),
+    ),
+  );
+}
 Future<ParseOutcome> parsePostOutcome(
   String url, {
   String source = 'app_input',
@@ -914,6 +979,54 @@ Future<void> _logParserProbe(
   }
 }
 
+/// Read the page's declared OpenGraph cover; empty when the page has none.
+const String _ogImageProbe =
+    "(() => { const m = document.querySelector('meta[property=\"og:image\"]');"
+    " return m && m.content ? m.content : ''; })()";
+
+/// Hold back an answer whose only media is the page's OpenGraph cover.
+///
+/// A login-gated page that exposes nothing but `og:image` yields a single
+/// dimension-less image, which is a placeholder rather than the post's media
+/// (a reel would get Instagram's drawn play button). The answer is still
+/// returned so the user sees something, but it is marked [ParseOutcome.degraded]
+/// and therefore never cached.
+Future<ParseOutcome> _dropCoverOnlyAnswer(
+  ParserHooks hooks,
+  InAppWebViewController controller,
+  ParseOutcome outcome,
+) async {
+  final items = outcome.data.items;
+  if (items.length != 1) return outcome;
+  final item = items.single;
+  if (item.type != 'image' ||
+      item.videoUrl != null ||
+      item.width != null ||
+      item.height != null) {
+    return outcome;
+  }
+  try {
+    final cover = await controller.evaluateJavascript(source: _ogImageProbe);
+    if (cover is String && cover.isNotEmpty && cover == item.url) {
+      unawaited(
+        DevLog.write(
+          'ParseCache',
+          'event=degraded site=${hooks.site.id} '
+              'post=${safeCacheLabel(outcome.data.id)} reason=og_cover_only',
+        ),
+      );
+      return ParseOutcome(
+        data: outcome.data,
+        rawImages: outcome.rawImages,
+        degraded: true,
+      );
+    }
+  } catch (_) {
+    // No page probe available: treat the answer as an ordinary result.
+  }
+  return outcome;
+}
+
 Future<ParseOutcome> _run(
   ParserHooks hooks,
   String targetUrl, {
@@ -1209,7 +1322,10 @@ Future<ParseOutcome> _run(
       } catch (_) {}
     }
     stage = 'validate';
-    final outcome = validateParserResult(result, hooks.site);
+    var outcome = validateParserResult(result, hooks.site);
+    if (!jsonMode) {
+      outcome = await _dropCoverOnlyAnswer(hooks, controller, outcome);
+    }
     DevLog.write(
       'ParseWebView',
       'event=success source=$source site=${hooks.site.id} path=$path loads=$loads navigations=$mainNavigations',

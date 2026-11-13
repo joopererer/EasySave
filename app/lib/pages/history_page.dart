@@ -19,6 +19,7 @@ import '../services/download_manager.dart';
 import '../services/gallery_locator_service.dart';
 import '../services/history_backfill_service.dart';
 import '../services/history_db.dart';
+import '../services/history_decode_check.dart';
 import '../services/history_deletion.dart';
 import '../services/history_io.dart';
 import '../services/host_bridge.dart';
@@ -74,6 +75,13 @@ class HistoryPage extends StatefulWidget {
 
 class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
   List<HistoryRecord> _records = [];
+
+  /// Records this page removed, by id and by `platform:postId`. A reload whose
+  /// read started before the delete committed still returns them; they must
+  /// never come back on screen.
+  final Set<int> _deletedRecordIds = {};
+  final Set<String> _deletedPostKeys = {};
+
   bool _loading = true;
   String? _dbError;
   bool _opening = false;
@@ -354,10 +362,19 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
           deadline: _historyRefresh.deadline);
       if (!mounted) return;
       setState(() {
-        _records = records;
+        _records = dropDeletedRecords(
+          records,
+          ids: _deletedRecordIds,
+          postKeys: _deletedPostKeys,
+        );
         _loading = false;
         _dbError = null;
       });
+      // A quiet, read-only pass over stills the album already holds: a HEIC
+      // this device cannot decode is marked so its card can say so. It runs
+      // once per session, one file at a time, and never opens a decode path
+      // that could stall the page.
+      unawaited(HistoryDecodeCheck.runOnce());
     } catch (e) {
       if (!mounted) return;
       setState(() {
@@ -722,12 +739,16 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
     final ids = records.map((r) => r.id).whereType<int>().toList();
     if (ids.isEmpty) return;
 
-    final media = deletableMediaFor(records);
+    // The sheet reports what the user actually saved for these posts, not just
+    // the rows that already carry a located album id: build 46 offered
+    // "1 个文件" for two posts holding 3 + 4 files, because the other rows had
+    // not been synced yet.
+    final savedFileCount = savedFileCountFor(records);
     if (!mounted) return;
     final result = await showDeleteRecordsSheet(
       context,
       recordCount: records.length,
-      fileCount: media.length,
+      fileCount: savedFileCount,
       cancelDownloads: true,
     );
     if (result == null || !mounted) return;
@@ -753,22 +774,43 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
       return;
     }
 
-    // Delete album files first (no undo), then the records.
-    final bool approved;
+    // The user asked for the album files to go: resolve their current ids
+    // first (a row whose album link was never refreshed has no id yet), then
+    // hand them to the OS confirmation flow. Never claim a deletion that did
+    // not happen.
+    final media = await resolveDeletableMedia(records);
+    if (!mounted) return;
+    if (media.isEmpty) {
+      if (!await _deleteDatabaseRecords(db, records)) return;
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            '未能在相册中找到这 $savedFileCount 个文件，仅删除了历史记录',
+          ),
+        ),
+      );
+      return;
+    }
+    final MediaDeleteOutcome outcome;
     try {
-      approved = await MediaDeleteService.instance.deleteMedia(media);
+      outcome = await MediaDeleteService.instance.deleteMedia(media);
     } on StateError catch (e) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('${e.message}')));
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text(e.message)));
+      }
       return;
     }
     if (!await _deleteDatabaseRecords(db, records)) return;
     if (!mounted) return;
+    final problem = outcome.problem;
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text(
-          approved
-              ? '已删除 ${records.length} 条记录，并删除相册文件'
-              : '相册文件已保留，仅删除历史记录',
+          problem == null
+              ? '已删除 ${records.length} 条记录，并删除 ${media.length} 个相册文件'
+              : '$problem，仅删除了 ${records.length} 条记录',
         ),
       ),
     );
@@ -779,8 +821,21 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
     try {
       await deleteHistoryRecords(db, records);
       if (mounted) {
-        final ids = records.map((record) => record.id).toSet();
-        setState(() => _records = _records.where((record) => !ids.contains(record.id)).toList());
+        final ids = records.map((record) => record.id).whereType<int>().toSet();
+        final posts = records.map(postKeyOf).toSet();
+        // Remember what this page already removed: a snapshot read that was
+        // still in flight when the delete committed must never put one of
+        // these posts back on screen. Build 46 left one of two deleted posts
+        // visible (and openable) until the page was left.
+        _deletedRecordIds.addAll(ids);
+        _deletedPostKeys.addAll(posts);
+        setState(
+          () => _records = dropDeletedRecords(
+            _records,
+            ids: _deletedRecordIds,
+            postKeys: _deletedPostKeys,
+          ),
+        );
         unawaited(_reload());
       }
       return true;

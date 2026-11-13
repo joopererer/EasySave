@@ -180,6 +180,30 @@ void main() {
           );
         }
       }
+      // The transfer encoding is whitelisted for `identity` only: every
+      // transfer sends it, and no other value describes the stored bytes.
+      expect(
+        p
+            .validate(
+              resource(
+                'https://www.tiktok.com/a',
+                headers: {'Accept-Encoding': 'identity'},
+              ),
+            )
+            .host,
+        'www.tiktok.com',
+      );
+      for (final value in ['gzip', 'br', 'gzip, identity', '', 'identity ']) {
+        expect(
+          () => p.validate(
+            resource(
+              'https://www.tiktok.com/a',
+              headers: {'accept-encoding': value},
+            ),
+          ),
+          rejected('REQUEST_HEADER_REJECTED'),
+        );
+      }
       expect(
         () => p.validate(
           resource(

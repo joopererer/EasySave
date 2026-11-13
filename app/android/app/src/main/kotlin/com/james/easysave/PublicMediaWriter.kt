@@ -2,6 +2,7 @@ package com.james.easysave
 
 import android.content.ContentValues
 import android.content.Context
+import android.media.MediaScannerConnection
 import android.net.Uri
 import android.os.Build
 import android.os.Environment
@@ -69,9 +70,20 @@ object PublicMediaWriter {
         available(context, relative, name)
         if (Build.VERSION.SDK_INT < 29) return@synchronized legacy(context, source, mime, relative, name)
         val resolver = context.contentResolver
+        val video = !mime.startsWith("image/")
         val collection = if (mime.startsWith("image/")) MediaStore.Images.Media.EXTERNAL_CONTENT_URI else MediaStore.Video.Media.EXTERNAL_CONTENT_URI
+        // A video row is inserted with its real duration and pixel size: the
+        // album then shows the right length even when MediaStore's own
+        // extraction after publishing is skipped or late (a 0-second entry
+        // that still plays when opened).
+        val meta = if (video) MediaMetadataProbe.probeFile(source) else null
         val values = ContentValues().apply {
             put("_display_name", name); put("mime_type", mime); put("relative_path", relative); put("is_pending", 1)
+            if (meta != null) {
+                put(MediaStore.Video.Media.DURATION, meta.durationMs)
+                if (meta.width > 0) put(MediaStore.Video.Media.WIDTH, meta.width)
+                if (meta.height > 0) put(MediaStore.Video.Media.HEIGHT, meta.height)
+            }
         }
         val uri = checkNotNull(resolver.insert(collection, values))
         try {
@@ -85,12 +97,54 @@ object PublicMediaWriter {
             }
             check(digest(source.inputStream()).contentEquals(digest(checkNotNull(resolver.openInputStream(uri))))) { "Saved bytes mismatch" }
             check(resolver.update(uri, ContentValues().apply { put("is_pending", 0) }, null, null) == 1)
-            mapOf("mediaId" to uri.lastPathSegment!!, "title" to name, "relativePath" to relative)
+            val mediaId = uri.lastPathSegment!!
+            val duration = if (video) publishDuration(context, uri, mediaId, source, mime) else null
+            buildMap {
+                put("mediaId", mediaId); put("title", name); put("relativePath", relative)
+                if (duration != null) put("duration", duration.toString())
+            }
         } catch (e: Exception) {
             try { resolver.delete(uri, null, null) } catch (cleanup: Exception) { throw IllegalStateException("Save and cleanup failed: ${cleanup.javaClass.simpleName}", e) }
             throw e
         }
     }
+
+    /**
+     * Reads DURATION back after publishing, and rescans the file once when the
+     * row still says 0 so the album and third-party galleries see the real
+     * length. Returns the duration now recorded (null when not a video).
+     */
+    private fun publishDuration(
+        context: Context,
+        uri: Uri,
+        mediaId: String,
+        source: File,
+        mime: String,
+    ): Long? {
+        val numericId = mediaId.toLongOrNull()
+        var duration = numericId?.let { MediaMetadataProbe.durationOf(context.contentResolver, it) }
+        NativeLog.i("MediaImport", "event=duration_read duration=${duration ?: -1} media=$mediaId stage=published")
+        if (!MediaMetadataProbe.needsRescan(duration, true)) return duration
+        val path = legacyPathOf(context, uri)
+        if (path != null) {
+            val latch = java.util.concurrent.CountDownLatch(1)
+            runCatching {
+                MediaScannerConnection.scanFile(context, arrayOf(path), arrayOf(mime)) { _, _ -> latch.countDown() }
+                latch.await(10, java.util.concurrent.TimeUnit.SECONDS)
+            }
+        }
+        // The scan runs asynchronously in MediaProvider: read the row back once
+        // more and log what it says instead of assuming the scan landed.
+        duration = numericId?.let { MediaMetadataProbe.durationOf(context.contentResolver, it) }
+        NativeLog.i("MediaImport", "event=duration_rescan duration=${duration ?: -1} media=$mediaId path=${if (path == null) "unknown" else "album"}")
+        return duration
+    }
+
+    /** Absolute path of a published row, for the scanner (API 29+). */
+    private fun legacyPathOf(context: Context, uri: Uri): String? = runCatching {
+        context.contentResolver.query(uri, arrayOf(MediaStore.MediaColumns.DATA), null, null, null)
+            ?.use { cursor -> if (cursor.moveToFirst()) cursor.getString(0) else null }
+    }.getOrNull()
     @Suppress("DEPRECATION")
     private fun legacy(context: Context, source: File, mime: String, relative: String, name: String): Map<String, String> {
         val parent = File(Environment.getExternalStorageDirectory(), relative)
