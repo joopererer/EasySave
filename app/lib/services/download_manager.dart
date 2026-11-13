@@ -1838,7 +1838,7 @@ class DownloadManager extends ChangeNotifier {
       'event=retry reason=low_resolution index=${job.itemIndex} '
           'expected=${expectedWidth}x$expectedHeight '
           'actual=${actual.width}x${actual.height} '
-          'candidate=${job.attempts}/${job.urls.length}',
+          'candidate=${candidateProgressLabel(job)}',
     ));
     final pixels = actual.width * actual.height;
     final previous = job.lowResPath;
@@ -2325,7 +2325,7 @@ class DownloadManager extends ChangeNotifier {
       unawaited(DevLog.write(
         'V16DL', // i18n:ignore 日志
         'event=retry reason=no_audio_track index=${job.itemIndex} '
-            'candidate=${job.attempts}/${job.urls.length}',
+            'candidate=${candidateProgressLabel(job)}',
       ));
       try {
         await File(path).delete();
@@ -2393,6 +2393,15 @@ class DownloadManager extends ChangeNotifier {
     return job.candidateIndex > last ? last : job.candidateIndex;
   }
 
+  /// `2/4`-style label for the candidate being tried.
+  ///
+  /// The numerator is the candidate's own position, not the retry counter:
+  /// build 48 logged `candidate=3/1` and `candidate=11/4` because the attempt
+  /// counter (which keeps growing across backoff retries) was printed over the
+  /// number of candidates.
+  static String candidateProgressLabel(DownloadJob job) =>
+      '${candidateIndexOf(job) + 1}/${job.urls.length}';
+
   String? _candidateUrlOf(DownloadJob job) => candidateUrlOf(job);
 
   /// `[V16DL] candidate index=2 role=live_still label=img:jpg bytes=… sniff=heic
@@ -2431,7 +2440,7 @@ class DownloadManager extends ChangeNotifier {
       'V16DL', // i18n:ignore 日志
       'candidate index=${job.itemIndex} role=${roleOf(job)} label=$label '
           'bytes=$bytes sniff=$sniff result=$result '
-          'candidate=${job.attempts}/${job.urls.length}'
+          'candidate=${candidateProgressLabel(job)}'
           '${extra == null ? '' : ' $extra'}',
     ));
   }
@@ -2953,7 +2962,8 @@ class DownloadManager extends ChangeNotifier {
           'label=${candidateLabelOf(_candidateUrlOf(job) ?? '')} '
           'host_class=${_hostClassOf(batch, job)} bytes=- '
           'sniff=- result=transfer_failed reason=${_transferReason(update)} '
-          'cause=$cause candidate=${job.attempts}/$cap'
+          'cause=$cause attempts=${job.attempts}/$cap '
+          'candidate=${candidateProgressLabel(job)}'
           '${backoffRetry ? ' retry=backoff retry_index=$nextRetry/$kCandidateRetryLimit wait_ms=${backoff.inMilliseconds} candidate_seq=${candidateIndexOf(job) + 1}/${job.urls.length}' : ''}',
     ));
     if (backoffRetry) {
