@@ -9,6 +9,12 @@ This file documents notable user-facing changes following [Keep a Changelog](htt
 
 ### 新增 / Added
 
+- 历史页瀑布流（帖子与全部两种模式）改为懒加载：只为可见区域附近的卡片构建卡片并请求本机缩略图，卡片高度由封面宽高比直接算出，不再为测量高度而构建屏幕外的子项。平衡布局规则（左列不短于右列、打平放左、布局确定）与「全部」的错位网格顺序均不变。
+  Both history waterfalls (帖子 and 全部) are now lazy: only cards near the viewport are built and ask for a local thumbnail, and a card's height comes from its cover's aspect ratio instead of building off-screen cards to measure them. The balanced rules (left column never the shorter one, ties to the left, deterministic) and the 全部 staggered order are unchanged.
+- 无网络时开始下载会提示「当前无网络，联网后自动开始」，任务照常排队；等待期间卡片、下载面板与通知显示「等待网络…联网后自动继续」并保留「取消」，联网后自动继续。等待网络不算失败，不生成失败快照；网络状态只用于显示，不改变下载器的排队与重试逻辑。
+  Starting a download without a connection now says 当前无网络，联网后自动开始 while the batch is queued as usual; while it waits, the card, the panel and the notification say 等待网络…联网后自动继续 and keep 取消 available, and it continues by itself once the connection is back. Waiting for the network is not a failure and takes no snapshot; the connection state is display-only and never changes queuing or retry behaviour.
+- 「我的 → 日志」新增开发者开关「下一次下载模拟失败」：仅让下一个下载批次的第一个文件在下载完成之后、写入相册之前模拟失败，走正常失败路径与文案，日志标记 `simulated_failure=1`；生效一次即自动关闭，App 重启后恢复关闭，不写入相册、不影响其他文件。用于在真机上验证失败快照。
+  「我的 → 日志」 gains a developer switch 「下一次下载模拟失败」: it makes the first file of the next download batch fail on purpose after the download and before anything reaches the album, through the normal failure path and wording, with `simulated_failure=1` in the log. It applies once and turns itself off, starts disarmed after a restart, never writes to the album and never affects another file — it exists to verify the failure snapshot on a real device.
 - 历史页「创作者」模式右上角新增排序菜单：帖子数、最近保存时间、名称，每种可升序或降序；默认「最近保存」降序，选择会记住。排序只在已加载的分组数据上做内存排序，不额外查询数据库。名称排序规则固定：忽略大小写、未知作者排最后、数字按数值（`2` 在 `10` 前）、其后依次为拉丁字母、中日韩字符（按 Unicode 码位）、其他符号与 emoji；同值时按最近保存降序。
   The history page's 创作者 view has its own sort menu: post count, latest save time and name, each ascending or descending, defaulting to latest-save descending and remembered across launches. Ordering is an in-memory sort over the groups already loaded, with no extra database query. Names follow a fixed rule: case-insensitive, unknown authors last, digits compared as numbers (`2` before `10`), then Latin, then CJK by code point, then symbols and emoji; ties fall back to newest save.
 - 帖子模式瀑布流改为平衡布局：每张卡片放进当前较矮的一列，两列高度差不超过 8dp 视为打平并放左列；分组结束时若右列更长则整组左右对调，保证左列不短于右列。放置只由卡片高度决定，滚动或刷新不会重排已经显示的卡片。
@@ -20,11 +26,19 @@ This file documents notable user-facing changes following [Keep a Changelog](htt
 
 ### 修复 / Fixed
 
+- 修复真机上大量本机缩略图请求同时发出、成批超时的问题（build 49 日志中 625 条 `local_decode_failed`、在途请求峰值 416，而屏幕只有十几张卡片）：历史页瀑布流原先必须构建整个日期分组的全部卡片才能知道组高度，现在改为两列并排的懒加载列表，只构建视口附近的卡片，也就只为这些卡片请求缩略图。实测 200 个帖子的一组：初次构建 4 张卡片、快速滑动后 6 张，在途请求数与已构建卡片数相同。
+  Fixed off-screen cards flooding the local thumbnail pipeline on real devices (625 `local_decode_failed` lines and an in-flight peak of 416 requests in build 49, while a dozen cards were on screen): a date group used to build every one of its cards just to learn its height, and now renders as two side-by-side lazy lists that build only the cards near the viewport — and only those ask for a thumbnail. Measured on a 200-post group: 4 cards built at first, 6 after a fast flick, with in-flight requests equal to the cards that exist.
+- 修复真机上一条 `ThumbStat` 10 秒统计都没有输出的问题：原先在途请求清零就停掉计时器，而一次洪泛的请求全部在 5 秒超时、10 秒窗口还没到就先清零，统计随之丢失；现在一个突发结束时立即输出该窗口的统计并停止计时器，同时保留进行中的 10 秒统计。
+  Fixed the missing `ThumbStat` 10 second summaries on real devices: the timer was cancelled as soon as nothing was in flight, and a flooded batch gave up at 5s — before the first 10s tick — so the summary never printed. A burst that ends now reports its window immediately and then stops the timer, while the periodic summary stays for work in flight.
+- 修正 `queue_timeout` / `system_timeout` 的判定：改为按请求发出时已经在排队的请求数判断，请求洪泛时不会再出现 400+ 在途却整批判为 `system_timeout` 的情况；统计行同时给出该窗口的在途峰值 `max_inflight`。
+  The `queue_timeout` / `system_timeout` split now looks at how many requests were already waiting when a request was issued, so a flood can no longer report 400+ in flight yet call every timeout `system_timeout`; the summary line also reports the window's in-flight peak as `max_inflight`.
 - 下载失败日志的 `candidate=` 字段改为候选序号/候选总数，不再出现 `candidate=3/1`、`candidate=11/4`（此前分子是重试次数）；重试次数单独记为 `attempts=`。
   The `candidate=` field of the download log now shows candidate position over total candidates instead of the retry counter, so `candidate=3/1` and `candidate=11/4` can no longer appear; the retry count is logged separately as `attempts=`.
 
 ### 诊断 / Diagnostics
 
+- 本机缩略图请求新增「发出时已在排队的请求数」(`concurrent_at_issue`) 与统计窗口的在途峰值 (`max_inflight`)，用于区分「排队拥堵」和「系统调用不返回」；统计行在突发结束时立即补发一行，不再因为请求在 10 秒内全部结束而整段丢失。加载、超时与回退行为不变。
+  Local thumbnail requests now record how many requests were already waiting when they were issued (`concurrent_at_issue`) and the window's in-flight peak (`max_inflight`), which separates queue congestion from a platform call that never answers; a burst that ends inside a window now reports that window instead of losing it. Loading, timeout and fallback behaviour is unchanged.
 - 本机缩略图超时日志补充缩略图 key、等待时长、超时阈值、更早未返回的请求数及其最长等待和在途请求数，并区分「排队超时」与「系统调用超时」；每 10 秒输出一行统计（成功/超时/平均耗时/在途）。加载、超时与回退行为不变。
   Local thumbnail timeout logs now carry the thumbnail key, the wait, the timeout, how many older requests are still unresolved and for how long, and the in-flight count, and separate queue timeouts from system call timeouts; a one-line summary every 10 seconds reports successes, timeouts, average time and in-flight requests. Loading, timeout and fallback behaviour is unchanged.
 
