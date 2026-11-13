@@ -12,7 +12,24 @@ import '../metadata/url_normalizer.dart' show sameCanonicalUrl;
 import 'clipboard_guard.dart';
 import 'site_registry.dart';
 
-enum FileStatus { unknown, found, notFound }
+enum FileStatus {
+  /// Never resolved against the album (a legacy guess, or a row written before
+  /// the next scan).
+  unknown,
+
+  /// The album answered and holds the file.
+  found,
+
+  /// The album was asked, answered, and confirmed it does **not** hold the
+  /// file any more (the user deleted it, or a cleanup tool did).
+  notFound,
+
+  /// The user deleted this item inside the app — either the record only or the
+  /// record and the album file. The row stays so the item is never counted as
+  /// missing, never offered for a re-download and never resurrected by a scan.
+  deleted,
+}
+
 
 class HistoryFile {
   HistoryFile({
@@ -159,12 +176,41 @@ class HistoryFile {
 /// history claim files the album does not hold.
 bool isSavedHistoryFile(HistoryFile file) => file.status == FileStatus.found;
 
-/// A row kept through the one-time cleanup: anything the album has not already
-/// reported missing. An `unknown` row may still be resolved by the next album
-/// scan (it is never counted or merged), while a `notFound` row is a known
-/// leftover.
+/// A row the user deleted in the app. Kept in the record so the item is never
+/// counted as missing and never offered for a re-download, but never shown.
+bool isDeletedHistoryFile(HistoryFile file) =>
+    file.status == FileStatus.deleted;
+
+/// Whether a row is confirmed to be **not on this device** right now: the album
+/// answered and the file is gone. Only such a row counts as a missing item, so
+/// a timeout, an error or a missing permission can never create one.
+bool isMissingHistoryFile(HistoryFile file) =>
+    file.status == FileStatus.notFound;
+
+/// A row the browser may show: everything except what the user deleted in the
+/// app. A missing row is still shown, as a placeholder with its re-download
+/// button.
+bool isVisibleHistoryFile(HistoryFile file) =>
+    file.status != FileStatus.deleted;
+
+/// Whether an item was ever downloaded at all.
+///
+/// A row with no album identity and no confirmation from the album is a legacy
+/// guess built from the post JSON — usually a media item the user never ticked.
+/// Those are never shown (v1.11 batch 4): the browser lists the media the post
+/// actually has on this device or had before it went missing.
+bool isShowableHistoryFile(HistoryFile file) =>
+    isVisibleHistoryFile(file) &&
+    (isSavedHistoryFile(file) ||
+        isMissingHistoryFile(file) ||
+        file.mediaId?.isNotEmpty == true ||
+        file.assetId?.isNotEmpty == true);
+
+/// A row kept through the one-time cleanup: anything that is neither a deleted
+/// item nor a known leftover the album already reported missing.
 bool isRetainedHistoryFile(HistoryFile file) =>
-    file.status != FileStatus.notFound;
+    file.status != FileStatus.notFound && file.status != FileStatus.deleted;
+
 
 /// Whether a stored file row is a *winner* when two rows describe the same
 /// album file: a real 1-based index with written provenance is preferred.
@@ -275,14 +321,13 @@ int _countStoredFiles(String? filesJson) {
   }
 }
 
-/// One-time cleanup of the file rows that an older build kept for deleted posts
-/// and for files that were already known to be gone.
+/// One-time cleanup of the file rows that an older build kept for deleted posts.
 ///
 /// Database only: no album file is read, moved or deleted. A deleted record
-/// loses its rows (they must never be restorable), an active record loses the
-/// rows the album scan already marked missing and the pure filename guesses that
-/// carry no physical identity. Rows that still carry a MediaStore id or a
-/// provenance asset id are kept so a later scan can confirm or drop them.
+/// loses its rows (they must never be restorable). An active record keeps every
+/// row it has, including the ones the album reported missing: since v1.11 a
+/// missing row *is* the "不在本机" state the browser shows with its re-download
+/// button, so dropping it would hide a file the user still wants back.
 Future<void> _cleanResidualFileRows(Database db) async {
   final rows = await db.query(
     'history_records',
@@ -305,24 +350,17 @@ Future<void> _cleanResidualFileRows(Database db) async {
     ];
     if (files.isEmpty) continue;
     final deleted = ((row['is_deleted'] as num?)?.toInt() ?? 0) != 0;
-    final kept = deleted
-        ? const <HistoryFile>[]
-        : files.where(isRetainedHistoryFile).toList();
-    if (kept.length == files.length) continue;
-    final repaired = repairHistoryFiles(kept) ?? kept;
+    if (!deleted) continue;
     await db.update(
       'history_records',
-      {
-        'files_json': jsonEncode([for (final f in repaired) f.toMap()]),
-        'file_count': repaired.where(isSavedHistoryFile).length,
-      },
+      {'files_json': '[]', 'file_count': 0},
       where: 'id = ?',
       whereArgs: [row['id']],
     );
     DevLog.write(
       'HIST',
       'file rows cleaned source=migration post=${row['post_id']} '
-          'deleted=${deleted ? 1 : 0} from=${files.length} kept=${repaired.length}',
+          'deleted=1 from=${files.length} kept=0',
     );
   }
 }
@@ -454,6 +492,51 @@ class HistoryRecord {
   /// Saved-content UI requires a located file or recorded physical identity.
   /// Unbound legacy filename guesses remain available only to the album scan.
   List<HistoryFile> get savedFiles => files.where(isSavedHistoryFile).toList();
+
+  /// Rows the browser may show: every item that was downloaded and that the user
+  /// has not deleted in the app, including the ones the album no longer holds.
+  /// Those keep their identity so the browser can offer "重新下载这张" instead
+  /// of silently hiding them; media the post never saved has no row at all.
+  List<HistoryFile> get visibleFiles =>
+      files.where(isShowableHistoryFile).toList();
+
+  /// Items the album answered as gone ("不在本机"). Deleted items are not part
+  /// of this count, and neither are rows the album never confirmed.
+  List<HistoryFile> get missingFiles =>
+      files.where(isMissingHistoryFile).toList();
+
+  /// The post's media total as parsed, so the viewer can say "3 / 8" about an
+  /// original position that does not depend on how many files were saved.
+  ///
+  /// `items_json` holds one entry per media item (a Live photo counts once), so
+  /// it is the total at parse time. Records written before it was stored have
+  /// no post total: the highest stored item index (or, without usable indices,
+  /// the number of visible rows) is the best possible stand-in.
+  int get originalItemCount {
+    final parsed = _parsedItemCount();
+    if (parsed != null && parsed > 0) return parsed;
+    var maxIndex = 0;
+    for (final file in files) {
+      // Every row counts, deleted ones included: the item was there, so the
+      // position of the others does not shrink because the user removed one.
+      if (file.itemIndex > maxIndex) maxIndex = file.itemIndex;
+    }
+    if (maxIndex > 0) return maxIndex;
+    final visible = visibleFiles.length;
+    return visible > 0 ? visible : files.length;
+  }
+
+  int? _parsedItemCount() {
+    final json = itemsJson;
+    if (json == null || json.isEmpty) return null;
+    try {
+      final decoded = jsonDecode(json);
+      return decoded is List ? decoded.length : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
 
   /// Soft delete flag. When true, record is hidden from UI but files remain in gallery
   /// and can be restored on rebuild. See spec/metadata.md §7.1.
@@ -1033,9 +1116,16 @@ class HistoryDb {
         // Its file rows were dropped when it was deleted; resurrecting them with
         // a later download of the same post was what made the history show more
         // files than the album holds.
+        //
+        // Rows the user deleted *inside* the post join too: a save of another
+        // item must not forget which ones they removed. Writing one of those
+        // indices again replaces its row with the new (found) one, which is the
+        // user asking for it back.
         final carried = existing.isDeleted
             ? const <HistoryFile>[]
-            : existing.files.where(isSavedHistoryFile);
+            : existing.files.where(
+                (f) => isSavedHistoryFile(f) || isDeletedHistoryFile(f),
+              );
         final carriedKeys = <String>{};
         final fileMap = <String, HistoryFile>{};
         for (final f in carried) {
