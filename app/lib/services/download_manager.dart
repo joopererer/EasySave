@@ -24,6 +24,7 @@ import '../metadata/metadata_service.dart';
 import '../metadata/site_provenance.dart';
 import 'backup/local_auto_backup.dart';
 import 'backup/saf_service.dart';
+import 'dev_download_failure.dart';
 import 'download_failure_snapshots.dart';
 import 'gallery_locator_service.dart';
 import 'history_db.dart';
@@ -2641,6 +2642,19 @@ class DownloadManager extends ChangeNotifier {
     // A hung album scan / metadata write / gallery copy must not leave the
     // job `active` forever (the batch would never finish).
     final work = (() async {
+        // Developer switch (v1.11 batch 2): the download finished, nothing has
+        // been written to the album yet. Failing here takes the normal failure
+        // path, so the batch, its message and its snapshot look exactly like a
+        // real failure — one file, one time.
+        if (DevDownloadFailure.take(batch.batchId)) {
+          unawaited(DevLog.write(
+            logTag, // i18n:ignore 日志
+            'simulated_failure=1 ${job.key}',
+          ));
+          job.error = '下载失败，请重试（模拟失败）';
+          job.state = JobState.failed;
+          return;
+        }
         final file = File(path);
         if (!await file.exists()) {
           job.error = '文件丢失，请重试';

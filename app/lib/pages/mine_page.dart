@@ -16,6 +16,7 @@ import '../services/history_backfill_service.dart';
 import '../services/history_rebuild_service.dart';
 import '../services/provenance_pair.dart';
 import '../services/backup/saf_service.dart';
+import '../services/dev_download_failure.dart';
 import '../services/settings.dart';
 import '../services/tile_service.dart';
 import '../services/update_service.dart';
@@ -992,6 +993,26 @@ class _MinePageState extends State<MinePage> with WidgetsBindingObserver {
                   onTap: () => openFailureLogs(context),
                 ),
                 ListTile(title: const Text('清空日志'), onTap: _clearLog),
+                // Developer switch for the failure-snapshot path (v1.11 batch
+                // 2): the next download batch fails its first file on purpose,
+                // once, so a real device can produce a snapshot on demand.
+                SwitchListTile(
+                  key: const Key('simulate_download_failure'),
+                  title: const Text('下一次下载模拟失败'),
+                  subtitle: const Text(
+                    '开发者开关：下一个下载批次的第一个文件在写入相册前模拟失败，'
+                    '仅生效一次，重启 App 自动关闭',
+                  ),
+                  value: DevDownloadFailure.armed,
+                  onChanged: (on) {
+                    if (on) {
+                      DevDownloadFailure.arm();
+                    } else {
+                      DevDownloadFailure.disarm();
+                    }
+                    setState(() {});
+                  },
+                ),
                 ListTile(title: const Text('版本号'), subtitle: Text(_version)),
                 ListTile(
                   title: const Text('解析器版本'),
