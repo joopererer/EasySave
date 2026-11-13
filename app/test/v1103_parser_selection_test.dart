@@ -288,6 +288,63 @@ void main() {
     },
   );
 
+  test(
+    'a build 46 device on builtin 1.4.16/12 meets the same channel release as '
+    'the same parser, not an equivocation',
+    () async {
+      final previous = debugPrint;
+      debugPrint = (message, {wrapWidth}) {
+        if (message != null) lines.add(message);
+      };
+      addTearDown(() => debugPrint = previous);
+
+      // Exactly what build 46 left behind: the bundled parser is what the
+      // device runs, the watermark sits at its sequence and the content hash is
+      // the hash of its signed payload.
+      File('${directory.path}/state.json').writeAsStringSync(
+        jsonEncode({
+          'current': 'builtin',
+          'previous': null,
+          'highestAcceptedManifestVersion': builtinVersion,
+          'contentHash': builtinHash,
+        }),
+      );
+      final before = rawState();
+
+      // The new APK bundles the very same parser: 1.4.16 as manifestVersion 12.
+      await prepare();
+      expect(ParserVersion.version, '1.4.16');
+      expect(builtinVersion, 12);
+      expect(manager.activeSource, ParserSource.builtin);
+      expect(manager.activeVersion, '1.4.16');
+      expect(manager.activeSignedManifest, isNull);
+
+      // The online channel serves the same sequence with the same content.
+      remote = await envelope(builtinText);
+      final beforeRequests = requests;
+      expect(await manager.checkForUpdates(force: true), isFalse);
+      expect(requests, beforeRequests + 1,
+          reason: 'manifest only, no parser download');
+
+      final line = log();
+      expect(line, contains('result=same'), reason: line);
+      expect(line, contains('remoteManifest=12'), reason: line);
+      expect(line, contains('reason=same_as_builtin'), reason: line);
+      // A same-sequence, same-content release is not reported as a conflict and
+      // never rolls the device back to an older parser.
+      expect(line, isNot(contains('same_sequence_different_content')),
+          reason: line);
+      expect(line, isNot(contains('parser_rollback')), reason: line);
+      expect(line, isNot(contains('event=rejected')), reason: line);
+
+      expect(rawState(), before, reason: 'nothing was written');
+      expect(state()['current'], 'builtin');
+      expect(state()['highestAcceptedManifestVersion'], 12);
+      expect(manager.activeSource, ParserSource.builtin);
+      expect(manager.activeVersion, '1.4.16');
+    },
+  );
+
   test('the bundled manifest is hash-checked like a downloaded one', () async {
     expect(
       () => SignedParserManifest.fromBuiltin(

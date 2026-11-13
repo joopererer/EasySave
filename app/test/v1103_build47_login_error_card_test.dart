@@ -5,9 +5,13 @@
 // second time. The card describes the state *before* the login, so a confirmed
 // session has to clear it and re-parse the link on its own.
 
+import 'package:easysave/core/error_copy.dart';
+import 'package:easysave/core/models.dart';
 import 'package:easysave/services/auth.dart';
 import 'package:easysave/services/login_navigation.dart';
 import 'package:easysave/services/site_registry.dart';
+import 'package:easysave/widgets/shared.dart';
+import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
@@ -64,4 +68,57 @@ void main() {
       isTrue,
     );
   });
+
+  // Parser 1.4.16 answers MEDIA_UNAVAILABLE to an App without the capability,
+  // while an expired session still answers LOGIN_REQUIRED. Both cards have to
+  // send the user to the login page and be cleared by the login that follows.
+  for (final code in [
+    ParseErrorCode.mediaUnavailable,
+    ParseErrorCode.loginRequired,
+  ]) {
+    group('after parsing answers $code', () {
+      const link = 'https://www.instagram.com/reel/DflxolxpdHT/';
+
+      test('the card routes to login and the login clears it', () {
+        final copy = errorCopyFor(code);
+        expect(copy.action, ErrorAction.goLogin, reason: code);
+        expect(
+          loginClearsErrorCard(
+            errorPlatform: platformFromUrl(link),
+            loginPlatform: 'instagram',
+          ),
+          isTrue,
+          reason: code,
+        );
+        // Another site's login must not clear it.
+        expect(
+          loginClearsErrorCard(
+            errorPlatform: platformFromUrl(link),
+            loginPlatform: 'xhs',
+          ),
+          isFalse,
+          reason: code,
+        );
+      });
+
+      testWidgets('the card shows 去登录 and reports goLogin', (tester) async {
+        final actions = <ErrorAction>[];
+        await tester.pumpWidget(
+          MaterialApp(
+            home: Scaffold(
+              body: ErrorCard(
+                code: code,
+                onAction: (action) async => actions.add(action),
+              ),
+            ),
+          ),
+        );
+        expect(tester.takeException(), isNull);
+        expect(find.text('去登录'), findsOneWidget, reason: code);
+        await tester.tap(find.text('去登录'));
+        await tester.pump();
+        expect(actions, [ErrorAction.goLogin], reason: code);
+      });
+    });
+  }
 }
