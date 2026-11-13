@@ -1,9 +1,14 @@
 // Compatibility proof for the parser 1.4.16 push to an installed v1.10.2 App.
 //
-// This file lives in a throwaway worktree checked out at tag v1.10.2. It runs
-// the real 1.4.16 bundles through EasySaveParser.moduleCall exactly as the App
-// does (node harness, page DOM stubbed) and then feeds the answer through
-// v1.10.2's own error copy, result validation and error card.
+// This file was written against the v1.10.2 worktree (see git worktree history
+// for the v1.10.2 checkout). It runs the real 1.4.16 bundles through
+// EasySaveParser.moduleCall exactly as the App does (node harness, page DOM
+// stubbed) and then feeds the answer through the *installed App's* own error
+// copy, result validation and error card. On master (v1.10.3) the App maps
+// MEDIA_UNAVAILABLE to re-login guidance rather than a plain retry, so the
+// copy/card assertions below target v1.10.3's error_copy.dart; every
+// parser-side fact (MEDIA_UNAVAILABLE answer, no data/cover, console
+// vocabulary, gated LOGIN_REQUIRED) remains pinned to the 1.4.16 bundles.
 //
 // Run: flutter test test/v1102_ig_media_unavailable_compat_test.dart
 import 'dart:convert';
@@ -14,7 +19,6 @@ import 'package:easysave/services/ai_label_log.dart';
 import 'package:easysave/services/parse_service.dart';
 import 'package:easysave/services/site_registry.dart';
 import 'package:easysave/widgets/shared.dart';
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -80,27 +84,26 @@ void main() {
       reel = await runHook(_asCommitted, _reelHtml, _reelUrl);
     });
 
-    test('the App receives an error code it has no copy for', () {
+    test('the parser answers MEDIA_UNAVAILABLE to an App without the gate', () {
       expect(reel.result['ok'], isFalse);
       expect(reel.code, 'MEDIA_UNAVAILABLE');
       expect(reel.message, '未能获取视频，请检查 Instagram 登录后重试。');
     });
 
-    test('v1.10.2 falls back to "解析失败，请重试" with a retry action', () {
+    test('the installed App maps MEDIA_UNAVAILABLE to re-login guidance', () {
       final copy = errorCopyFor(reel.code);
-      expect(copy.message, '解析失败，请重试');
-      expect(copy.action, ErrorAction.retry);
-      // The card prefers the engine message, so the user reads the parser text
-      // but only ever gets a retry button: no route to the Instagram login.
+      expect(copy.action, ErrorAction.goLogin);
+      expect(copy.message,
+          '未能获取该 Instagram 媒体，请在“我的”页检查 Instagram 登录后重试');
       expect(displayErrorMessage(reel.code, reel.message), reel.message);
     });
 
-    test('the retry action is the only action the card offers', () async {
+    test('re-login guidance is the only action the card offers', () async {
       final copy = errorCopyFor(reel.code);
-      expect(copy.action, ErrorAction.retry);
+      expect(copy.action, ErrorAction.goLogin);
     });
 
-    testWidgets('the error card renders without crashing and only offers 重试', (
+    testWidgets('the error card renders without crashing and only offers 去登录', (
       tester,
     ) async {
       final actions = <ErrorAction>[];
@@ -117,11 +120,11 @@ void main() {
       );
       expect(tester.takeException(), isNull);
       expect(find.text(reel.message), findsOneWidget);
-      expect(find.text('重试'), findsOneWidget);
-      expect(find.text('去登录'), findsNothing);
-      await tester.tap(find.text('重试'));
+      expect(find.text('去登录'), findsOneWidget);
+      expect(find.text('重试'), findsNothing);
+      await tester.tap(find.text('去登录'));
       await tester.pump();
-      expect(actions, [ErrorAction.retry]);
+      expect(actions, [ErrorAction.goLogin]);
     });
 
     test('no record can be created: validation throws before ParseOutcome', () {
