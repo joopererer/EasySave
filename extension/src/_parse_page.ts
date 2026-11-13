@@ -1,5 +1,12 @@
 import { parseXhs, findNoteInStates, buildNoteFromRecord } from './xhs';
-import { parseInstagram, buildPostFromProduct } from './instagram';
+import {
+  parseInstagram,
+  buildPostFromProduct,
+  hasLoginWall,
+  mediaTypeOf,
+  igParseLogLine,
+  igParseSourceOfProduct,
+} from './instagram';
 import { parseX, calculateToken, extractTweetId } from './x';
 import { parseTiktok, isTiktokLink } from './tiktok';
 import { hostnameOf, isXhsHost, isInstagramHost, isXHost } from './_utils';
@@ -56,24 +63,10 @@ export function parseInstagramFromDom(doc: Document, pageUrl: string): { ok: tru
     });
   }
 
-  // 3. Fallback to OpenGraph meta tags
-  if (items.length === 0) {
-    const ogVideo = doc.querySelector('meta[property="og:video"]')?.getAttribute('content');
-    const ogImage = doc.querySelector('meta[property="og:image"]')?.getAttribute('content');
-    if (ogVideo) {
-      items.push({
-        type: 'video',
-        url: ogImage || ogVideo,
-        videoUrl: ogVideo,
-      });
-    } else if (ogImage) {
-      items.push({
-        type: 'image',
-        url: ogImage,
-      });
-    }
-  }
-
+  // 3. OpenGraph meta is NOT a fallback: an og:image on a page that returned no
+  // post data is the link preview cover (a reel cover even shows a play button).
+  // Returning it would present one cover as the whole post, so this returns
+  // undefined and the caller keeps parseInstagram's real error instead.
   if (items.length === 0) return undefined;
 
   let caption = '';
@@ -140,14 +133,34 @@ export function parsePageForModule(moduleId: string, thumbnailScenes: string[] =
   if (moduleId === 'instagram') {
     const shortcode = shortcodeFromUrl(url);
     if (shortcode && (window as any).__easysaveIgProducts?.[shortcode]) {
-      return JSON.stringify(
-        buildPostFromProduct((window as any).__easysaveIgProducts[shortcode], shortcode, smallThumbnail)
-      );
+      const product = (window as any).__easysaveIgProducts[shortcode];
+      const result = buildPostFromProduct(product, shortcode, smallThumbnail);
+      if (result.ok) {
+        console.info?.(
+          igParseLogLine({
+            source: igParseSourceOfProduct(product),
+            mediaType: mediaTypeOf(result.data.items),
+            items: result.data.items.length,
+            loginWall: hasLoginWall(document.documentElement.outerHTML) ? 1 : 0,
+          }),
+        );
+      }
+      return JSON.stringify(result);
     }
     const res = parseInstagram(html, url, smallThumbnail);
     if (res.ok) return JSON.stringify(res);
     const domRes = parseInstagramFromDom(document, url);
-    if (domRes && domRes.ok) return JSON.stringify(domRes);
+    if (domRes && domRes.ok) {
+      console.info?.(
+        igParseLogLine({
+          source: 'og_meta',
+          mediaType: mediaTypeOf(domRes.data.items),
+          items: domRes.data.items.length,
+          loginWall: hasLoginWall(document.documentElement.outerHTML) ? 1 : 0,
+        }),
+      );
+      return JSON.stringify(domRes);
+    }
     return JSON.stringify(res);
   }
   if (moduleId === 'x') {

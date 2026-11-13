@@ -10,7 +10,8 @@ export type InstagramErrorCode =
   | "LOGIN_REQUIRED"
   | "PRIVATE_OR_UNAVAILABLE"
   | "BLOCKED"
-  | "INVALID_PAGE";
+  | "INVALID_PAGE"
+  | "MEDIA_UNAVAILABLE";
 
 export interface InstagramError {
   code: InstagramErrorCode;
@@ -53,6 +54,124 @@ export type InstagramResult =
 const SHORTCODE_PATTERN = /\/(?:p|reels?|tv)\/([A-Za-z0-9-_]+)/;
 const SHORTCODE_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
 const DATA_SJS_PATTERN = /<script\b[^>]*\bdata-sjs[^>]*>(\{.+?\})<\/script>/gs;
+
+interface OgMeta {
+  type?: string;
+  image?: string;
+  video?: string;
+}
+
+function ogMetaOf(html: string): OgMeta {
+  const og: OgMeta = {};
+  const re = /<meta\b[^>]*\bproperty=["']og:([a-z_]+)["'][^>]*\bcontent=["']([^"']*)["']/gi;
+  let match: RegExpExecArray | null;
+  while ((match = re.exec(html)) !== null) {
+    const key = match[1];
+    const value = match[2];
+    if (key === "type") og.type = value;
+    else if (key === "image") og.image = value;
+    else if (key === "video") og.video = value;
+  }
+  return og;
+}
+
+function hasLoginWall(html: string): boolean {
+  return /age-restricted|sensitive content|see post|查看帖子|了解详情|成人内容|log in to|登入以继续|请先登录/i.test(html);
+}
+
+function videoPage(pageUrl: string, og: OgMeta): boolean {
+  try {
+    const { pathname } = new URL(pageUrl);
+    if (/(^|\/)(reels?|tv)(\/|$)/i.test(pathname)) return true;
+  } catch {}
+  return (og.type ?? "").includes("video") || og.video != null;
+}
+
+/** One media item is enough to fail the "whole reel is one cover" trap; nothing else counts. */
+function mediaTypeOf(items: InstagramItem[]): "image" | "video" | "carousel" {
+  if (items.some((item) => item.type === "video")) return "video";
+  if (items.length > 1) return "carousel";
+  return "image";
+}
+
+function igParseSourceOfProduct(product: Record<string, unknown>): "api" | "graphql" {
+  const typename = typeof product["__typename"] === "string" ? (product["__typename"] as string) : "";
+  return /^Graph(I|Video|Sidecar)/.test(typename) ? "graphql" : "api";
+}
+
+export { ogMetaOf, hasLoginWall, videoPage, mediaTypeOf, igParseLogLine, igParseSourceOfProduct };
+export type { IgParseLog };
+
+interface IgParseLog {
+  source: "api" | "graphql" | "embedded_json" | "og_meta";
+  mediaType: "image" | "video" | "carousel";
+  items: number;
+  loginWall: 0 | 1;
+}
+
+function igParseLogLine(log: IgParseLog): string {
+  return `[IgParse] source=${log.source} mediaType=${log.mediaType} items=${log.items} loginWall=${log.loginWall}`;
+}
+
+/**
+ * A page that only exposes an OpenGraph cover image is never a complete result:
+ * reels and TV pages would hand out the play-button cover as the media, and
+ * /p/ pages would hand out a single cover as a carousel. Both fail instead.
+ */
+function ogImageOnlyFailure(html: string, pageUrl: string): InstagramError | undefined {
+  const og = ogMetaOf(html);
+  if (!og.image || og.video) return undefined;
+  const wall = hasLoginWall(html);
+  if (videoPage(pageUrl, og)) {
+    return wall
+      ? { code: "LOGIN_REQUIRED", message: "该视频需要登录 Instagram 后才能查看。" }
+      : {
+          code: "MEDIA_UNAVAILABLE",
+          message: "未能获取视频，请检查 Instagram 登录后重试。",
+        };
+  }
+  if (/\/p\//i.test(pageUrl)) {
+    return wall
+      ? { code: "LOGIN_REQUIRED", message: "该帖子需要登录 Instagram 后才能查看。" }
+      : {
+          code: "MEDIA_UNAVAILABLE",
+          message: "未能获取图片，请检查 Instagram 登录后重试。",
+        };
+  }
+  return undefined;
+}
+
+/** Capability an App declares in the hook context when it renders MEDIA_UNAVAILABLE. */
+const MEDIA_UNAVAILABLE_CAPABILITY = "media_unavailable";
+
+/** Login guidance shown to an App that only knows the v1 error vocabulary. */
+const MEDIA_UNAVAILABLE_LOGIN_FALLBACK: InstagramError = {
+  code: "LOGIN_REQUIRED",
+  message: "需要登录 Instagram 后才能查看该内容，请在“我的”页登录后重试。",
+};
+
+/**
+ * Keep MEDIA_UNAVAILABLE only for a client that declared the capability.
+ *
+ * The App renders an unknown code as a bare retry prompt with no way to reach
+ * the Instagram login, which leaves the user stuck; an App that sends no
+ * capability therefore gets LOGIN_REQUIRED and its login button instead. The
+ * browser extension runs the parser it was built with and always declares it.
+ */
+export function gateMediaUnavailable<T>(result: T, caps: unknown): T {
+  if (!isRecord(result) || result["ok"] !== false) return result;
+  const error = result["error"];
+  if (!isRecord(error) || error["code"] !== "MEDIA_UNAVAILABLE") return result;
+  if (declaresMediaUnavailable(caps)) return result;
+  return { ...result, error: { ...MEDIA_UNAVAILABLE_LOGIN_FALLBACK } } as T;
+}
+
+export function declaresMediaUnavailable(caps: unknown): boolean {
+  return (
+    Array.isArray(caps) &&
+    caps.some((capability) => capability === MEDIA_UNAVAILABLE_CAPABILITY)
+  );
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
@@ -202,6 +321,7 @@ export function parseInstagram(html: string, pageUrl: string, smallThumbnail = f
   const mediaId = shortcode ? shortcodeToMediaId(shortcode) : undefined;
 
   let product: Record<string, unknown> | undefined;
+  let source: "api" | "graphql" | "embedded_json" = "api";
   if (mediaId) {
     DATA_SJS_PATTERN.lastIndex = 0;
     let match: RegExpExecArray | null;
@@ -213,7 +333,10 @@ export function parseInstagram(html: string, pageUrl: string, smallThumbnail = f
         continue;
       }
       product = findProduct(parsed, mediaId);
-      if (product) break;
+      if (product) {
+        source = "embedded_json";
+        break;
+      }
     }
   }
 
@@ -227,6 +350,7 @@ export function parseInstagram(html: string, pageUrl: string, smallThumbnail = f
       const cached = g?.["__easysaveIgProducts"] as Record<string, unknown> | undefined;
       if (cached && isRecord(cached[shortcode])) {
         product = cached[shortcode] as Record<string, unknown>;
+        source = igParseSourceOfProduct(product);
       }
     } catch (_) {}
   }
@@ -234,8 +358,22 @@ export function parseInstagram(html: string, pageUrl: string, smallThumbnail = f
   const looksLikeInstagram =
     /instagram\.com|instagr\.am/.test(pageUrl) ||
     /instagram\.com|instagr\.am|data-sjs/.test(html.slice(0, 20000));
+  const loginWall = hasLoginWall(html) ? 1 : 0;
   if (!product || !shortcode) {
     if (looksLikeInstagram) {
+      const ogOnly = ogImageOnlyFailure(html, pageUrl);
+      if (ogOnly) {
+        const og = ogMetaOf(html);
+        console.info?.(
+          igParseLogLine({
+            source: "og_meta",
+            mediaType: videoPage(pageUrl, og) ? "video" : "image",
+            items: 0,
+            loginWall,
+          }),
+        );
+        return { ok: false, error: ogOnly };
+      }
       const isAgeGated =
         /sensitive content|age-restricted|查看帖子|了解详情|see post|成人内容|sensitive_content/i.test(html);
       return {
@@ -254,7 +392,18 @@ export function parseInstagram(html: string, pageUrl: string, smallThumbnail = f
     };
   }
 
-  return buildPostFromProduct(product, shortcode, smallThumbnail);
+  const result = buildPostFromProduct(product, shortcode, smallThumbnail);
+  if (result.ok) {
+    console.info?.(
+      igParseLogLine({
+        source,
+        mediaType: mediaTypeOf(result.data.items),
+        items: result.data.items.length,
+        loginWall,
+      }),
+    );
+  }
+  return result;
 }
 
 /**

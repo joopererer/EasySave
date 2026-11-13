@@ -946,7 +946,10 @@ Future<ParseOutcome> _run(
       initialData: jsonMode
           ? InAppWebViewInitialData(data: '<html></html>')
           : null,
-      onConsoleMessage: (_, message) => logUnknownAiLabel(message.message),
+      onConsoleMessage: (_, message) {
+        logUnknownAiLabel(message.message);
+        logIgParseDiagnostic(message.message);
+      },
       initialUserScripts: UnmodifiableListView([
         UserScript(
           source: '${hooks.script};${hooks.expression('install', targetUrl)}',
