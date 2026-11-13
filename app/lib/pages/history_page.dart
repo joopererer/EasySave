@@ -1760,9 +1760,9 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
                   downloadPaused: _isPaused(record.postId),
                   downloadStalled: _isStalled(record.postId),
                   downloadWaitingForNetwork:
-                      !NetworkStatus.instance.online &&
-                      _downloadBatches[record.postId] != null &&
-                      !(_downloadBatches[record.postId]!.isTerminal),
+                      !NetworkStatus.instance.online ||
+                      (_downloadBatches[record.postId]?.waitingForNetwork ??
+                          false),
                   downloadFailed: _isFailed(record.postId) || _recordFailed(record),
                   downloadFailureReason: _downloadBatches[record.postId]?.failureReason ?? record.downloadError,
                   onToggleDownload: _recordFailed(record) ? () => _reparse(record) : _downloadBatches[record.postId]?.supportsPause == false && !_isFailed(record.postId) ? null : () => _toggleDownload(record.postId),

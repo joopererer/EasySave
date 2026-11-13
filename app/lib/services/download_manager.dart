@@ -95,6 +95,67 @@ final RegExp _diagnosticPolicyCode = RegExp(
 /// Whether [job] must never be enqueued again in this batch.
 bool isPolicyRejected(DownloadJob job) => job.errorCode == policyRejectedCode;
 
+/// Machine-readable mark of a connectivity failure (v1.11 batch 3): no network,
+/// DNS failure, refused or reset connection, timeout, TLS handshake. It is a
+/// statement about the network, never about the media, so it must never be
+/// reported as a content failure.
+const String networkFailureCode = 'NETWORK';
+
+/// Transport failure causes that mean the network could not be reached. They
+/// are the same tokens [DownloadManager._failureCause] logs.
+const Set<String> kNetworkFailureCauses = {
+  'network',
+  'dns',
+  'refused',
+  'reset',
+  'timeout',
+  'tls',
+  'unreachable',
+};
+
+/// Whether the transport failure [cause] is a connectivity failure.
+bool isNetworkCause(String cause) => kNetworkFailureCauses.contains(cause);
+
+/// Fixed cause token of a caught connection error: `dns`, `refused`, `reset`,
+/// `timeout`, `tls`, `unreachable` or `network`. The error message itself is
+/// never returned — on Android it embeds the host name and the request URL.
+String? networkCauseOf(Object error) {
+  final text = error is SocketException
+      ? '${error.message} ${error.osError?.message ?? ''}'
+      : error.toString();
+  bool has(String pattern) =>
+      RegExp(pattern, caseSensitive: false).hasMatch(text);
+  if (error is TimeoutException || has(r'timeout|timed out|超时')) {
+    return 'timeout';
+  }
+  if (has(r'unknownhost|unresolved|gaierror|nodename|failed host lookup')) {
+    return 'dns';
+  }
+  if (has(r'ssl|certificate|handshake|certpath|\btls\b')) return 'tls';
+  if (has(r'connection refused|econnrefused')) return 'refused';
+  if (has(r'noroutetohost|enetunreach|ehostunreach|unreachable')) {
+    return 'unreachable';
+  }
+  if (has(r'econnreset|connection reset|epipe|broken pipe|connection closed')) {
+    return 'reset';
+  }
+  if (error is SocketException ||
+      error is HttpException ||
+      error is TlsException) {
+    return 'network';
+  }
+  return null;
+}
+
+/// How often a file waiting for the network is looked at again while the system
+/// still reports a connection (a connection that breaks while the system thinks
+/// it is up produces no connectivity event, so the wait needs its own clock).
+const Duration kNetworkRetryInterval = Duration(seconds: 5);
+
+/// Consecutive waits of one file while the system claimed to be online. Past
+/// this the file fails with [networkFailureCode] instead of waiting forever.
+const int kNetworkWaitLimit = 12;
+
 /// Overrides the backoff ladder in unit tests.
 @visibleForTesting
 List<Duration> candidateRetryBackoffsForTesting = kCandidateRetryBackoffs;
@@ -164,6 +225,10 @@ bool needsSessionDownload(DownloadBatch batch, DownloadJob job) {
 
 bool recoverSessionJob(DownloadBatch batch, DownloadJob job) {
   if (!needsSessionDownload(batch, job) || job.isTerminal) return false;
+  // A file that was parked waiting for the connection is still meaningfully
+  // waiting after a restart: it never had a transfer that could be interrupted
+  // (v1.11 batch 3). It resumes with the connection, not with a re-parse.
+  if (job.isWaitingForNetwork) return false;
   job.state = JobState.failed;
   job.progress = 0;
   job.currentTaskId = null;
@@ -321,12 +386,14 @@ String? shortFailureReason(DownloadJob job) {
   if (job.errorCode == storageFullCode || isStorageFullError(error)) {
     return '存储空间不足';
   }
+  if (job.errorCode == networkFailureCode) return '网络不可用';
   final status = job.lastStatusCode ??
       int.tryParse(RegExp(r'HTTP (\d{3})').firstMatch(error)?.group(1) ?? '');
   if (status != null) return 'HTTP $status';
   if (error.contains('超时')) return '保存超时';
   if (error.contains('过期')) return '链接已过期';
   if (error.contains('允许范围')) return '地址不被允许';
+  if (error.contains('网络')) return '网络不可用';
   if (error.contains('文件丢失')) return '文件丢失';
   if (error.contains('来源信息')) return '来源信息写入失败';
   return '下载出错';
@@ -345,8 +412,9 @@ String userFacingFailureReason(DownloadJob job) {
   return '$text（$detail）';
 }
 
-/// `paused` is appended last: job states are persisted by index.
-enum JobState { queued, active, done, failed, canceled, paused }
+/// `paused` and `waitingNetwork` are appended last: job states are persisted by
+/// index.
+enum JobState { queued, active, done, failed, canceled, paused, waitingNetwork }
 
 /// Running work takes precedence over an old failure, regardless of snapshot
 /// timestamps (a late failure may be newer than the current download).
@@ -455,6 +523,10 @@ class DownloadJob {
       state == JobState.done ||
       state == JobState.failed ||
       state == JobState.canceled;
+
+  /// The file cannot be transferred until the connection is back (v1.11 batch
+  /// 3). A wait is not a failure: it spends no attempt and writes no error.
+  bool get isWaitingForNetwork => state == JobState.waitingNetwork;
 
   Map<String, Object?> toJson() => {
     'lastProgressAt': lastProgressAt,
@@ -661,6 +733,9 @@ class DownloadBatch {
   int get doneCount => jobs.where((j) => j.state == JobState.done).length;
   int get failedCount => jobs.where((j) => j.state == JobState.failed).length;
 
+  /// At least one file is parked until the connection is back (v1.11 batch 3).
+  bool get waitingForNetwork => jobs.any((j) => j.isWaitingForNetwork);
+
   /// Short reason of the first failed job, for the history card.
   String? get failureReason => jobs
       .map(shortFailureReason)
@@ -684,6 +759,8 @@ class DownloadBatch {
     if (isTerminal) return false;
     // A batch the user paused is waiting on purpose, not stuck.
     if (isPaused) return false;
+    // Neither is a batch that waits for the connection (v1.11 batch 3).
+    if (waitingForNetwork) return false;
     final last = lastActivityAt;
     if (last <= 0) return false;
     return now - last >= kStalledBatchAgeMs;
@@ -1062,7 +1139,7 @@ class DownloadManager extends ChangeNotifier {
 
   static int _batchSequence = 0;
   final Map<String, DownloadBatch> _batches = {};
-  final Map<String, SessionMediaDownload> _sessionTransfers = {};
+  final Map<String, SessionTransfer> _sessionTransfers = {};
   StreamSubscription<TaskUpdate>? _updatesSub;
   Timer? _heartbeat;
   bool _ready = false;
@@ -1243,17 +1320,119 @@ class DownloadManager extends ChangeNotifier {
       (_) => _heartbeatTick(),
     );
     await _loadAndReconcile();
+    // A file parked waiting for the connection in an earlier run continues as
+    // soon as there is one (v1.11 batch 3).
+    unawaited(_resumeWaitingJobs());
   }
 
   /// The system connection came back (or went away): the notification body
-  /// follows it. Purely cosmetic — the downloader itself is never touched.
+  /// follows it. A connection that comes back also restarts every file parked
+  /// in [JobState.waitingNetwork] (v1.11 batch 3).
   void _onNetworkChanged() {
     for (final batch in _batches.values.toList()) {
       if (batch.isTerminal) continue;
       unawaited(_refreshNotification(batch));
     }
     notifyListeners();
+    if (NetworkStatus.instance.online) unawaited(_resumeWaitingJobs());
   }
+
+  /// Attaches the system-connection listener exactly as [init] does, so a test
+  /// can observe the automatic resume without starting the plugin.
+  @visibleForTesting
+  void attachNetworkListenerForTesting() {
+    NetworkStatus.instance.removeListener(_onNetworkChanged);
+    NetworkStatus.instance.addListener(_onNetworkChanged);
+  }
+
+  /// Re-enqueue every file parked until the connection returns. Called when the
+  /// system reports a connection again and once at startup, so a file parked in
+  /// a previous run continues too.
+  Future<void> _resumeWaitingJobs() async {
+    for (final batch in _batches.values.toList()) {
+      if (batch.source != owner) continue;
+      var changed = false;
+      for (final job in batch.jobs.toList()) {
+        if (!job.isWaitingForNetwork) continue;
+        _networkWaits.remove(job.key);
+        job.state = JobState.queued;
+        changed = true;
+        try {
+          await _enqueueAttempt(batch, job);
+        } catch (e) {
+          _log('resume after network failure failed ${job.key}: $e');
+          job.state = JobState.failed;
+          job.error = '加入下载队列失败';
+        }
+      }
+      if (!changed) continue;
+      await _persist(batch);
+      notifyListeners();
+      if (batch.isTerminal) await _afterTerminal(batch, recovered: false);
+    }
+  }
+
+  /// Consecutive waits of one file while the system claimed to be online.
+  final _networkWaits = <String, int>{};
+
+  /// Park [job] until the connection is back instead of failing it.
+  ///
+  /// A network failure says nothing about the media: no attempt is spent
+  /// ([refundAttempt]), no failure is recorded, the history keeps waiting and no
+  /// failure snapshot is taken. [cause] is a fixed token — never a URL, a host
+  /// name or a raw exception.
+  Future<void> _waitForNetwork(
+    DownloadBatch batch,
+    DownloadJob job, {
+    required String cause,
+    bool refundAttempt = false,
+  }) async {
+    if (refundAttempt && job.attempts > 0) job.attempts--;
+    job
+      ..state = JobState.waitingNetwork
+      ..progress = 0
+      ..error = null
+      ..errorCode = null
+      ..lastProgressAt = DateTime.now().millisecondsSinceEpoch;
+    _log('waiting for network index=${job.itemIndex} role=${roleOf(job)} '
+        'cause=$cause attempts=${job.attempts}/${retryCapFor(batch, job)}');
+    _scheduleNetworkRetry(batch, job);
+    await _persist(batch);
+    notifyListeners();
+    unawaited(_refreshNotification(batch));
+  }
+
+  /// While the system claims a connection there is no connectivity event to
+  /// wait for, so the parked file is looked at again on its own clock. Offline
+  /// the system event is the trigger and no timer runs.
+  void _scheduleNetworkRetry(DownloadBatch batch, DownloadJob job) {
+    _networkRetryTimers.remove(job.key)?.cancel();
+    if (!NetworkStatus.instance.online) return;
+    final waits = (_networkWaits[job.key] ?? 0) + 1;
+    _networkWaits[job.key] = waits;
+    if (waits > kNetworkWaitLimit) {
+      // The system keeps claiming a connection that never carries a transfer:
+      // stop waiting and report it as the network failure it is, so the file
+      // does not sit in the queue forever.
+      _networkWaits.remove(job.key);
+      unawaited(_failReadable(
+        batch,
+        job,
+        error: networkUnavailableMessage,
+        code: networkFailureCode,
+      ));
+      return;
+    }
+    _networkRetryTimers[job.key] = Timer(kNetworkRetryInterval, () {
+      _networkRetryTimers.remove(job.key);
+      if (!job.isWaitingForNetwork) return;
+      if (!NetworkStatus.instance.online) return;
+      job.state = JobState.queued;
+      unawaited(_enqueueAttempt(batch, job));
+    });
+  }
+
+  final _networkRetryTimers = <String, Timer>{};
 
   /// Persist the running batches so their `updatedAt` stays fresh while the
   /// owning engine is alive.
@@ -1283,6 +1462,9 @@ class DownloadManager extends ChangeNotifier {
     final now = DateTime.now().millisecondsSinceEpoch;
     for (final job in batch.jobs.toList()) {
       if (job.isTerminal || job.state == JobState.paused) continue;
+      // A parked file is waiting on the connection, not stuck: the network
+      // listener (or its own timer) owns it.
+      if (job.isWaitingForNetwork) continue;
       if (needsSessionDownload(batch, job)) {
         if (!_sessionTransfers.containsKey(job.key)) {
           recoverSessionJob(batch, job);
@@ -1912,26 +2094,46 @@ class DownloadManager extends ChangeNotifier {
   }
 
   /// Fail [job] before it downloads when its known size does not fit.
+  ///
+  /// The log line states the outcome it really reached (v1.11 batch 3): a probe
+  /// that could not run or did not answer is `result=unknown` with a fixed
+  /// `reason=`, never `result=ok` next to `size=-1`, which claimed a check that
+  /// never happened.
   Future<bool> _storageBlocked(DownloadBatch batch, DownloadJob job) async {
     if (job.urls.isEmpty) return false;
     final index = candidateIndexOf(job);
     var size = job.expectedBytes;
+    String? reason;
     if (size == null) {
       try {
         final probe = contentLengthProbeForTesting;
-        size = probe != null
-            ? await probe(job, job.urls[index])
-            : await _probeContentLength(batch, job, index);
-      } catch (_) {
+        if (probe != null) {
+          final offline = !NetworkStatus.instance.online;
+          if (offline) {
+            reason = 'offline';
+          } else {
+            size = await probe(job, job.urls[index]);
+            if (size == null || size <= 0) reason = 'probe_failed';
+          }
+        } else {
+          final probed = await _probeContentLength(batch, job, index);
+          size = probed.bytes;
+          reason = probed.reason;
+        }
+      } catch (e) {
         size = null;
+        reason = networkCauseOf(e) ?? 'probe_failed';
       }
       if (size != null && size > 0) job.expectedBytes = size;
     }
-    final required = await StorageGuard.shortfall(size);
+    final known = size != null && size > 0;
+    final required = await StorageGuard.shortfall(known ? size : null);
     _log('preflight index=${job.itemIndex} role=${roleOf(job)} '
         'label=${candidateLabelOf(job.urls[index])} '
         'candidate_seq=${index + 1}/${job.urls.length} '
-        'size=${size ?? -1} result=${required == null ? 'ok' : storageFullCode}');
+        'size=${known ? size : -1} '
+        'result=${required != null ? storageFullCode : known ? 'ok' : 'unknown'}'
+        '${required != null || known ? '' : ' reason=${reason ?? 'probe_failed'}'}');
     if (required == null) return false;
     await _failForStorage(batch, job, required);
     return true;
@@ -1943,15 +2145,21 @@ class DownloadManager extends ChangeNotifier {
   /// the bytes the transfer would receive), `Accept-Encoding: identity` and a
   /// browser User-Agent. No redirect is followed (each hop would need its own
   /// authorization).
-  Future<int?> _probeContentLength(
+  Future<({int? bytes, String? reason})> _probeContentLength(
     DownloadBatch batch,
     DownloadJob job,
     int index,
   ) async {
-    if (needsSessionDownload(batch, job)) return null;
+    // Every path states why it has no size, so `size=-1` is never a mystery.
+    if (needsSessionDownload(batch, job)) {
+      return (bytes: null, reason: 'session');
+    }
+    if (!NetworkStatus.instance.online) return (bytes: null, reason: 'offline');
     final policy = _policyFor(batch.platform);
     final authorized = await policy.authorize(_jobResource(job, index, policy));
-    if (authorized.cookie != null && authorized.cookie!.isNotEmpty) return null;
+    if (authorized.cookie != null && authorized.cookie!.isNotEmpty) {
+      return (bytes: null, reason: 'cookie');
+    }
     final client = http.Client();
     try {
       final request = http.Request('GET', authorized.uri)
@@ -1962,17 +2170,28 @@ class DownloadManager extends ChangeNotifier {
       final response =
           await client.send(request).timeout(const Duration(seconds: 8));
       try {
-        if (response.statusCode == 200) return response.contentLength;
-        if (response.statusCode != 206) return null;
+        if (response.statusCode == 200) {
+          final length = response.contentLength;
+          return length == null || length <= 0
+              ? (bytes: null, reason: 'no_length')
+              : (bytes: length, reason: null);
+        }
+        if (response.statusCode != 206) {
+          return (bytes: null, reason: 'status_${response.statusCode}');
+        }
         // `Content-Range: bytes 0-0/12345` carries the full size.
         final range = response.headers['content-range'];
         final total = range == null
             ? null
             : int.tryParse(range.split('/').last.trim());
-        return total != null && total > 0 ? total : null;
+        return total != null && total > 0
+            ? (bytes: total, reason: null)
+            : (bytes: null, reason: 'no_range');
       } finally {
         await response.stream.drain<void>().catchError((_) {});
       }
+    } catch (e) {
+      return (bytes: null, reason: networkCauseOf(e) ?? 'probe_failed');
     } finally {
       client.close();
     }
@@ -2062,9 +2281,17 @@ class DownloadManager extends ChangeNotifier {
     DownloadJob job,
   ) async {
     if (_sessionTransfers.containsKey(job.key)) return;
+    // Everything below this line needs a connection: an in-process transfer has
+    // no native queue to wait in, so it parks here instead of failing (v1.11
+    // batch 3). Nothing is spent and nothing is recorded as a failure.
+    if (!NetworkStatus.instance.online) {
+      await _waitForNetwork(batch, job, cause: 'offline');
+      return;
+    }
     final file = await _sessionFile(job);
-    final transfer = SessionMediaDownload();
+    final transfer = sessionTransferForTesting?.call() ?? SessionMediaDownload();
     _sessionTransfers[job.key] = transfer;
+    _networkWaits.remove(job.key);
     job.attempts++;
     job.currentTaskId = null;
     job.state = JobState.active;
@@ -2076,10 +2303,15 @@ class DownloadManager extends ChangeNotifier {
     unawaited(_runSessionDownload(batch, job, transfer, file));
   }
 
+  /// Test seam: replaces the in-process HTTP transfer so a connection that
+  /// drops, or a network that is down, can be scripted.
+  @visibleForTesting
+  SessionTransfer Function()? sessionTransferForTesting;
+
   Future<void> _runSessionDownload(
     DownloadBatch batch,
     DownloadJob job,
-    SessionMediaDownload transfer,
+    SessionTransfer transfer,
     File file,
   ) async {
     var checkingControl = false;
@@ -2127,10 +2359,21 @@ class DownloadManager extends ChangeNotifier {
           ? expiredMediaMessage
           : '该资源地址不在允许范围内';
     } on SessionDownloadException catch (e) {
-      job.state = JobState.failed;
-      job.error = e.message;
-      job.lastStatusCode = e.statusCode;
-      if (isStorageFullError(e.message)) _markStorageFull(job);
+      if (e.network) {
+        // The connection broke or was never there (v1.11 batch 3). Wait for it
+        // instead of failing the file: the media was never judged.
+        await _waitForNetwork(
+          batch,
+          job,
+          cause: e.statusCode == null ? 'network' : 'status_${e.statusCode}',
+          refundAttempt: true,
+        );
+      } else {
+        job.state = JobState.failed;
+        job.error = e.message;
+        job.lastStatusCode = e.statusCode;
+        if (isStorageFullError(e.message)) _markStorageFull(job);
+      }
     } catch (e) {
       job.state = JobState.failed;
       job.error = '下载失败，请重新解析';
@@ -2617,9 +2860,11 @@ class DownloadManager extends ChangeNotifier {
     DownloadBatch batch,
     DownloadJob job, {
     String? error,
+    String? code,
   }) async {
     job
       ..state = JobState.failed
+      ..errorCode = code
       ..error = error ?? (job.isImage ? failureTextFor(job) : '下载到的文件不是视频，已跳过');
     await _persist(batch);
     notifyListeners();
@@ -2990,6 +3235,25 @@ class DownloadManager extends ChangeNotifier {
     // or its query.
     final cap = retryCapFor(batch, job);
     final cause = _failureCause(update);
+    // No connection means the transfer never had a chance: park the file until
+    // the network is back instead of spending its attempts on a dead link
+    // (v1.11 batch 3). The native queue is left alone on purpose — it already
+    // waits by itself — this only makes the wait visible and refundable.
+    if (isNetworkCause(cause) && !NetworkStatus.instance.online) {
+      unawaited(DevLog.write(
+        'V16DL', // i18n:ignore 日志
+        'item waiting_network index=${job.itemIndex} role=${roleOf(job)} '
+            'cause=$cause attempts=${job.attempts}/$cap '
+            'candidate=${candidateProgressLabel(job)}',
+      ));
+      await _waitForNetwork(
+        batch,
+        job,
+        cause: cause,
+        refundAttempt: true,
+      );
+      return;
+    }
     // A dropped connection or a timeout is usually transient: the same
     // candidate is retried on an exponential ladder (0.6s, 1.2s, 2.4s) before
     // it is written off. Every other failure rotates to the next candidate at
@@ -3029,12 +3293,17 @@ class DownloadManager extends ChangeNotifier {
         'reason=${_transferReason(update)} cause=${_failureCause(update)} '
         'detail=${update.exception?.toString() ?? 'unknown'}');
     await _cleanupJobTemp(batch, job);
+    // A file that never got a connection is a network failure, never a content
+    // verdict: the bytes were never seen (v1.11 batch 3). The per-item sentence
+    // stays the readable one; the *classification* is what must not be CONTENT.
+    final networkGaveUp = isNetworkCause(cause);
     await _failReadable(
       batch,
       job,
       error: update.responseStatusCode != null
           ? '${failureTextFor(job)}（HTTP ${update.responseStatusCode}）'
           : failureTextFor(job),
+      code: networkGaveUp ? networkFailureCode : null,
     );
   }
 
@@ -3090,8 +3359,12 @@ class DownloadManager extends ChangeNotifier {
     final description = update.exception?.description ?? '';
     bool has(String pattern) =>
         RegExp(pattern, caseSensitive: false).hasMatch(description);
-    if (has(r'unknownhost|unresolved|gaierror|nodename')) return 'dns';
-    if (has(r'ssl|certificate|handshake|certpath')) return 'tls';
+    if (has(
+      r'unknownhost|unresolved|gaierror|nodename|failed host lookup|host lookup',
+    )) {
+      return 'dns';
+    }
+    if (has(r'ssl|certificate|handshake|certpath|\btls\b')) return 'tls';
     if (has(r'econnrefused|connection refused|connectexception')) {
       return 'refused';
     }
@@ -3099,9 +3372,12 @@ class DownloadManager extends ChangeNotifier {
     if (has(r'noroutetohost|enetunreach|ehostunreach|unreachable')) {
       return 'unreachable';
     }
-    if (has(r'econnreset|connection reset|epipe|eof|broken pipe')) {
+    if (has(r'econnreset|connection reset|epipe|eof|broken pipe|connection closed')) {
       return 'reset';
     }
+    // The plugin wraps a socket failure in its own connection exception; trust
+    // the type even when the description carries no recognisable token.
+    if (update.exception is TaskConnectionException) return 'network';
     return 'other';
   }
 
@@ -3414,7 +3690,9 @@ class DownloadManager extends ChangeNotifier {
     for (final job in batch.jobs) {
       if (job.state == JobState.queued ||
           job.state == JobState.active ||
-          job.state == JobState.paused) {
+          job.state == JobState.paused ||
+          job.state == JobState.waitingNetwork) {
+        _networkRetryTimers.remove(job.key)?.cancel();
         job.state = JobState.canceled;
       }
     }
@@ -3551,6 +3829,7 @@ class DownloadManager extends ChangeNotifier {
         case JobState.queued:
         case JobState.active:
         case JobState.paused:
+        case JobState.waitingNetwork:
           final id = job.currentTaskId;
           if (id != null && job.state != JobState.paused) {
             try {
@@ -3591,6 +3870,7 @@ class DownloadManager extends ChangeNotifier {
     job = batch.jobs.firstWhere((j) => j.key == job.key, orElse: () => job);
     if (job.saved) return; // The album write won the race; keep it completed.
     if (job.isTerminal) return;
+    _networkRetryTimers.remove(job.key)?.cancel();
     if (needsSessionDownload(batch, job)) {
       job.state = JobState.canceled;
       await _sessionTransfers[job.key]?.cancel();
@@ -3915,6 +4195,8 @@ String failedJobLogLine(DownloadBatch batch, DownloadJob job) {
   final error = job.error ?? '';
   final reason = job.errorCode == storageFullCode
       ? storageFullCode
+      : job.errorCode == networkFailureCode
+      ? 'NETWORK'
       : job.errorCode == policyRejectedCode
       ? 'POLICY'
       : error.contains('403')

@@ -6,15 +6,39 @@ import 'transfer_headers.dart';
 
 const expiredMediaMessage = '链接已过期，请重新解析';
 const interruptedMediaMessage = '需要重新解析';
+const networkUnavailableMessage = '网络不可用，请联网后重试';
 
 /// Only fixed messages leave the transport. Never expose request objects,
 /// response headers or exceptions (which may contain credentials).
 class SessionDownloadException implements Exception {
-  const SessionDownloadException(this.message, {this.statusCode});
+  const SessionDownloadException(this.message, {this.statusCode, this.network = false});
   final String message;
   final int? statusCode;
+
+  /// The connection could not be reached or broke mid-transfer (v1.11 batch 3):
+  /// no network, DNS failure, refused or reset connection, a timeout or a TLS
+  /// handshake that never finished. Such a failure says nothing about the
+  /// media, so it must never be recorded as a content verdict.
+  final bool network;
+
   @override
   String toString() => message;
+}
+
+/// What [DownloadManager] needs from one in-process transfer: a download it can
+/// start and a cancel it can ask for. The real one is [SessionMediaDownload];
+/// tests substitute their own to script a connection that drops.
+abstract class SessionTransfer {
+  Future<void> download({
+    required String url,
+    required File destination,
+    Future<String> Function()? readCookie,
+    MediaRequestPolicy? policy,
+    MediaRequestResource? resource,
+    required void Function(double progress) onProgress,
+  });
+
+  Future<void> cancel();
 }
 
 class SessionDownloadCanceled implements Exception {
@@ -25,11 +49,12 @@ class SessionDownloadCanceled implements Exception {
 
 /// One in-process transfer. No task database, cookie jar, resume data or logger.
 /// [cancel] closes the client even while waiting for headers or stalled bytes.
-class SessionMediaDownload {
+class SessionMediaDownload implements SessionTransfer {
   HttpClient? _client;
   bool _canceled = false;
   final _finished = Completer<void>();
 
+  @override
   Future<void> cancel() async {
     _canceled = true;
     _client?.close(force: true);
@@ -122,6 +147,36 @@ class SessionMediaDownload {
       rethrow;
     } on MediaPolicyException {
       rethrow;
+    } on TimeoutException {
+      // A connect, header or byte timeout: the peer never answered. Retrying
+      // the URL by hand is the user's choice, not the app's verdict on it.
+      if (_canceled) throw const SessionDownloadCanceled();
+      throw const SessionDownloadException(
+        networkUnavailableMessage,
+        network: true,
+      );
+    } on SocketException {
+      // No route, DNS failure, refused or reset connection: the network could
+      // not be reached (v1.11 batch 3).
+      if (_canceled) throw const SessionDownloadCanceled();
+      throw const SessionDownloadException(
+        networkUnavailableMessage,
+        network: true,
+      );
+    } on TlsException {
+      if (_canceled) throw const SessionDownloadCanceled();
+      throw const SessionDownloadException(
+        networkUnavailableMessage,
+        network: true,
+      );
+    } on HttpException {
+      // `HttpException` covers a connection closed before the headers or the
+      // body completed — a transport failure, never a content verdict.
+      if (_canceled) throw const SessionDownloadCanceled();
+      throw const SessionDownloadException(
+        networkUnavailableMessage,
+        network: true,
+      );
     } catch (_) {
       if (_canceled) throw const SessionDownloadCanceled();
       throw const SessionDownloadException('下载失败，请重新解析');

@@ -371,6 +371,7 @@ class _JobTile extends StatelessWidget {
     JobState.failed => job.error ?? '失败',
     JobState.canceled => '已取消',
     JobState.paused => '已暂停',
+    JobState.waitingNetwork => '等待网络…联网后自动继续',
   };
 
   @override
@@ -387,7 +388,10 @@ class _JobTile extends StatelessWidget {
       ),
       subtitle: Text(_label, maxLines: 1, overflow: TextOverflow.ellipsis),
       trailing: switch (job.state) {
-        JobState.queued || JobState.active || JobState.paused => IconButton(
+        JobState.queued ||
+        JobState.active ||
+        JobState.paused ||
+        JobState.waitingNetwork => IconButton(
           tooltip: '取消此文件',
           icon: const Icon(Icons.close),
           onPressed: busy ? null : onCancel,

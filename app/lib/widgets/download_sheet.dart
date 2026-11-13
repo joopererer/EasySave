@@ -123,8 +123,12 @@ class _DownloadSheetState extends State<DownloadSheet> {
             .where((j) => j.state == JobState.done)
             .length;
         // Display only: an offline batch keeps its queue position and resumes
-        // by itself; the panel just stops pretending it is transferring.
-        final waitingForNetwork = running && !NetworkStatus.instance.online;
+        // by itself; the panel just stops pretending it is transferring. A file
+        // parked waiting for the connection says so even while the system still
+        // reports one (v1.11 batch 3).
+        final waitingForNetwork =
+            running &&
+            (!NetworkStatus.instance.online || batch.waitingForNetwork);
         return SafeArea(
           child: Padding(
             padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
@@ -328,6 +332,9 @@ class _DownloadSheetState extends State<DownloadSheet> {
         return '已取消';
       case JobState.paused:
         return '已暂停';
+      case JobState.waitingNetwork:
+        // A parked file: not a failure, not a spent attempt (v1.11 batch 3).
+        return '等待网络…联网后自动继续';
     }
   }
 
