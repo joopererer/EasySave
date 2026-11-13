@@ -1,192 +1,134 @@
-// The render object behind the 帖子 waterfall's balanced two columns.
+// Lazy (sliver) two-column waterfalls for the history page (v1.11 batch 2).
+//
+// Batch 1 placed the 帖子 waterfall's cards with a MultiChildRenderObjectWidget
+// and kept the 全部 waterfall in a shrink-wrapped masonry inside a
+// SliverToBoxAdapter. Both had to build *every* card of a date group to know
+// the group's height, so a 200-post group mounted 200 HistoryThumb widgets —
+// and every mounted thumb starts its own local thumbnail request — before the
+// user saw a dozen of them. Build 49 measured the result: 625 timeout lines
+// and an in-flight peak of 416 native thumbnail requests.
+//
+// The placement never needed the measured heights, only *heights*, and a
+// card's height is a function of its cover's aspect ratio, which the record
+// already carries. So the heights come from the data
+// ([LazyMasonrySliver.estimatedHeightOf]) and the cards are rendered by two
+// lazy [SliverList]s side by side inside a [SliverCrossAxisGroup]: only the
+// cards near the viewport (plus the viewport's own cache extent) exist, and
+// the geometry is identical to measuring, because each card really is that
+// tall (both cards are a plain AspectRatio).
+//
+// The columns are pure stacks with a constant gap, so "two independent lists"
+// reproduces both placement rules exactly:
+//
+//   * [layoutBalancedMasonry] for the 帖子 waterfall (left column never the
+//     shorter one, ties to the left, deterministic);
+//   * [layoutGreedyMasonry] for the 全部 waterfall (classic staggered order).
 
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 
 import 'balanced_masonry.dart';
 
-/// Two-column masonry whose cards are placed by [layoutBalancedMasonry].
+/// Lazy two-column masonry sliver.
 ///
-/// Children are measured once per layout pass with a fixed column width, so
-/// their height comes from the cover's aspect ratio exactly like the staggered
-/// grid did. The placement is re-derived from those heights every pass, which
-/// makes it stable: the same children always produce the same layout.
-class BalancedMasonry extends MultiChildRenderObjectWidget {
-  const BalancedMasonry({
+/// [itemKeys] identify the items by content (not by position) so the lists can
+/// keep an element when the order changes; [estimatedHeightOf] must return the
+/// exact height the card will occupy at [columnWidth], derived from known data
+/// only — nothing here may build a card to find out how tall it is.
+class LazyMasonrySliver extends StatelessWidget {
+  const LazyMasonrySliver({
     super.key,
-    required super.children,
+    required this.itemKeys,
+    required this.estimatedHeightOf,
+    required this.itemBuilder,
+    this.balanced = false,
     this.columnGap = kMasonryColumnGap,
     this.rowGap = kMasonryRowGap,
     this.tieThreshold = kMasonryTieThreshold,
   });
 
+  /// One key per item, in display order.
+  final List<String> itemKeys;
+
+  /// Height of item [index] inside a column of [columnWidth] logical pixels.
+  final double Function(int index, double columnWidth) estimatedHeightOf;
+
+  /// Builds item [index] (the card itself, without padding).
+  final Widget Function(BuildContext context, int index) itemBuilder;
+
+  /// Balanced rule (帖子) instead of the staggered one (全部).
+  final bool balanced;
+
   final double columnGap;
   final double rowGap;
   final double tieThreshold;
 
-  @override
-  RenderBalancedMasonry createRenderObject(BuildContext context) =>
-      RenderBalancedMasonry(
-        columnGap: columnGap,
-        rowGap: rowGap,
-        tieThreshold: tieThreshold,
-      );
-
-  @override
-  void updateRenderObject(
-    BuildContext context,
-    RenderBalancedMasonry renderObject,
-  ) {
-    renderObject
-      ..columnGap = columnGap
-      ..rowGap = rowGap
-      ..tieThreshold = tieThreshold;
-  }
-}
-
-/// Shrink-wrapped balanced two-column grid with the same API as
-/// [HistoryMasonryGrid], so a group can switch its placement rule in one line.
-class BalancedMasonryGrid extends StatelessWidget {
-  const BalancedMasonryGrid({
-    super.key,
-    required this.itemKeys,
-    required this.itemBuilder,
-  });
-
-  final List<String> itemKeys;
-  final IndexedWidgetBuilder itemBuilder;
+  static const String _keyPrefix = 'lazy-masonry:';
 
   @override
   Widget build(BuildContext context) {
-    return BalancedMasonry(
-      // The key keeps the render object stable while only progress changes.
-      key: ValueKey(itemKeys.join('\u0000')),
-      children: [
-        for (var i = 0; i < itemKeys.length; i++)
-          KeyedSubtree(
-            key: ValueKey(itemKeys[i]),
-            child: itemBuilder(context, i),
-          ),
-      ],
+    return SliverLayoutBuilder(
+      builder: (BuildContext context, SliverConstraints constraints) {
+        final double width = constraints.crossAxisExtent;
+        final double columnWidth = ((width - columnGap) / 2).clamp(0.0, width);
+        final List<double> heights = <double>[
+          for (var i = 0; i < itemKeys.length; i++)
+            estimatedHeightOf(i, columnWidth),
+        ];
+        final MasonryLayout layout = balanced
+            ? layoutBalancedMasonry(
+                heights,
+                tieThreshold: tieThreshold,
+                rowGap: rowGap,
+              )
+            : layoutGreedyMasonry(heights, rowGap: rowGap);
+
+        final List<int> left = <int>[];
+        final List<int> right = <int>[];
+        for (var i = 0; i < heights.length; i++) {
+          (layout.slots[i].column == 0 ? left : right).add(i);
+        }
+
+        return SliverCrossAxisGroup(
+          slivers: <Widget>[
+            _column(context, left, leading: 0, trailing: columnGap / 2),
+            _column(context, right, leading: columnGap / 2, trailing: 0),
+          ],
+        );
+      },
     );
   }
-}
 
-class MasonryParentData extends ContainerBoxParentData<RenderBox> {}
-
-class RenderBalancedMasonry extends RenderBox
-    with
-        ContainerRenderObjectMixin<RenderBox, MasonryParentData>,
-        RenderBoxContainerDefaultsMixin<RenderBox, MasonryParentData> {
-  RenderBalancedMasonry({
-    required double columnGap,
-    required double rowGap,
-    required double tieThreshold,
-  }) : _columnGap = columnGap,
-       _rowGap = rowGap,
-       _tieThreshold = tieThreshold;
-
-  double get columnGap => _columnGap;
-  double _columnGap;
-  set columnGap(double value) {
-    if (_columnGap == value) return;
-    _columnGap = value;
-    markNeedsLayout();
-  }
-
-  double get rowGap => _rowGap;
-  double _rowGap;
-  set rowGap(double value) {
-    if (_rowGap == value) return;
-    _rowGap = value;
-    markNeedsLayout();
-  }
-
-  double get tieThreshold => _tieThreshold;
-  double _tieThreshold;
-  set tieThreshold(double value) {
-    if (_tieThreshold == value) return;
-    _tieThreshold = value;
-    markNeedsLayout();
-  }
-
-  @override
-  void setupParentData(RenderBox child) {
-    if (child.parentData is! MasonryParentData) {
-      child.parentData = MasonryParentData();
-    }
-  }
-
-  @override
-  void performLayout() {
-    final children = <RenderBox>[];
-    var child = firstChild;
-    while (child != null) {
-      children.add(child);
-      child = childAfter(child);
-    }
-    if (children.isEmpty) {
-      size = constraints.constrain(Size.zero);
-      return;
-    }
-
-    final width = constraints.maxWidth;
-    final columnWidth = ((width - columnGap) / 2).clamp(0.0, width);
-    for (final box in children) {
-      box.layout(
-        BoxConstraints.tightFor(width: columnWidth),
-        parentUsesSize: true,
-      );
-    }
-
-    final layout = layoutBalancedMasonry(
-      [for (final box in children) box.size.height],
-      tieThreshold: tieThreshold,
-      rowGap: rowGap,
+  Widget _column(
+    BuildContext context,
+    List<int> indices, {
+    required double leading,
+    required double trailing,
+  }) {
+    final Map<String, int> positions = <String, int>{
+      for (var position = 0; position < indices.length; position++)
+        '$_keyPrefix${itemKeys[indices[position]]}': position,
+    };
+    return SliverList(
+      delegate: SliverChildBuilderDelegate(
+        (BuildContext context, int position) {
+          final int index = indices[position];
+          return Padding(
+            key: ValueKey<String>('$_keyPrefix${itemKeys[index]}'),
+            padding: EdgeInsets.only(
+              left: leading,
+              right: trailing,
+              bottom: rowGap,
+            ),
+            child: itemBuilder(context, index),
+          );
+        },
+        childCount: indices.length,
+        findChildIndexCallback: (Key key) {
+          if (key is! ValueKey<String>) return null;
+          return positions[key.value];
+        },
+      ),
     );
-
-    for (var i = 0; i < children.length; i++) {
-      final slot = layout.slots[i];
-      final parentData = children[i].parentData as MasonryParentData;
-      parentData.offset = Offset(
-        slot.column == 0 ? 0 : columnWidth + columnGap,
-        slot.top,
-      );
-    }
-
-    size = constraints.constrain(Size(width, layout.height));
   }
-
-  @override
-  double computeMinIntrinsicWidth(double height) {
-    var widest = 0.0;
-    var child = firstChild;
-    while (child != null) {
-      final width = child.getMinIntrinsicWidth(height);
-      if (width > widest) widest = width;
-      child = childAfter(child);
-    }
-    return widest * 2 + columnGap;
-  }
-
-  @override
-  double computeMaxIntrinsicWidth(double height) {
-    var widest = 0.0;
-    var child = firstChild;
-    while (child != null) {
-      final width = child.getMaxIntrinsicWidth(height);
-      if (width > widest) widest = width;
-      child = childAfter(child);
-    }
-    return widest * 2 + columnGap;
-  }
-
-  @override
-  void paint(PaintingContext context, Offset offset) {
-    defaultPaint(context, offset);
-  }
-
-  @override
-  bool hitTestChildren(BoxHitTestResult result, {required Offset position}) =>
-      defaultHitTestChildren(result, position: position);
 }

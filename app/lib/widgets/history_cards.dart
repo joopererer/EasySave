@@ -5,7 +5,6 @@
 
 import 'package:flutter/material.dart';
 import 'package:photo_manager/photo_manager.dart';
-import 'package:photo_manager_image_provider/photo_manager_image_provider.dart';
 
 import '../core/models.dart';
 import '../services/gallery_locator_service.dart';
@@ -68,6 +67,40 @@ double aspectRatioFor(MediaItem? item) {
     return (w / h).clamp(0.5, 2.0);
   }
   return 0.75;
+}
+
+/// Padding the waterfall card keeps inside its column cell (back layer peek).
+const double kWaterfallCardInset = 5;
+
+/// Exact height of a [WaterfallPostCard] in a column [width] wide.
+///
+/// The card is a [AspectRatio] on the cover's own size, inset by
+/// [kWaterfallCardInset] on the right and bottom, so its height is known from
+/// the record before the card exists. The waterfall uses this instead of
+/// building a card to measure it (v1.11 batch 2: measuring off-screen cards
+/// flooded the local thumbnail pipeline).
+double waterfallCardHeight(HistoryRecord record, double width) {
+  final inner = (width - kWaterfallCardInset).clamp(0.0, double.infinity);
+  return inner / aspectRatioFor(coverItemFor(record)) + kWaterfallCardInset;
+}
+
+/// Exact height of an [AllMediaCard] in a column [width] wide.
+double allMediaCardHeight(MediaItem? item, double width) =>
+    width / aspectRatioFor(item);
+
+/// The media item an [AllMediaCard] shows for [itemIndex].
+MediaItem? allMediaItemFor(HistoryRecord record, int itemIndex) {
+  final post = record.toPost();
+  final is1Based = record.savedFiles.isNotEmpty &&
+      record.savedFiles.every((f) => f.itemIndex > 0);
+  final zeroBased = is1Based ? itemIndex - 1 : itemIndex;
+  if (zeroBased >= 0 && zeroBased < post.items.length) {
+    return post.items[zeroBased];
+  }
+  if (itemIndex >= 0 && itemIndex < post.items.length) {
+    return post.items[itemIndex];
+  }
+  return null;
 }
 
 /// Local-album thumbnail for a record (optionally a specific file). Falls back
@@ -1002,15 +1035,7 @@ class AllMediaCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final post = record.toPost();
-    final is1Based =
-        record.savedFiles.isNotEmpty && record.savedFiles.every((f) => f.itemIndex > 0);
-    final zeroBased = is1Based ? itemIndex - 1 : itemIndex;
-    final item = (zeroBased >= 0 && zeroBased < post.items.length)
-        ? post.items[zeroBased]
-        : ((itemIndex >= 0 && itemIndex < post.items.length)
-              ? post.items[itemIndex]
-              : null);
+    final item = allMediaItemFor(record, itemIndex);
     final radius = BorderRadius.circular(16);
     final badge = listTypeBadge(item);
 

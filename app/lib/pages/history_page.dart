@@ -35,7 +35,6 @@ import '../widgets/delete_records_sheet.dart';
 import '../widgets/download_sheet.dart';
 import '../widgets/gallery_browser.dart';
 import '../widgets/history_cards.dart';
-import '../widgets/history_masonry.dart';
 import 'download_queue_page.dart';
 import 'login_page.dart';
 import 'preview_page.dart';
@@ -1705,22 +1704,27 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
     );
   }
 
-  /// A masonry block for one group: a shrink-wrapped grid inside a
-  /// SliverToBoxAdapter so the sliver reports an exact height (avoids the
-  /// sliver-masonry extent estimate that caused the scroll to jump back and
-  /// stop short of the bottom). [itemKeys] identify the ordered items so the
-  /// grid lays out again whenever order or membership changes.
-  Widget _groupGrid({
+  /// A lazy masonry block for one group (v1.11 batch 2).
+  ///
+  /// The cards are laid out by two side-by-side sliver lists, so only the cards
+  /// near the viewport exist and only those ask for a local thumbnail. The
+  /// placement comes from [LazyMasonrySliver.estimatedHeightOf], i.e. from the
+  /// cover's aspect ratio — never from measuring an off-screen card.
+  /// [itemKeys] identify the ordered items so an element follows its content
+  /// when the order changes.
+  Widget _groupMasonry({
     required List<String> itemKeys,
+    required double Function(int index, double columnWidth) estimatedHeightOf,
     required Widget Function(BuildContext, int) itemBuilder,
     bool balanced = false,
   }) {
-    return SliverToBoxAdapter(
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 16),
-        child: balanced
-            ? BalancedMasonryGrid(itemKeys: itemKeys, itemBuilder: itemBuilder)
-            : HistoryMasonryGrid(itemKeys: itemKeys, itemBuilder: itemBuilder),
+    return SliverPadding(
+      padding: const EdgeInsets.symmetric(horizontal: 16),
+      sliver: LazyMasonrySliver(
+        itemKeys: itemKeys,
+        estimatedHeightOf: estimatedHeightOf,
+        itemBuilder: itemBuilder,
+        balanced: balanced,
       ),
     );
   }
@@ -1735,9 +1739,11 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
             historyGroupSliver(
               title: group.title,
               background: Theme.of(context).scaffoldBackgroundColor,
-              content: _groupGrid(
+              content: _groupMasonry(
               balanced: true,
               itemKeys: [for (final record in group.posts) 'wf-${record.id}'],
+              estimatedHeightOf: (index, columnWidth) =>
+                  waterfallCardHeight(group.posts[index], columnWidth),
               itemBuilder: (context, index) {
                 final record = group.posts[index];
                 final key = _postKey(record);
@@ -1854,10 +1860,17 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
             historyGroupSliver(
               title: group.title,
               background: Theme.of(context).scaffoldBackgroundColor,
-              content: _groupGrid(
+              content: _groupMasonry(
               itemKeys: [
                 for (final ref in group.media) 'all-${ref.record.id}-${ref.itemIndex}',
               ],
+              estimatedHeightOf: (index, columnWidth) {
+                final ref = group.media[index];
+                return allMediaCardHeight(
+                  allMediaItemFor(ref.record, ref.itemIndex),
+                  columnWidth,
+                );
+              },
               itemBuilder: (context, index) {
                 final ref = group.media[index];
                 final key = _mediaKey(ref.record, ref.itemIndex);

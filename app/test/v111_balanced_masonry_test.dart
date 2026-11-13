@@ -156,19 +156,44 @@ void main() {
     });
   });
 
-  group('render object', () {
+  group('staggered placement (全部)', () {
+    test('every card goes to the shorter column, ties to the left', () {
+      final layout = layoutGreedyMasonry([100, 200, 100, 100], rowGap: 0);
+      // 100 left, 200 right, 100 left (100 < 200), then a tie at 200/200 that
+      // the left column wins.
+      expect(columns(layout), [0, 1, 0, 0]);
+      expect(layout.mirrored, isFalse);
+      expect(layout.height, 300);
+      expect(layout.leftHeight, 300);
+      expect(layout.rightHeight, 200);
+    });
+
+    test('never mirrors, so the left column may end shorter', () {
+      final layout = layoutGreedyMasonry([20, 200], rowGap: 0);
+      expect(columns(layout), [0, 1]);
+      expect(layout.mirrored, isFalse);
+      expect(layout.leftHeight, 20);
+      expect(layout.rightHeight, 200);
+    });
+  });
+
+  group('lazy sliver', () {
     Widget host(List<double> heights) => MaterialApp(
           home: Scaffold(
             body: SizedBox(
               width: 200,
-              child: BalancedMasonry(
-                children: [
-                  for (var i = 0; i < heights.length; i++)
-                    SizedBox(
-                      key: ValueKey('card-$i'),
-                      height: heights[i],
+              child: CustomScrollView(
+                slivers: [
+                  LazyMasonrySliver(
+                    itemKeys: [for (var i = 0; i < heights.length; i++) 'card-$i'],
+                    estimatedHeightOf: (index, columnWidth) => heights[index],
+                    balanced: true,
+                    itemBuilder: (context, index) => SizedBox(
+                      key: ValueKey('card-$index'),
+                      height: heights[index],
                       child: const ColoredBox(color: Colors.grey),
                     ),
+                  ),
                 ],
               ),
             ),

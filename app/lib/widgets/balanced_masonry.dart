@@ -1,4 +1,4 @@
-// Placement rule for the 帖子 waterfall's two balanced columns (v1.11).
+// The placement rule for the 帖子 waterfall's two balanced columns (v1.11).
 //
 // Pure Dart: the placement is a function of the card heights alone, so the
 // same data always lays out the same way and a refresh cannot reshuffle cards
@@ -62,8 +62,7 @@ class MasonryLayout {
 ///
 /// [tieThreshold] and [rowGap] are parameters so the rule can be tested at its
 /// boundaries; production uses the constants above.
-MasonryLayout layoutBalancedMasonry(
-  List<double> heights, {
+MasonryLayout layoutBalancedMasonry(  List<double> heights, {
   double tieThreshold = kMasonryTieThreshold,
   double rowGap = kMasonryRowGap,
 }) {
@@ -105,5 +104,42 @@ MasonryLayout layoutBalancedMasonry(
     mirrored: mirrored,
     leftHeight: mirrored ? rightContent : leftContent,
     rightHeight: mirrored ? leftContent : rightContent,
+  );
+}
+
+/// Places the cards of one group into two columns the way a staggered masonry
+/// does: every card goes to the column that currently ends highest (the left
+/// one wins a tie) and nothing is mirrored.
+///
+/// This is the 全部 waterfall's rule; the 帖子 waterfall uses
+/// [layoutBalancedMasonry]. Both are computed from the card heights alone, so
+/// neither needs a child built to be measured.
+MasonryLayout layoutGreedyMasonry(
+  List<double> heights, {
+  double rowGap = kMasonryRowGap,
+}) {
+  var left = 0.0;
+  var right = 0.0;
+  final slots = <MasonrySlot>[];
+
+  for (final height in heights) {
+    if (left <= right) {
+      slots.add(MasonrySlot(column: 0, top: left, height: height));
+      left += height + rowGap;
+    } else {
+      slots.add(MasonrySlot(column: 1, top: right, height: height));
+      right += height + rowGap;
+    }
+  }
+
+  final leftContent = left > 0 ? left - rowGap : 0.0;
+  final rightContent = right > 0 ? right - rowGap : 0.0;
+
+  return MasonryLayout(
+    slots: slots,
+    height: leftContent > rightContent ? leftContent : rightContent,
+    mirrored: false,
+    leftHeight: leftContent,
+    rightHeight: rightContent,
   );
 }
