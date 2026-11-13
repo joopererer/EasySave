@@ -61,6 +61,7 @@ class SessionMediaDownload implements SessionTransfer {
     await _finished.future;
   }
 
+  @override
   Future<void> download({
     required String url,
     required File destination,

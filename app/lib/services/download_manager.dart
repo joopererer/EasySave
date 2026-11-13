@@ -101,6 +101,11 @@ bool isPolicyRejected(DownloadJob job) => job.errorCode == policyRejectedCode;
 /// reported as a content failure.
 const String networkFailureCode = 'NETWORK';
 
+/// Machine-readable mark of the developer "下一次下载模拟失败" switch. Final by
+/// design: the point is to exercise the failure path, so nothing may re-download
+/// the file behind the user's back (a manual retry clears it and downloads).
+const String simulatedFailureCode = 'SIMULATED';
+
 /// Transport failure causes that mean the network could not be reached. They
 /// are the same tokens [DownloadManager._failureCause] logs.
 const Set<String> kNetworkFailureCauses = {
@@ -146,6 +151,11 @@ String? networkCauseOf(Object error) {
   }
   return null;
 }
+
+/// Whether a retry of the same file cannot change anything: the request policy
+/// refused the URL, or the developer switch failed it on purpose.
+bool isFinalFailure(DownloadJob job) =>
+    isPolicyRejected(job) || job.errorCode == simulatedFailureCode;
 
 /// How often a file waiting for the network is looked at again while the system
 /// still reports a connection (a connection that breaks while the system thinks
@@ -386,6 +396,7 @@ String? shortFailureReason(DownloadJob job) {
   if (job.errorCode == storageFullCode || isStorageFullError(error)) {
     return '存储空间不足';
   }
+  if (job.errorCode == simulatedFailureCode) return '模拟失败';
   if (job.errorCode == networkFailureCode) return '网络不可用';
   final status = job.lastStatusCode ??
       int.tryParse(RegExp(r'HTTP (\d{3})').firstMatch(error)?.group(1) ?? '');
@@ -403,6 +414,11 @@ String? shortFailureReason(DownloadJob job) {
 /// reason appended ("第3项实况的静态图保存失败（来源信息写入失败）"). Never a raw
 /// exception such as `Bad state: …`.
 String userFacingFailureReason(DownloadJob job) {
+  // The simulated failure already reads exactly like the sentence the user
+  // should see; appending the reason again would stutter.
+  if (job.errorCode == simulatedFailureCode) {
+    return job.error ?? '下载失败（模拟失败）';
+  }
   final detail = shortFailureReason(job);
   final text = DownloadManager.failureTextFor(
     job,
@@ -1923,8 +1939,11 @@ class DownloadManager extends ChangeNotifier {
   }
 
   Future<void> _enqueueAttemptOnce(DownloadBatch batch, DownloadJob job) async {
-    if (isPolicyRejected(job)) {
-      job.state = JobState.failed;
+    if (isFinalFailure(job)) {
+      // A refused URL or a simulated failure is decided: nothing may put the
+      // file back in the queue behind the user's back. A manual retry clears
+      // the code first (see [retryJob]).
+      if (!job.isTerminal) job.state = JobState.failed;
       return;
     }
     if (batch.cancelledByDeletion ||
@@ -2880,6 +2899,9 @@ class DownloadManager extends ChangeNotifier {
     required bool isImage,
     MediaContentType? content,
   }) async {
+    // A file the developer switch failed stays failed until the user retries
+    // it: a late task or a reconciler pass must not sneak it into the album.
+    if (job.errorCode == simulatedFailureCode) return;
     int? sourceBytes;
     try {
       sourceBytes = await File(path).length();
@@ -2887,17 +2909,24 @@ class DownloadManager extends ChangeNotifier {
     // A hung album scan / metadata write / gallery copy must not leave the
     // job `active` forever (the batch would never finish).
     final work = (() async {
-        // Developer switch (v1.11 batch 2): the download finished, nothing has
-        // been written to the album yet. Failing here takes the normal failure
-        // path, so the batch, its message and its snapshot look exactly like a
-        // real failure — one file, one time.
-        if (DevDownloadFailure.take(batch.batchId)) {
+        // Developer switch (v1.11 batch 2, targeted at the plan's first file in
+        // batch 3): the download finished, nothing has been written to the
+        // album yet. The failure is final on purpose — the switch exists to see
+        // the failure state and its snapshot, so no automatic path may
+        // re-download the file afterwards. A manual retry clears the code and
+        // downloads normally.
+        if (DevDownloadFailure.take(
+          batch.batchId,
+          firstFile: batch.jobs.isNotEmpty && identical(batch.jobs.first, job),
+        )) {
           unawaited(DevLog.write(
             logTag, // i18n:ignore 日志
             'simulated_failure=1 ${job.key}',
           ));
-          job.error = '下载失败，请重试（模拟失败）';
-          job.state = JobState.failed;
+          job
+            ..errorCode = simulatedFailureCode
+            ..error = '下载失败（模拟失败）'
+            ..state = JobState.failed;
           return;
         }
         final file = File(path);
@@ -4114,8 +4143,9 @@ class DownloadManager extends ChangeNotifier {
           record.status == TaskStatus.notFound) {
         // A policy rejection is final (see [policyRejectedCode]): re-enqueueing
         // it produced the 220 repeated `REQUEST_HEADER_REJECTED` lines of build
-        // 46 and pushed the attempt counter past the displayed limit.
-        if (!isPolicyRejected(job) && job.attempts < retryCapFor(batch, job)) {
+        // 46 and pushed the attempt counter past the displayed limit. A
+        // simulated failure is final for the same reason (v1.11 batch 3).
+        if (!isFinalFailure(job) && job.attempts < retryCapFor(batch, job)) {
           await _enqueueAttempt(batch, job);
         } else {
           job.state = JobState.failed;
@@ -4195,6 +4225,8 @@ String failedJobLogLine(DownloadBatch batch, DownloadJob job) {
   final error = job.error ?? '';
   final reason = job.errorCode == storageFullCode
       ? storageFullCode
+      : job.errorCode == simulatedFailureCode
+      ? 'SIMULATED'
       : job.errorCode == networkFailureCode
       ? 'NETWORK'
       : job.errorCode == policyRejectedCode

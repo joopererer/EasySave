@@ -16,7 +16,6 @@
 //     never printed next to `result=ok`.
 
 import 'dart:io';
-import 'dart:typed_data';
 
 import 'package:background_downloader/background_downloader.dart';
 import 'package:easysave/core/dev_log.dart';

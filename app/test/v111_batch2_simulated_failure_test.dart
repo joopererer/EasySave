@@ -123,21 +123,21 @@ void main() {
   group('the switch', () {
     test('is off until armed and goes off again after one use', () {
       expect(DevDownloadFailure.armed, isFalse);
-      expect(DevDownloadFailure.take('batch-a'), isFalse);
+      expect(DevDownloadFailure.take('batch-a', firstFile: true), isFalse);
       DevDownloadFailure.arm();
       expect(DevDownloadFailure.armed, isTrue);
-      expect(DevDownloadFailure.take('batch-a'), isTrue);
+      expect(DevDownloadFailure.take('batch-a', firstFile: true), isTrue);
       expect(DevDownloadFailure.armed, isFalse,
           reason: 'one shot, then it turns itself off');
-      expect(DevDownloadFailure.take('batch-a'), isFalse);
+      expect(DevDownloadFailure.take('batch-a', firstFile: true), isFalse);
     });
 
     test('only the next batch is affected, not another one', () {
       DevDownloadFailure.arm();
-      expect(DevDownloadFailure.take('first-batch'), isTrue);
+      expect(DevDownloadFailure.take('first-batch', firstFile: true), isTrue);
       DevDownloadFailure.arm();
-      expect(DevDownloadFailure.take('batch-b'), isTrue);
-      expect(DevDownloadFailure.take('batch-c'), isFalse);
+      expect(DevDownloadFailure.take('batch-b', firstFile: true), isTrue);
+      expect(DevDownloadFailure.take('batch-c', firstFile: true), isFalse);
     });
 
     test('a restart starts disarmed (in memory only)', () {
@@ -145,7 +145,7 @@ void main() {
       // A new process has no state at all; resetForTesting models that.
       DevDownloadFailure.resetForTesting();
       expect(DevDownloadFailure.armed, isFalse);
-      expect(DevDownloadFailure.take('batch-a'), isFalse);
+      expect(DevDownloadFailure.take('batch-a', firstFile: true), isFalse);
     });
   });
 
@@ -171,8 +171,8 @@ void main() {
     await manager.importFileForTesting(batch, batch.jobs[0], first.path);
     final failed = batch.jobs[0];
     expect(failed.state, JobState.failed);
-    expect(failed.error, contains('模拟失败'));
-    expect(failed.error, contains('请重试'), reason: 'normal wording, plus the tag');
+    expect(failed.error, '下载失败（模拟失败）');
+    expect(failed.errorCode, simulatedFailureCode);
     expect(saved, 0, reason: 'nothing may reach the album');
     expect(DevDownloadFailure.armed, isFalse);
     expect(
