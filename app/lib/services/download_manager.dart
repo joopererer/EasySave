@@ -24,6 +24,7 @@ import '../metadata/metadata_service.dart';
 import '../metadata/site_provenance.dart';
 import 'backup/local_auto_backup.dart';
 import 'backup/saf_service.dart';
+import 'download_failure_snapshots.dart';
 import 'gallery_locator_service.dart';
 import 'history_db.dart';
 import 'history_io.dart';
@@ -1645,8 +1646,13 @@ class DownloadManager extends ChangeNotifier {
     _batches[batchId] = batch;
     notifyListeners();
     onBatchReady?.call(batch);
+    // Remember where this batch starts in the log so a failed batch can save
+    // the lines around it (v1.11 batch 1).
+    _batchLogStarts[batchId] = DevLog.totalLines;
     _log('batch start id=$batchId source=${batch.source} post=${batch.postId}');
-    unawaited(_refreshNotification(batch));
+    if (_batchLogStarts.length > 64) {
+      _batchLogStarts.remove(_batchLogStarts.keys.first);
+    }    unawaited(_refreshNotification(batch));
     await _persist(batch);
     // The placeholder is a convenience; the download must still start. The
     // terminal history write creates the record if this one cannot.
@@ -3078,6 +3084,12 @@ class DownloadManager extends ChangeNotifier {
 
   final _historyRetries = <String, Timer>{};
 
+  /// Log line index per batch, taken when the batch started.
+  final _batchLogStarts = <String, int>{};
+
+  /// Batches that already wrote a failure snapshot.
+  final _failureSnapshotsTaken = <String>{};
+
   void _scheduleHistoryRetry(DownloadBatch batch) {
     _historyRetries[batch.batchId]?.cancel();
     _historyRetries[batch.batchId] = Timer(historyRetryDelay, () {
@@ -3095,6 +3107,18 @@ class DownloadManager extends ChangeNotifier {
     required bool recovered,
   }) async {
     if (!batch.isTerminal) return;
+    // v1.11 batch 1: a batch that ended with failures saves the log around it
+    // to the app's private directory. This never affects the download itself.
+    if (batch.failedCount > 0 && _failureSnapshotsTaken.add(batch.batchId)) {
+      unawaited(DownloadFailureSnapshots.capture(
+        batchId: batch.batchId,
+        platform: batch.platform,
+        postId: batch.postId,
+        failed: batch.failedCount,
+        total: batch.jobs.length,
+        startLine: _batchLogStarts.remove(batch.batchId),
+      ));
+    }
     await DownloadClaims.release(batch.batchId);
     if (batch.cancelledByDeletion ||
         await DownloadClaims.isCancelled(batch.batchId)) {

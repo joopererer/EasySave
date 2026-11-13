@@ -20,6 +20,7 @@ import '../services/settings.dart';
 import '../services/tile_service.dart';
 import '../services/update_service.dart';
 import 'backup_restore_page.dart';
+import 'failure_log_page.dart';
 import 'login_page.dart';
 
 class MinePage extends StatefulWidget {
@@ -982,6 +983,13 @@ class _MinePageState extends State<MinePage> with WidgetsBindingObserver {
                   title: const Text('导出日志'),
                   subtitle: const Text('调试用：把脱敏后的运行日志复制到可读取目录'),
                   onTap: _exportLog,
+                ),
+                ListTile(
+                  key: const Key('failure_logs_entry'),
+                  title: const Text('下载失败日志'),
+                  subtitle: const Text('下载批次失败时自动保存的脱敏日志，可查看与导出'),
+                  trailing: const Icon(Icons.chevron_right),
+                  onTap: () => openFailureLogs(context),
                 ),
                 ListTile(title: const Text('清空日志'), onTap: _clearLog),
                 ListTile(title: const Text('版本号'), subtitle: Text(_version)),
