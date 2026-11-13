@@ -7,6 +7,27 @@ This file documents notable user-facing changes following [Keep a Changelog](htt
 
 ## [Unreleased]
 
+### 新增 / Added
+
+- 历史页「创作者」模式右上角新增排序菜单：帖子数、最近保存时间、名称，每种可升序或降序；默认「最近保存」降序，选择会记住。排序只在已加载的分组数据上做内存排序，不额外查询数据库。名称排序规则固定：忽略大小写、未知作者排最后、数字按数值（`2` 在 `10` 前）、其后依次为拉丁字母、中日韩字符（按 Unicode 码位）、其他符号与 emoji；同值时按最近保存降序。
+  The history page's 创作者 view has its own sort menu: post count, latest save time and name, each ascending or descending, defaulting to latest-save descending and remembered across launches. Ordering is an in-memory sort over the groups already loaded, with no extra database query. Names follow a fixed rule: case-insensitive, unknown authors last, digits compared as numbers (`2` before `10`), then Latin, then CJK by code point, then symbols and emoji; ties fall back to newest save.
+- 帖子模式瀑布流改为平衡布局：每张卡片放进当前较矮的一列，两列高度差不超过 8dp 视为打平并放左列；分组结束时若右列更长则整组左右对调，保证左列不短于右列。放置只由卡片高度决定，滚动或刷新不会重排已经显示的卡片。
+  The 帖子 waterfall now uses a balanced layout: each card goes into the shorter column, a difference of at most 8dp counts as a tie and goes left, and a group that would end with the right column taller is mirrored so the left column is never the shorter one. Placement depends only on card heights, so scrolling or refreshing never reshuffles cards already on screen.
+- 备份会记录外部文件夹自动备份的开关与文件夹显示名（不含授权本身）。恢复这类备份后会询问是否继续自动备份到该文件夹，确认后由系统文件夹选择器重新授权，授权成功才开启；旧备份照常恢复、不弹提示。
+  Backups now record the automatic folder-backup switch and the folder's display name (never the grant itself). Restoring such a backup asks whether to keep backing up to that folder; the system folder picker re-authorises it and only a successful pick switches it on. Older backups restore as before, without a prompt.
+- 某次下载批次出现失败时，自动把该批次前 200 行到结束的日志另存为脱敏快照（App 私有目录，最多 10 份）；「我的 → 日志」新增「下载失败日志」，可查看与导出这些快照。
+  A download batch that ends with failures now saves a redacted snapshot of the log around it (200 lines before the batch through its end, app private directory, at most 10 files). 「我的 → 日志」 gains 「下载失败日志」 to view and export them.
+
+### 修复 / Fixed
+
+- 下载失败日志的 `candidate=` 字段改为候选序号/候选总数，不再出现 `candidate=3/1`、`candidate=11/4`（此前分子是重试次数）；重试次数单独记为 `attempts=`。
+  The `candidate=` field of the download log now shows candidate position over total candidates instead of the retry counter, so `candidate=3/1` and `candidate=11/4` can no longer appear; the retry count is logged separately as `attempts=`.
+
+### 诊断 / Diagnostics
+
+- 本机缩略图超时日志补充缩略图 key、等待时长、超时阈值、更早未返回的请求数及其最长等待和在途请求数，并区分「排队超时」与「系统调用超时」；每 10 秒输出一行统计（成功/超时/平均耗时/在途）。加载、超时与回退行为不变。
+  Local thumbnail timeout logs now carry the thumbnail key, the wait, the timeout, how many older requests are still unresolved and for how long, and the in-flight count, and separate queue timeouts from system call timeouts; a one-line summary every 10 seconds reports successes, timeouts, average time and in-flight requests. Loading, timeout and fallback behaviour is unchanged.
+
 ## [1.10.3] - 2026-11-12
 
 ### 修复 / Fixed
