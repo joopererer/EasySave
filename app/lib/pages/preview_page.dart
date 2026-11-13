@@ -57,6 +57,7 @@ class PreviewPage extends StatefulWidget {
     required this.post,
     this.rawImages = const [],
     this.onSaved,
+    this.initialSelection,
   });
 
   final ParsedPost post;
@@ -65,6 +66,12 @@ class PreviewPage extends StatefulWidget {
   /// Called once a save (or local association) succeeds, so the caller can
   /// clear the paste box.
   final VoidCallback? onSaved;
+
+  /// Item indices to tick on open. Null (the default) ticks everything, which
+  /// is what a fresh parse wants; a re-download of missing items passes only
+  /// those, so the user can still adjust the selection before saving
+  /// (v1.11 batch 4).
+  final Set<int>? initialSelection;
 
   /// Rebuild a post from a stored history record (shared by the history
   /// list and the home "recent" cards).
@@ -77,11 +84,16 @@ class PreviewPage extends StatefulWidget {
     required ParsedPost post,
     List<RawImageEntry> rawImages = const [],
     VoidCallback? onSaved,
+    Set<int>? initialSelection,
   }) {
     return MaterialPageRoute<void>(
       settings: RouteSettings(name: kPreviewRouteName, arguments: post.id),
-      builder: (_) =>
-          PreviewPage(post: post, rawImages: rawImages, onSaved: onSaved),
+      builder: (_) => PreviewPage(
+        post: post,
+        rawImages: rawImages,
+        onSaved: onSaved,
+        initialSelection: initialSelection,
+      ),
     );
   }
 
@@ -89,9 +101,15 @@ class PreviewPage extends StatefulWidget {
     required ParsedPost post,
     List<RawImageEntry> rawImages = const [],
     VoidCallback? onSaved,
+    Set<int>? initialSelection,
   }) async {
     if (PreviewRouteObserver.instance.revealPreview(post.id)) return;
-    await Navigator.of(context).push(route(post: post, rawImages: rawImages, onSaved: onSaved));
+    await Navigator.of(context).push(route(
+      post: post,
+      rawImages: rawImages,
+      onSaved: onSaved,
+      initialSelection: initialSelection,
+    ));
   }
 
   @override
@@ -100,9 +118,22 @@ class PreviewPage extends StatefulWidget {
 
 class _PreviewPageState extends State<PreviewPage> {
   late ParsedPost _post = widget.post;
-  late final List<int> _order = [
-    for (var i = 0; i < _post.items.length; i++) i,
-  ];
+  late final List<int> _order = _initialOrder();
+
+  /// Everything is ticked by default; a re-download of missing items passes the
+  /// indices to tick instead (v1.11 batch 4).
+  List<int> _initialOrder() {
+    final preselected = widget.initialSelection;
+    final all = [for (var i = 0; i < widget.post.items.length; i++) i];
+    if (preselected == null) return all;
+    final wanted = <int>[
+      for (final index in all)
+        if (preselected.contains(index)) index,
+    ];
+    // An empty result would leave the 保存 button dead on a page the user just
+    // asked to resave: fall back to the whole post.
+    return wanted.isEmpty ? all : wanted;
+  }
   Set<int> _downloaded = {};
   Map<int, AssetEntity> _localAssets = {};
   Map<int, AssetEntity> _localMotions = {};
