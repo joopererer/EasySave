@@ -39,6 +39,11 @@ This file documents notable user-facing changes following [Keep a Changelog](htt
 - 已保存但本机无法解码的 HEIC 会在历史卡片上标注「本机无法显示此格式」，点开后可「重新下载」：先确认再删除相册中的旧文件，并按新规则替换该项；检测为后台只读、带超时、一次一个文件。
   A saved HEIC this device cannot decode is marked 「本机无法显示此格式」 on its history card, and opening it offers 「重新下载」: the old album file is deleted only after the user confirms, and the item is replaced under the new rules. The detection is a background, read-only, one-file-at-a-time pass with a timeout.
 
+- Instagram：当页面未返回完整媒体（登录失效或被限制）时，解析不再把网页分享封面（og:image）当作帖子媒体交出；reel/电视页或 /p/ 页仅拿到封面时返回错误，提示在“我的”页检查 Instagram 登录后重试；只有确认公开单图只能通过 og_meta 获取的情况才会先停止并报告，再决定是否标注“非原图”。
+  When Instagram returns no complete media (login expired or limited), the parser no longer hands out the OpenGraph share cover (og:image) as the post media: a reel/video page or /p/ page with only a cover now fails and prompts the user to re-check Instagram login in "My", instead of presenting one cover as the whole post. Public single-image posts that can only be obtained through og_meta are reported first for a decision on keeping them marked as "non-original".
+- 新增解析诊断日志 `[IgParse] source=api|graphql|embedded_json|og_meta mediaType=image|video|carousel items=N loginWall=0|1`，可区分数据来自接口、嵌入 JSON 还是 OpenGraph 元数据；`hook=probe` 对 Instagram 是无效探针，已改为空探针，不再把它当成 mismatch 记录。
+  Adds parse diagnostics `[IgParse] ...` telling whether Instagram data came from the API/GraphQL, embedded JSON or OpenGraph meta; `hook=probe` is an invalid probe for Instagram and is now a null probe, no longer recorded as a mismatch.
+
 ## [1.10.2] - 2026-11-12
 
 ### 修复 / Fixed

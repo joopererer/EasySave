@@ -12,6 +12,7 @@ export type ParseErrorCode =
   | "AGE_RESTRICTED"
   | "PROTECTED"
   | "PRIVATE_OR_UNAVAILABLE"
+  | "MEDIA_UNAVAILABLE"
   | "BLOCKED"
   | "INVALID_PAGE"
   | "UNSUPPORTED_URL"

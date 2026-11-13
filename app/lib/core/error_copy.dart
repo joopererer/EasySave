@@ -42,6 +42,11 @@ ErrorCopy errorCopyFor(String code) {
         message: '该内容需要你的 X 账号先设置出生日期（年龄）后才能查看',
         action: ErrorAction.backHome,
       );
+    case ParseErrorCode.mediaUnavailable:
+      return const ErrorCopy(
+        message: '未能获取该 Instagram 媒体，请在“我的”页检查 Instagram 登录后重试',
+        action: ErrorAction.goLogin,
+      );
     case ParseErrorCode.ageRestricted:
       return const ErrorCopy(
         message: '该帖子有年龄限制，需要登录已完成年龄验证的 X 账号才能查看',

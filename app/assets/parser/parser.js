@@ -779,6 +779,75 @@ var EasySaveParser = (() => {
   var SHORTCODE_PATTERN = /\/(?:p|reels?|tv)\/([A-Za-z0-9-_]+)/;
   var SHORTCODE_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
   var DATA_SJS_PATTERN = /<script\b[^>]*\bdata-sjs[^>]*>(\{.+?\})<\/script>/gs;
+  function ogMetaOf(html) {
+    const og = {};
+    const re = /<meta\b[^>]*\bproperty=["']og:([a-z_]+)["'][^>]*\bcontent=["']([^"']*)["']/gi;
+    let match;
+    while ((match = re.exec(html)) !== null) {
+      const key = match[1];
+      const value = match[2];
+      if (key === "type") og.type = value;
+      else if (key === "image") og.image = value;
+      else if (key === "video") og.video = value;
+    }
+    return og;
+  }
+  function hasLoginWall(html) {
+    return /age-restricted|sensitive content|see post|查看帖子|了解详情|成人内容|log in to|登入以继续|请先登录/i.test(html);
+  }
+  function videoPage(pageUrl, og) {
+    try {
+      const { pathname } = new URL(pageUrl);
+      if (/(^|\/)(reels?|tv)(\/|$)/i.test(pathname)) return true;
+    } catch {
+    }
+    return (og.type ?? "").includes("video") || og.video != null;
+  }
+  function mediaTypeOf(items) {
+    if (items.some((item) => item.type === "video")) return "video";
+    if (items.length > 1) return "carousel";
+    return "image";
+  }
+  function igParseSourceOfProduct(product) {
+    const typename = typeof product["__typename"] === "string" ? product["__typename"] : "";
+    return /^Graph(I|Video|Sidecar)/.test(typename) ? "graphql" : "api";
+  }
+  function igParseLogLine(log) {
+    return `[IgParse] source=${log.source} mediaType=${log.mediaType} items=${log.items} loginWall=${log.loginWall}`;
+  }
+  function ogImageOnlyFailure(html, pageUrl) {
+    const og = ogMetaOf(html);
+    if (!og.image || og.video) return void 0;
+    const wall = hasLoginWall(html);
+    if (videoPage(pageUrl, og)) {
+      return wall ? { code: "LOGIN_REQUIRED", message: "\u8BE5\u89C6\u9891\u9700\u8981\u767B\u5F55 Instagram \u540E\u624D\u80FD\u67E5\u770B\u3002" } : {
+        code: "MEDIA_UNAVAILABLE",
+        message: "\u672A\u80FD\u83B7\u53D6\u89C6\u9891\uFF0C\u8BF7\u68C0\u67E5 Instagram \u767B\u5F55\u540E\u91CD\u8BD5\u3002"
+      };
+    }
+    if (/\/p\//i.test(pageUrl)) {
+      return wall ? { code: "LOGIN_REQUIRED", message: "\u8BE5\u5E16\u5B50\u9700\u8981\u767B\u5F55 Instagram \u540E\u624D\u80FD\u67E5\u770B\u3002" } : {
+        code: "MEDIA_UNAVAILABLE",
+        message: "\u672A\u80FD\u83B7\u53D6\u56FE\u7247\uFF0C\u8BF7\u68C0\u67E5 Instagram \u767B\u5F55\u540E\u91CD\u8BD5\u3002"
+      };
+    }
+    return void 0;
+  }
+  var MEDIA_UNAVAILABLE_CAPABILITY = "media_unavailable";
+  var MEDIA_UNAVAILABLE_LOGIN_FALLBACK = {
+    code: "LOGIN_REQUIRED",
+    message: "\u9700\u8981\u767B\u5F55 Instagram \u540E\u624D\u80FD\u67E5\u770B\u8BE5\u5185\u5BB9\uFF0C\u8BF7\u5728\u201C\u6211\u7684\u201D\u9875\u767B\u5F55\u540E\u91CD\u8BD5\u3002"
+  };
+  function gateMediaUnavailable(result, caps) {
+    if (!isRecord2(result) || result["ok"] !== false) return result;
+    const error = result["error"];
+    if (!isRecord2(error) || error["code"] !== "MEDIA_UNAVAILABLE") return result;
+    if (declaresMediaUnavailable(caps)) return result;
+    return { ...result, error: { ...MEDIA_UNAVAILABLE_LOGIN_FALLBACK } };
+  }
+  function declaresMediaUnavailable(caps) {
+    return Array.isArray(caps) && caps.some((capability) => capability === MEDIA_UNAVAILABLE_CAPABILITY);
+  }
   function isRecord2(value) {
     return typeof value === "object" && value !== null;
   }
@@ -886,6 +955,7 @@ var EasySaveParser = (() => {
     const shortcode = shortcodeMatch ? shortcodeMatch[1] : void 0;
     const mediaId = shortcode ? shortcodeToMediaId(shortcode) : void 0;
     let product;
+    let source = "api";
     if (mediaId) {
       DATA_SJS_PATTERN.lastIndex = 0;
       let match;
@@ -897,7 +967,10 @@ var EasySaveParser = (() => {
           continue;
         }
         product = findProduct(parsed, mediaId);
-        if (product) break;
+        if (product) {
+          source = "embedded_json";
+          break;
+        }
       }
     }
     if (!product && shortcode) {
@@ -906,13 +979,28 @@ var EasySaveParser = (() => {
         const cached = g?.["__easysaveIgProducts"];
         if (cached && isRecord2(cached[shortcode])) {
           product = cached[shortcode];
+          source = igParseSourceOfProduct(product);
         }
       } catch (_) {
       }
     }
     const looksLikeInstagram = /instagram\.com|instagr\.am/.test(pageUrl) || /instagram\.com|instagr\.am|data-sjs/.test(html.slice(0, 2e4));
+    const loginWall = hasLoginWall(html) ? 1 : 0;
     if (!product || !shortcode) {
       if (looksLikeInstagram) {
+        const ogOnly = ogImageOnlyFailure(html, pageUrl);
+        if (ogOnly) {
+          const og = ogMetaOf(html);
+          console.info?.(
+            igParseLogLine({
+              source: "og_meta",
+              mediaType: videoPage(pageUrl, og) ? "video" : "image",
+              items: 0,
+              loginWall
+            })
+          );
+          return { ok: false, error: ogOnly };
+        }
         const isAgeGated = /sensitive content|age-restricted|查看帖子|了解详情|see post|成人内容|sensitive_content/i.test(html);
         return {
           ok: false,
@@ -927,7 +1015,18 @@ var EasySaveParser = (() => {
         error: { code: "INVALID_PAGE", message: "Not an Instagram post page." }
       };
     }
-    return buildPostFromProduct(product, shortcode, smallThumbnail);
+    const result = buildPostFromProduct(product, shortcode, smallThumbnail);
+    if (result.ok) {
+      console.info?.(
+        igParseLogLine({
+          source,
+          mediaType: mediaTypeOf(result.data.items),
+          items: result.data.items.length,
+          loginWall
+        })
+      );
+    }
+    return result;
   }
   function buildPostFromProduct(product, shortcode, smallThumbnail = false) {
     for (const line of probeInstagramAiFields(product)) console.info?.("EasySaveIgAiProbe:" + line);
@@ -1753,6 +1852,7 @@ var EasySaveParser = (() => {
   // src/parser-modules.ts
   var page = () => window;
   var failure2 = (code, message) => ({ code, message });
+  var appFacing = (moduleId, result, caps) => moduleId === "instagram" ? gateMediaUnavailable(result, caps) : result;
   var onXPage = () => {
     try {
       return /(?:^|\.)(?:x|twitter)\.com$/i.test(location.hostname);
@@ -1842,6 +1942,7 @@ var EasySaveParser = (() => {
         }
         return false;
       },
+      probe: () => null,
       classify: (c) => c.error?.code === "LOGIN_REQUIRED" && c.loggedIn ? failure2("PRIVATE_OR_UNAVAILABLE", /敏感内容|年龄限制/.test(c.error.message || "") ? c.error.message : "\u672A\u80FD\u8BFB\u53D6\u5E16\u5B50\u5185\u5BB9\uFF08\u53EF\u80FD\u5305\u542B\u53D7\u9650\u5185\u5BB9\u6216\u5DF2\u88AB\u5220\u9664\uFF09") : c.error
     },
     tiktok: {
@@ -1878,10 +1979,10 @@ var EasySaveParser = (() => {
           if (result.ok) return output(result);
         } catch (_) {
         }
-        return output(JSON.parse(parse(document.documentElement.outerHTML, context.url, moduleId, context.site.download?.thumbnailScenes, context.site.download?.thumbnailVariant === "smallestCandidate")));
+        return output(appFacing(moduleId, JSON.parse(parse(document.documentElement.outerHTML, context.url, moduleId, context.site.download?.thumbnailScenes, context.site.download?.thumbnailVariant === "smallestCandidate")), context.caps));
       }
       case "parse":
-        return output(JSON.parse(parse(context.input || "", context.url, moduleId, context.site.download?.thumbnailScenes, context.site.download?.thumbnailVariant === "smallestCandidate")));
+        return output(appFacing(moduleId, JSON.parse(parse(context.input || "", context.url, moduleId, context.site.download?.thumbnailScenes, context.site.download?.thumbnailVariant === "smallestCandidate")), context.caps));
       case "classify": {
         const error = context.error;
         return JSON.stringify({ value: error?.code === "PRIVATE_OR_UNAVAILABLE" && context.site.auth.mode !== "none" && !context.loggedIn ? failure2("LOGIN_REQUIRED", "\u53EF\u80FD\u9700\u8981\u767B\u5F55" + context.site.displayName) : error });
@@ -1935,22 +2036,6 @@ var EasySaveParser = (() => {
         width: rect?.width ? Math.round(rect.width) : void 0,
         height: rect?.height ? Math.round(rect.height) : void 0
       });
-    }
-    if (items.length === 0) {
-      const ogVideo = doc.querySelector('meta[property="og:video"]')?.getAttribute("content");
-      const ogImage = doc.querySelector('meta[property="og:image"]')?.getAttribute("content");
-      if (ogVideo) {
-        items.push({
-          type: "video",
-          url: ogImage || ogVideo,
-          videoUrl: ogVideo
-        });
-      } else if (ogImage) {
-        items.push({
-          type: "image",
-          url: ogImage
-        });
-      }
     }
     if (items.length === 0) return void 0;
     let caption = "";
@@ -2008,14 +2093,34 @@ var EasySaveParser = (() => {
     if (moduleId === "instagram") {
       const shortcode = shortcodeFromUrl(url);
       if (shortcode && window.__easysaveIgProducts?.[shortcode]) {
-        return JSON.stringify(
-          buildPostFromProduct(window.__easysaveIgProducts[shortcode], shortcode, smallThumbnail)
-        );
+        const product = window.__easysaveIgProducts[shortcode];
+        const result = buildPostFromProduct(product, shortcode, smallThumbnail);
+        if (result.ok) {
+          console.info?.(
+            igParseLogLine({
+              source: igParseSourceOfProduct(product),
+              mediaType: mediaTypeOf(result.data.items),
+              items: result.data.items.length,
+              loginWall: hasLoginWall(document.documentElement.outerHTML) ? 1 : 0
+            })
+          );
+        }
+        return JSON.stringify(result);
       }
       const res = parseInstagram(html, url, smallThumbnail);
       if (res.ok) return JSON.stringify(res);
       const domRes = parseInstagramFromDom(document, url);
-      if (domRes && domRes.ok) return JSON.stringify(domRes);
+      if (domRes && domRes.ok) {
+        console.info?.(
+          igParseLogLine({
+            source: "og_meta",
+            mediaType: mediaTypeOf(domRes.data.items),
+            items: domRes.data.items.length,
+            loginWall: hasLoginWall(document.documentElement.outerHTML) ? 1 : 0
+          })
+        );
+        return JSON.stringify(domRes);
+      }
       return JSON.stringify(res);
     }
     if (moduleId === "x") {

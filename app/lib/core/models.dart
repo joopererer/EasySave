@@ -11,6 +11,9 @@ abstract final class ParseErrorCode {
   static const ageRestricted = 'AGE_RESTRICTED';
   static const protectedAccount = 'PROTECTED';
   static const privateOrUnavailable = 'PRIVATE_OR_UNAVAILABLE';
+  /// The post exists but the media itself could not be extracted (e.g. only an
+  /// OpenGraph cover was on a login-gated page); the user should re-login.
+  static const mediaUnavailable = 'MEDIA_UNAVAILABLE';
   static const blocked = 'BLOCKED';
   static const invalidPage = 'INVALID_PAGE';
   static const postNotFound = 'POST_NOT_FOUND';
