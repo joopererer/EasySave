@@ -40,13 +40,12 @@ GalleryBrowserItem _item(int index,
     );
 
 class _LocalAsset extends AssetEntity {
-  _LocalAsset({required String id, required this.path})
+  _LocalAsset({required super.id, required this.path})
       : super(
-          id: id,
           typeInt: AssetType.image.index,
           width: 1080,
           height: 1440,
-          title: '$id.jpg',
+          title: 'local.jpg',
         );
 
   final String path;
