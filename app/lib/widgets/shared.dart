@@ -24,10 +24,15 @@ class GradientButton extends StatelessWidget {
     super.key,
     required this.label,
     required this.onPressed,
+    this.height,
   });
 
   final String label;
   final VoidCallback? onPressed;
+
+  /// Fixed height for the bars that must line up with their neighbours (the
+  /// viewer's actions are 48 dp tall); null keeps the padded default.
+  final double? height;
 
   @override
   Widget build(BuildContext context) {
@@ -45,7 +50,10 @@ class GradientButton extends StatelessWidget {
             onTap: onPressed,
             borderRadius: const BorderRadius.all(Radius.circular(999)),
             child: Container(
-              padding: const EdgeInsets.symmetric(vertical: 14),
+              height: height,
+              padding: height == null
+                  ? const EdgeInsets.symmetric(vertical: 14)
+                  : EdgeInsets.zero,
               alignment: Alignment.center,
               child: Text(
                 label,

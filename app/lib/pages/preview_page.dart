@@ -746,6 +746,7 @@ class _PreviewPageState extends State<PreviewPage> {
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 4, 16, 16),
             child: GradientButton(
+              height: 48,
               label: _saving ? '处理中…' : '保存到相册（${_order.length}）',
               onPressed: _selected && !_saving ? _save : null,
             ),
