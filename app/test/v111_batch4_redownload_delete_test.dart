@@ -99,7 +99,7 @@ void main() {
       );
       await tester.pump();
       expect(find.text('保存到相册（2）'), findsOneWidget);
-      expect(find.text('2/4'), findsNothing,
+      expect(find.text('2 / 4'), findsNothing,
           reason: 'the badge counts the selected order, not the item slot');
       await tester.pumpWidget(const SizedBox.shrink());
     });

@@ -133,7 +133,10 @@ Set<int> initialGallerySelection(Set<int>? selectedIndices) =>
 /// The browser's own numbering counts what it shows — items on this device and
 /// the "不在本机" placeholders — so a delete shrinks it at once. The post's
 /// numbering never moves: it is where the item sits in the original post, which
-/// is what makes `1/3 (2/8)` useful after the first picture was deleted.
+/// is what makes `1 / 3  2 / 8` useful after the first picture was deleted.
+/// Both are always shown, even when they agree: the post's place is what the
+/// user came for, so hiding it would only make the two numbers appear and
+/// disappear as pages change.
 class BrowserPosition {
   const BrowserPosition({
     required this.position,
@@ -155,16 +158,15 @@ class BrowserPosition {
   /// The post's item total as last parsed.
   final int postTotal;
 
-  /// The post's numbering is only shown when it says something the browser's
-  /// own numbering cannot: `1/3` alone instead of `1/3 (1/3)`.
-  bool get showsOrigin => !(postPosition == position && postTotal == total);
+  /// The post's numbering is always shown: the pill on the right of the
+  /// counter reads `2 / 8`, or `— / 8` when the post no longer reaches the
+  /// item's place.
+  String get label => '$position / $total';
 
-  String get label => '$position/$total';
+  String get originLabel => '${postPosition?.toString() ?? '—'} / $postTotal';
 
-  String get originLabel => '${postPosition?.toString() ?? '—'}/$postTotal';
-
-  /// The whole counter as one string, e.g. `1/3 (2/8)`.
-  String get fullLabel => showsOrigin ? '$label ($originLabel)' : label;
+  /// Both numbers as one string (semantics only), e.g. `1 / 3  2 / 8`.
+  String get fullLabel => '$label  $originLabel';
 }
 
 /// The two numbering systems of one viewer page (v1.11 batch 6).
@@ -1161,26 +1163,57 @@ class _GalleryBrowserPageState extends State<GalleryBrowserPage> {
                             crossAxisAlignment: CrossAxisAlignment.center,
                             mainAxisSize: MainAxisSize.min,
                             children: [
-                              Text.rich(
-                                TextSpan(
-                                  text: _position.label,
-                                  children: [
-                                    if (_position.showsOrigin)
-                                      TextSpan(
-                                        text: ' (${_position.originLabel})',
-                                        style: const TextStyle(
-                                          color: Colors.white54,
-                                          fontSize: 12,
-                                          fontWeight: FontWeight.normal,
+                              // Both numbers, always: `1 / 3` then the post's
+                              // own place in a translucent stadium pill. The
+                              // pair scales down together on the narrowest
+                              // screens so the top bar never overflows.
+                              Semantics(
+                                container: true,
+                                label: _position.fullLabel,
+                                child: ExcludeSemantics(
+                                  child: FittedBox(
+                                    fit: BoxFit.scaleDown,
+                                    child: Row(
+                                      key: const Key('browser_counter'),
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        Text(
+                                          _position.label,
+                                          style: const TextStyle(
+                                            color: Colors.white,
+                                            fontSize: 16,
+                                            fontWeight: FontWeight.bold,
+                                          ),
                                         ),
-                                      ),
-                                  ],
-                                ),
-                                key: const Key('browser_counter'),
-                                style: const TextStyle(
-                                  color: Colors.white,
-                                  fontSize: 16,
-                                  fontWeight: FontWeight.bold,
+                                        const SizedBox(width: 6),
+                                        Container(
+                                          key: const Key(
+                                            'browser_counter_post',
+                                          ),
+                                          padding: const EdgeInsets.symmetric(
+                                            horizontal: 8,
+                                            vertical: 2,
+                                          ),
+                                          decoration: BoxDecoration(
+                                            color: Colors.white.withValues(
+                                              alpha: 0.12,
+                                            ),
+                                            borderRadius: BorderRadius.circular(
+                                              999,
+                                            ),
+                                          ),
+                                          child: Text(
+                                            _position.originLabel,
+                                            style: const TextStyle(
+                                              color: Colors.white70,
+                                              fontSize: 12,
+                                              fontWeight: FontWeight.normal,
+                                            ),
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
                                 ),
                               ),
                               if (widget.authorName.isNotEmpty ||
@@ -1309,6 +1342,7 @@ class _GalleryBrowserPageState extends State<GalleryBrowserPage> {
                                 final isSel = _selected.contains(it.index);
 
                                 return GestureDetector(
+                                  key: Key('thumb_${it.index}'),
                                   onTap: () {
                                     _pageController.animateToPage(
                                       idx,
@@ -1318,6 +1352,10 @@ class _GalleryBrowserPageState extends State<GalleryBrowserPage> {
                                       curve: Curves.easeInOut,
                                     );
                                   },
+                                  // The strip is the fastest way to build a
+                                  // selection: long-press ticks an item, and a
+                                  // second long-press unticks it.
+                                  onLongPress: () => _toggleSelect(it.index),
                                   child: Container(
                                     width: 44,
                                     height: 44,
@@ -1637,16 +1675,13 @@ class _BrowserActionBar extends StatelessWidget {
             top: 2,
             right: 2,
             child: IgnorePointer(
+              // Just the number: no plate behind it, so the button underneath
+              // stays whole. A shadow keeps it readable over bright pictures.
               child: Container(
                 key: badgeKey,
                 constraints: const BoxConstraints(minWidth: 16),
                 height: 16,
-                padding: const EdgeInsets.symmetric(horizontal: 4),
                 alignment: Alignment.center,
-                decoration: const BoxDecoration(
-                  color: Color(0xFFFF2442),
-                  borderRadius: BorderRadius.all(Radius.circular(8)),
-                ),
                 child: Text(
                   selectionCount.toString(),
                   maxLines: 1,
@@ -1654,6 +1689,7 @@ class _BrowserActionBar extends StatelessWidget {
                     color: Colors.white,
                     fontSize: 10,
                     fontWeight: FontWeight.bold,
+                    shadows: [Shadow(color: Color(0x8A000000), blurRadius: 3)],
                   ),
                 ),
               ),
@@ -1701,6 +1737,10 @@ class _BrowserActionBar extends StatelessWidget {
     tooltip: '更多操作',
     padding: EdgeInsets.zero,
     color: const Color(0xFF232323),
+    // The menu hugs its entries: no 112 dp minimum width and no wide margin on
+    // the right of the words.
+    constraints: const BoxConstraints(minWidth: 0, maxWidth: 220),
+    menuPadding: const EdgeInsets.symmetric(vertical: 4),
     onSelected: (action) {
       switch (action) {
         case _BrowserMoreAction.openOriginal:
@@ -1719,30 +1759,24 @@ class _BrowserActionBar extends StatelessWidget {
           '补下缺失($missingCount)',
         ),
     ],
+    // A bare vertical ellipsis: the disc behind the icon goes, like the one
+    // behind every other icon on the bar.
     child: SizedBox(
       width: _extent,
       height: _extent,
       child: Stack(
         alignment: Alignment.center,
         children: [
-          Container(
-            width: _extent,
-            height: _extent,
-            decoration: BoxDecoration(
-              color: Colors.white.withValues(alpha: 0.12),
-              shape: BoxShape.circle,
-            ),
-          ),
           const Icon(
-            Icons.more_horiz,
+            Icons.more_vert,
             size: 20,
             color: Colors.white,
             semanticLabel: '更多操作',
           ),
           if (missingInMenu && missingCount > 0)
             Positioned(
-              top: 4,
-              right: 4,
+              top: 6,
+              right: 6,
               child: Container(
                 width: 8,
                 height: 8,
@@ -1763,11 +1797,14 @@ class _BrowserActionBar extends StatelessWidget {
     String label,
   ) => PopupMenuItem<_BrowserMoreAction>(
     value: value,
+    height: 44,
+    padding: const EdgeInsets.only(left: 12, right: 12),
     child: Row(
+      mainAxisSize: MainAxisSize.min,
       children: [
-        Icon(icon, size: 20, semanticLabel: label),
-        const SizedBox(width: 12),
-        Text(label),
+        Icon(icon, size: 18, semanticLabel: label),
+        const SizedBox(width: 8),
+        Text(label, style: const TextStyle(fontSize: 13)),
       ],
     ),
   );

@@ -3,9 +3,10 @@
 //
 // The first number follows what the viewer shows -- items on this device and the
 // placeholders of the ones that are gone -- so a delete shrinks it at once and
-// an undo restores it. The number in brackets is where the item sits in the
-// original post: it does not move with deletes and only follows a successful
-// re-parse. When the two agree, only the first one is shown.
+// an undo restores it. The second, in a translucent pill, is where the item sits
+// in the original post: it does not move with deletes and only follows a
+// successful re-parse. Both are always shown, even when they agree, and the
+// numbers keep a space around the slash so they never run together.
 
 import 'package:easysave/services/gallery_locator_service.dart';
 import 'package:easysave/services/history_db.dart';
@@ -79,6 +80,20 @@ Future<void> _deleteCurrent(WidgetTester tester) async {
   await tester.pumpAndSettle();
 }
 
+/// The two numbers as the top bar draws them: the browser's place, then the
+/// post's place in its pill.
+({String browser, String post}) _counter(WidgetTester tester) {
+  final texts = tester
+      .widgetList<Text>(
+        find.descendant(
+          of: find.byKey(const Key('browser_counter')),
+          matching: find.byType(Text),
+        ),
+      )
+      .toList();
+  return (browser: texts.first.data!, post: texts.last.data!);
+}
+
 /// The button that downloads the page again: batch 5 keyed it
 /// `redownload_current`, batch 6 `redownload`.
 Future<void> _tapRedownload(WidgetTester tester) async {
@@ -107,16 +122,16 @@ void main() {
   });
 
   group('the two numbers', () {
-    test('a fully saved post shows a single number', () {
+    test('the post number is shown even when it matches the browser', () {
       final position = browserPositionFor(
         listIndex: 1,
         listLength: 3,
         itemIndex: 1,
         postTotal: 3,
       );
-      expect(position.label, '2/3');
-      expect(position.showsOrigin, isFalse);
-      expect(position.fullLabel, '2/3');
+      expect(position.label, '2 / 3');
+      expect(position.originLabel, '2 / 3');
+      expect(position.fullLabel, '2 / 3  2 / 3');
     });
 
     test('a partially saved post shows both numbers', () {
@@ -127,9 +142,9 @@ void main() {
         itemIndex: 4,
         postTotal: 8,
       );
-      expect(position.label, '2/3');
-      expect(position.originLabel, '5/8');
-      expect(position.fullLabel, '2/3 (5/8)');
+      expect(position.label, '2 / 3');
+      expect(position.originLabel, '5 / 8');
+      expect(position.fullLabel, '2 / 3  5 / 8');
     });
 
     test('an original place the post no longer reaches is a dash', () {
@@ -139,8 +154,8 @@ void main() {
         itemIndex: 5,
         postTotal: 4,
       );
-      expect(position.originLabel, '—/4');
-      expect(position.fullLabel, '1/2 (—/4)');
+      expect(position.originLabel, '— / 4');
+      expect(position.fullLabel, '1 / 2  — / 4');
     });
 
     test('the browser position never runs past what it shows', () {
@@ -150,7 +165,7 @@ void main() {
         itemIndex: 0,
         postTotal: 2,
       );
-      expect(position.label, '2/2');
+      expect(position.label, '2 / 2');
     });
 
     test('a deleted Live pair is one item of the post', () {
@@ -164,14 +179,47 @@ void main() {
   });
 
   group('the viewer', () {
-    testWidgets('a fully saved post hides the second number', (tester) async {
+    testWidgets('a fully saved post still shows the post number', (
+      tester,
+    ) async {
       await _pump(
         tester,
         items: [_item(0), _item(1), _item(2)],
         total: 3,
         initialIndex: 1,
       );
-      expect(find.text('2/3'), findsOneWidget);
+      expect(_counter(tester), (browser: '2 / 3', post: '2 / 3'));
+      await tester.pumpWidget(const SizedBox.shrink());
+    });
+
+    testWidgets('the post number sits in a translucent pill', (tester) async {
+      await _pump(tester, items: [_item(0), _item(1)], total: 2);
+
+      final pill = tester.widget<Container>(
+        find.byKey(const Key('browser_counter_post')),
+      );
+      final decoration = pill.decoration! as BoxDecoration;
+      expect(
+        decoration.color,
+        Colors.white.withValues(alpha: 0.12),
+        reason: 'the fill is the one every round button on the bar uses',
+      );
+      expect(
+        (decoration.borderRadius! as BorderRadius).topLeft.x,
+        greaterThanOrEqualTo(20),
+        reason: 'a stadium, not a rounded rectangle',
+      );
+
+      // A gap keeps the two numbers from touching.
+      expect(
+        find.descendant(
+          of: find.byKey(const Key('browser_counter')),
+          matching: find.byWidgetPredicate(
+            (widget) => widget is SizedBox && widget.width == 6,
+          ),
+        ),
+        findsOneWidget,
+      );
       await tester.pumpWidget(const SizedBox.shrink());
     });
 
@@ -181,13 +229,13 @@ void main() {
       final stored = [_item(2), _item(4), _item(6)];
 
       await _pump(tester, items: stored, total: 8);
-      expect(find.text('1/3 (3/8)'), findsOneWidget);
+      expect(_counter(tester), (browser: '1 / 3', post: '3 / 8'));
 
       await _pump(tester, items: stored, total: 8, initialIndex: 1);
-      expect(find.text('2/3 (5/8)'), findsOneWidget);
+      expect(_counter(tester), (browser: '2 / 3', post: '5 / 8'));
 
       await _pump(tester, items: stored, total: 8, initialIndex: 2);
-      expect(find.text('3/3 (7/8)'), findsOneWidget);
+      expect(_counter(tester), (browser: '3 / 3', post: '7 / 8'));
 
       await tester.pumpWidget(const SizedBox.shrink());
     });
@@ -196,11 +244,11 @@ void main() {
       tester,
     ) async {
       await _pump(tester, items: [_item(0), _item(1), _item(2)], total: 3);
-      expect(find.text('1/3'), findsOneWidget);
+      expect(_counter(tester), (browser: '1 / 3', post: '1 / 3'));
 
       await _deleteCurrent(tester);
 
-      expect(find.text('1/2 (2/3)'), findsOneWidget);
+      expect(_counter(tester), (browser: '1 / 2', post: '2 / 3'));
       await tester.pumpWidget(const SizedBox.shrink());
     });
 
@@ -211,11 +259,11 @@ void main() {
         total: 3,
         initialIndex: 1,
       );
-      expect(find.text('2/3'), findsOneWidget);
+      expect(_counter(tester), (browser: '2 / 3', post: '2 / 3'));
 
       await _deleteCurrent(tester);
 
-      expect(find.text('2/2 (3/3)'), findsOneWidget);
+      expect(_counter(tester), (browser: '2 / 2', post: '3 / 3'));
       await tester.pumpWidget(const SizedBox.shrink());
     });
 
@@ -231,7 +279,7 @@ void main() {
 
       await _deleteCurrent(tester);
 
-      expect(find.text('2/2 (2/3)'), findsOneWidget);
+      expect(_counter(tester), (browser: '2 / 2', post: '2 / 3'));
       await tester.pumpWidget(const SizedBox.shrink());
     });
 
@@ -239,12 +287,12 @@ void main() {
       await _pump(tester, items: [_item(0), _item(1), _item(2)], total: 3);
 
       await _deleteCurrent(tester);
-      expect(find.text('1/2 (2/3)'), findsOneWidget);
+      expect(_counter(tester), (browser: '1 / 2', post: '2 / 3'));
 
       await tester.tap(find.text('撤销'));
       await tester.pumpAndSettle();
 
-      expect(find.text('1/3'), findsOneWidget);
+      expect(_counter(tester), (browser: '1 / 3', post: '1 / 3'));
       await tester.pumpWidget(const SizedBox.shrink());
     });
 
@@ -257,7 +305,7 @@ void main() {
         total: 3,
         initialIndex: 1,
       );
-      expect(find.text('2/3'), findsOneWidget);
+      expect(_counter(tester), (browser: '2 / 3', post: '2 / 3'));
       expect(find.text('不在本机'), findsOneWidget);
       await tester.pumpWidget(const SizedBox.shrink());
     });
@@ -269,7 +317,7 @@ void main() {
         total: 3,
         initialIndex: 1,
       );
-      expect(find.text('2/3'), findsOneWidget);
+      expect(_counter(tester), (browser: '2 / 3', post: '2 / 3'));
       await tester.pumpWidget(const SizedBox.shrink());
     });
 
@@ -282,7 +330,7 @@ void main() {
         total: 3,
         deletedIndices: {0},
       );
-      expect(find.text('1/2 (2/3)'), findsOneWidget);
+      expect(_counter(tester), (browser: '1 / 2', post: '2 / 3'));
       await tester.pumpWidget(const SizedBox.shrink());
     });
 
@@ -299,7 +347,7 @@ void main() {
           postTotal: 2,
         ),
       );
-      expect(find.text('4/4'), findsOneWidget);
+      expect(_counter(tester), (browser: '4 / 4', post: '4 / 4'));
 
       // A re-download of the selected page re-parses the post.
       await tester.tap(find.byKey(const Key('browser_select_toggle')));
@@ -307,8 +355,8 @@ void main() {
       await _tapRedownload(tester);
 
       expect(
-        find.text('2/2'),
-        findsOneWidget,
+        _counter(tester),
+        (browser: '2 / 2', post: '2 / 2'),
         reason: 'the page keeps what it can; the post is two items now',
       );
       await tester.pumpWidget(const SizedBox.shrink());

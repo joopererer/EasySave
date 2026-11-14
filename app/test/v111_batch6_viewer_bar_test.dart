@@ -307,6 +307,102 @@ void main() {
     await tester.pumpWidget(const SizedBox.shrink());
   });
 
+  testWidgets('the corner badge carries no plate of its own', (tester) async {
+    await _pumpViewer(tester, width: 411, textScale: 1.0, mode: _Mode.local);
+    await _tapCircle(tester);
+
+    final badge = tester.widget<Container>(
+      find.byKey(const Key('badge_redownload')),
+    );
+    expect(
+      badge.decoration,
+      isNull,
+      reason: 'the count is just a number over the button, not a red disc',
+    );
+    expect(_badgeCount(tester, 'badge_redownload'), 1);
+
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  testWidgets('更多 is a bare vertical ellipsis', (tester) async {
+    await _pumpViewer(tester, width: 411, textScale: 1.0, mode: _Mode.local);
+
+    expect(find.byIcon(Icons.more_vert), findsOneWidget);
+    expect(find.byIcon(Icons.more_horiz), findsNothing);
+    expect(
+      find.descendant(
+        of: find.byKey(const Key('browser_more')),
+        matching: find.byType(Container),
+      ),
+      findsNothing,
+      reason: 'no disc behind the dots',
+    );
+    // The tap target and the row height are unchanged.
+    expect(tester.getRect(find.byKey(const Key('browser_more'))).height, 48);
+
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  testWidgets('the 更多 menu hugs its entries', (tester) async {
+    await _pumpViewer(tester, width: 411, textScale: 1.0, mode: _Mode.local);
+
+    await tester.tap(find.byKey(const Key('browser_more')));
+    await tester.pumpAndSettle();
+
+    final label = find.text('打开原帖');
+    expect(label, findsOneWidget);
+    expect(
+      tester.widget<Text>(label).style?.fontSize,
+      13,
+      reason: 'the entries read a size smaller than the bar',
+    );
+
+    final item = find.byWidgetPredicate((w) => w is PopupMenuItem).first;
+    final itemRect = tester.getRect(item);
+    final labelRect = tester.getRect(label);
+    expect(
+      labelRect.right,
+      greaterThan(itemRect.left),
+      reason: 'the entry is wider than the words it holds',
+    );
+    expect(
+      itemRect.right - labelRect.right,
+      lessThanOrEqualTo(24.0),
+      reason:
+          'no wide margin after the words: the popup rounds its width up to a '
+          '56 dp step, so a little room is left instead of the 50+ dp the old '
+          'padding produced',
+    );
+    expect(
+      itemRect.width,
+      lessThan(150.0),
+      reason: 'the menu is not held open by a minimum width',
+    );
+
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  testWidgets('long-pressing a thumbnail toggles that item', (tester) async {
+    await _pumpViewer(tester, width: 411, textScale: 1.0, mode: _Mode.local);
+    expect(find.byKey(const Key('badge_share')), findsNothing);
+
+    await tester.longPress(find.byKey(const Key('thumb_1')));
+    await tester.pumpAndSettle();
+    expect(_badgeCount(tester, 'badge_share'), 1);
+    expect(
+      find.byTooltip('选中'),
+      findsOneWidget,
+      reason: 'a long press ticks; the page in view stays where it was',
+    );
+
+    // A second long press unticks it and leaves the bar alone again.
+    await tester.longPress(find.byKey(const Key('thumb_1')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('badge_share')), findsNothing);
+
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
   testWidgets('selecting every page keeps every item', (tester) async {
     await _pumpViewer(tester, width: 411, textScale: 1.0, mode: _Mode.local);
     await _selectPage(tester, 0, 411);
@@ -354,12 +450,13 @@ void main() {
     await tester.pumpAndSettle();
     await _confirmDelete(tester, '已选的 2 项');
     expect(deleted, [0, 2], reason: 'both selected items, each once');
-    expect(find.text('1/1 (2/3)'), findsOneWidget);
+    expect(find.text('1 / 1'), findsOneWidget);
+    expect(find.text('2 / 3'), findsOneWidget);
 
     // Undo restores both in place.
     await tester.tap(find.text('撤销'));
     await tester.pumpAndSettle();
-    expect(find.text('3/3'), findsOneWidget);
+    expect(find.text('3 / 3'), findsNWidgets(2));
     await tester.pumpWidget(const SizedBox.shrink());
   });
 
