@@ -128,6 +128,45 @@ class GalleryBrowserItem {
 Set<int> initialGallerySelection(Set<int>? selectedIndices) =>
     Set<int>.from(selectedIndices ?? const <int>{});
 
+/// The "position / total" pair the viewer shows above the media.
+class BrowserCounter {
+  const BrowserCounter({required this.position, required this.total});
+
+  final int position;
+  final int total;
+
+  String get label => '$position / $total';
+}
+
+/// Numbering of one viewer item once the items the user deleted are gone.
+///
+/// [baseTotal] is the post's item total at parse time (a Live photo counts
+/// once), [deleted] the original item indices the user deleted in the app.
+/// Deleting an item shrinks the post, so `2 / 6` with its first picture deleted
+/// reads `1 / 5`. Items that are "not on this device" or were never downloaded
+/// keep their slot: nothing is subtracted unless it was really deleted, so a
+/// post whose 3rd, 5th and 7th pictures were saved still reads 3 / 8, 5 / 8,
+/// 7 / 8.
+BrowserCounter browserCounterFor({
+  required int itemIndex,
+  required int baseTotal,
+  required Set<int> deleted,
+}) {
+  final postTotal = baseTotal < 1 ? 1 : baseTotal;
+  var removed = 0;
+  var before = 0;
+  for (final index in deleted) {
+    if (index < 0 || index >= postTotal) continue;
+    removed++;
+    if (index < itemIndex) before++;
+  }
+  final total = postTotal - removed < 1 ? 1 : postTotal - removed;
+  var position = itemIndex + 1 - before;
+  if (position < 1) position = 1;
+  if (position > total) position = total;
+  return BrowserCounter(position: position, total: total);
+}
+
 /// What deleting one item of a post did, so the viewer can say it and offer the
 /// undo that "仅删除记录" supports.
 class GalleryBrowserItemDeletion {
@@ -394,6 +433,7 @@ class GalleryBrowserPage extends StatefulWidget {
     required this.platform,
     required this.postUrl,
     this.originalTotal,
+    this.deletedIndices = const <int>{},
     this.selectedIndices,
     this.onSelectionChanged,
     this.onRedownload,
@@ -415,11 +455,15 @@ class GalleryBrowserPage extends StatefulWidget {
   final String? aiLabel;
   final String? aiLabelSource;
 
-  /// How many media items the post had when it was parsed. The top counter
-  /// reads "original position / original total" (e.g. 3 / 8) so a post whose
-  /// files were mostly deleted still says where the current item sits.
+  /// How many media items the post had when it was parsed. The counter reads
+  /// "position / total" — the item's own place in the post, not its place in
+  /// this list — minus the items the user deleted ([deletedIndices]).
   /// Null keeps the number of [items] (a remote preview shows them all).
   final int? originalTotal;
+
+  /// Original post item indices the user already deleted in the app, so the
+  /// counter opens with the shrunk total instead of the post's old one.
+  final Set<int> deletedIndices;
   final Set<int>? selectedIndices;
   final ValueChanged<Set<int>>? onSelectionChanged;
 
@@ -472,6 +516,14 @@ class _GalleryBrowserPageState extends State<GalleryBrowserPage> {
   /// A re-download or a delete is running; the buttons stay disabled.
   bool _busy = false;
 
+  /// Original post item indices the current post lost to the user's deletes.
+  /// Kept apart from [_items] because a deleted item leaves the viewer: the
+  /// total only shrinks if we remember what is no longer there.
+  late final Set<int> _deleted = {
+    for (final index in widget.deletedIndices)
+      if (index >= 0) index,
+  };
+
   /// Original post item index of the page in view.
   int? get _currentItemIndex {
     if (_items.isEmpty) return null;
@@ -491,26 +543,25 @@ class _GalleryBrowserPageState extends State<GalleryBrowserPage> {
       if (item.missing) item.index,
   ];
 
-  /// How many media items the post had when it was parsed.
-  int get _originalTotal {
+  /// The post's item total before any deletion: the declared total, or — for a
+  /// record written before it was stored — what the viewer holds plus what was
+  /// deleted from it (the old fallback, which the deletes are then subtracted
+  /// from like any other).
+  int get _baseTotal {
     final declared = widget.originalTotal;
     if (declared != null && declared > 0) return declared;
-    return _items.isEmpty ? 1 : _items.length;
+    final living = _items.length + _deleted.length;
+    return living == 0 ? 1 : living;
   }
 
-  /// "original position / original total", e.g. `3 / 8`.
-  ///
-  /// The position is the item's own place in the post, not its place in this
-  /// list: a post whose first two files were deleted still says `3 / 8` for the
-  /// third item instead of `1 / 6`.
-  String get _counterLabel {
-    final total = _originalTotal;
-    final position = (_currentItemIndex ?? _currentIndex) + 1;
-    final shown = position < 1
-        ? 1
-        : (position > total ? total : position);
-    return '$shown / $total';
-  }
+  /// "position / total" of the page in view, e.g. `1 / 5` after one delete.
+  BrowserCounter get _counter => browserCounterFor(
+    itemIndex: _currentItemIndex ?? _currentIndex,
+    baseTotal: _baseTotal,
+    deleted: _deleted,
+  );
+
+  String get _counterLabel => _counter.label;
 
   /// Re-download [indices]: the caller re-parses the post and opens the preview
   /// selection with exactly those items ticked. The refreshed items replace what
@@ -572,7 +623,7 @@ class _GalleryBrowserPageState extends State<GalleryBrowserPage> {
     final item = _currentItem;
     final remove = widget.onDeleteItem;
     if (item == null || remove == null || _busy) return;
-    final label = (item.index + 1).toString();
+    final label = _counter.position.toString();
     final withFile = await _askDeleteMode('第 $label 项');
     if (withFile == null || !mounted) return;
     setState(() => _busy = true);
@@ -617,6 +668,7 @@ class _GalleryBrowserPageState extends State<GalleryBrowserPage> {
     final at = _items.indexWhere((it) => it.index == index);
     if (at < 0) return;
     setState(() {
+      _deleted.add(index);
       _items.removeAt(at);
       _currentIndex = _items.isEmpty
           ? 0
@@ -630,6 +682,7 @@ class _GalleryBrowserPageState extends State<GalleryBrowserPage> {
   void _insertItem(GalleryBrowserItem item, int at) {
     if (_items.any((it) => it.index == item.index)) return;
     setState(() {
+      _deleted.remove(item.index);
       final position = at < 0 || at > _items.length ? _items.length : at;
       _items.insert(position, item);
       _currentIndex = position;

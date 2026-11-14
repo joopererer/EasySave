@@ -211,6 +211,23 @@ bool isShowableHistoryFile(HistoryFile file) =>
 bool isRetainedHistoryFile(HistoryFile file) =>
     file.status != FileStatus.notFound && file.status != FileStatus.deleted;
 
+/// Original post item indices (zero-based, the viewer's numbering) of the items
+/// the user deleted in the app.
+///
+/// A Live photo leaves two rows (still and motion clip) for one media item; the
+/// set keeps the pair one item, so deleting it shrinks the post by exactly one.
+/// [rows] must be the record's whole file list, not the visible one: the
+/// 1-based/0-based shape is decided by what the record holds.
+Set<int> deletedItemIndices(Iterable<HistoryFile> rows) {
+  final all = rows.toList();
+  final deleted = all.where(isDeletedHistoryFile);
+  if (deleted.isEmpty) return <int>{};
+  final is1Based = all.every((file) => file.itemIndex > 0);
+  return <int>{
+    for (final file in deleted) is1Based ? file.itemIndex - 1 : file.itemIndex,
+  };
+}
+
 
 /// Whether a stored file row is a *winner* when two rows describe the same
 /// album file: a real 1-based index with written provenance is preferred.

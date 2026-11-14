@@ -675,6 +675,7 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
             items: items,
             initialIndex: initial,
             originalTotal: record0.originalItemCount,
+            deletedIndices: deletedItemIndices(record0.files),
             authorName: record0.authorName ?? '',
             title: (record0.title?.isNotEmpty == true)
                 ? record0.title!

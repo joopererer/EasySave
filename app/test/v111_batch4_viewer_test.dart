@@ -259,8 +259,8 @@ void main() {
       await tester.tap(find.text('仅删除记录'));
       await settle(tester);
       expect(deletions, 1);
-      // The next item takes the place of the deleted one.
-      expect(find.text('2 / 3'), findsOneWidget);
+      // The post lost one item, so the next one reads 1 / 2 and not 2 / 3.
+      expect(find.text('1 / 2'), findsOneWidget);
       expect(find.text('不在本机'), findsOneWidget);
 
       expect(find.text('撤销'), findsOneWidget);

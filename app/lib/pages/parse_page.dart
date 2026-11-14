@@ -1221,6 +1221,7 @@ class ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
             items: items,
             initialIndex: built.initial,
             originalTotal: record.originalItemCount,
+            deletedIndices: deletedItemIndices(record.files),
             authorName: record.authorName ?? '',
             title: (record.title?.isNotEmpty == true)
                 ? record.title!
