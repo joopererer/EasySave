@@ -1091,149 +1091,34 @@ class _GalleryBrowserPageState extends State<GalleryBrowserPage> {
                           ),
 
                         // Bottom action bar
-                        Padding(
-                          padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
-                          child: Row(
-                            children: [
-                              // Left info text
-                              Text(
-                                _selected.isEmpty
-                                    ? '点右上角选择'
-                                    : '已选 ${_selected.length} 项',
-                                style: const TextStyle(
-                                  color: Colors.white70,
-                                  fontSize: 13,
-                                ),
-                              ),
-                              const Spacer(),
-                              // Items whose files the album no longer holds:
-                              // one tap re-downloads all of them.
-                              if (_missingIndices.isNotEmpty &&
-                                  (widget.onRedownloadItems != null ||
-                                      widget.onRedownload != null))
-                                Padding(
-                                  padding: const EdgeInsets.only(right: 8),
-                                  child: TextButton.icon(
-                                    key: const Key('redownload_missing'),
-                                    style: TextButton.styleFrom(
-                                      backgroundColor: Colors.white12,
-                                      foregroundColor: Colors.white,
-                                      shape: const StadiumBorder(),
-                                      padding: const EdgeInsets.symmetric(
-                                        horizontal: 12,
-                                        vertical: 6,
-                                      ),
-                                    ),
-                                    onPressed: _busy
-                                        ? null
-                                        : () => _redownload(
-                                            _missingIndices.toSet(),
-                                          ),
-                                    icon: const Icon(
-                                      Icons.download_outlined,
-                                      size: 16,
-                                    ),
-                                    label: Text(
-                                      '重新下载缺失的 ${_missingIndices.length} 张',
-                                      style: const TextStyle(fontSize: 12),
-                                    ),
-                                  ),
-                                ),
-                              // Actions
-                              if ((widget.onRedownload != null ||
-                                      widget.onRedownloadItems != null) &&
-                                  currentItem != null &&
-                                  _missingIndices.length <= 1)
-                                IconButton(
-                                  tooltip: '重新下载',
-                                  color: Colors.white,
-                                  icon: const Icon(Icons.download_outlined),
-                                  onPressed: _busy
-                                      ? null
-                                      : () => _redownload({currentItem.index}),
-                                ),
-                              if (widget.onDeleteItem != null &&
-                                  currentItem != null)
-                                IconButton(
-                                  key: const Key('delete_item'),
-                                  tooltip: '删除这张',
-                                  color: Colors.white,
-                                  icon: const Icon(Icons.delete_outline),
-                                  onPressed: _busy ? null : _deleteCurrentItem,
-                                ),
-                              if (!widget.showSave && widget.onReparse != null)
-                                Padding(
-                                  padding: const EdgeInsets.only(right: 8),
-                                  child: TextButton.icon(
-                                    style: TextButton.styleFrom(
-                                      backgroundColor: Colors.white12,
-                                      foregroundColor: Colors.white,
-                                      shape: const StadiumBorder(),
-                                      padding: const EdgeInsets.symmetric(
-                                        horizontal: 12,
-                                        vertical: 6,
-                                      ),
-                                    ),
-                                    onPressed: widget.onReparse,
-                                    icon: const Icon(Icons.refresh, size: 16),
-                                    label: const Text(
-                                      '重新解析',
-                                      style: TextStyle(fontSize: 12),
-                                    ),
-                                  ),
-                                ),
-                              if (!widget.showSave)
-                                IconButton(
-                                  style: IconButton.styleFrom(
-                                    backgroundColor: Colors.white12,
-                                    foregroundColor: Colors.white,
-                                  ),
-                                  icon: const Icon(Icons.open_in_new, size: 18),
-                                  tooltip: '打开原帖',
-                                  onPressed: _openOriginal,
-                                ),
-                              const SizedBox(width: 8),
-                              if (widget.showSave)
-                                ElevatedButton.icon(
-                                  style: ElevatedButton.styleFrom(
-                                    backgroundColor: const Color(0xFFFF2442),
-                                    foregroundColor: Colors.white,
-                                    shape: const StadiumBorder(),
-                                    padding: const EdgeInsets.symmetric(
-                                      horizontal: 14,
-                                      vertical: 8,
-                                    ),
-                                  ),
-                                  // Close the viewer and let the preview page
-                                  // start the save with the synced selection.
-                                  onPressed: () =>
-                                      Navigator.of(context).pop(true),
-                                  icon: const Icon(Icons.download, size: 16),
-                                  label: const Text(
-                                    '保存',
-                                    style: TextStyle(fontSize: 13),
-                                  ),
-                                )
-                              else
-                                ElevatedButton.icon(
-                                  style: ElevatedButton.styleFrom(
-                                    backgroundColor: const Color(0xFFFF2442),
-                                    foregroundColor: Colors.white,
-                                    shape: const StadiumBorder(),
-                                    padding: const EdgeInsets.symmetric(
-                                      horizontal: 14,
-                                      vertical: 8,
-                                    ),
-                                  ),
-                                  onPressed: _shareCurrent,
-                                  icon: const Icon(Icons.share, size: 16),
-                                  label: const Text(
-                                    '分享',
-                                    style: TextStyle(fontSize: 13),
-                                  ),
-                                ),
-                            ],
-                          ),
+                        _BrowserActionBar(
+                          selectionCount: _selected.length,
+                          missingCount: _missingIndices.length,
+                          showSave: widget.showSave,
+                          busy: _busy,
+                          onRedownloadMissing:
+                              widget.onRedownloadItems != null ||
+                                  widget.onRedownload != null
+                              ? () => _redownload(_missingIndices.toSet())
+                              : null,
+                          onRedownloadCurrent:
+                              (widget.onRedownloadItems != null ||
+                                      widget.onRedownload != null) &&
+                                  currentItem != null
+                              ? () => _redownload({currentItem.index})
+                              : null,
+                          onDeleteCurrent:
+                              widget.onDeleteItem != null && currentItem != null
+                              ? _deleteCurrentItem
+                              : null,
+                          onReparse: widget.showSave ? null : widget.onReparse,
+                          onOpenOriginal: widget.showSave ? null : _openOriginal,
+                          onShare: widget.showSave ? null : _shareCurrent,
+                          // Close the viewer and let the preview page start the
+                          // save with the synced selection.
+                          onSave: widget.showSave
+                              ? () => Navigator.of(context).pop(true)
+                              : null,
                         ),
                       ],
                     ),
@@ -1244,6 +1129,354 @@ class _GalleryBrowserPageState extends State<GalleryBrowserPage> {
           ),
         ),
       ),
+    );
+  }
+}
+
+/// The actions the 「更多」 menu keeps once the bar is too narrow for them.
+enum _BrowserMoreAction { delete, reparse, openOriginal, redownloadMissing }
+
+/// Bottom action bar of the fullscreen viewer.
+///
+/// Every action is an icon with a tooltip (shown on long press) and a semantics
+/// label; the missing-items button keeps its word because "补下缺失(N)" cannot
+/// be guessed from an icon. The bar never overflows: it first drops the hint,
+/// then tightens the gaps, then moves the secondary actions into a 「更多」
+/// menu. The primary action (分享 / 保存) is always visible.
+class _BrowserActionBar extends StatelessWidget {
+  const _BrowserActionBar({
+    required this.selectionCount,
+    required this.missingCount,
+    required this.showSave,
+    required this.busy,
+    required this.onRedownloadMissing,
+    required this.onRedownloadCurrent,
+    required this.onDeleteCurrent,
+    required this.onReparse,
+    required this.onOpenOriginal,
+    required this.onShare,
+    required this.onSave,
+  });
+
+  final int selectionCount;
+  final int missingCount;
+  final bool showSave;
+  final bool busy;
+  final Future<void> Function()? onRedownloadMissing;
+  final Future<void> Function()? onRedownloadCurrent;
+  final Future<void> Function()? onDeleteCurrent;
+  final VoidCallback? onReparse;
+  final VoidCallback? onOpenOriginal;
+  final Future<void> Function()? onShare;
+  final VoidCallback? onSave;
+
+  /// Side of one icon slot: wide enough to tap, narrow enough to keep five
+  /// actions on a 320 dp screen.
+  static const double _extent = 44;
+  static const double _looseGap = 8;
+  static const double _tightGap = 2;
+
+  /// The measured width is only an estimate of the rendered one; keep this much
+  /// room so a rounding difference can never turn into an overflow.
+  static const double _reserve = 12;
+
+  static const TextStyle _hintStyle = TextStyle(
+    color: Colors.white70,
+    fontSize: 13,
+  );
+  static const TextStyle _missingStyle = TextStyle(fontSize: 12);
+
+  static double _textWidth(BuildContext context, String text, TextStyle style) {
+    final painter = TextPainter(
+      text: TextSpan(text: text, style: style),
+      textDirection: Directionality.maybeOf(context) ?? TextDirection.ltr,
+      textScaler: MediaQuery.textScalerOf(context),
+      maxLines: 1,
+    )..layout();
+    final width = painter.width;
+    painter.dispose();
+    return width;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    const hintStyle = _hintStyle;
+    final hintText = selectionCount > 0 ? '已选 $selectionCount 项' : '点右上角选择';
+    final hintWidth = _textWidth(context, hintText, hintStyle);
+    // icon 16 + the 8 dp gap of a labelled button + 20 dp of horizontal padding.
+    final missingWidth =
+        _textWidth(context, '补下缺失($missingCount)', _missingStyle) + 44;
+
+    final showMissing = missingCount > 0 && onRedownloadMissing != null;
+    // One missing item has its own button; with several, 「补下缺失」 covers all
+    // of them and the extra icon would only cost width.
+    final canRedownloadCurrent =
+        onRedownloadCurrent != null && missingCount <= 1;
+    final secondaryCount =
+        (onDeleteCurrent != null ? 1 : 0) +
+        (onReparse != null ? 1 : 0) +
+        (onOpenOriginal != null ? 1 : 0);
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final available = constraints.maxWidth;
+
+          double needed({
+            required bool hint,
+            required bool more,
+            required bool missingInMenu,
+            required double gap,
+          }) {
+            final widths = <double>[
+              if (hint) hintWidth,
+              if (showMissing && !missingInMenu) missingWidth,
+            ];
+            final icons = 1 + // the primary action, always here
+                (canRedownloadCurrent ? 1 : 0) +
+                (more ? (secondaryCount > 0 ? 1 : 0) : secondaryCount);
+            widths.addAll(List<double>.filled(icons, _extent));
+            if (widths.isEmpty) return 0;
+            return widths.reduce((a, b) => a + b) + gap * (widths.length - 1);
+          }
+
+          bool fits(double width) => width <= available - _reserve;
+
+          // Retreat order: hint, then gaps, then the secondary actions.
+          final tier =
+              fits(needed(
+                hint: true,
+                more: false,
+                missingInMenu: false,
+                gap: _looseGap,
+              ))
+              ? 1
+              : fits(needed(
+                  hint: false,
+                  more: false,
+                  missingInMenu: false,
+                  gap: _looseGap,
+                ))
+              ? 2
+              : fits(needed(
+                  hint: false,
+                  more: false,
+                  missingInMenu: false,
+                  gap: _tightGap,
+                ))
+              ? 3
+              : fits(needed(
+                  hint: false,
+                  more: true,
+                  missingInMenu: false,
+                  gap: _tightGap,
+                ))
+              ? 4
+              : fits(needed(
+                  hint: false,
+                  more: true,
+                  missingInMenu: false,
+                  gap: 0,
+                ))
+              ? 5
+              : 6;
+          final showHint = tier == 1;
+          final useMore = tier >= 4;
+          final missingInMenu = tier == 6;
+          final gap = tier <= 2 ? _looseGap : (tier <= 4 ? _tightGap : 0.0);
+
+          final secondary = <Widget>[
+            if (onDeleteCurrent != null)
+              _iconAction(
+                key: const Key('delete_item'),
+                label: '删除这张',
+                icon: Icons.delete_outline,
+                onPressed: busy ? null : () => onDeleteCurrent?.call(),
+              ),
+            if (onReparse != null)
+              _iconAction(
+                key: const Key('reparse'),
+                label: '重新解析',
+                icon: Icons.refresh,
+                onPressed: onReparse,
+              ),
+            if (onOpenOriginal != null)
+              _iconAction(
+                key: const Key('open_original'),
+                label: '打开原帖',
+                icon: Icons.open_in_new,
+                onPressed: onOpenOriginal,
+              ),
+          ];
+
+          final trailing = <Widget>[
+            if (showMissing && !missingInMenu) _missingButton(),
+            if (canRedownloadCurrent)
+              _iconAction(
+                key: const Key('redownload_current'),
+                label: '重新下载这张',
+                icon: Icons.download_outlined,
+                onPressed: busy ? null : () => onRedownloadCurrent?.call(),
+              ),
+            if (useMore && secondary.isNotEmpty)
+              _moreButton(context, missingInMenu: missingInMenu)
+            else
+              ...secondary,
+            _primaryAction(),
+          ];
+
+          return Row(
+            children: [
+              if (showHint)
+                Expanded(
+                  child: Text(
+                    hintText,
+                    key: const Key('browser_hint'),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: hintStyle,
+                  ),
+                )
+              else
+                const Spacer(),
+              if (showHint) SizedBox(width: gap),
+              for (var i = 0; i < trailing.length; i++) ...[
+                if (i > 0 && gap > 0) SizedBox(width: gap),
+                trailing[i],
+              ],
+            ],
+          );
+        },
+      ),
+    );
+  }
+
+  Widget _iconAction({
+    Key? key,
+    required String label,
+    required IconData icon,
+    VoidCallback? onPressed,
+  }) => IconButton(
+    key: key,
+    tooltip: label,
+    onPressed: onPressed,
+    iconSize: 20,
+    padding: EdgeInsets.zero,
+    constraints: const BoxConstraints.tightFor(width: _extent, height: _extent),
+    style: IconButton.styleFrom(
+      backgroundColor: Colors.white.withValues(alpha: 0.12),
+      foregroundColor: Colors.white,
+      shape: const CircleBorder(),
+      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+    ),
+    icon: Icon(icon, semanticLabel: label),
+  );
+
+  /// The one action that keeps its words: an icon cannot say "N items are gone".
+  Widget _missingButton() => Tooltip(
+    message: '补下缺失的 $missingCount 张',
+    child: TextButton.icon(
+      key: const Key('redownload_missing'),
+      style: TextButton.styleFrom(
+        backgroundColor: Colors.white.withValues(alpha: 0.12),
+        foregroundColor: Colors.white,
+        shape: const StadiumBorder(),
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+        minimumSize: Size.zero,
+        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+      ),
+      onPressed: busy ? null : () => onRedownloadMissing?.call(),
+      icon: const Icon(Icons.download_outlined, size: 16),
+      label: Text('补下缺失($missingCount)', style: _missingStyle),
+    ),
+  );
+
+  Widget _moreButton(BuildContext context, {required bool missingInMenu}) =>
+      PopupMenuButton<_BrowserMoreAction>(
+        key: const Key('browser_more'),
+        tooltip: '更多操作',
+        padding: EdgeInsets.zero,
+        color: const Color(0xFF232323),
+        onSelected: (action) {
+          switch (action) {
+            case _BrowserMoreAction.delete:
+              onDeleteCurrent?.call();
+            case _BrowserMoreAction.reparse:
+              onReparse?.call();
+            case _BrowserMoreAction.openOriginal:
+              onOpenOriginal?.call();
+            case _BrowserMoreAction.redownloadMissing:
+              onRedownloadMissing?.call();
+          }
+        },
+        itemBuilder: (context) => [
+          if (missingInMenu && missingCount > 0 && onRedownloadMissing != null)
+            _menuItem(
+              _BrowserMoreAction.redownloadMissing,
+              Icons.download_outlined,
+              '补下缺失($missingCount)',
+            ),
+          if (onDeleteCurrent != null)
+            _menuItem(_BrowserMoreAction.delete, Icons.delete_outline, '删除这张'),
+          if (onReparse != null)
+            _menuItem(_BrowserMoreAction.reparse, Icons.refresh, '重新解析'),
+          if (onOpenOriginal != null)
+            _menuItem(_BrowserMoreAction.openOriginal, Icons.open_in_new, '打开原帖'),
+        ],
+        child: Container(
+          width: _extent,
+          height: _extent,
+          decoration: BoxDecoration(
+            color: Colors.white.withValues(alpha: 0.12),
+            shape: BoxShape.circle,
+          ),
+          child: const Icon(
+            Icons.more_horiz,
+            size: 20,
+            color: Colors.white,
+            semanticLabel: '更多操作',
+          ),
+        ),
+      );
+
+  PopupMenuItem<_BrowserMoreAction> _menuItem(
+    _BrowserMoreAction value,
+    IconData icon,
+    String label,
+  ) => PopupMenuItem<_BrowserMoreAction>(
+    value: value,
+    child: Row(
+      children: [
+        Icon(icon, size: 20, semanticLabel: label),
+        const SizedBox(width: 12),
+        Text(label),
+      ],
+    ),
+  );
+
+  /// 分享 (remote preview) or 保存 (the viewer opened from the preview flow).
+  Widget _primaryAction() {
+    final label = showSave ? '保存' : '分享';
+    return IconButton(
+      key: const Key('browser_primary_action'),
+      tooltip: label,
+      onPressed: busy
+          ? null
+          : (showSave ? onSave : () => onShare?.call()),
+      iconSize: 20,
+      padding: EdgeInsets.zero,
+      constraints: const BoxConstraints.tightFor(
+        width: _extent,
+        height: _extent,
+      ),
+      style: IconButton.styleFrom(
+        backgroundColor: const Color(0xFFFF2442),
+        foregroundColor: Colors.white,
+        shape: const CircleBorder(),
+        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+      ),
+      icon: Icon(showSave ? Icons.download : Icons.share, semanticLabel: label),
     );
   }
 }

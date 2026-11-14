@@ -178,13 +178,13 @@ void main() {
       expect(find.text('重新下载这张'), findsOneWidget);
       // The position is the item's own place in the post, not its list slot.
       expect(find.text('2 / 8'), findsOneWidget);
-      expect(find.text('重新下载缺失的 2 张'), findsOneWidget);
+      expect(find.text('补下缺失(2)'), findsOneWidget);
 
       await tester.tap(find.text('重新下载这张'));
       await settle(tester);
       expect(asked, {1}, reason: 'one item, by its original index');
 
-      await tester.tap(find.text('重新下载缺失的 2 张'));
+      await tester.tap(find.text('补下缺失(2)'));
       await settle(tester);
       expect(asked, {1, 2}, reason: 'the whole missing set at once');
       await tester.pumpWidget(const SizedBox.shrink());
@@ -216,7 +216,7 @@ void main() {
       await settle(tester);
       expect(find.text('不在本机'), findsOneWidget);
       expect(find.text('1 / 2'), findsOneWidget);
-      expect(find.text('重新下载缺失的 2 张'), findsOneWidget);
+      expect(find.text('补下缺失(2)'), findsOneWidget);
       await tester.pumpWidget(const SizedBox.shrink());
     });
 
