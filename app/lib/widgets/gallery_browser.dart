@@ -6,6 +6,7 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/widget_previews.dart';
 import 'package:photo_manager/photo_manager.dart';
 import 'package:photo_manager_image_provider/photo_manager_image_provider.dart';
 import 'package:share_plus/share_plus.dart';
@@ -1762,7 +1763,7 @@ class _BrowserActionBar extends StatelessWidget {
     // A bare vertical ellipsis: the disc behind the icon goes, like the one
     // behind every other icon on the bar.
     child: SizedBox(
-      width: _extent,
+      width: _extent/2,
       height: _extent,
       child: Stack(
         alignment: Alignment.center,
@@ -2749,4 +2750,17 @@ class _ZoomableImageViewState extends State<_ZoomableImageView>
       ),
     );
   }
+}
+
+@Preview(name: 'MoreButton')
+Widget previewMoreButton() {
+  return GalleryBrowserPage(
+    items: [
+      GalleryBrowserItem(
+        index: 0,
+        type: 'image',
+        url: 'https://www.example.com/image.jpg',
+      ),
+    ], authorName: '', title: '', platform: '', postUrl: '',
+  );
 }
