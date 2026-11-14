@@ -110,6 +110,21 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
   /// The [ModeSwitch] measurement of the switch in progress (v1.11 batch 3).
   ModeSwitchProbe? _modeSwitch;
 
+  /// The modes entered so far and the last widget built for each, created the
+  /// first time that mode is entered (v1.11 batch 3). Only the mode in view is
+  /// ever in the tree.
+  final Map<HistoryView, Widget> _modeSubtrees = {};
+
+  /// Modes whose data changed while they were hidden. Nothing is rebuilt in
+  /// them; the flag is cleared the moment they come back and are rebuilt from
+  /// the current data.
+  final Set<HistoryView> _modePendingUpdate = {};
+
+  /// One scroll controller per mode. Each mode owns its own, so a list never
+  /// inherits the offset of another and the offset of the mode being returned
+  /// to is restored from [PageStorage] on its first layout.
+  final Map<HistoryView, ScrollController> _modeScroll = {};
+
   // Keys: posts view -> 'p{recordId}'; all view -> 'm{recordId}:{itemIndex}'.
   final Set<String> _selected = {};
 
@@ -241,6 +256,7 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
           );
       if (changed) {
         setState(() {
+          _markHiddenModesPending();
           _unfinished = unfinished;
           _downloadProgress = progress;
           _downloadBatches = {for (final b in unfinished) b.postId: b};
@@ -260,6 +276,9 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
   void dispose() {
     _historyRefresh.dispose();
     _modeSwitch?.dispose();
+    for (final controller in _modeScroll.values) {
+      controller.dispose();
+    }
     WidgetsBinding.instance.removeObserver(this);
     GalleryLocatorService.instance.removeListener(_onLocatorChanged);
     HostBridge.historyRevision.removeListener(_onHostHistoryChanged);
@@ -382,6 +401,7 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
           deadline: _historyRefresh.deadline);
       if (!mounted) return;
       setState(() {
+        _markHiddenModesPending();
         _records = dropDeletedRecords(
           records,
           ids: _deletedRecordIds,
@@ -1445,6 +1465,7 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
               children: [
                 for (final (view, label) in segments)
                   GestureDetector(
+                    key: ValueKey('view_switcher_${view.name}'),
                     onTap: () {
                       if (_view == view) return;
                       _beginModeSwitch(view);
@@ -1709,17 +1730,68 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
     if (_filtered.isEmpty) {
       return _emptyFiltered();
     }
-    switch (_view) {
+    return _modeStack();
+  }
+
+  /// Shows the mode in view, and only that one (v1.11 batch 3).
+  ///
+  /// A mode is created the first time it is entered and remembered afterwards;
+  /// while it is hidden nothing of it exists in the tree, so it cannot issue a
+  /// thumbnail request and cannot react to a refresh. What it keeps is its
+  /// scroll offset (through its own [ScrollController] and [PageStorage]) and
+  /// its decoded thumbnails (through the image cache), and its data change is
+  /// applied the moment it is switched back to. Lazy building is untouched: the
+  /// visible mode still builds only the cards near the viewport.
+  Widget _modeStack() {
+    return KeyedSubtree(
+      key: ValueKey('history_view_${_view.name}'),
+      child: _modeBody(_view),
+    );
+  }
+
+  Widget _modeBody(HistoryView view) {
+    _modeSubtrees[view] = _buildModeView(view);
+    _modePendingUpdate.remove(view);
+    return _modeSubtrees[view]!;
+  }
+
+  Widget _buildModeView(HistoryView view) {
+    final controller = _modeScroll.putIfAbsent(view, ScrollController.new);
+    switch (view) {
       case HistoryView.posts:
         return _layout == HistoryLayout.waterfall
-            ? _postsWaterfall()
-            : _postsList();
+            ? _postsWaterfall(controller)
+            : _postsList(controller);
       case HistoryView.all:
-        return _allWaterfall();
+        return _allWaterfall(controller);
       case HistoryView.creators:
-        return _creators();
+        return _creators(controller);
     }
   }
+
+  /// Data changed. Every hidden mode now owes itself a rebuild, which it gets
+  /// the moment it is switched back to.
+  void _markHiddenModesPending() {
+    for (final view in _modeSubtrees.keys) {
+      if (view != _view) _modePendingUpdate.add(view);
+    }
+  }
+
+  /// Modes entered so far, for tests (v1.11 batch 3).
+  @visibleForTesting
+  Set<HistoryView> get keptModesForTesting => Set<HistoryView>.of(_modeSubtrees.keys);
+
+  /// Rows and visible rows, for tests.
+  @visibleForTesting
+  int get recordCountForTesting => _records.length;
+
+  @visibleForTesting
+  int get filteredCountForTesting => _filtered.length;
+
+  /// Hidden modes that still owe themselves a rebuild, for tests.
+  @visibleForTesting
+  Set<HistoryView> get pendingModeUpdatesForTesting =>
+      Set<HistoryView>.of(_modePendingUpdate);
 
   Widget _emptyAll() {
     return Center(
@@ -1794,10 +1866,12 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
     );
   }
 
-  Widget _postsWaterfall() {
+  Widget _postsWaterfall(ScrollController controller) {
     final groups = _groupPosts(_filtered);
     return _refreshWrapper(
       CustomScrollView(
+        controller: controller,
+        key: const PageStorageKey<String>('history_scroll_posts'),
         slivers: [
           const SliverToBoxAdapter(child: SizedBox(height: 8)),
           for (final group in groups)
@@ -1841,10 +1915,12 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
     );
   }
 
-  Widget _postsList() {
+  Widget _postsList(ScrollController controller) {
     final groups = _groupPosts(_filtered);
     return _refreshWrapper(
       CustomScrollView(
+        controller: controller,
+        key: const PageStorageKey<String>('history_scroll_posts_list'),
         slivers: [
           const SliverToBoxAdapter(child: SizedBox(height: 8)),
           for (final group in groups)
@@ -1919,10 +1995,12 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
     );
   }
 
-  Widget _allWaterfall() {
+  Widget _allWaterfall(ScrollController controller) {
     final groups = _groupMedia(_filtered);
     return _refreshWrapper(
       CustomScrollView(
+        controller: controller,
+        key: const PageStorageKey<String>('history_scroll_all'),
         slivers: [
           const SliverToBoxAdapter(child: SizedBox(height: 8)),
           for (final group in groups)
@@ -1963,10 +2041,12 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
     );
   }
 
-  Widget _creators() {
+  Widget _creators(ScrollController controller) {
     final creators = _creatorGroups(_filtered);
     return _refreshWrapper(
       GridView.builder(
+        controller: controller,
+        key: const PageStorageKey<String>('history_scroll_creators'),
         padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
         gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
           crossAxisCount: 2,
