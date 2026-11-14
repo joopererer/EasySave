@@ -6,11 +6,9 @@
 // the post's original total, and the bottom bar offers the whole set of missing
 // items at once. Deleting one item moves to the next and can be undone.
 
-import 'package:easysave/core/models.dart';
 import 'package:easysave/services/gallery_locator_service.dart';
 import 'package:easysave/services/history_db.dart';
 import 'package:easysave/services/live_pairs.dart';
-import 'package:easysave/widgets/decoded_image_keeper.dart';
 import 'package:easysave/widgets/gallery_browser.dart';
 import 'package:easysave/widgets/verified_asset_image.dart';
 import 'package:flutter/material.dart';
