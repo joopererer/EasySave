@@ -230,7 +230,7 @@ void main() {
       _file(2, FileStatus.deleted),
     ]);
     final exported = await BackupService.exportBackup(db: db, settings: settings);
-    final preview = await BackupService.previewBackup(exported);
+    final preview = BackupService.previewBackup(exported);
     expect(preview.fileCount, 1, reason: 'the deleted item is not coming back');
     expect(preview.postCount, 1);
   });
