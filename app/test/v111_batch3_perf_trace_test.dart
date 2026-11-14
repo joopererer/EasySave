@@ -19,7 +19,6 @@ import 'package:easysave/services/gallery_locator_service.dart';
 import 'package:easysave/services/history_db.dart';
 import 'package:easysave/services/perf_trace.dart';
 import 'package:easysave/services/thumbnail_diagnostics.dart';
-import 'package:easysave/services/verified_media.dart';
 import 'package:easysave/widgets/gallery_browser.dart';
 import 'package:easysave/widgets/verified_asset_image.dart';
 import 'package:flutter/material.dart';

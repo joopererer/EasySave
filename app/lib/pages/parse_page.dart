@@ -23,6 +23,7 @@ import '../services/history_deletion.dart';
 import '../services/host_bridge.dart';
 import '../services/links.dart';
 import '../services/live_pairs.dart';
+import '../services/local_thumbnail_tiers.dart';
 import '../services/login_navigation.dart';
 import '../services/preview_open_guard.dart';
 import '../services/preview_route_observer.dart';
@@ -1288,7 +1289,7 @@ class ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
             image: AssetEntityImageProvider(
               asset,
               isOriginal: false,
-              thumbnailSize: const ThumbnailSize.square(150),
+              thumbnailSize: LocalThumbnailTiers.small,
             ),
             fit: BoxFit.cover,
             gaplessPlayback: true,

@@ -22,6 +22,7 @@ import '../services/live_pairs.dart';
 import '../services/media_delete_service.dart';
 import '../services/preview_video.dart';
 import '../services/media_request_policy.dart';
+import '../services/local_thumbnail_tiers.dart';
 import '../services/perf_trace.dart';
 import 'shared.dart';
 import 'decoded_image_keeper.dart';
@@ -1918,7 +1919,7 @@ class _ThumbnailImage extends StatelessWidget {
           fit: BoxFit.contain,
         ),
         isOriginal: false,
-        thumbnailSize: const ThumbnailSize.square(120),
+        thumbnailSize: LocalThumbnailTiers.small,
         fit: BoxFit.cover,
       );
     }

@@ -10,6 +10,7 @@ import '../core/models.dart';
 import '../services/gallery_locator_service.dart';
 import '../services/history_db.dart';
 import '../services/live_pairs.dart';
+import '../services/local_thumbnail_tiers.dart';
 import '../theme/app_theme.dart';
 import 'shared.dart';
 import 'verified_asset_image.dart';
@@ -121,6 +122,7 @@ class HistoryThumb extends StatelessWidget {
     this.width,
     this.height,
     this.brokenIconSize = 24,
+    this.thumbnailSize = LocalThumbnailTiers.medium,
   });
 
   final HistoryRecord record;
@@ -129,6 +131,11 @@ class HistoryThumb extends StatelessWidget {
   final double? width;
   final double? height;
   final double brokenIconSize;
+
+  /// Which of the two local thumbnail tiers this thumb asks for (v1.11 batch
+  /// 3). The default is the history cover; a cell in the creator card's 2×2
+  /// grid asks for [LocalThumbnailTiers.small].
+  final ThumbnailSize thumbnailSize;
 
   @override
   Widget build(BuildContext context) {
@@ -178,7 +185,7 @@ class HistoryThumb extends StatelessWidget {
             height: height,
           ),
           isOriginal: false,
-          thumbnailSize: const ThumbnailSize.square(400),
+          thumbnailSize: thumbnailSize,
           fit: fit,
           width: width,
           height: height,
@@ -1226,6 +1233,9 @@ class _CreatorCell extends StatelessWidget {
       itemIndex: r.itemIndex,
       fit: BoxFit.cover,
       brokenIconSize: 16,
+      // A cell of the 2×2 grid: the small tier, shared with the thumbnail
+      // strip and the parse page (v1.11 batch 3).
+      thumbnailSize: LocalThumbnailTiers.small,
     );
   }
 }

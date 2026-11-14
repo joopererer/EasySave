@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:photo_manager/photo_manager.dart';
 import 'package:photo_manager_image_provider/photo_manager_image_provider.dart';
 import '../services/gallery_locator_service.dart';
+import '../services/local_thumbnail_tiers.dart';
 import '../services/thumbnail_diagnostics.dart';
 import '../services/verified_media.dart';
 
@@ -17,7 +18,7 @@ const Duration kLocalThumbnailTimeout = Duration(seconds: 5);
 
 class VerifiedAssetImage extends StatefulWidget {
   const VerifiedAssetImage(this.asset, {super.key, required this.fallback,
-    this.isOriginal = false, this.thumbnailSize = const ThumbnailSize.square(400),
+    this.isOriginal = false, this.thumbnailSize = LocalThumbnailTiers.medium,
     this.fit, this.width, this.height, this.verifyExistence, this.onFrame});
   final AssetEntity asset;
   final Widget fallback;
@@ -45,7 +46,7 @@ class VerifiedAssetImage extends StatefulWidget {
   static ImageProvider providerFor(
     AssetEntity asset, {
     bool isOriginal = false,
-    ThumbnailSize thumbnailSize = const ThumbnailSize.square(400),
+    ThumbnailSize thumbnailSize = LocalThumbnailTiers.medium,
   }) =>
       providerForTesting?.call(asset, isOriginal, thumbnailSize) ??
       AssetEntityImageProvider(asset, isOriginal: isOriginal, thumbnailSize: thumbnailSize);
