@@ -301,6 +301,9 @@ void main() {
       );
       expect(find.text('4/4'), findsOneWidget);
 
+      // A re-download of the selected page re-parses the post.
+      await tester.tap(find.byKey(const Key('browser_select_toggle')));
+      await tester.pumpAndSettle();
       await _tapRedownload(tester);
 
       expect(

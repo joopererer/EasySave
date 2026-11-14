@@ -658,45 +658,95 @@ class _GalleryBrowserPageState extends State<GalleryBrowserPage> {
     ),
   );
 
-  /// Delete the page in view and move on to the next item.
-  Future<void> _deleteCurrentItem() async {
-    final item = _currentItem;
+  /// Delete what the bar acts on — the page in view, or every selected item.
+  ///
+  /// One dialog asks how (record only / album file too) for the whole batch,
+  /// then each item goes through the same single-item deletion, so "仅删除记录"
+  /// stays undoable and the system dialog for the album files is the same one.
+  Future<void> _deleteTargets() async {
     final remove = widget.onDeleteItem;
-    if (item == null || remove == null || _busy) return;
-    final label = _position.position.toString();
-    final withFile = await _askDeleteMode('第 $label 项');
+    if (_targets.isEmpty || remove == null || _busy) return;
+    // Remember where every item sits before the first one leaves, so an undo
+    // can put each of them back exactly where it was.
+    final items = [
+      for (final item in _targets)
+        (item: item, at: _items.indexWhere((it) => it.index == item.index)),
+    ];
+    final title = items.length == 1
+        ? '第 ${_position.position} 项'
+        : '已选的 ${items.length} 项';
+    final withFile = await _askDeleteMode(title);
     if (withFile == null || !mounted) return;
     setState(() => _busy = true);
-    GalleryBrowserItemDeletion? result;
+    final removed =
+        <({GalleryBrowserItem item, int at, GalleryBrowserItemDeletion result})>[];
+    var failed = 0;
     try {
-      result = await remove(item, deleteAlbumFiles: withFile);
+      for (final entry in items) {
+        if (!mounted) break;
+        GalleryBrowserItemDeletion? result;
+        try {
+          result = await remove(
+            entry.item,
+            deleteAlbumFiles: withFile,
+          );
+        } catch (_) {
+          result = null;
+        }
+        if (result == null || !result.ok) {
+          failed++;
+          continue;
+        }
+        _removeItem(entry.item.index);
+        removed.add((item: entry.item, at: entry.at, result: result));
+      }
     } finally {
       if (mounted) setState(() => _busy = false);
     }
     if (!mounted) return;
-    if (result == null || !result.ok) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('删除失败，请重试')),
-      );
-      return;
-    }
-    final at = _items.indexWhere((it) => it.index == item.index);
-    _removeItem(item.index);
+
+    // Whatever left the viewer cannot stay selected.
+    setState(
+      () => _selected.removeWhere(
+        (index) => !_items.any((item) => item.index == index),
+      ),
+    );
+    widget.onSelectionChanged?.call(_selected);
+
     final messenger = ScaffoldMessenger.of(context);
     messenger.hideCurrentSnackBar();
-    final undo = result.undo;
+    if (removed.isEmpty) {
+      messenger.showSnackBar(const SnackBar(content: Text('删除失败，请重试')));
+      return;
+    }
+    final undos = [
+      for (final entry in removed)
+        if (entry.result.undo != null) entry.result.undo!,
+    ];
+    final undoAll = undos.length == removed.length && undos.isNotEmpty
+        ? () async {
+            for (final undo in undos) {
+              await undo();
+            }
+          }
+        : null;
+    final message = removed.length == 1
+        ? (removed.single.result.message ?? '已删除这张')
+        : (failed > 0 ? '已删除 ${removed.length} 项，$failed 项删除失败' : '已删除 ${removed.length} 项');
     messenger.showSnackBar(
       SnackBar(
-        content: Text(result.message ?? '已删除这张'),
+        content: Text(message),
         duration: const Duration(seconds: 6),
-        action: undo == null
+        action: undoAll == null
             ? null
             : SnackBarAction(
                 label: '撤销',
                 onPressed: () async {
-                  await undo();
+                  await undoAll();
                   if (!mounted) return;
-                  _insertItem(item, at);
+                  for (final entry in removed) {
+                    _insertItem(entry.item, entry.at);
+                  }
                 },
               ),
       ),
@@ -825,20 +875,114 @@ class _GalleryBrowserPageState extends State<GalleryBrowserPage> {
     widget.onSelectionChanged?.call(_selected);
   }
 
-  Future<void> _shareCurrent() async {
-    final item = _items[_currentIndex];
-    if (item.asset != null) {
-      try {
-        final file = await item.asset!.file;
-        if (file != null && await file.exists()) {
-          await SharePlus.instance.share(
-            ShareParams(text: widget.postUrl, files: [XFile(file.path)]),
-          );
-          return;
-        }
-      } catch (_) {}
+  /// A selection turns every action into "this, for all of them" (v1.11 batch
+  /// 6): the bar never needs a second row of buttons.
+  bool get _selectionMode => _selected.isNotEmpty;
+
+  /// What the bar acts on: the selected items, or the page in view.
+  List<GalleryBrowserItem> get _targets {
+    if (_selected.isEmpty) {
+      final item = _currentItem;
+      return item == null ? const <GalleryBrowserItem>[] : [item];
     }
-    await SharePlus.instance.share(ShareParams(text: widget.postUrl));
+    return [
+      for (final item in _items)
+        if (_selected.contains(item.index)) item,
+    ];
+  }
+
+  void _selectAll() {
+    setState(() {
+      _selected
+        ..clear()
+        ..addAll([for (final item in _items) item.index]);
+    });
+    widget.onSelectionChanged?.call(_selected);
+  }
+
+  void _clearSelection() {
+    if (_selected.isEmpty) return;
+    setState(_selected.clear);
+    widget.onSelectionChanged?.call(_selected);
+  }
+
+  /// A compact top-bar tool (全选 / 取消选择): 40 dp wide so the two of them and
+  /// the selection circle still fit beside the title on a 320 dp screen.
+  Widget _topTool({
+    required Key key,
+    required String label,
+    required IconData icon,
+    required VoidCallback onPressed,
+  }) => IconButton(
+    key: key,
+    tooltip: label,
+    onPressed: onPressed,
+    iconSize: 20,
+    padding: EdgeInsets.zero,
+    constraints: const BoxConstraints.tightFor(width: 40, height: 40),
+    style: IconButton.styleFrom(
+      foregroundColor: Colors.white,
+      backgroundColor: Colors.white.withValues(alpha: 0.12),
+      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+    ),
+    icon: Icon(icon, semanticLabel: label),
+  );
+
+  /// 重新下载: with a selection, only the selected items are ticked in the
+  /// preview that re-parses the post; without one, the post is parsed again
+  /// with everything selected, exactly like the old 「重新解析」.
+  Future<void> _redownloadFromBar() async {
+    if (_selectionMode) {
+      await _redownload(Set<int>.of(_selected));
+      return;
+    }
+    widget.onReparse?.call();
+  }
+
+  /// Share what the bar acts on: the page in view, or every selected item that
+  /// is actually on this device ("不在本机" 的项 cannot leave the phone).
+  Future<void> _shareTargets() async {
+    final items = _targets;
+    if (items.isEmpty) return;
+    final messenger = ScaffoldMessenger.of(context);
+    final shareable = <XFile>[];
+    var offline = 0;
+    for (final item in items) {
+      final asset = item.asset;
+      if (item.missing || asset == null) {
+        offline++;
+        continue;
+      }
+      try {
+        final file = await asset.file;
+        if (file != null && await file.exists()) {
+          shareable.add(XFile(file.path));
+        } else {
+          offline++;
+        }
+      } catch (_) {
+        offline++;
+      }
+    }
+    if (items.length > 1 && offline > 0) {
+      messenger.showSnackBar(
+        SnackBar(
+          content: Text(
+            shareable.isEmpty
+                ? '$offline 项不在本机，没有可分享的内容'
+                : '$offline 项不在本机，只分享还在的 ${shareable.length} 项',
+          ),
+        ),
+      );
+    }
+    if (shareable.isEmpty) {
+      // Only the network post itself can travel then.
+      await SharePlus.instance.share(ShareParams(text: widget.postUrl));
+      return;
+    }
+    await SharePlus.instance.share(
+      ShareParams(text: widget.postUrl, files: shareable),
+    );
   }
 
   Future<void> _openOriginal() async {
@@ -974,6 +1118,7 @@ class _GalleryBrowserPageState extends State<GalleryBrowserPage> {
                           ? () => _redownload({item.index})
                           : null,
                       onToggleSelect: () => _toggleSelect(item.index),
+                      selectionMode: _selectionMode,
                     );
                   },
                 ),
@@ -1061,33 +1206,58 @@ class _GalleryBrowserPageState extends State<GalleryBrowserPage> {
                           text: widget.aiLabel,
                           source: widget.aiLabelSource,
                         ),
+                        // Selection tools: 全选 and 取消选择 only make sense once
+                        // something is selected, and they belong next to the
+                        // circle that starts the selection.
+                        if (_selectionMode) ...[
+                          _topTool(
+                            key: const Key('select_all'),
+                            label: '全选',
+                            icon: Icons.select_all,
+                            onPressed: _selectAll,
+                          ),
+                          _topTool(
+                            key: const Key('clear_selection'),
+                            label: '取消选择',
+                            icon: Icons.deselect,
+                            onPressed: _clearSelection,
+                          ),
+                        ],
                         // Checkbox
-                        GestureDetector(
-                          onTap: currentItem != null
-                              ? () => _toggleSelect(currentItem.index)
-                              : null,
-                          child: Container(
-                            width: 32,
-                            height: 32,
-                            decoration: BoxDecoration(
-                              shape: BoxShape.circle,
-                              color: isSelected
-                                  ? const Color(0xFFFF2442)
-                                  : Colors.white.withValues(alpha: 0.2),
-                              border: Border.all(
-                                color: isSelected
-                                    ? Colors.transparent
-                                    : Colors.white70,
-                                width: 2,
+                        Tooltip(
+                          message: isSelected ? '取消选中' : '选中',
+                          child: Semantics(
+                            button: true,
+                            label: isSelected ? '取消选中' : '选中',
+                            child: GestureDetector(
+                              key: const Key('browser_select_toggle'),
+                              onTap: currentItem != null
+                                  ? () => _toggleSelect(currentItem.index)
+                                  : null,
+                              child: Container(
+                                width: 32,
+                                height: 32,
+                                decoration: BoxDecoration(
+                                  shape: BoxShape.circle,
+                                  color: isSelected
+                                      ? const Color(0xFFFF2442)
+                                      : Colors.white.withValues(alpha: 0.2),
+                                  border: Border.all(
+                                    color: isSelected
+                                        ? Colors.transparent
+                                        : Colors.white70,
+                                    width: 2,
+                                  ),
+                                ),
+                                child: isSelected
+                                    ? const Icon(
+                                        Icons.check,
+                                        color: Colors.white,
+                                        size: 18,
+                                      )
+                                    : null,
                               ),
                             ),
-                            child: isSelected
-                                ? const Icon(
-                                    Icons.check,
-                                    color: Colors.white,
-                                    size: 18,
-                                  )
-                                : null,
                           ),
                         ),
                       ],
@@ -1209,19 +1379,19 @@ class _GalleryBrowserPageState extends State<GalleryBrowserPage> {
                                   widget.onRedownload != null
                               ? () => _redownload(_missingIndices.toSet())
                               : null,
-                          onRedownloadCurrent:
-                              (widget.onRedownloadItems != null ||
-                                      widget.onRedownload != null) &&
+                          onRedownload:
+                              widget.onRedownloadItems != null ||
+                                  widget.onRedownload != null ||
+                                  widget.onReparse != null
+                              ? _redownloadFromBar
+                              : null,
+                          onDelete:
+                              widget.onDeleteItem != null &&
                                   currentItem != null
-                              ? () => _redownload({currentItem.index})
+                              ? _deleteTargets
                               : null,
-                          onDeleteCurrent:
-                              widget.onDeleteItem != null && currentItem != null
-                              ? _deleteCurrentItem
-                              : null,
-                          onReparse: widget.showSave ? null : widget.onReparse,
+                          onShare: widget.showSave ? null : _shareTargets,
                           onOpenOriginal: widget.showSave ? null : _openOriginal,
-                          onShare: widget.showSave ? null : _shareCurrent,
                           // Close the viewer and let the preview page start the
                           // save with the synced selection.
                           onSave: widget.showSave
@@ -1241,16 +1411,19 @@ class _GalleryBrowserPageState extends State<GalleryBrowserPage> {
   }
 }
 
-/// The actions the 「更多」 menu keeps once the bar is too narrow for them.
-enum _BrowserMoreAction { delete, reparse, openOriginal, redownloadMissing }
+/// What the 「更多」 menu keeps once the bar cannot fit them all.
+enum _BrowserMoreAction { openOriginal, redownloadMissing }
 
 /// Bottom action bar of the fullscreen viewer.
 ///
-/// Every action is an icon with a tooltip (shown on long press) and a semantics
-/// label; the missing-items button keeps its word because "补下缺失(N)" cannot
-/// be guessed from an icon. The bar never overflows: it first drops the hint,
-/// then tightens the gaps, then moves the secondary actions into a 「更多」
-/// menu. The primary action (分享 / 保存) is always visible.
+/// One thing at a time: with nothing selected, every button acts on the page
+/// in view; with a selection, every button acts on the whole selection. This is
+/// the only row the viewer needs — 「重新下载这张」 leaves with it.
+///
+/// Every button is [_extent] dp high with the icon and text vertically
+/// centered, so the row reads as one line. It never overflows: first the hint
+/// goes, then the gaps tighten, then the missing-items button shrinks and
+/// finally moves into 「更多」; 分享 is never folded away.
 class _BrowserActionBar extends StatelessWidget {
   const _BrowserActionBar({
     required this.selectionCount,
@@ -1258,11 +1431,10 @@ class _BrowserActionBar extends StatelessWidget {
     required this.showSave,
     required this.busy,
     required this.onRedownloadMissing,
-    required this.onRedownloadCurrent,
-    required this.onDeleteCurrent,
-    required this.onReparse,
-    required this.onOpenOriginal,
+    required this.onRedownload,
+    required this.onDelete,
     required this.onShare,
+    required this.onOpenOriginal,
     required this.onSave,
   });
 
@@ -1271,16 +1443,15 @@ class _BrowserActionBar extends StatelessWidget {
   final bool showSave;
   final bool busy;
   final Future<void> Function()? onRedownloadMissing;
-  final Future<void> Function()? onRedownloadCurrent;
-  final Future<void> Function()? onDeleteCurrent;
-  final VoidCallback? onReparse;
-  final VoidCallback? onOpenOriginal;
+  final Future<void> Function()? onRedownload;
+  final Future<void> Function()? onDelete;
   final Future<void> Function()? onShare;
+  final VoidCallback? onOpenOriginal;
   final VoidCallback? onSave;
 
-  /// Side of one icon slot: wide enough to tap, narrow enough to keep five
-  /// actions on a 320 dp screen.
-  static const double _extent = 44;
+  /// One button slot: 48 dp high, and 48 dp wide keeps four of them side by
+  /// side with the hint or the missing-items button on a 320 dp screen.
+  static const double _extent = 48;
   static const double _looseGap = 8;
   static const double _tightGap = 2;
 
@@ -1288,11 +1459,10 @@ class _BrowserActionBar extends StatelessWidget {
   /// room so a rounding difference can never turn into an overflow.
   static const double _reserve = 12;
 
-  static const TextStyle _hintStyle = TextStyle(
-    color: Colors.white70,
-    fontSize: 13,
-  );
+  static const TextStyle _hintStyle = TextStyle(color: Colors.white70, fontSize: 13);
   static const TextStyle _missingStyle = TextStyle(fontSize: 12);
+  static const TextStyle _saveStyle = TextStyle(color: Colors.white, fontSize: 13);
+  static const EdgeInsets _missingPadding = EdgeInsets.symmetric(horizontal: 10);
 
   static double _textWidth(BuildContext context, String text, TextStyle style) {
     final painter = TextPainter(
@@ -1305,248 +1475,287 @@ class _BrowserActionBar extends StatelessWidget {
     painter.dispose();
     return width;
   }
-
   @override
   Widget build(BuildContext context) {
-    const hintStyle = _hintStyle;
-    final hintText = selectionCount > 0 ? '已选 $selectionCount 项' : '点右上角选择';
-    final hintWidth = _textWidth(context, hintText, hintStyle);
-    // icon 16 + the 8 dp gap of a labelled button + 20 dp of horizontal padding.
-    final missingWidth =
-        _textWidth(context, '补下缺失($missingCount)', _missingStyle) + 44;
+    if (showSave) return _saveButtonRow();
 
+    final hintText = selectionCount > 0 ? '已选 $selectionCount 项' : '点右上角选择';
+    final hintWidth = _textWidth(context, hintText, _hintStyle);
+    final missingLabel = '补下缺失($missingCount)';
+    final missingWidth = _textWidth(context, missingLabel, _missingStyle);
+    // icon 16 + the 8 dp gap and 20 dp of padding a labelled button adds.
+    final missingFullWidth = missingWidth + 44;
+    final missingTextWidth = missingWidth + 16;
     final showMissing = missingCount > 0 && onRedownloadMissing != null;
-    // One missing item has its own button; with several, 「补下缺失」 covers all
-    // of them and the extra icon would only cost width.
-    final canRedownloadCurrent =
-        onRedownloadCurrent != null && missingCount <= 1;
-    final secondaryCount =
-        (onDeleteCurrent != null ? 1 : 0) +
-        (onReparse != null ? 1 : 0) +
-        (onOpenOriginal != null ? 1 : 0);
+    final iconCount =
+        (onRedownload != null ? 1 : 0) +
+        (onDelete != null ? 1 : 0) +
+        (onShare != null ? 1 : 0);
 
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
-      child: LayoutBuilder(
-        builder: (context, constraints) {
-          final available = constraints.maxWidth;
+      child: SizedBox(
+        height: _extent,
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            final available = constraints.maxWidth;
 
-          double needed({
-            required bool hint,
-            required bool more,
-            required bool missingInMenu,
-            required double gap,
-          }) {
-            final widths = <double>[
-              if (hint) hintWidth,
-              if (showMissing && !missingInMenu) missingWidth,
+            double needed({
+              required bool hint,
+              required bool missingFull,
+              required bool missingOnlyText,
+              required double slot,
+              required double gap,
+            }) {
+              final widths = <double>[
+                if (hint) hintWidth,
+                if (showMissing && missingFull) missingFullWidth,
+                if (showMissing && missingOnlyText) missingTextWidth,
+                ...List<double>.filled(
+                  iconCount + 1, // the 「更多」 button is always here
+                  slot,
+                ),
+              ];
+              return widths.reduce((a, b) => a + b) +
+                  gap * (widths.length - 1);
+            }
+
+            bool fits(double width) => width <= available - _reserve;
+
+            // Retreat order: the hint, then the gaps, then the width of the
+            // missing-items button, and only then its place in 「更多」.
+            final tier =
+                fits(needed(hint: true, missingFull: true, missingOnlyText: false, slot: _extent, gap: _looseGap))
+                ? 1
+                : fits(needed(hint: false, missingFull: true, missingOnlyText: false, slot: _extent, gap: _looseGap))
+                ? 2
+                : fits(needed(hint: false, missingFull: true, missingOnlyText: false, slot: _extent, gap: _tightGap))
+                ? 3
+                : fits(needed(hint: false, missingFull: true, missingOnlyText: false, slot: 44, gap: _tightGap))
+                ? 4
+                : fits(needed(hint: false, missingFull: false, missingOnlyText: true, slot: 44, gap: _tightGap))
+                ? 5
+                : 6;
+            final showHint = tier == 1;
+            final missingInMenu = tier == 6;
+            final gap = tier >= 5 ? 0.0 : (tier <= 2 ? _looseGap : _tightGap);
+            final slot = tier >= 4 ? 44.0 : _extent;
+
+            final trailing = <Widget>[
+              if (showMissing && !missingInMenu)
+                _missingButton(textOnly: tier >= 5),
+              if (onRedownload != null)
+                _actionButton(
+                  slot: slot,
+                  key: const Key('redownload'),
+                  badgeKey: const Key('badge_redownload'),
+                  label: selectionCount > 0 ? '重新下载选中项' : '重新下载',
+                  icon: Icons.refresh,
+                  onPressed: () => onRedownload?.call(),
+                ),
+              if (onDelete != null)
+                _actionButton(
+                  slot: slot,
+                  key: const Key('delete_item'),
+                  badgeKey: const Key('badge_delete'),
+                  label: selectionCount > 0 ? '删除选中项' : '删除这张',
+                  icon: Icons.delete_outline,
+                  onPressed: () => onDelete?.call(),
+                ),
+              if (onShare != null)
+                _actionButton(
+                  slot: slot,
+                  key: const Key('share_item'),
+                  badgeKey: const Key('badge_share'),
+                  label: selectionCount > 0 ? '分享选中项' : '分享',
+                  icon: Icons.share,
+                  onPressed: () => onShare?.call(),
+                ),
+              _moreButton(missingInMenu: missingInMenu),
             ];
-            final icons = 1 + // the primary action, always here
-                (canRedownloadCurrent ? 1 : 0) +
-                (more ? (secondaryCount > 0 ? 1 : 0) : secondaryCount);
-            widths.addAll(List<double>.filled(icons, _extent));
-            if (widths.isEmpty) return 0;
-            return widths.reduce((a, b) => a + b) + gap * (widths.length - 1);
-          }
 
-          bool fits(double width) => width <= available - _reserve;
-
-          // Retreat order: hint, then gaps, then the secondary actions.
-          final tier =
-              fits(needed(
-                hint: true,
-                more: false,
-                missingInMenu: false,
-                gap: _looseGap,
-              ))
-              ? 1
-              : fits(needed(
-                  hint: false,
-                  more: false,
-                  missingInMenu: false,
-                  gap: _looseGap,
-                ))
-              ? 2
-              : fits(needed(
-                  hint: false,
-                  more: false,
-                  missingInMenu: false,
-                  gap: _tightGap,
-                ))
-              ? 3
-              : fits(needed(
-                  hint: false,
-                  more: true,
-                  missingInMenu: false,
-                  gap: _tightGap,
-                ))
-              ? 4
-              : fits(needed(
-                  hint: false,
-                  more: true,
-                  missingInMenu: false,
-                  gap: 0,
-                ))
-              ? 5
-              : 6;
-          final showHint = tier == 1;
-          final useMore = tier >= 4;
-          final missingInMenu = tier == 6;
-          final gap = tier <= 2 ? _looseGap : (tier <= 4 ? _tightGap : 0.0);
-
-          final secondary = <Widget>[
-            if (onDeleteCurrent != null)
-              _iconAction(
-                key: const Key('delete_item'),
-                label: '删除这张',
-                icon: Icons.delete_outline,
-                onPressed: busy ? null : () => onDeleteCurrent?.call(),
-              ),
-            if (onReparse != null)
-              _iconAction(
-                key: const Key('reparse'),
-                label: '重新解析',
-                icon: Icons.refresh,
-                onPressed: onReparse,
-              ),
-            if (onOpenOriginal != null)
-              _iconAction(
-                key: const Key('open_original'),
-                label: '打开原帖',
-                icon: Icons.open_in_new,
-                onPressed: onOpenOriginal,
-              ),
-          ];
-
-          final trailing = <Widget>[
-            if (showMissing && !missingInMenu) _missingButton(),
-            if (canRedownloadCurrent)
-              _iconAction(
-                key: const Key('redownload_current'),
-                label: '重新下载这张',
-                icon: Icons.download_outlined,
-                onPressed: busy ? null : () => onRedownloadCurrent?.call(),
-              ),
-            if (useMore && secondary.isNotEmpty)
-              _moreButton(context, missingInMenu: missingInMenu)
-            else
-              ...secondary,
-            _primaryAction(),
-          ];
-
-          return Row(
-            children: [
-              if (showHint)
-                Expanded(
-                  child: Text(
-                    hintText,
-                    key: const Key('browser_hint'),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: hintStyle,
-                  ),
-                )
-              else
-                const Spacer(),
-              if (showHint) SizedBox(width: gap),
-              for (var i = 0; i < trailing.length; i++) ...[
-                if (i > 0 && gap > 0) SizedBox(width: gap),
-                trailing[i],
+            return Row(
+              crossAxisAlignment: CrossAxisAlignment.center,
+              children: [
+                if (showHint)
+                  Expanded(
+                    child: Text(
+                      hintText,
+                      key: const Key('browser_hint'),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: _hintStyle,
+                    ),
+                  )
+                else
+                  const Spacer(),
+                for (var i = 0; i < trailing.length; i++) ...[
+                  if (i > 0 && gap > 0) SizedBox(width: gap),
+                  trailing[i],
+                ],
               ],
-            ],
-          );
-        },
+            );
+          },
+        ),
+      ),
+    );
+  }
+  /// One round icon action, with the number of selected items in a corner badge
+  /// once the button speaks for a selection.
+  Widget _actionButton({
+    required double slot,
+    required Key key,
+    required Key badgeKey,
+    required String label,
+    required IconData icon,
+    required VoidCallback onPressed,
+  }) {
+    final button = IconButton(
+      key: key,
+      tooltip: label,
+      onPressed: busy ? null : onPressed,
+      iconSize: 20,
+      padding: EdgeInsets.zero,
+      constraints: BoxConstraints.tightFor(width: slot, height: _extent),
+      style: IconButton.styleFrom(
+        backgroundColor: Colors.white.withValues(alpha: 0.12),
+        foregroundColor: Colors.white,
+        shape: const CircleBorder(),
+        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+      ),
+      icon: Icon(icon, semanticLabel: label),
+    );
+    if (selectionCount <= 0) return button;
+    return SizedBox(
+      width: slot,
+      height: _extent,
+      child: Stack(
+        clipBehavior: Clip.none,
+        children: [
+          Positioned.fill(child: button),
+          Positioned(
+            top: 2,
+            right: 2,
+            child: IgnorePointer(
+              child: Container(
+                key: badgeKey,
+                constraints: const BoxConstraints(minWidth: 16),
+                height: 16,
+                padding: const EdgeInsets.symmetric(horizontal: 4),
+                alignment: Alignment.center,
+                decoration: const BoxDecoration(
+                  color: Color(0xFFFF2442),
+                  borderRadius: BorderRadius.all(Radius.circular(8)),
+                ),
+                child: Text(
+                  selectionCount.toString(),
+                  maxLines: 1,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 10,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }
 
-  Widget _iconAction({
-    Key? key,
-    required String label,
-    required IconData icon,
-    VoidCallback? onPressed,
-  }) => IconButton(
-    key: key,
-    tooltip: label,
-    onPressed: onPressed,
-    iconSize: 20,
-    padding: EdgeInsets.zero,
-    constraints: const BoxConstraints.tightFor(width: _extent, height: _extent),
-    style: IconButton.styleFrom(
-      backgroundColor: Colors.white.withValues(alpha: 0.12),
-      foregroundColor: Colors.white,
-      shape: const CircleBorder(),
-      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-    ),
-    icon: Icon(icon, semanticLabel: label),
-  );
-
   /// The one action that keeps its words: an icon cannot say "N items are gone".
-  Widget _missingButton() => Tooltip(
+  Widget _missingButton({required bool textOnly}) => Tooltip(
     message: '补下缺失的 $missingCount 张',
-    child: TextButton.icon(
-      key: const Key('redownload_missing'),
-      style: TextButton.styleFrom(
-        backgroundColor: Colors.white.withValues(alpha: 0.12),
-        foregroundColor: Colors.white,
-        shape: const StadiumBorder(),
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-        minimumSize: Size.zero,
-        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+    child: SizedBox(
+      height: _extent,
+      child: TextButton.icon(
+        key: const Key('redownload_missing'),
+        style: TextButton.styleFrom(
+          backgroundColor: Colors.white.withValues(alpha: 0.12),
+          foregroundColor: Colors.white,
+          shape: const StadiumBorder(),
+          padding: textOnly
+              ? const EdgeInsets.symmetric(horizontal: 8)
+              : _missingPadding,
+          minimumSize: Size.zero,
+          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+          alignment: Alignment.center,
+        ),
+        onPressed: busy ? null : () => onRedownloadMissing?.call(),
+        icon: textOnly
+            ? null
+            : const Icon(Icons.cloud_download_outlined, size: 16),
+        label: Text(
+          '补下缺失($missingCount)',
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: _missingStyle,
+        ),
       ),
-      onPressed: busy ? null : () => onRedownloadMissing?.call(),
-      icon: const Icon(Icons.download_outlined, size: 16),
-      label: Text('补下缺失($missingCount)', style: _missingStyle),
     ),
   );
 
-  Widget _moreButton(BuildContext context, {required bool missingInMenu}) =>
-      PopupMenuButton<_BrowserMoreAction>(
-        key: const Key('browser_more'),
-        tooltip: '更多操作',
-        padding: EdgeInsets.zero,
-        color: const Color(0xFF232323),
-        onSelected: (action) {
-          switch (action) {
-            case _BrowserMoreAction.delete:
-              onDeleteCurrent?.call();
-            case _BrowserMoreAction.reparse:
-              onReparse?.call();
-            case _BrowserMoreAction.openOriginal:
-              onOpenOriginal?.call();
-            case _BrowserMoreAction.redownloadMissing:
-              onRedownloadMissing?.call();
-          }
-        },
-        itemBuilder: (context) => [
-          if (missingInMenu && missingCount > 0 && onRedownloadMissing != null)
-            _menuItem(
-              _BrowserMoreAction.redownloadMissing,
-              Icons.download_outlined,
-              '补下缺失($missingCount)',
+  Widget _moreButton({required bool missingInMenu}) => PopupMenuButton<_BrowserMoreAction>(
+    key: const Key('browser_more'),
+    tooltip: '更多操作',
+    padding: EdgeInsets.zero,
+    color: const Color(0xFF232323),
+    onSelected: (action) {
+      switch (action) {
+        case _BrowserMoreAction.openOriginal:
+          onOpenOriginal?.call();
+        case _BrowserMoreAction.redownloadMissing:
+          onRedownloadMissing?.call();
+      }
+    },
+    itemBuilder: (context) => [
+      if (onOpenOriginal != null)
+        _menuItem(_BrowserMoreAction.openOriginal, Icons.open_in_new, '打开原帖'),
+      if (missingInMenu && missingCount > 0 && onRedownloadMissing != null)
+        _menuItem(
+          _BrowserMoreAction.redownloadMissing,
+          Icons.cloud_download_outlined,
+          '补下缺失($missingCount)',
+        ),
+    ],
+    child: SizedBox(
+      width: _extent,
+      height: _extent,
+      child: Stack(
+        alignment: Alignment.center,
+        children: [
+          Container(
+            width: _extent,
+            height: _extent,
+            decoration: BoxDecoration(
+              color: Colors.white.withValues(alpha: 0.12),
+              shape: BoxShape.circle,
             ),
-          if (onDeleteCurrent != null)
-            _menuItem(_BrowserMoreAction.delete, Icons.delete_outline, '删除这张'),
-          if (onReparse != null)
-            _menuItem(_BrowserMoreAction.reparse, Icons.refresh, '重新解析'),
-          if (onOpenOriginal != null)
-            _menuItem(_BrowserMoreAction.openOriginal, Icons.open_in_new, '打开原帖'),
-        ],
-        child: Container(
-          width: _extent,
-          height: _extent,
-          decoration: BoxDecoration(
-            color: Colors.white.withValues(alpha: 0.12),
-            shape: BoxShape.circle,
           ),
-          child: const Icon(
+          const Icon(
             Icons.more_horiz,
             size: 20,
             color: Colors.white,
             semanticLabel: '更多操作',
           ),
-        ),
-      );
+          if (missingInMenu && missingCount > 0)
+            Positioned(
+              top: 4,
+              right: 4,
+              child: Container(
+                width: 8,
+                height: 8,
+                decoration: const BoxDecoration(
+                  color: Color(0xFFFF2442),
+                  shape: BoxShape.circle,
+                ),
+              ),
+            ),
+        ],
+      ),
+    ),
+  );
 
   PopupMenuItem<_BrowserMoreAction> _menuItem(
     _BrowserMoreAction value,
@@ -1563,28 +1772,47 @@ class _BrowserActionBar extends StatelessWidget {
     ),
   );
 
-  /// 分享 (remote preview) or 保存 (the viewer opened from the preview flow).
-  Widget _primaryAction() {
-    final label = showSave ? '保存' : '分享';
-    return IconButton(
-      key: const Key('browser_primary_action'),
-      tooltip: label,
-      onPressed: busy
-          ? null
-          : (showSave ? onSave : () => onShare?.call()),
-      iconSize: 20,
-      padding: EdgeInsets.zero,
-      constraints: const BoxConstraints.tightFor(
-        width: _extent,
+  /// The remote preview's bar keeps one button: 保存, carrying how many items it
+  /// would download.
+  Widget _saveButtonRow() {
+    final label = selectionCount > 0 ? '保存 ($selectionCount)' : '保存';
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
+      child: SizedBox(
         height: _extent,
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: [
+            const Spacer(),
+            SizedBox(
+              height: _extent,
+              child: Tooltip(
+                message: '保存',
+                child: FilledButton.icon(
+                  key: const Key('browser_primary_action'),
+                  style: FilledButton.styleFrom(
+                    backgroundColor: const Color(0xFFFF2442),
+                    foregroundColor: Colors.white,
+                    minimumSize: Size.zero,
+                    padding: const EdgeInsets.symmetric(horizontal: 16),
+                    shape: const StadiumBorder(),
+                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    alignment: Alignment.center,
+                  ),
+                  onPressed: busy || selectionCount == 0 ? null : onSave,
+                  icon: const Icon(Icons.download, size: 18),
+                  label: Text(
+                    label,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: _saveStyle,
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
       ),
-      style: IconButton.styleFrom(
-        backgroundColor: const Color(0xFFFF2442),
-        foregroundColor: Colors.white,
-        shape: const CircleBorder(),
-        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-      ),
-      icon: Icon(showSave ? Icons.download : Icons.share, semanticLabel: label),
     );
   }
 }
@@ -1672,6 +1900,10 @@ class _BrowserItemView extends StatefulWidget {
     this.onZoomChanged,
     this.onRedownload,
     this.onToggleSelect,
+    /// The viewer is in multi-select mode: a short tap on the picture toggles
+    /// selection instead of playback controls (a real life photo's long press
+    /// still plays the motion clip).
+    this.selectionMode = false,
   });
 
   final GalleryBrowserItem item;
@@ -1679,6 +1911,7 @@ class _BrowserItemView extends StatefulWidget {
   final ValueChanged<bool>? onZoomChanged;
   final Future<void> Function()? onRedownload;
   final VoidCallback? onToggleSelect;
+  final bool selectionMode;
 
   @override
   State<_BrowserItemView> createState() => _BrowserItemViewState();
@@ -2008,7 +2241,7 @@ class _BrowserItemViewState extends State<_BrowserItemView> {
     // 2. GIF playback: auto loop, muted, tap to pause/play, GIF badge
     if (it.isGif) {
       final c = _videoController;
-      return GestureDetector(
+      return _withSelectionTap(GestureDetector(
         behavior: HitTestBehavior.opaque,
         // Long-press toggles selection (tap still pauses/plays).
         onLongPress: widget.onToggleSelect,
@@ -2085,13 +2318,13 @@ class _BrowserItemViewState extends State<_BrowserItemView> {
               ),
           ],
         ),
-      );
+      ));
     }
 
     // 3. Regular Video playback: starts paused, tap the play button to start
     if (it.type == 'video') {
       final c = _videoController;
-      return GestureDetector(
+      return _withSelectionTap(GestureDetector(
         behavior: HitTestBehavior.opaque,
         // Long-press toggles selection; tap shows/hides the controls bar.
         onLongPress: widget.onToggleSelect,
@@ -2212,7 +2445,7 @@ class _BrowserItemViewState extends State<_BrowserItemView> {
               ),
           ],
         ),
-      );
+      ));
     }
 
     // 4. Live Photo: static cover + "LIVE" badge + "长按播放实况" + press to play loop
@@ -2220,7 +2453,7 @@ class _BrowserItemViewState extends State<_BrowserItemView> {
       final c = _videoController;
       final showVideo = _isLiveHolding && c != null && c.value.isInitialized;
 
-      return GestureDetector(
+      return _withSelectionTap(GestureDetector(
         behavior: HitTestBehavior.opaque,
         onLongPressStart: (_) => _startLiveMotion(),
         onLongPressEnd: (_) => _stopLiveMotion(),
@@ -2317,15 +2550,37 @@ class _BrowserItemViewState extends State<_BrowserItemView> {
               ),
           ],
         ),
-      );
+      ));
     }
 
     // 5. Standard Image: Zoomable with double-tap zoom & pinch pan
-    return _ZoomableImageView(
-      item: it,
-      platform: widget.platform,
-      onZoomChanged: widget.onZoomChanged,
-      onLongPress: widget.onToggleSelect,
+    return _withSelectionTap(
+      _ZoomableImageView(
+        item: it,
+        platform: widget.platform,
+        onZoomChanged: widget.onZoomChanged,
+        onLongPress: widget.onToggleSelect,
+      ),
+    );
+  }
+
+  /// While the viewer is in multi-select mode a tap on the picture toggles the
+  /// selection of the page in view — the only thing a tap can mean then. The
+  /// pictures below keep their own gestures (long press, zoom, playback), so
+  /// this sits on top instead of fighting them in the gesture arena.
+  Widget _withSelectionTap(Widget child) {
+    if (!widget.selectionMode) return child;
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        child,
+        Positioned.fill(
+          child: GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: widget.onToggleSelect,
+          ),
+        ),
+      ],
     );
   }
 }
