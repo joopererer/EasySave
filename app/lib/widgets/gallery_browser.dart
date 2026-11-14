@@ -26,6 +26,7 @@ import '../services/local_thumbnail_tiers.dart';
 import '../services/perf_trace.dart';
 import 'shared.dart';
 import 'decoded_image_keeper.dart';
+import 'staged_photo.dart';
 import 'verified_asset_image.dart';
 import 'ai_label_badge.dart';
 
@@ -48,6 +49,8 @@ class GalleryBrowserItem {
     this.cachePostId,
     this.cacheItemIndex,
     this.undecodable = false,
+    this.width,
+    this.height,
   });
 
   factory GalleryBrowserItem.fromMediaItem(
@@ -76,6 +79,8 @@ class GalleryBrowserItem {
     status: status,
     missing: missing,
     filename: filename ?? item.localFilename,
+    width: item.width?.toDouble(),
+    height: item.height?.toDouble(),
   );
 
   final int index;
@@ -109,6 +114,12 @@ class GalleryBrowserItem {
   /// auxiliary image on Android 12). The page then offers a replacement
   /// instead of trying to draw a file the platform rejects.
   final bool undecodable;
+
+  /// Declared size of the still in the post, when it is known. The viewer uses
+  /// it to give the placeholder and the full-resolution image one display box
+  /// (v1.11 batch 3).
+  final double? width;
+  final double? height;
 
   /// Build the [MediaItem] that drives [CoverImage] with the full URL set.
   MediaItem toMediaItem() =>
@@ -2521,40 +2532,27 @@ class _BrowserItemViewState extends State<_BrowserItemView> {
                 minScale: 1.0,
                 maxScale: 4.0,
                 child: Center(
-                  child: it.asset != null
-                      ? VerifiedAssetImage(
-                          it.asset!,
-                          fallback: CoverImage(
-                            item: it.toMediaItem(),
-                            platform: (widget.platform),
-                            fit: BoxFit.contain,
-                            fullResolution: true,
-                          ),
-                          isOriginal: true,
-                          fit: BoxFit.contain,
-                          onFrame: _trace.fullShown,
-                        )
-                      : Stack(
-                          fit: StackFit.passthrough,
-                          alignment: Alignment.center,
-                          children: [
-                            CoverImage(
-                              item: it.toMediaItem(),
-                              platform: (widget.platform),
-                              fit: BoxFit.contain,
-                              cacheWidth: 400,
-                              onFrame: _trace.placeholderShown,
-                            ),
-                            CoverImage(
-                              item: it.toMediaItem(),
-                              platform: (widget.platform),
-                              fit: BoxFit.contain,
-                              fullResolution: true,
-                              onFrame: _trace.fullShown,
-                              placeholder: const Center(child: CircularProgressIndicator()),
-                            ),
-                          ],
-                        ),
+                  child: StagedPhoto(
+                    aspectRatio: stillAspectOf(it),
+                    placeholder: viewerStillPlaceholder(
+                      item: it,
+                      platform: widget.platform,
+                      fit: stillAspectOf(it) == null
+                          ? BoxFit.contain
+                          : BoxFit.cover,
+                      onFrame: _trace.placeholderShown,
+                    ),
+                    buildFull: (signals) => viewerFullStill(
+                      item: it,
+                      platform: widget.platform,
+                      fit: stillAspectOf(it) == null
+                          ? BoxFit.contain
+                          : BoxFit.cover,
+                      signals: signals,
+                      onFrame: _trace.fullShown,
+                      onFailed: _trace.failed,
+                    ),
+                  ),
                 ),
               ),
 
@@ -2635,8 +2633,104 @@ class _BrowserItemViewState extends State<_BrowserItemView> {
   }
 }
 
-class _ZoomableImageView extends StatefulWidget {
-  const _ZoomableImageView({
+/// Display frame of a still: the size the post declared, else the album file's
+/// own, else unknown (v1.11 batch 3).
+double? stillAspectOf(GalleryBrowserItem item) {
+  final declared = stagedAspectRatio(item.width, item.height);
+  if (declared != null) return declared;
+  final asset = item.asset;
+  if (asset == null) return null;
+  return stagedAspectRatio(asset.width, asset.height);
+}
+
+/// The low-resolution layer of a still in the viewer (v1.11 batch 3).
+///
+/// A local file shows the same medium-tier thumbnail its card uses, so it is
+/// usually already decoded — no original bytes are ever read into Dart. A
+/// remote file shows the cached preview thumbnail (400 px wide).
+Widget viewerStillPlaceholder({
+  required GalleryBrowserItem item,
+  required String platform,
+  required BoxFit fit,
+  VoidCallback? onFrame,
+}) {
+  final asset = item.asset;
+  if (asset != null) {
+    return Image(
+      image: VerifiedAssetImage.providerFor(
+        asset,
+        thumbnailSize: LocalThumbnailTiers.medium,
+      ),
+      fit: fit,
+      gaplessPlayback: true,
+      frameBuilder: (context, child, frame, wasSync) {
+        if (frame != null) onFrame?.call();
+        return child;
+      },
+      // A thumbnail this device cannot decode simply leaves the frame empty;
+      // the full-resolution layer below still tries.
+      errorBuilder: (_, _, _) => const SizedBox.shrink(),
+    );
+  }
+  return CoverImage(
+    item: item.toMediaItem(),
+    platform: platform,
+    fit: fit,
+    cacheWidth: 400,
+    onFrame: onFrame,
+  );
+}
+
+/// The full-resolution layer of a still in the viewer. It reports its first
+/// frame and its failures so [StagedPhoto] can fade it in or keep the
+/// placeholder on screen.
+Widget viewerFullStill({
+  required GalleryBrowserItem item,
+  required String platform,
+  required BoxFit fit,
+  required StagedPhotoSignals signals,
+  VoidCallback? onFrame,
+  VoidCallback? onFailed,
+}) {
+  final asset = item.asset;
+  if (asset != null) {
+    return VerifiedAssetImage(
+      asset,
+      fallback: CoverImage(
+        item: item.toMediaItem(),
+        platform: platform,
+        fit: fit,
+        fullResolution: true,
+      ),
+      isOriginal: true,
+      fit: fit,
+      onFrame: () {
+        onFrame?.call();
+        signals.onFrame();
+      },
+      onFailed: () {
+        onFailed?.call();
+        signals.onFailure();
+      },
+    );
+  }
+  return CoverImage(
+    item: item.toMediaItem(),
+    platform: platform,
+    fit: fit,
+    fullResolution: true,
+    onFrame: () {
+      onFrame?.call();
+      signals.onFrame();
+    },
+    onError: () {
+      onFailed?.call();
+      signals.onFailure();
+    },
+  );
+}
+
+class _ZoomableImageView extends StatefulWidget {  const _ZoomableImageView({
     required this.item,
     required this.platform,
     this.onZoomChanged,
@@ -2664,6 +2758,9 @@ class _ZoomableImageViewState extends State<_ZoomableImageView>
     index: widget.item.index,
     source: widget.item.asset != null ? 'local' : 'remote',
   );
+
+  /// Display frame shared by the placeholder and the full image.
+  double? get _aspect => stillAspectOf(widget.item);
 
   @override
   void initState() {
@@ -2734,40 +2831,23 @@ class _ZoomableImageViewState extends State<_ZoomableImageView>
         maxScale: 5.0,
         clipBehavior: Clip.none,
         child: Center(
-          child: widget.item.asset != null
-              ? VerifiedAssetImage(
-                  widget.item.asset!,
-                  fallback: CoverImage(
-                    item: widget.item.toMediaItem(),
-                    platform: (widget.platform),
-                    fit: BoxFit.contain,
-                    fullResolution: true,
-                  ),
-                  isOriginal: true,
-                  fit: BoxFit.contain,
-                  onFrame: _trace.fullShown,
-                )
-              : Stack(
-                  fit: StackFit.passthrough,
-                  alignment: Alignment.center,
-                  children: [
-                    CoverImage(
-                      item: widget.item.toMediaItem(),
-                      platform: (widget.platform),
-                      fit: BoxFit.contain,
-                      cacheWidth: 400,
-                      onFrame: _trace.placeholderShown,
-                    ),
-                    CoverImage(
-                      item: widget.item.toMediaItem(),
-                      platform: (widget.platform),
-                      fit: BoxFit.contain,
-                      fullResolution: true,
-                      onFrame: _trace.fullShown,
-                      placeholder: const Center(child: CircularProgressIndicator()),
-                    ),
-                  ],
-                ),
+          child: StagedPhoto(
+            aspectRatio: _aspect,
+            placeholder: viewerStillPlaceholder(
+              item: widget.item,
+              platform: widget.platform,
+              fit: _aspect == null ? BoxFit.contain : BoxFit.cover,
+              onFrame: _trace.placeholderShown,
+            ),
+            buildFull: (signals) => viewerFullStill(
+              item: widget.item,
+              platform: widget.platform,
+              fit: _aspect == null ? BoxFit.contain : BoxFit.cover,
+              signals: signals,
+              onFrame: _trace.fullShown,
+              onFailed: _trace.failed,
+            ),
+          ),
         ),
       ),
     );

@@ -91,6 +91,7 @@ class CoverImage extends StatefulWidget {
     this.placeholder,
     this.fullResolution = false,
     this.onFrame,
+    this.onError,
   });
 
   final MediaItem item;
@@ -106,6 +107,11 @@ class CoverImage extends StatefulWidget {
   /// 3). Measurement only: it never changes what the widget draws.
   final VoidCallback? onFrame;
 
+  /// Called when the image cannot be loaded. The retry hint below is unchanged;
+  /// the viewer uses this to keep its placeholder visible with it (v1.11 batch
+  /// 3).
+  final VoidCallback? onError;
+
   @override
   State<CoverImage> createState() => _CoverImageState();
 }
@@ -113,11 +119,18 @@ class CoverImage extends StatefulWidget {
 class _CoverImageState extends State<CoverImage> {
   int _retry = 0;
   bool _reported = false;
+  bool _errorReported = false;
 
   void _reportFrame() {
     if (_reported) return;
     _reported = true;
     widget.onFrame?.call();
+  }
+
+  void _reportError() {
+    if (_errorReported) return;
+    _errorReported = true;
+    widget.onError?.call();
   }
 
   @override
@@ -153,24 +166,29 @@ class _CoverImageState extends State<CoverImage> {
             if (frame != null) _reportFrame();
             return child;
           },
-          errorBuilder: (context, error, _) => ColoredBox(
-            color: Colors.black12,
-            child: InkWell(
-              onTap: () async {
-                await CdnImage(
-                  widget.item,
-                  platform: widget.platform,
-                  cacheWidth: width,
-                ).evict();
-                if (mounted) setState(() => _retry++);
-              },
-              child: Center(
-                child: Text(
-                  error is MediaPolicyException ? '该资源地址不在允许范围内' : '加载失败，点击重试',
+          errorBuilder: (context, error, _) {
+            _reportError();
+            return ColoredBox(
+              color: Colors.black12,
+              child: InkWell(
+                onTap: () async {
+                  await CdnImage(
+                    widget.item,
+                    platform: widget.platform,
+                    cacheWidth: width,
+                  ).evict();
+                  if (mounted) setState(() => _retry++);
+                },
+                child: Center(
+                  child: Text(
+                    error is MediaPolicyException
+                        ? '该资源地址不在允许范围内'
+                        : '加载失败，点击重试',
+                  ),
                 ),
               ),
-            ),
-          ),
+            );
+          },
           loadingBuilder: (context, child, progress) => progress == null
               ? child
               : (widget.placeholder ?? const ColoredBox(color: Colors.black12)),

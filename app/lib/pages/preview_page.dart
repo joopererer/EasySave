@@ -18,9 +18,11 @@ import '../services/host_bridge.dart';
 import '../services/media_request_policy.dart';
 import '../services/preview_route_observer.dart';
 import '../theme/app_theme.dart';
+import '../services/local_thumbnail_tiers.dart';
 import '../widgets/download_sheet.dart';
 import '../widgets/gallery_browser.dart';
 import '../widgets/shared.dart';
+import '../widgets/staged_photo.dart';
 import '../widgets/verified_asset_image.dart';
 
 class PreviewItemCover extends StatelessWidget {
@@ -39,14 +41,55 @@ class PreviewItemCover extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // The preview thumbnail (already fetched for the grid) is the placeholder,
+    // and the full-resolution image fades in inside the same frame (v1.11
+    // batch 3). A local file keeps its own verified path on top.
     final remote = CoverImage(item: item, platform: platform);
     final local = asset;
+    final staged = StagedPhoto(
+      aspectRatio: stagedAspectRatio(
+        item.width?.toInt(),
+        item.height?.toInt(),
+      ),
+      placeholder: CoverImage(
+        item: item,
+        platform: platform,
+        fit: BoxFit.cover,
+        cacheWidth: 400,
+      ),
+      buildFull: (signals) => CoverImage(
+        item: item,
+        platform: platform,
+        fit: BoxFit.cover,
+        fullResolution: true,
+        onFrame: signals.onFrame,
+        onError: signals.onFailure,
+      ),
+    );
     return local == null
-        ? remote
-        : VerifiedAssetImage(
-            local,
-            fallback: remote,
-            verifyExistence: verifyExistence,
+        ? staged
+        : StagedPhoto(
+            aspectRatio: stagedAspectRatio(
+              item.width?.toInt(),
+              item.height?.toInt(),
+            ),
+            placeholder: Image(
+              image: VerifiedAssetImage.providerFor(
+                local,
+                thumbnailSize: LocalThumbnailTiers.medium,
+              ),
+              fit: BoxFit.cover,
+              gaplessPlayback: true,
+              errorBuilder: (_, _, _) => const SizedBox.shrink(),
+            ),
+            buildFull: (signals) => VerifiedAssetImage(
+              local,
+              fallback: remote,
+              verifyExistence: verifyExistence,
+              fit: BoxFit.cover,
+              onFrame: signals.onFrame,
+              onFailed: signals.onFailure,
+            ),
           );
   }
 }

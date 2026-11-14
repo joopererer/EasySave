@@ -19,7 +19,8 @@ const Duration kLocalThumbnailTimeout = Duration(seconds: 5);
 class VerifiedAssetImage extends StatefulWidget {
   const VerifiedAssetImage(this.asset, {super.key, required this.fallback,
     this.isOriginal = false, this.thumbnailSize = LocalThumbnailTiers.medium,
-    this.fit, this.width, this.height, this.verifyExistence, this.onFrame});
+    this.fit, this.width, this.height, this.verifyExistence, this.onFrame,
+    this.onFailed});
   final AssetEntity asset;
   final Widget fallback;
   final bool isOriginal;
@@ -31,6 +32,13 @@ class VerifiedAssetImage extends StatefulWidget {
   /// Called once, when the first frame of this thumbnail has painted (v1.11
   /// batch 3). Measurement only: it never changes what the widget draws.
   final VoidCallback? onFrame;
+
+  /// Called when this widget can no longer produce a frame — a decode error, a
+  /// deadline that expired, or a file the album no longer holds. The viewer uses
+  /// it to keep its placeholder on screen instead of hiding it behind an empty
+  /// full-resolution layer (v1.11 batch 3). The widget's own fallback and
+  /// timeout behaviour is unchanged.
+  final VoidCallback? onFailed;
 
   /// Test seam for the existence check of an asset.
   @visibleForTesting
@@ -127,6 +135,7 @@ class _VerifiedAssetImageState extends State<VerifiedAssetImage> with WidgetsBin
       );
       _request = null;
       if (mounted && widget.asset.id == id) setState(() {});
+      widget.onFailed?.call();
     });
   }
 
@@ -170,8 +179,17 @@ class _VerifiedAssetImageState extends State<VerifiedAssetImage> with WidgetsBin
     WidgetsBinding.instance.addPostFrameCallback((_) {
       GalleryLocatorService.instance.markUnreadable(id);
       if (mounted && widget.asset.id == id) setState(() {});
+      widget.onFailed?.call();
     });
   }
+  /// Reports a file the album no longer holds, once the frame that draws the
+  /// fallback is done (never during build).
+  void _reportMissing() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      widget.onFailed?.call();
+    });
+  }
+
   @override
   Widget build(BuildContext context) => FutureBuilder<bool>(
     future: _exists,
@@ -183,6 +201,7 @@ class _VerifiedAssetImageState extends State<VerifiedAssetImage> with WidgetsBin
         PaintingBinding.instance.imageCache.evict(_provider);
         ThumbnailDiagnostics.instance.abandon(_request);
         _request = null;
+        _reportMissing();
         return widget.fallback;
       }
       if (snapshot.data != true && !PaintingBinding.instance.imageCache.statusForKey(_provider).keepAlive) {
