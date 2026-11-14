@@ -128,43 +128,79 @@ class GalleryBrowserItem {
 Set<int> initialGallerySelection(Set<int>? selectedIndices) =>
     Set<int>.from(selectedIndices ?? const <int>{});
 
-/// The "position / total" pair the viewer shows above the media.
-class BrowserCounter {
-  const BrowserCounter({required this.position, required this.total});
+/// Where the page in view sits: inside this browser, and inside the post.
+///
+/// The browser's own numbering counts what it shows — items on this device and
+/// the "不在本机" placeholders — so a delete shrinks it at once. The post's
+/// numbering never moves: it is where the item sits in the original post, which
+/// is what makes `1/3 (2/8)` useful after the first picture was deleted.
+class BrowserPosition {
+  const BrowserPosition({
+    required this.position,
+    required this.total,
+    required this.postPosition,
+    required this.postTotal,
+  });
 
+  /// 1-based place of the page in this browser.
   final int position;
+
+  /// How many items this browser shows.
   final int total;
 
-  String get label => '$position / $total';
+  /// 1-based place of the item in the post; null when the post no longer has
+  /// that place (a re-parse came back with fewer items than the stored index).
+  final int? postPosition;
+
+  /// The post's item total as last parsed.
+  final int postTotal;
+
+  /// The post's numbering is only shown when it says something the browser's
+  /// own numbering cannot: `1/3` alone instead of `1/3 (1/3)`.
+  bool get showsOrigin => !(postPosition == position && postTotal == total);
+
+  String get label => '$position/$total';
+
+  String get originLabel => '${postPosition?.toString() ?? '—'}/$postTotal';
+
+  /// The whole counter as one string, e.g. `1/3 (2/8)`.
+  String get fullLabel => showsOrigin ? '$label ($originLabel)' : label;
 }
 
-/// Numbering of one viewer item once the items the user deleted are gone.
+/// The two numbering systems of one viewer page (v1.11 batch 6).
 ///
-/// [baseTotal] is the post's item total at parse time (a Live photo counts
-/// once), [deleted] the original item indices the user deleted in the app.
-/// Deleting an item shrinks the post, so `2 / 6` with its first picture deleted
-/// reads `1 / 5`. Items that are "not on this device" or were never downloaded
-/// keep their slot: nothing is subtracted unless it was really deleted, so a
-/// post whose 3rd, 5th and 7th pictures were saved still reads 3 / 8, 5 / 8,
-/// 7 / 8.
-BrowserCounter browserCounterFor({
+/// [listIndex] and [listLength] are the page's place and the browser's item
+/// count; [itemIndex] is the item's own 0-based index in the post and
+/// [postTotal] the post's item total (a Live photo counts once). A stored index
+/// the post no longer reaches keeps the place empty instead of guessing.
+BrowserPosition browserPositionFor({
+  required int listIndex,
+  required int listLength,
   required int itemIndex,
-  required int baseTotal,
-  required Set<int> deleted,
+  required int postTotal,
 }) {
-  final postTotal = baseTotal < 1 ? 1 : baseTotal;
-  var removed = 0;
-  var before = 0;
-  for (final index in deleted) {
-    if (index < 0 || index >= postTotal) continue;
-    removed++;
-    if (index < itemIndex) before++;
-  }
-  final total = postTotal - removed < 1 ? 1 : postTotal - removed;
-  var position = itemIndex + 1 - before;
+  final total = listLength < 1 ? 1 : listLength;
+  var position = listIndex + 1;
   if (position < 1) position = 1;
   if (position > total) position = total;
-  return BrowserCounter(position: position, total: total);
+
+  final origin = postTotal < 1 ? 1 : postTotal;
+  final postPosition = itemIndex >= 0 && itemIndex < origin ? itemIndex + 1 : null;
+  return BrowserPosition(
+    position: position,
+    total: total,
+    postPosition: postPosition,
+    postTotal: origin,
+  );
+}
+
+/// What a re-download changed: what the viewer shows now, and — when the post
+/// was parsed again — its new total, so the counter's post numbering follows.
+class GalleryBrowserRefresh {
+  const GalleryBrowserRefresh({required this.items, this.postTotal});
+
+  final List<GalleryBrowserItem> items;
+  final int? postTotal;
 }
 
 /// What deleting one item of a post did, so the viewer can say it and offer the
@@ -473,7 +509,7 @@ class GalleryBrowserPage extends StatefulWidget {
   /// Preferred re-download entry: asks the caller to re-parse the post and open
   /// the selection panel with exactly these items preselected. Returning a new
   /// item list replaces what the viewer shows, so the state updates in place.
-  final Future<List<GalleryBrowserItem>?> Function(Set<int> indices)?
+  final Future<GalleryBrowserRefresh?> Function(Set<int> indices)?
       onRedownloadItems;
 
   /// Deletes one item of the post (v1.11 batch 4). Null hides the action.
@@ -518,11 +554,15 @@ class _GalleryBrowserPageState extends State<GalleryBrowserPage> {
 
   /// Original post item indices the current post lost to the user's deletes.
   /// Kept apart from [_items] because a deleted item leaves the viewer: the
-  /// total only shrinks if we remember what is no longer there.
+  /// post's fallback total only stays right if we remember what is no longer
+  /// there.
   late final Set<int> _deleted = {
     for (final index in widget.deletedIndices)
       if (index >= 0) index,
   };
+
+  /// The post's item total a re-parse reported, null until one succeeds.
+  int? _parsedPostTotal;
 
   /// Original post item index of the page in view.
   int? get _currentItemIndex {
@@ -543,25 +583,25 @@ class _GalleryBrowserPageState extends State<GalleryBrowserPage> {
       if (item.missing) item.index,
   ];
 
-  /// The post's item total before any deletion: the declared total, or — for a
-  /// record written before it was stored — what the viewer holds plus what was
-  /// deleted from it (the old fallback, which the deletes are then subtracted
-  /// from like any other).
-  int get _baseTotal {
+  /// The post's item total as last known: the total a re-parse reported, else
+  /// the record's, else — for a record written before it was stored — what the
+  /// viewer holds plus what was deleted from it (the old fallback, unchanged).
+  int get _postTotal {
+    final parsed = _parsedPostTotal;
+    if (parsed != null && parsed > 0) return parsed;
     final declared = widget.originalTotal;
     if (declared != null && declared > 0) return declared;
     final living = _items.length + _deleted.length;
     return living == 0 ? 1 : living;
   }
 
-  /// "position / total" of the page in view, e.g. `1 / 5` after one delete.
-  BrowserCounter get _counter => browserCounterFor(
-    itemIndex: _currentItemIndex ?? _currentIndex,
-    baseTotal: _baseTotal,
-    deleted: _deleted,
+  /// "1/3 (2/8)": the page's place in this browser, then its place in the post.
+  BrowserPosition get _position => browserPositionFor(
+    listIndex: _items.isEmpty ? 0 : _currentIndex.clamp(0, _items.length - 1),
+    listLength: _items.length,
+    itemIndex: _currentItemIndex ?? 0,
+    postTotal: _postTotal,
   );
-
-  String get _counterLabel => _counter.label;
 
   /// Re-download [indices]: the caller re-parses the post and opens the preview
   /// selection with exactly those items ticked. The refreshed items replace what
@@ -623,7 +663,7 @@ class _GalleryBrowserPageState extends State<GalleryBrowserPage> {
     final item = _currentItem;
     final remove = widget.onDeleteItem;
     if (item == null || remove == null || _busy) return;
-    final label = _counter.position.toString();
+    final label = _position.position.toString();
     final withFile = await _askDeleteMode('第 $label 项');
     if (withFile == null || !mounted) return;
     setState(() => _busy = true);
@@ -715,11 +755,13 @@ class _GalleryBrowserPageState extends State<GalleryBrowserPage> {
   }
 
   /// Swap the visible pages, keeping the page the user was looking at.
-  void _replaceItems(List<GalleryBrowserItem> rebuilt) {
+  void _replaceItems(GalleryBrowserRefresh rebuilt) {
     final keep = _currentItemIndex;
     final keepSelection = Set<int>.of(_selected);
     setState(() {
-      _items = List<GalleryBrowserItem>.of(rebuilt);
+      _items = List<GalleryBrowserItem>.of(rebuilt.items);
+      final parsed = rebuilt.postTotal;
+      if (parsed != null && parsed > 0) _parsedPostTotal = parsed;
       final at = keep == null
           ? -1
           : _items.indexWhere((item) => item.index == keep);
@@ -974,8 +1016,21 @@ class _GalleryBrowserPageState extends State<GalleryBrowserPage> {
                             crossAxisAlignment: CrossAxisAlignment.center,
                             mainAxisSize: MainAxisSize.min,
                             children: [
-                              Text(
-                                _counterLabel,
+                              Text.rich(
+                                TextSpan(
+                                  text: _position.label,
+                                  children: [
+                                    if (_position.showsOrigin)
+                                      TextSpan(
+                                        text: ' (${_position.originLabel})',
+                                        style: const TextStyle(
+                                          color: Colors.white54,
+                                          fontSize: 12,
+                                          fontWeight: FontWeight.normal,
+                                        ),
+                                      ),
+                                  ],
+                                ),
                                 key: const Key('browser_counter'),
                                 style: const TextStyle(
                                   color: Colors.white,

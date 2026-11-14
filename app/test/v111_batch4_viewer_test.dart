@@ -176,8 +176,8 @@ void main() {
 
       expect(find.text('不在本机'), findsOneWidget);
       expect(find.text('重新下载这张'), findsOneWidget);
-      // The position is the item's own place in the post, not its list slot.
-      expect(find.text('2 / 8'), findsOneWidget);
+      // The browser slot, then the item's own place in the post.
+      expect(find.text('2/3 (2/8)'), findsOneWidget);
       expect(find.text('补下缺失(2)'), findsOneWidget);
 
       await tester.tap(find.text('重新下载这张'));
@@ -215,7 +215,7 @@ void main() {
       );
       await settle(tester);
       expect(find.text('不在本机'), findsOneWidget);
-      expect(find.text('1 / 2'), findsOneWidget);
+      expect(find.text('1/2'), findsOneWidget);
       expect(find.text('补下缺失(2)'), findsOneWidget);
       await tester.pumpWidget(const SizedBox.shrink());
     });
@@ -249,7 +249,7 @@ void main() {
         ),
       );
       await settle(tester);
-      expect(find.text('1 / 3'), findsOneWidget);
+      expect(find.text('1/3'), findsOneWidget);
 
       await tester.tap(find.byKey(const Key('delete_item')));
       await settle(tester);
@@ -259,15 +259,16 @@ void main() {
       await tester.tap(find.text('仅删除记录'));
       await settle(tester);
       expect(deletions, 1);
-      // The post lost one item, so the next one reads 1 / 2 and not 2 / 3.
-      expect(find.text('1 / 2'), findsOneWidget);
+      // The browser lost one item, so the next one reads 1/2, not 2/3; the
+      // post still calls it the 2nd of 3.
+      expect(find.text('1/2 (2/3)'), findsOneWidget);
       expect(find.text('不在本机'), findsOneWidget);
 
       expect(find.text('撤销'), findsOneWidget);
       await tester.tap(find.text('撤销'));
       await settle(tester);
       expect(undoable, 1);
-      expect(find.text('1 / 3'), findsOneWidget,
+      expect(find.text('1/3'), findsOneWidget,
           reason: 'the deleted item is back in place');
       await tester.pumpWidget(const SizedBox.shrink());
     });

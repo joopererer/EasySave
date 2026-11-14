@@ -79,8 +79,9 @@ Set<int> preselectableIndices(ParsedPost post, Set<int> indices) => {
 /// The post is parsed again on purpose: the stored items may be stale (signed
 /// URLs expire) and the user must be able to change the selection before the
 /// download starts. Nothing about the record is touched unless the user saves.
-/// Returns the refreshed viewer items, or null when nothing changed.
-Future<List<GalleryBrowserItem>?> redownloadRecordItems(
+/// Returns the refreshed viewer items and the post's current total, or null
+/// when nothing changed.
+Future<GalleryBrowserRefresh?> redownloadRecordItems(
   BuildContext context,
   HistoryRecord record,
   Set<int> indices,
@@ -114,7 +115,7 @@ Future<List<GalleryBrowserItem>?> redownloadRecordItems(
   }
 
   // The post may have lost items since it was saved: never preselect an index
-  // that no longer exists, and say so instead of downloading something else.
+  // that no longer exists, say which ones are gone, and download the rest.
   final valid = preselectableIndices(post, indices);
   if (valid.isEmpty) {
     messenger.hideCurrentSnackBar();
@@ -123,8 +124,16 @@ Future<List<GalleryBrowserItem>?> redownloadRecordItems(
     );
     return null;
   }
+  final dropped = indices.length - valid.length;
   if (!context.mounted) return null;
   messenger.hideCurrentSnackBar();
+  if (dropped > 0) {
+    messenger.showSnackBar(
+      SnackBar(
+        content: Text('原帖中已找不到其中 $dropped 项，只下载还在的 ${valid.length} 项'),
+      ),
+    );
+  }
 
   await PreviewPage.open(context, post: post, initialSelection: valid);
   if (!context.mounted) return null;
@@ -133,7 +142,10 @@ Future<List<GalleryBrowserItem>?> redownloadRecordItems(
   // items are back. No album rescan is needed (and none is added) to show it.
   final fresh = await reloadRecord(record);
   try {
-    return await browserItemsForRecord(fresh);
+    return GalleryBrowserRefresh(
+      items: await browserItemsForRecord(fresh),
+      postTotal: fresh.originalItemCount,
+    );
   } catch (_) {
     return null;
   }
