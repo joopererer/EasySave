@@ -18,7 +18,7 @@ const Duration kLocalThumbnailTimeout = Duration(seconds: 5);
 class VerifiedAssetImage extends StatefulWidget {
   const VerifiedAssetImage(this.asset, {super.key, required this.fallback,
     this.isOriginal = false, this.thumbnailSize = const ThumbnailSize.square(400),
-    this.fit, this.width, this.height, this.verifyExistence});
+    this.fit, this.width, this.height, this.verifyExistence, this.onFrame});
   final AssetEntity asset;
   final Widget fallback;
   final bool isOriginal;
@@ -26,6 +26,10 @@ class VerifiedAssetImage extends StatefulWidget {
   final BoxFit? fit;
   final double? width, height;
   final Future<bool> Function(String)? verifyExistence;
+
+  /// Called once, when the first frame of this thumbnail has painted (v1.11
+  /// batch 3). Measurement only: it never changes what the widget draws.
+  final VoidCallback? onFrame;
 
   /// Test seam for the existence check of an asset.
   @visibleForTesting
@@ -99,6 +103,17 @@ class _VerifiedAssetImageState extends State<VerifiedAssetImage> with WidgetsBin
     _timedOut = false;
     _frameSeen = false;
     final id = widget.asset.id;
+    // Was this thumbnail's decoded image already in the cache? A hit needs no
+    // native call, which is what a revisited mode is supposed to look like
+    // (v1.11 batch 3: the [ModeSwitch] line reports both counts).
+    final cached = PaintingBinding.instance.imageCache
+        .statusForKey(_provider)
+        .keepAlive;
+    if (cached) {
+      ThumbnailDiagnostics.instance.noteCacheHit();
+    } else {
+      ThumbnailDiagnostics.instance.noteCacheMiss();
+    }
     _request = ThumbnailDiagnostics.instance.begin(_thumbKey);
     _watchdog = Timer(kLocalThumbnailTimeout, () {
       if (!mounted || _frameSeen || _failed) return;
@@ -188,6 +203,7 @@ class _VerifiedAssetImageState extends State<VerifiedAssetImage> with WidgetsBin
             _watchdog?.cancel();
             ThumbnailDiagnostics.instance.succeeded(_request);
             _request = null;
+            widget.onFrame?.call();
           }
           return child;
         },

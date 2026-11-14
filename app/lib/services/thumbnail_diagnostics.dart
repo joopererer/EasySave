@@ -62,7 +62,34 @@ class ThumbnailRequest {
   bool get resolved => ThumbnailDiagnostics.instance._open[id] == null;
 }
 
-class ThumbnailDiagnostics {
+/// Snapshot of the thumbnail counters (v1.11 batch 3).
+///
+/// Lives beside the counters themselves so the [ModeSwitch] timing line can
+/// difference two snapshots without the diagnostics depending on it.
+class ThumbnailCounters {
+  const ThumbnailCounters({
+    required this.issued,
+    required this.hits,
+    required this.misses,
+  });
+
+  /// Native thumbnail requests issued since the process started.
+  final int issued;
+
+  /// Thumbnails that found their decoded image in the image cache.
+  final int hits;
+
+  /// Thumbnails that had to issue a request.
+  final int misses;
+
+  ThumbnailCounters operator -(ThumbnailCounters other) => ThumbnailCounters(
+    issued: issued - other.issued,
+    hits: hits - other.hits,
+    misses: misses - other.misses,
+  );
+}
+
+class ThumbnailDiagnostics extends ChangeNotifier {
   ThumbnailDiagnostics();
 
   static final ThumbnailDiagnostics instance = ThumbnailDiagnostics();
@@ -92,6 +119,29 @@ class ThumbnailDiagnostics {
 
   int get inflight => _open.length;
 
+  // Bookkeeping for the [ModeSwitch] timing line (v1.11 batch 3): how many
+  // thumbnails found their decoded image in the cache, how many had to issue a
+  // request, and how many requests were issued in total.
+  int _issued = 0;
+  int _hits = 0;
+  int _misses = 0;
+
+  /// Snapshot of the counters, for a caller that measures a window.
+  ThumbnailCounters get counters =>
+      ThumbnailCounters(issued: _issued, hits: _hits, misses: _misses);
+
+  /// A thumbnail found its decoded image in the image cache.
+  void noteCacheHit() {
+    _hits++;
+    notifyListeners();
+  }
+
+  /// A thumbnail had to issue a native request.
+  void noteCacheMiss() {
+    _misses++;
+    notifyListeners();
+  }
+
   @visibleForTesting
   int get successes => _totalOk;
   @visibleForTesting
@@ -110,8 +160,10 @@ class ThumbnailDiagnostics {
       _open.length + 1,
     );
     _open[request.id] = request;
+    _issued++;
     if (_open.length > _maxInflight) _maxInflight = _open.length;
     _timer ??= Timer.periodic(window, (_) => _flushWindow());
+    notifyListeners();
     return request;
   }
 
@@ -200,6 +252,9 @@ class ThumbnailDiagnostics {
     _totalDecodeErrors = 0;
     _totalQueueTimeouts = 0;
     _totalSystemTimeouts = 0;
+    _issued = 0;
+    _hits = 0;
+    _misses = 0;
   }
 
   /// Frees a request without recording an outcome (e.g. the card scrolled
@@ -219,6 +274,7 @@ class ThumbnailDiagnostics {
   /// idle state). A burst that ends before the window closes is summarised
   /// right here — that is the case build 49 dropped on the floor.
   void _afterChange() {
+    notifyListeners();
     if (_open.isNotEmpty) return;
     _flushWindow();
   }

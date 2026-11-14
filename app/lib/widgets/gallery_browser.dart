@@ -22,6 +22,7 @@ import '../services/live_pairs.dart';
 import '../services/media_delete_service.dart';
 import '../services/preview_video.dart';
 import '../services/media_request_policy.dart';
+import '../services/perf_trace.dart';
 import 'shared.dart';
 import 'decoded_image_keeper.dart';
 import 'verified_asset_image.dart';
@@ -1965,6 +1966,12 @@ class _BrowserItemViewState extends State<_BrowserItemView> {
   bool _isNotFound = false;
   String? _error;
 
+  /// The live photo's still, measured from the page opening (v1.11 batch 3).
+  late final ViewerImageProbe _trace = ViewerImageProbe(
+    index: widget.item.index,
+    source: widget.item.asset != null ? 'local' : 'remote',
+  );
+
   @override
   void initState() {
     super.initState();
@@ -1996,6 +2003,7 @@ class _BrowserItemViewState extends State<_BrowserItemView> {
 
   @override
   void dispose() {
+    _trace.dispose();
     _hideTimer?.cancel();
     _videoController?.dispose();
     super.dispose();
@@ -2523,6 +2531,7 @@ class _BrowserItemViewState extends State<_BrowserItemView> {
                           ),
                           isOriginal: true,
                           fit: BoxFit.contain,
+                          onFrame: _trace.fullShown,
                         )
                       : Stack(
                           fit: StackFit.passthrough,
@@ -2533,12 +2542,14 @@ class _BrowserItemViewState extends State<_BrowserItemView> {
                               platform: (widget.platform),
                               fit: BoxFit.contain,
                               cacheWidth: 400,
+                              onFrame: _trace.placeholderShown,
                             ),
                             CoverImage(
                               item: it.toMediaItem(),
                               platform: (widget.platform),
                               fit: BoxFit.contain,
                               fullResolution: true,
+                              onFrame: _trace.fullShown,
                               placeholder: const Center(child: CircularProgressIndicator()),
                             ),
                           ],
@@ -2630,7 +2641,6 @@ class _ZoomableImageView extends StatefulWidget {
     this.onZoomChanged,
     this.onLongPress,
   });
-
   final GalleryBrowserItem item;
   final String platform;
   final ValueChanged<bool>? onZoomChanged;
@@ -2647,6 +2657,13 @@ class _ZoomableImageViewState extends State<_ZoomableImageView>
   TapDownDetails? _doubleTapDetails;
   late final AnimationController _animController;
 
+  /// `[ViewerImage] index=… placeholder_ms=… full_ms=… source=…` (v1.11 batch
+  /// 3). Measurement only: nothing below waits for it.
+  late final ViewerImageProbe _trace = ViewerImageProbe(
+    index: widget.item.index,
+    source: widget.item.asset != null ? 'local' : 'remote',
+  );
+
   @override
   void initState() {
     super.initState();
@@ -2659,6 +2676,7 @@ class _ZoomableImageViewState extends State<_ZoomableImageView>
 
   @override
   void dispose() {
+    _trace.dispose();
     _transformationController.removeListener(_handleTransform);
     _transformationController.dispose();
     _animController.dispose();
@@ -2726,6 +2744,7 @@ class _ZoomableImageViewState extends State<_ZoomableImageView>
                   ),
                   isOriginal: true,
                   fit: BoxFit.contain,
+                  onFrame: _trace.fullShown,
                 )
               : Stack(
                   fit: StackFit.passthrough,
@@ -2736,12 +2755,14 @@ class _ZoomableImageViewState extends State<_ZoomableImageView>
                       platform: (widget.platform),
                       fit: BoxFit.contain,
                       cacheWidth: 400,
+                      onFrame: _trace.placeholderShown,
                     ),
                     CoverImage(
                       item: widget.item.toMediaItem(),
                       platform: (widget.platform),
                       fit: BoxFit.contain,
                       fullResolution: true,
+                      onFrame: _trace.fullShown,
                       placeholder: const Center(child: CircularProgressIndicator()),
                     ),
                   ],

@@ -28,6 +28,7 @@ import '../services/live_pairs.dart';
 import '../services/media_delete_service.dart';
 import '../services/network_status.dart';
 import '../services/parse_service.dart';
+import '../services/perf_trace.dart';
 import '../services/settings.dart';
 import '../services/site_registry.dart';
 import '../theme/app_theme.dart';
@@ -105,6 +106,10 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
   String? _author;
 
   bool _selectionMode = false;
+
+  /// The [ModeSwitch] measurement of the switch in progress (v1.11 batch 3).
+  ModeSwitchProbe? _modeSwitch;
+
   // Keys: posts view -> 'p{recordId}'; all view -> 'm{recordId}:{itemIndex}'.
   final Set<String> _selected = {};
 
@@ -254,6 +259,7 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
   @override
   void dispose() {
     _historyRefresh.dispose();
+    _modeSwitch?.dispose();
     WidgetsBinding.instance.removeObserver(this);
     GalleryLocatorService.instance.removeListener(_onLocatorChanged);
     HostBridge.historyRevision.removeListener(_onHostHistoryChanged);
@@ -1408,6 +1414,17 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
     }
   }
 
+  /// Starts the `[ModeSwitch]` measurement of a switch to [next] (v1.11 batch
+  /// 3). The line reports the switch itself, so it is started before the new
+  /// view is built and closed once every visible thumbnail has resolved.
+  void _beginModeSwitch(HistoryView next) {
+    if (next == _view) return;
+    _modeSwitch?.dispose();
+    final probe = ModeSwitchProbe(from: _view.name, to: next.name);
+    _modeSwitch = probe;
+    WidgetsBinding.instance.addPostFrameCallback((_) => probe.firstFrame());
+  }
+
   Widget _viewSwitcher() {
     final segments = <(HistoryView, String)>[
       (HistoryView.posts, '帖子'),
@@ -1430,6 +1447,7 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
                   GestureDetector(
                     onTap: () {
                       if (_view == view) return;
+                      _beginModeSwitch(view);
                       setState(() {
                         _view = view;
                         _selected.clear();
@@ -1967,6 +1985,7 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
             fileCount: c.fileCount,
             thumbs: c.thumbs,
             onTap: () => setState(() {
+              _beginModeSwitch(HistoryView.posts);
               _view = HistoryView.posts;
               _author = c.authorName;
             }),

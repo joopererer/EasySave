@@ -90,6 +90,7 @@ class CoverImage extends StatefulWidget {
     this.height,
     this.placeholder,
     this.fullResolution = false,
+    this.onFrame,
   });
 
   final MediaItem item;
@@ -101,12 +102,24 @@ class CoverImage extends StatefulWidget {
   final Widget? placeholder;
   final bool fullResolution;
 
+  /// Called once, when the first frame of this image has painted (v1.11 batch
+  /// 3). Measurement only: it never changes what the widget draws.
+  final VoidCallback? onFrame;
+
   @override
   State<CoverImage> createState() => _CoverImageState();
 }
 
 class _CoverImageState extends State<CoverImage> {
   int _retry = 0;
+  bool _reported = false;
+
+  void _reportFrame() {
+    if (_reported) return;
+    _reported = true;
+    widget.onFrame?.call();
+  }
+
   @override
   Widget build(BuildContext context) {
     if (widget.item.url.isEmpty && (widget.item.posterUrl?.isEmpty ?? true)) {
@@ -136,6 +149,10 @@ class _CoverImageState extends State<CoverImage> {
           width: widget.width,
           height: widget.height,
           gaplessPlayback: true,
+          frameBuilder: (context, child, frame, wasSync) {
+            if (frame != null) _reportFrame();
+            return child;
+          },
           errorBuilder: (context, error, _) => ColoredBox(
             color: Colors.black12,
             child: InkWell(
