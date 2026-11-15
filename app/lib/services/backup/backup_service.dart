@@ -11,6 +11,7 @@ import 'package:provenance_dart/provenance_dart.dart';
 import '../../core/dev_log.dart';
 import '../../metadata/url_normalizer.dart';
 import '../history_db.dart';
+import '../image_format_preference.dart';
 import '../settings.dart';
 import 'backup_model.dart';
 import 'backup_restore_matcher.dart';
@@ -178,6 +179,7 @@ abstract final class BackupService {
       historyView: appSettings.historyView.name,
       historyLayout: appSettings.historyLayout.name,
       historySort: appSettings.historySort.name,
+      imageFormat: appSettings.imageFormat.name,
       autoFolderBackupEnabled: appSettings.autoFolderBackupEnabled,
       autoBackupFolderName: appSettings.backupFolderName,
     );
@@ -419,6 +421,11 @@ abstract final class BackupService {
       settings.historySort = HistorySort.values.firstWhere(
         (v) => v.name == data.settings.historySort,
         orElse: () => HistorySort.latest,
+      );
+      // v1.11 batch 3: 图片格式. A backup written before the setting existed
+      // reads as `compat`, i.e. the v1.10.3 rules.
+      settings.imageFormat = ImageFormatPreference.fromName(
+        data.settings.imageFormat,
       );
 
       // Union merge for usedAlbumNames:

@@ -3,6 +3,7 @@
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'creator_sort.dart';
+import 'image_format_preference.dart';
 
 /// History page view modes (ui-spec §2.4.1).
 enum HistoryView { posts, all, creators }
@@ -58,6 +59,10 @@ class AppSettings {
   HistoryView historyView = HistoryView.posts;
   HistoryLayout historyLayout = HistoryLayout.waterfall;
   HistorySort historySort = HistorySort.latest;
+
+  /// 我的 → 设置 → 下载 → 图片格式 (v1.11 batch 3). Only 小红书 stills are
+  /// affected: other platforms hand out one kind of still URL.
+  ImageFormatPreference imageFormat = ImageFormatPreference.compat;
 
   /// 创作者 view ordering (v1.11 batch 1): key plus direction, remembered
   /// across launches. 最近保存 descending is the default.
@@ -134,6 +139,11 @@ class AppSettings {
         prefs.getString('historySort'),
         HistorySort.latest,
       )
+      ..imageFormat = _enumFromName(
+        ImageFormatPreference.values,
+        prefs.getString('imageFormat'),
+        ImageFormatPreference.compat,
+      )
       ..creatorSort = _enumFromName(
         CreatorSort.values,
         prefs.getString('creatorSort'),
@@ -170,6 +180,7 @@ class AppSettings {
     await prefs.setString('historyView', historyView.name);
     await prefs.setString('historyLayout', historyLayout.name);
     await prefs.setString('historySort', historySort.name);
+    await prefs.setString('imageFormat', imageFormat.name);
     await prefs.setString('creatorSort', creatorSort.name);
     await prefs.setBool('creatorSortDescending', creatorSortDescending);
     await prefs.setBool('saveProvenanceInImages', saveProvenanceInImages);

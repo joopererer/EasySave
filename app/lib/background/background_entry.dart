@@ -525,8 +525,24 @@ Future<void> _awaitBatchAndNotify(
       await _notify(channel, '下载失败：成功 $ok/$total —— $firstError');
     } else {
       await _log(channel, 'DOWNLOAD done: $ok/$total in ${secs}s');
-      if (toasts) await _toast(channel, '下载完成：$ok/$total 个文件');
-      await _notify(channel, '下载完成：$ok/$total 个文件');
+      // 图片格式 (v1.11 batch 3): say when the original bytes were kept in a
+      // container this device may not display, or when JPEG was asked for and
+      // no jpeg candidate existed.
+      final formatNote = imageFormatCompletionNote(batch);
+      if (toasts) {
+        await _toast(
+          channel,
+          formatNote == null
+              ? '下载完成：$ok/$total 个文件'
+              : '下载完成：$ok/$total 个文件 · $formatNote',
+        );
+      }
+      await _notify(
+        channel,
+        formatNote == null
+            ? '下载完成：$ok/$total 个文件'
+            : '下载完成：$ok/$total 个文件 —— $formatNote',
+      );
     }
     await _invoke(channel, 'historyChanged');
   } finally {

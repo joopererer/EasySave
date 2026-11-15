@@ -253,6 +253,10 @@ class BackupSettings {
   final String historyLayout;
   final String historySort;
 
+  /// v1.11 batch 3: 「图片格式」. Defaults to `compat` for backups written
+  /// before the setting existed.
+  final String imageFormat;
+
   /// v1.11 batch 1: the automatic folder backup switch and the folder's
   /// display name. The SAF tree URI (the permission grant itself) is never
   /// written — a restore has to re-authorise the folder.
@@ -276,6 +280,7 @@ class BackupSettings {
     this.historyView = 'posts',
     this.historyLayout = 'waterfall',
     this.historySort = 'latest',
+    this.imageFormat = 'compat',
     this.autoFolderBackupEnabled,
     this.autoBackupFolderName,
   }) : usedAlbumNames = usedAlbumNames != null
@@ -299,6 +304,7 @@ class BackupSettings {
         'historyView': historyView,
         'historyLayout': historyLayout,
         'historySort': historySort,
+        'imageFormat': imageFormat,
         if (autoFolderBackupEnabled != null)
           'autoFolderBackupEnabled': autoFolderBackupEnabled,
         if (autoBackupFolderName != null)
@@ -330,6 +336,7 @@ class BackupSettings {
       historyView: map['historyView'] as String? ?? 'posts',
       historyLayout: map['historyLayout'] as String? ?? 'waterfall',
       historySort: map['historySort'] as String? ?? 'latest',
+      imageFormat: map['imageFormat'] as String? ?? 'compat',
       autoFolderBackupEnabled: map['autoFolderBackupEnabled'] as bool?,
       autoBackupFolderName: (map['autoBackupFolderName'] as String?)?.trim(),
     );

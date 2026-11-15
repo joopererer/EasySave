@@ -29,6 +29,7 @@ import 'download_failure_snapshots.dart';
 import 'gallery_locator_service.dart';
 import 'history_db.dart';
 import 'history_io.dart';
+import 'image_format_preference.dart';
 import 'image_dimensions.dart';
 import 'network_status.dart';
 import 'image_decode_probe.dart';
@@ -653,6 +654,8 @@ class DownloadBatch {
     this.updatedAt = 0,
     required this.jobs,
     int? startedAt,
+    this.formatPref = ImageFormatPreference.compat,
+    this.jpegFallbackPlanned = false,
   }) : startedAt = startedAt ?? DateTime.now().microsecondsSinceEpoch;
 
   final int startedAt;
@@ -683,6 +686,16 @@ class DownloadBatch {
   /// Total number of media items in the whole post (`post.items.length`),
   /// independent of which items the user selected for this batch.
   final int? postItemCount;
+
+  /// The 「图片格式」in force when this batch was planned (v1.11 batch 3). Kept
+  /// with the batch so the completion note and a resumed download describe the
+  /// same setting, and so a snapshot from before the setting existed reads as
+  /// [ImageFormatPreference.compat].
+  ImageFormatPreference formatPref;
+
+  /// At least one still of this batch had no jpeg candidate although JPEG only
+  /// was asked for, so the compat ladder was used for it.
+  bool jpegFallbackPlanned;
 
   /// Item count written to provenance metadata. Prefers the stored post
   /// total; snapshots written before [postItemCount] existed fall back to
@@ -813,6 +826,8 @@ class DownloadBatch {
     'startedAt': startedAt,
     'cancelledByDeletion': cancelledByDeletion,
     'settledBy': settledBy,
+    'formatPref': formatPref.name,
+    'jpegFallback': jpegFallbackPlanned,
   };
 
   static DownloadBatch fromJson(Map<String, Object?> map) =>
@@ -843,6 +858,8 @@ class DownloadBatch {
                 (e) => DownloadJob.fromJson((e as Map).cast<String, Object?>()),
               )
               .toList(),
+          formatPref: ImageFormatPreference.fromName(map['formatPref'] as String?),
+          jpegFallbackPlanned: map['jpegFallback'] as bool? ?? false,
         )
         ..historyWritten = map['historyWritten'] as bool? ?? false
         ..cancelledByDeletion = map['cancelledByDeletion'] as bool? ?? false
@@ -861,6 +878,7 @@ class PlannedFile {
     this.isLivePhoto = false,
     this.expectedWidth,
     this.expectedHeight,
+    this.jpegFallback = false,
   });
 
   final String label;
@@ -873,13 +891,18 @@ class PlannedFile {
   final bool isImage;
   final int itemIndex;
   final bool isLivePhoto;
+
+  /// 「图片格式」asked for JPEG only and this item had no jpeg candidate, so
+  /// the compat ladder is used for it (v1.11 batch 3).
+  final bool jpegFallback;
 }
 
 List<PlannedFile> planFiles(
   ParsedPost post,
   List<int> selected,
-  String Function(String label, int seq, String ext) nameFor,
-) {
+  String Function(String label, int seq, String ext) nameFor, {
+  ImageFormatPreference formatPref = ImageFormatPreference.compat,
+}) {
   final planned = <PlannedFile>[];
   final counters = <String, int>{};
   String nextLabel(String kind) {
@@ -899,12 +922,12 @@ List<PlannedFile> planFiles(
     // Both ordinary images and a Live photo's still use the same jpeg-first
     // ranking, so the still of a Live item is never the only file in a batch
     // that starts with a container provenance cannot be written to.
-    final imageUrls = rankStillCandidates(filterMediaCandidates(
-      verifyOnlyStillCandidates(
-        withDerivedJpegOriginals(orderedMediaUrls(post, item)),
-      ),
-      isImage: true,
-    ));
+    final imageSource = orderedMediaUrls(post, item);
+    final imageUrls = stillCandidatesFor(imageSource, formatPref: formatPref);
+    final jpegFallback = stillFormatFellBack(
+      imageSource,
+      formatPref: formatPref,
+    );
     if (item.type == 'live' && item.videoUrl != null) {
       final base = nextLabel('Live');
       planned.add(
@@ -917,6 +940,7 @@ List<PlannedFile> planFiles(
           isLivePhoto: true,
           expectedWidth: item.width?.toInt(),
           expectedHeight: item.height?.toInt(),
+          jpegFallback: jpegFallback,
         ),
       );
       planned.add(
@@ -958,6 +982,7 @@ List<PlannedFile> planFiles(
           itemIndex: index + 1, // 1-based position in original post
           expectedWidth: item.width?.toInt(),
           expectedHeight: item.height?.toInt(),
+          jpegFallback: jpegFallback,
         ),
       );
     }
@@ -1780,11 +1805,14 @@ class DownloadManager extends ChangeNotifier {
     // that starts a batch (main UI, bubble, share) reads the state the other
     // engine left behind instead of its own stale copy (v1.11 batch 4).
     await DevDownloadFailure.refresh();
+    // 图片格式 (v1.11 batch 3): read the setting the UI saved, so every engine
+    // (main UI, bubble, share) plans the same ladder.
+    final formatPref = (await AppSettings.load()).imageFormat;
     // The batch id carries the owner so ownership is visible in the shared
     // snapshot store (SharedPreferences) and in the plugin's task groups.
     final batchId =
         '${DownloadManager.owner}-${DateTime.now().microsecondsSinceEpoch}-${_batchSequence++}';
-    final planned = planFiles(post, selected, nameFor);
+    final planned = planFiles(post, selected, nameFor, formatPref: formatPref);
     final site = SiteRegistry.current.byId(post.platform);
     if (site == null) {
       throw const MediaPolicyException('REQUEST_SITE_REJECTED', '');
@@ -1810,6 +1838,8 @@ class DownloadManager extends ChangeNotifier {
       album: album,
       postUrl: post.url,
       platform: post.platform,
+      formatPref: formatPref,
+      jpegFallbackPlanned: planned.any((file) => file.jpegFallback),
       postId: post.id,
       authorName: post.author.name,
       authorId: post.author.id,
@@ -2736,7 +2766,8 @@ class DownloadManager extends ChangeNotifier {
       'V16DL', // i18n:ignore 日志
       'candidate index=${job.itemIndex} role=${roleOf(job)} label=$label '
           'bytes=$bytes sniff=$sniff result=$result '
-          'candidate=${candidateProgressLabel(job)}'
+          'candidate=${candidateProgressLabel(job)} '
+          'format_pref=${batch.formatPref.logToken}'
           '${extra == null ? '' : ' $extra'}',
     ));
   }
@@ -3303,7 +3334,8 @@ class DownloadManager extends ChangeNotifier {
           'host_class=${_hostClassOf(batch, job)} bytes=- '
           'sniff=- result=transfer_failed reason=${_transferReason(update)} '
           'cause=$cause attempts=${job.attempts}/$cap '
-          'candidate=${candidateProgressLabel(job)}'
+          'candidate=${candidateProgressLabel(job)} '
+          'format_pref=${batch.formatPref.logToken}'
           '${backoffRetry ? ' retry=backoff retry_index=$nextRetry/$kCandidateRetryLimit wait_ms=${backoff.inMilliseconds} candidate_seq=${candidateIndexOf(job) + 1}/${job.urls.length}' : ''}',
     ));
     if (backoffRetry) {
@@ -3643,10 +3675,13 @@ class DownloadManager extends ChangeNotifier {
           parsePostOutcome(batch.postUrl,
               source: 'download_retry', forceRefresh: true));
       final postIdx = job.itemIndex > 0 ? job.itemIndex - 1 : job.itemIndex;
-      final planned = planFiles(outcome.data, [postIdx], (_, _, _) => job.filename)
-          .where((file) => file.isImage == job.isImage &&
-              file.isLivePhoto == job.isLivePhoto)
-          .firstOrNull;
+      final planned = planFiles(
+        outcome.data,
+        [postIdx],
+        (_, _, _) => job.filename,
+        formatPref: (await AppSettings.load()).imageFormat,
+      ).where((file) => file.isImage == job.isImage &&
+          file.isLivePhoto == job.isLivePhoto).firstOrNull;
       if (planned != null && planned.urls.isNotEmpty) {
         final policy = _policyFor(batch.platform);
         final declarations = policy.resourcesFor(outcome.data.items[postIdx]);
@@ -4254,17 +4289,50 @@ String failedJobLogLine(DownloadBatch batch, DownloadJob job) {
       'reason=$reason attempt=${job.attempts}/${retryCapFor(batch, job)}';
 }
 
+/// The completion note the 「图片格式」 setting asks for (v1.11 batch 3), or
+/// null when there is nothing to say.
+///
+/// `已保存为原始格式，本机可能无法显示` — the original bytes were kept and the
+/// container is one a phone may not display (HEIC / HEIF / AVIF / WebP). The
+/// check reads the saved file name only: no decode, no blocking call.
+///
+/// `未取得 JPEG，已按兼容优先保存` — JPEG only was asked for and an item had no
+/// jpeg candidate, so the compat ladder was used.
+///
+/// The original-format note wins when both would apply, because it describes a
+/// file the user may not be able to open.
+String? imageFormatCompletionNote(DownloadBatch batch) {
+  if (batch.formatPref == ImageFormatPreference.compat) return null;
+  final savedOriginal = batch.jobs.any(
+    (job) =>
+        job.isImage &&
+        job.state == JobState.done &&
+        job.saved &&
+        kOriginalOnlyStillExtensions.contains(stillExtensionOf(job.savedTitle)),
+  );
+  if (batch.formatPref == ImageFormatPreference.original && savedOriginal) {
+    return '已保存为原始格式，本机可能无法显示';
+  }
+  if (batch.formatPref == ImageFormatPreference.jpeg &&
+      batch.jpegFallbackPlanned) {
+    return '未取得 JPEG，已按兼容优先保存';
+  }
+  return null;
+}
+
 /// Fresh CDN URLs for a single item after re-parsing (manual retry path).
 /// Returns null when the item no longer exists in the refreshed post.
-List<String>? planFilesForItem(ParsedPost post, int itemIndex) {
+List<String>? planFilesForItem(
+  ParsedPost post,
+  int itemIndex, {
+  ImageFormatPreference formatPref = ImageFormatPreference.compat,
+}) {
   if (itemIndex < 0 || itemIndex >= post.items.length) return null;
   final item = post.items[itemIndex];
-  final imageUrls = rankStillCandidates(filterMediaCandidates(
-    verifyOnlyStillCandidates(
-      withDerivedJpegOriginals(orderedMediaUrls(post, item)),
-    ),
-    isImage: true,
-  ));
+  final imageUrls = stillCandidatesFor(
+    orderedMediaUrls(post, item),
+    formatPref: formatPref,
+  );
   if (item.type == 'live' && item.videoUrl != null) {
     return [imageUrls.first, item.videoUrl!];
   }

@@ -157,6 +157,15 @@ class _DownloadSheetState extends State<DownloadSheet> {
                     ),
                   ],
                 ),
+                if (!running && failed == 0)
+                  if (imageFormatCompletionNote(batch) != null)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 4),
+                      child: Text(
+                        imageFormatCompletionNote(batch)!,
+                        style: const TextStyle(fontSize: 12),
+                      ),
+                    ),
                 if (_captionPath != null)
                   Padding(
                     padding: const EdgeInsets.only(top: 4),

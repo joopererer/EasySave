@@ -14,6 +14,7 @@ import '../services/bubble_service.dart';
 import '../services/gallery_locator_service.dart';
 import '../services/history_backfill_service.dart';
 import '../services/history_rebuild_service.dart';
+import '../services/image_format_preference.dart';
 import '../services/provenance_pair.dart';
 import '../services/backup/saf_service.dart';
 import '../services/dev_download_failure.dart';
@@ -264,6 +265,39 @@ class _MinePageState extends State<MinePage> with WidgetsBindingObserver {
     // Never persist the pre-load default snapshot.
     if (!_settingsLoaded) return;
     await _settings.save();
+  }
+
+  /// 「图片格式」: three options, each with what it does (v1.11 batch 3).
+  Future<void> _pickImageFormat() async {
+    final chosen = await showDialog<ImageFormatPreference>(
+      context: context,
+      builder: (context) => SimpleDialog(
+        title: const Text('图片格式'),
+        children: [
+          for (final option in ImageFormatPreference.values)
+            ListTile(
+              key: ValueKey('image_format_${option.name}'),
+              selected: _settings.imageFormat == option,
+              title: Text(option.label),
+              subtitle: Text(option.description),
+              trailing: _settings.imageFormat == option
+                  ? const Icon(Icons.check)
+                  : null,
+              onTap: () => Navigator.of(context).pop(option),
+            ),
+          const Padding(
+            padding: EdgeInsets.fromLTRB(16, 4, 16, 12),
+            child: Text(
+              '目前仅对小红书图片生效',
+              style: TextStyle(fontSize: 12),
+            ),
+          ),
+        ],
+      ),
+    );
+    if (chosen == null || !mounted) return;
+    setState(() => _settings.imageFormat = chosen);
+    await _saveSettings();
   }
 
   Future<void> _addTileToControlCenter() async {
@@ -864,6 +898,18 @@ class _MinePageState extends State<MinePage> with WidgetsBindingObserver {
                 ListTile(
                   title: const Text('文件名格式'),
                   subtitle: const Text('帖子ID_序号.扩展名'),
+                ),
+                ListTile(
+                  key: const ValueKey('image_format_setting'),
+                  title: const Text('图片格式'),
+                  subtitle: Text(
+                    '${_settings.imageFormat.label} · '
+                    '${_settings.imageFormat.description}\n'
+                    '目前仅对小红书图片生效',
+                  ),
+                  isThreeLine: true,
+                  trailing: const Icon(Icons.chevron_right),
+                  onTap: _pickImageFormat,
                 ),
                 SwitchListTile(
                   title: const Text('保存来源信息（图片和视频）'),
