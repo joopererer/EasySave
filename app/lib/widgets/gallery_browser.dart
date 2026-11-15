@@ -21,7 +21,6 @@ import '../services/history_db.dart';
 import '../services/live_pairs.dart';
 import '../services/media_delete_service.dart';
 import '../services/preview_video.dart';
-import '../services/media_request_policy.dart';
 import '../services/local_thumbnail_tiers.dart';
 import '../services/perf_trace.dart';
 import 'shared.dart';
@@ -37,6 +36,77 @@ import 'ai_label_badge.dart';
 /// reads it.
 @visibleForTesting
 int liveMotionStartsForTesting = 0;
+
+/// How long a live photo has to rest in view before its motion clip is
+/// prepared (v1.11 build 57).
+///
+/// A remote clip is fetched in full before a player can start it, which took
+/// long enough that a long press looked broken ("长按要等动态视频下载完才播放").
+/// Half a second of dwell is long enough to mean "this is the photo the user is
+/// looking at" and short enough to be ready before the press.
+const Duration kLiveMotionPreloadDelay = Duration(milliseconds: 500);
+
+/// The key of the small spinner shown in the LIVE badge while a pressed clip is
+/// still being prepared.
+const Key kLiveMotionLoadingKey = Key('viewer_live_motion_loading');
+
+/// A live photo's motion clip, prepared for playback.
+///
+/// Production wraps a [VideoPlayerController] ([PlayerLiveMotion]); a widget
+/// test substitutes its own implementation through
+/// [liveMotionLoaderForTesting], because a real player needs the platform
+/// plugin.
+abstract class LiveMotion {
+  /// Whether the clip can be shown right now.
+  bool get ready;
+
+  /// Frame aspect ratio, 1 when the player does not know it.
+  double get aspectRatio;
+
+  /// The picture to show in the viewer.
+  Widget buildView();
+
+  Future<void> play();
+
+  Future<void> dispose();
+}
+
+/// The production [LiveMotion]: an initialized [VideoPlayerController].
+class PlayerLiveMotion implements LiveMotion {
+  PlayerLiveMotion(this._controller);
+
+  final VideoPlayerController _controller;
+
+  @override
+  bool get ready => _controller.value.isInitialized;
+
+  @override
+  double get aspectRatio {
+    final ratio = _controller.value.aspectRatio;
+    return ratio == 0 ? 1 : ratio;
+  }
+
+  @override
+  Widget buildView() => VideoPlayer(_controller);
+
+  @override
+  Future<void> play() async {
+    await _controller.setLooping(true);
+    await _controller.setVolume(0);
+    await _controller.play();
+  }
+
+  @override
+  Future<void> dispose() => _controller.dispose();
+}
+
+/// Prepares the motion clip of one live photo — the local album clip when the
+/// still is local, the clip fetched through the request policy when it is not.
+///
+/// Test seam only (see [LiveMotion]).
+@visibleForTesting
+Future<LiveMotion> Function(GalleryBrowserItem item, String platform)?
+liveMotionLoaderForTesting;
 
 class GalleryBrowserItem {
   GalleryBrowserItem({
@@ -1143,6 +1213,10 @@ class _GalleryBrowserPageState extends State<GalleryBrowserPage> {
                           : null,
                       onToggleSelect: () => _toggleSelect(item.index),
                       selectionMode: _selectionMode,
+                      // Only the page in view prepares a live photo's motion
+                      // clip, so the viewer never fetches two clips at once
+                      // (v1.11 build 57).
+                      isCurrentPage: idx == _currentIndex,
                     );
                   },
                 ),
@@ -1963,6 +2037,10 @@ class _BrowserItemView extends StatefulWidget {
     /// selection instead of playback controls (a real life photo's long press
     /// still plays the motion clip).
     this.selectionMode = false,
+    /// This page is the one in view. Only that page prepares a live photo's
+    /// motion clip, so the viewer never loads two clips at once (v1.11 build
+    /// 57).
+    this.isCurrentPage = true,
   });
 
   final GalleryBrowserItem item;
@@ -1971,6 +2049,7 @@ class _BrowserItemView extends StatefulWidget {
   final Future<void> Function()? onRedownload;
   final VoidCallback? onToggleSelect;
   final bool selectionMode;
+  final bool isCurrentPage;
 
   @override
   State<_BrowserItemView> createState() => _BrowserItemViewState();
@@ -1985,6 +2064,25 @@ class _BrowserItemViewState extends State<_BrowserItemView> {
   bool _redownloading = false;
   bool _isNotFound = false;
   String? _error;
+
+  /// A motion clip prepared while this page rested (v1.11 build 57).
+  LiveMotion? _liveClip;
+
+  /// The clip being prepared right now; shared by the dwell timer and a press
+  /// that arrives before it finished.
+  Future<LiveMotion?>? _liveClipLoad;
+
+  /// The clip on screen during a press.
+  LiveMotion? _livePlaying;
+
+  Timer? _livePreloadTimer;
+
+  /// A pressed clip is still being prepared: the LIVE badge says so.
+  bool _liveLoading = false;
+
+  /// Invalidates a prepared clip when the page is left: whatever the load
+  /// returns afterwards is released instead of kept.
+  int _liveClipGeneration = 0;
 
   /// The live photo's still, measured from the page opening (v1.11 batch 3).
   late final ViewerImageProbe _trace = ViewerImageProbe(
@@ -2007,6 +2105,7 @@ class _BrowserItemViewState extends State<_BrowserItemView> {
         _initVideo();
       }
     }
+    _scheduleLivePreload();
   }
 
   Future<void> _checkAssetExistence() async {
@@ -2025,8 +2124,121 @@ class _BrowserItemViewState extends State<_BrowserItemView> {
   void dispose() {
     _trace.dispose();
     _hideTimer?.cancel();
+    _livePreloadTimer?.cancel();
+    _liveClipGeneration++;
+    // Leaving the page releases whatever was prepared for it: a clip is only
+    // ever kept for the photo in view (v1.11 build 57).
+    final prepared = _liveClip;
+    final playing = _livePlaying;
+    _liveClip = null;
+    _livePlaying = null;
+    if (prepared != null) unawaited(prepared.dispose());
+    if (playing != null) unawaited(playing.dispose());
     _videoController?.dispose();
     super.dispose();
+  }
+
+  @override
+  void didUpdateWidget(covariant _BrowserItemView oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    final replaced = oldWidget.item.index != widget.item.index ||
+        oldWidget.item.asset?.id != widget.item.asset?.id;
+    if (replaced || oldWidget.isCurrentPage != widget.isCurrentPage) {
+      _dropLiveClip();
+      _scheduleLivePreload();
+    }
+  }
+
+  /// Whether this live photo's clip has to be fetched (a remote preview): a
+  /// local pair comes from the album and needs no preparation.
+  bool _needsRemoteLiveClip(GalleryBrowserItem item) =>
+      item.type == 'live' &&
+      item.liveVideoAsset == null &&
+      (item.videoUrl?.startsWith('http') ?? false);
+
+  /// Prepare the motion clip after the page has rested for
+  /// [kLiveMotionPreloadDelay]. Only the page in view does this, and a press
+  /// takes over whatever was already prepared.
+  void _scheduleLivePreload() {
+    _livePreloadTimer?.cancel();
+    if (!widget.isCurrentPage || !_needsRemoteLiveClip(widget.item)) {
+      return;
+    }
+    if (_liveClip != null) return;
+    _livePreloadTimer = Timer(kLiveMotionPreloadDelay, () {
+      if (!mounted || _isLiveHolding || !widget.isCurrentPage) return;
+      unawaited(_ensureLiveClip());
+    });
+  }
+
+  /// Drop the prepared clip (the page is no longer in view). A load still in
+  /// flight releases its clip when it arrives.
+  void _dropLiveClip() {
+    _livePreloadTimer?.cancel();
+    _livePreloadTimer = null;
+    _liveClipGeneration++;
+    _liveClipLoad = null;
+    final prepared = _liveClip;
+    _liveClip = null;
+    if (prepared != null) unawaited(prepared.dispose());
+  }
+
+  /// The clip of this live photo: the prepared one when it is ready, otherwise
+  /// the load in flight, otherwise a new load.
+  Future<LiveMotion?> _ensureLiveClip() {
+    final prepared = _liveClip;
+    if (prepared != null) return Future<LiveMotion?>.value(prepared);
+    return _liveClipLoad ??= _loadLiveClip().whenComplete(() {
+      _liveClipLoad = null;
+    });
+  }
+
+  Future<LiveMotion?> _loadLiveClip() async {
+    final generation = _liveClipGeneration;
+    LiveMotion? clip;
+    try {
+      final loader = liveMotionLoaderForTesting;
+      clip = loader != null
+          ? await loader(widget.item, widget.platform)
+          : await _prepareLiveClip(widget.item);
+    } catch (error) {
+      // A clip that cannot be prepared leaves the long press to the still, as
+      // before: nothing is reported as a download failure here.
+      unawaited(DevLog.write(
+        'PreviewPlayer',
+        'event=live_preload_failed '
+            'source=${widget.item.asset == null ? 'network' : 'local'} '
+            'type=${playbackFailureType(error)}',
+      ));
+      return null;
+    }
+    if (!mounted || generation != _liveClipGeneration || !widget.isCurrentPage) {
+      await clip.dispose();
+      return null;
+    }
+    _liveClip = clip;
+    return clip;
+  }
+
+  /// Production loader: the album clip of a local live photo, otherwise the
+  /// remote clip fetched through the request policy.
+  Future<LiveMotion> _prepareLiveClip(GalleryBrowserItem item) async {
+    final asset = item.liveVideoAsset;
+    if (asset != null) {
+      final file = await asset.file;
+      if (file != null && await file.exists()) {
+        final controller = VideoPlayerController.file(file);
+        await controller.initialize();
+        return PlayerLiveMotion(controller);
+      }
+    }
+    final videoUrl = item.videoUrl;
+    if (videoUrl == null || videoUrl.isEmpty) {
+      throw const FileSystemException('LIVE_CLIP_MISSING');
+    }
+    final controller = await _createPlayerController(videoUrl);
+    await controller.initialize();
+    return PlayerLiveMotion(controller);
   }
 
   /// Keep the play/pause icons and the controls bar in sync with the player,
@@ -2138,50 +2350,49 @@ class _BrowserItemViewState extends State<_BrowserItemView> {
     }
   }
 
+  /// A long press on a live photo plays its motion clip (v1.11 batch 3).
+  ///
+  /// Build 57: the clip is normally already prepared (the page rested for
+  /// [kLiveMotionPreloadDelay]), so the press plays at once. If it is not ready
+  /// yet, the LIVE badge shows a spinner and playback starts the moment the clip
+  /// arrives — still while the finger is down; releasing cancels.
   Future<void> _startLiveMotion() async {
     if (_isLiveHolding) return;
-    setState(() => _isLiveHolding = true);
+    _livePreloadTimer?.cancel();
+    _livePreloadTimer = null;
+    final prepared = _liveClip;
+    _liveClip = null;
+    setState(() {
+      _isLiveHolding = true;
+      _liveLoading = prepared == null;
+    });
     liveMotionStartsForTesting++;
 
-    try {
-      final it = widget.item;
-      VideoPlayerController controller;
-
-      if (it.liveVideoAsset != null) {
-        final f = await it.liveVideoAsset!.file;
-        if (f != null && await f.exists()) {
-          controller = VideoPlayerController.file(f);
-        } else {
-          final videoUrl = it.videoUrl;
-          if (videoUrl == null || videoUrl.isEmpty) return;
-          controller = await _createPlayerController(videoUrl);
-        }
-      } else {
-        final videoUrl = it.videoUrl;
-        if (videoUrl == null || videoUrl.isEmpty) return;
-        controller = await _createPlayerController(videoUrl);
-      }
-
-      await controller.initialize();
-      await controller.setLooping(true);
-      await controller.setVolume(0);
-      if (!mounted || !_isLiveHolding) {
-        await controller.dispose();
-        return;
-      }
-      _videoController = controller;
-      await controller.play();
-      setState(() {});
-    } catch (error) {
-      if (mounted) {
-        setState(() => _isLiveHolding = false);
-        if (error is MediaPolicyException) {
-          ScaffoldMessenger.maybeOf(
-            context,
-          )?.showSnackBar(const SnackBar(content: Text('该资源地址不在允许范围内')));
-        }
-      }
+    final clip = prepared ?? await _ensureLiveClip();
+    if (!mounted) {
+      if (clip != null) unawaited(clip.dispose());
+      return;
     }
+    if (clip == null) {
+      setState(() {
+        _isLiveHolding = false;
+        _liveLoading = false;
+      });
+      return;
+    }
+    if (!_isLiveHolding) {
+      // Released while it was still being prepared: keep the clip ready for the
+      // next press instead of throwing the work away.
+      _liveClip = clip;
+      setState(() => _liveLoading = false);
+      return;
+    }
+    setState(() {
+      _livePlaying = clip;
+      _liveLoading = false;
+    });
+    await clip.play();
+    if (mounted) setState(() {});
   }
 
   Future<VideoPlayerController> _createPlayerController(String target) async {
@@ -2198,15 +2409,20 @@ class _BrowserItemViewState extends State<_BrowserItemView> {
     }
   }
 
+  /// The finger lifted: playback stops and the clip is released, and the page
+  /// starts preparing the next one (v1.11 build 57).
   Future<void> _stopLiveMotion() async {
-    setState(() => _isLiveHolding = false);
-    final c = _videoController;
-    _videoController = null;
-    if (c != null) {
-      await c.pause();
-      await c.dispose();
-    }
-    if (mounted) setState(() {});
+    _livePreloadTimer?.cancel();
+    _livePreloadTimer = null;
+    if (!_isLiveHolding && !_liveLoading && _livePlaying == null) return;
+    final playing = _livePlaying;
+    _livePlaying = null;
+    setState(() {
+      _isLiveHolding = false;
+      _liveLoading = false;
+    });
+    if (playing != null) await playing.dispose();
+    _scheduleLivePreload();
   }
 
   @override
@@ -2517,8 +2733,8 @@ class _BrowserItemViewState extends State<_BrowserItemView> {
 
     // 4. Live Photo: static cover + "LIVE" badge + "长按播放实况" + press to play loop
     if (it.type == 'live') {
-      final c = _videoController;
-      final showVideo = _isLiveHolding && c != null && c.value.isInitialized;
+      final playing = _livePlaying;
+      final showVideo = _isLiveHolding && playing != null && playing.ready;
 
       // A live photo's long press is the animation itself, in both viewers and
       // in multi-select mode too (v1.11 batch 3). This branch deliberately does
@@ -2537,10 +2753,8 @@ class _BrowserItemViewState extends State<_BrowserItemView> {
             if (showVideo)
               Center(
                 child: AspectRatio(
-                  aspectRatio: c.value.aspectRatio == 0
-                      ? 1
-                      : c.value.aspectRatio,
-                  child: VideoPlayer(c),
+                  aspectRatio: playing.aspectRatio,
+                  child: playing.buildView(),
                 ),
               )
             else
@@ -2572,7 +2786,10 @@ class _BrowserItemViewState extends State<_BrowserItemView> {
                 ),
               ),
 
-            // "LIVE" Badge top-left
+            // "LIVE" Badge top-left. While a pressed clip is still being
+            // prepared the badge carries the spinner, so the wait is explained
+            // where the LIVE mark already tells the user what will happen
+            // (v1.11 build 57).
             Positioned(
               top: 56,
               left: 16,
@@ -2582,13 +2799,32 @@ class _BrowserItemViewState extends State<_BrowserItemView> {
                   color: Colors.white,
                   borderRadius: BorderRadius.circular(6),
                 ),
-                child: const Text(
-                  'LIVE',
-                  style: TextStyle(
-                    color: Colors.black,
-                    fontSize: 11,
-                    fontWeight: FontWeight.bold,
-                  ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    if (_liveLoading) ...[
+                      const SizedBox(
+                        key: kLiveMotionLoadingKey,
+                        width: 10,
+                        height: 10,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          valueColor: AlwaysStoppedAnimation<Color>(
+                            Colors.black87,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 6),
+                    ],
+                    const Text(
+                      'LIVE',
+                      style: TextStyle(
+                        color: Colors.black,
+                        fontSize: 11,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ],
                 ),
               ),
             ),
