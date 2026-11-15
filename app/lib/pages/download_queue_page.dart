@@ -284,8 +284,10 @@ class _BatchCard extends StatelessWidget {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text(
-                '$_status · ${batch.doneCount}/${batch.jobs.length} 个文件'
-                '${batch.failedCount > 0 ? ' · ${batch.failedCount} 个失败' : ''}',
+                // Items, not files (v1.11 build 58): a Live photo's still and
+                // clip are one item, and one failed half fails the item.
+                '$_status · ${batch.itemDone}/${batch.itemTotal} 项'
+                '${batch.itemFailed > 0 ? ' · ${batch.itemFailed} 项失败' : ''}',
                 style: TextStyle(
                   fontSize: 12,
                   color: stalled || batch.failedCount > 0

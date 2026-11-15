@@ -762,6 +762,46 @@ class DownloadBatch {
   int get doneCount => jobs.where((j) => j.state == JobState.done).length;
   int get failedCount => jobs.where((j) => j.state == JobState.failed).length;
 
+  // Every number the user reads is per item, never per file (v1.11 build 58).
+  //
+  // A Live photo's still and motion clip are two files but one item, so an
+  // 8-item selection that holds three Live photos is 8 items — not 11 files,
+  // which is what made the bubble read x/11 for eight selected items. An item
+  // only counts as done when *all* of its files reached the album, and one
+  // failed half fails the item.
+  //
+  // The item set is the post's own 1-based positions ([DownloadJob.itemIndex])
+  // among the files that were not canceled, so canceling every file of an item
+  // drops that item from the total. The per-file counts ([succeeded],
+  // [failedCount], [doneCount]) stay for logs and the per-file rows.
+
+  /// Items this batch covers (the user's own selection, by item).
+  int get itemTotal => {
+    for (final job in jobs)
+      if (job.state != JobState.canceled) job.itemIndex,
+  }.length;
+
+  /// Items whose every file is in the album.
+  int get itemDone {
+    final complete = <int>{};
+    final incomplete = <int>{};
+    for (final job in jobs) {
+      if (job.state == JobState.done) {
+        complete.add(job.itemIndex);
+      } else {
+        // A canceled or still-running file also keeps its item unfinished.
+        incomplete.add(job.itemIndex);
+      }
+    }
+    return complete.difference(incomplete).length;
+  }
+
+  /// Items with at least one failed file: a failed Live half fails the item.
+  int get itemFailed => {
+    for (final job in jobs)
+      if (job.state == JobState.failed) job.itemIndex,
+  }.length;
+
   /// At least one file is parked until the connection is back (v1.11 batch 3).
   bool get waitingForNetwork => jobs.any((j) => j.isWaitingForNetwork);
 
@@ -1581,7 +1621,7 @@ class DownloadManager extends ChangeNotifier {
       await _cancelNotification(batch);
       return;
     }
-    final done = batch.succeeded;
+    final done = batch.itemDone;
     final percent =
         (active.map((j) => j.progress).fold<double>(0, (a, b) => a + b) /
                 active.length *
@@ -1606,7 +1646,7 @@ class DownloadManager extends ChangeNotifier {
         id: _notificationId(batch),
         title: downloadNotificationTitle(
           done: done,
-          total: active.length,
+          total: batch.itemTotal,
           waitingForNetwork: waitingForNetwork,
         ),
         body: downloadNotificationBody(
@@ -4241,6 +4281,10 @@ class DownloadManager extends ChangeNotifier {
 }
 
 /// Title of the single merged download notification.
+///
+/// [done] and [total] count items, not files (v1.11 build 58): a Live photo's
+/// still and clip are one item, so the number the notification shows is the
+/// same one the bubble, the panel and the completion note show.
 ///
 /// Offline the batch keeps waiting and continues by itself, so the title says
 /// that instead of "正在下载" (v1.11 batch 2). Display only.

@@ -190,7 +190,7 @@ class _PreviewPageState extends State<PreviewPage> {
     final pct = (batch.progress * 100).round();
     final text = running
         ? (stalled ? '下载已停滞 · $pct%' : '下载中 · $pct%')
-        : '${batch.failedCount} 个文件下载失败';
+        : '${batch.itemFailed} 项下载失败';
     return Material(
       color: Theme.of(context).colorScheme.surfaceContainerHighest,
       child: Padding(
@@ -452,8 +452,12 @@ class _PreviewPageState extends State<PreviewPage> {
     // User chose "后台下载": the batch keeps running, stay on the preview.
     if (!batch.isTerminal) return;
 
-    final failed = batch.jobs.where((j) => j.state == JobState.failed).length;
-    final done = batch.succeeded;
+    // Every number in these prompts counts items, not files (v1.11 build 58):
+    // a Live photo's still and clip are one saved item, and one failed half
+    // fails the item — so 「已保存 N 项」 and 「N 项保存失败」 agree with the
+    // bubble, the notification and the panel.
+    final failed = batch.itemFailed;
+    final done = batch.itemDone;
     if (failed == 0 && done > 0) {
       widget.onSaved?.call();
       if (!mounted) return;
@@ -461,8 +465,8 @@ class _PreviewPageState extends State<PreviewPage> {
         SnackBar(
           content: Text(
             associated > 0
-                ? '已保存 $done 个文件，并关联 $associated 个本地文件'
-                : '已保存 $done 个文件到相册',
+                ? '已保存 $done 项，并关联 $associated 个本地文件'
+                : '已保存 $done 项到相册',
           ),
         ),
       );
@@ -476,7 +480,7 @@ class _PreviewPageState extends State<PreviewPage> {
       // Keep the preview open; the sheet already carries per-row retry.
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text('$failed 个文件保存失败'),
+          content: Text('$failed 项保存失败'),
           action: SnackBarAction(
             label: '重试',
             onPressed: () => DownloadManager.instance.retryBatch(batch),

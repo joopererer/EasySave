@@ -115,13 +115,12 @@ class _DownloadSheetState extends State<DownloadSheet> {
           );
         }
         unawaited(_maybeSaveCaption(batch));
-        final failed = batch.jobs
-            .where((j) => j.state == JobState.failed)
-            .length;
+        // The panel's headline counts items, not files (v1.11 build 58): a
+        // Live photo's still and clip are one item, and an item only counts as
+        // done when both halves are in the album. The rows below stay per file.
+        final failed = batch.itemFailed;
         final running = !batch.isTerminal;
-        final doneCount = batch.jobs
-            .where((j) => j.state == JobState.done)
-            .length;
+        final doneCount = batch.itemDone;
         // Display only: an offline batch keeps its queue position and resumes
         // by itself; the panel just stops pretending it is transferring. A file
         // parked waiting for the connection says so even while the system still
@@ -145,7 +144,7 @@ class _DownloadSheetState extends State<DownloadSheet> {
                         running
                             ? waitingForNetwork
                             ? '等待网络…联网后自动继续'
-                            : '正在保存 $doneCount/${batch.jobs.length}'
+                            : '正在保存 $doneCount/${batch.itemTotal}'
                             : failed == 0
                             ? '全部完成 ✓'
                             : '$failed 项失败',

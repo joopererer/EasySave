@@ -335,9 +335,13 @@ Future<void> _announceBatchStarted(
 }) async {
   await _log(
     channel,
-    'DOWNLOAD started ${batch.jobs.length} files${selected ? ' (selected)' : ''}',
+    'DOWNLOAD started ${batch.jobs.length} files items=${batch.itemTotal}'
+    '${selected ? ' (selected)' : ''}',
   );
-  if (toasts) await _toast(channel, '开始下载 ${batch.jobs.length} 个文件');
+  // The toast counts items: a Live photo's still and clip are one item, so the
+  // user hears the same number the bubble, the panel and the completion note
+  // show (v1.11 build 58).
+  if (toasts) await _toast(channel, '开始下载 ${batch.itemTotal} 项');
   await _awaitBatchAndNotify(channel, batch, started, url, toasts);
 }
 
@@ -777,12 +781,15 @@ Future<void> _awaitBatchAndNotify(
     const Duration(seconds: 20),
     (_) => _invoke(channel, 'keepAlive'),
   );
-  final total = batch.jobs.length;
+  final total = batch.itemTotal;
   var lastDone = -1;
   var failed = 0;
   try {
     while (!batch.isTerminal) {
-      final done = batch.succeeded;
+      // Every number reported here counts items, not files: a Live photo's
+      // still and clip are one item and the batch only counts it once
+      // (v1.11 build 58).
+      final done = batch.itemDone;
       if (done != lastDone) {
         lastDone = done;
         await _tile(channel, true, '$done/$total');
@@ -792,8 +799,8 @@ Future<void> _awaitBatchAndNotify(
     }
     // Give _afterTerminal() (gallery link + history write) time to run.
     await Future<void>.delayed(const Duration(milliseconds: 1000));
-    final ok = batch.succeeded;
-    failed = batch.jobs.where((j) => j.state == JobState.failed).length;
+    final ok = batch.itemDone;
+    failed = batch.itemFailed;
     final secs = DateTime.now().difference(started).inSeconds;
     if (failed > 0) {
       final firstFailed = batch.jobs.firstWhere(
@@ -805,12 +812,18 @@ Future<void> _awaitBatchAndNotify(
       final firstError = userFacingFailureReason(firstFailed);
       await _log(
         channel,
-        'DOWNLOAD failed: $ok/$total ok, $failed failed, ${secs}s',
+        'DOWNLOAD failed: $ok/$total ok, $failed failed, ${secs}s '
+        '(files=${batch.doneCount}/${batch.jobs.length}, '
+        'failedFiles=${batch.failedCount})',
       );
-      if (toasts) await _toast(channel, '下载失败：成功 $ok/$total');
-      await _notify(channel, '下载失败：成功 $ok/$total —— $firstError');
+      if (toasts) await _toast(channel, '下载失败：成功 $ok/$total 项');
+      await _notify(channel, '下载失败：成功 $ok/$total 项 —— $firstError');
     } else {
-      await _log(channel, 'DOWNLOAD done: $ok/$total in ${secs}s');
+      await _log(
+        channel,
+        'DOWNLOAD done: $ok/$total in ${secs}s '
+        '(files=${batch.doneCount}/${batch.jobs.length})',
+      );
       // 图片格式 (v1.11 batch 3): say when the original bytes were kept in a
       // container this device may not display, or when JPEG was asked for and
       // no jpeg candidate existed.
@@ -819,15 +832,15 @@ Future<void> _awaitBatchAndNotify(
         await _toast(
           channel,
           formatNote == null
-              ? '下载完成：$ok/$total 个文件'
-              : '下载完成：$ok/$total 个文件 · $formatNote',
+              ? '下载完成：$ok/$total 项'
+              : '下载完成：$ok/$total 项 · $formatNote',
         );
       }
       await _notify(
         channel,
         formatNote == null
-            ? '下载完成：$ok/$total 个文件'
-            : '下载完成：$ok/$total 个文件 —— $formatNote',
+            ? '下载完成：$ok/$total 项'
+            : '下载完成：$ok/$total 项 —— $formatNote',
       );
     }
     await _invoke(channel, 'historyChanged');
@@ -837,7 +850,7 @@ Future<void> _awaitBatchAndNotify(
     await _bubble(
       channel,
       false,
-      batch.succeeded,
+      batch.itemDone,
       total,
       null,
       failed > 0,
