@@ -77,8 +77,8 @@ parser 1.4.17 计划由解析器直接生成 `imageView2/format/jpg/q/100` 候�
   已完成项全部勾选。
 - `app/pubspec.yaml`：`1.11.0+58`。
 
-`feature/v1.11` 相对 `master`：**55 个提交**，93 个文件，+16847 / −757（含本次
-发布提交；`git diff --shortstat master...HEAD`）。
+`feature/v1.11` 相对 `master`：93 个文件，**+16847 / −757**
+（`git diff --shortstat master...HEAD`）；分支提交数见交付说明。
 
 ## 5. 测试与闸门
 
