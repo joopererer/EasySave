@@ -155,7 +155,11 @@ void main() {
       GalleryLocatorService.instance.resetForTesting();
       HistoryDb.resetInstanceForTesting();
     });
+    // A fixed mid-day anchor: the grouping compares calendar days, so a run at
+    // 00:0x used to split the four "10–13 minutes ago" posts over 今天 and
+    // 昨天 and give three groups instead of two.
     final now = DateTime.now();
+    final anchor = DateTime(now.year, now.month, now.day, 12);
     late HistoryDb db;
     await tester.runAsync(() async {
       db = await HistoryDb.instance(dbPath: ':memory:');
@@ -163,11 +167,11 @@ void main() {
       await db.clear();
       for (final (index, id) in ['a', 'b', 'c', 'd'].indexed) {
         await db.upsert(
-          _record(id, now.subtract(Duration(minutes: 10 + index))),
+          _record(id, anchor.subtract(Duration(minutes: 10 + index))),
         );
       }
       // The last post starts in an older date group.
-      await db.upsert(_record('e', now.subtract(const Duration(days: 3))));
+      await db.upsert(_record('e', anchor.subtract(const Duration(days: 3))));
     });
     Future<void> settle() async {
       for (var i = 0; i < 10; i++) {
@@ -212,7 +216,7 @@ void main() {
     expect(find.byType(LazyMasonrySliver), findsNWidgets(2));
 
     await tester.runAsync(() async {
-      await db.upsert(_record('e', DateTime.now(), files: 2), userSave: true);
+      await db.upsert(_record('e', anchor, files: 2), userSave: true);
     });
     HostBridge.historyRevision.value++;
     await settle();
