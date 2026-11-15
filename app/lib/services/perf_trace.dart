@@ -51,22 +51,33 @@ abstract final class PerfTrace {
 }
 
 /// One switch of the history view, from its start until the visible thumbnails
-/// of the new view have all resolved.
+/// of the new view have resolved.
 ///
 /// [finish] is called by the probe itself; the owner only has to report the
 /// first frame and — when the user switches again before the thumbnails settle —
 /// [dispose] the old probe.
+///
+/// Build 55 device report: the line never appeared at all. The probe closed
+/// only when *nothing in the whole app* was in flight, so one long-lived or
+/// unrelated thumbnail request was enough to keep it open forever, and a second
+/// switch dropped it silently. It now closes on the requests issued inside its
+/// own window ([deadline] bounds the wait), and every switch that started
+/// reports exactly one line.
 class ModeSwitchProbe {
   ModeSwitchProbe({
     required this.from,
     required this.to,
     PerfTraceSink? sink,
     ThumbnailDiagnostics? diagnostics,
+    this.deadline = const Duration(seconds: 10),
   }) : _sink = sink ?? _defaultSink,
        _diagnostics = diagnostics ?? ThumbnailDiagnostics.instance {
     _start = _diagnostics.counters;
     _watch.start();
     _diagnostics.addListener(_check);
+    _timer = Timer(deadline, () {
+      _finish(timedOut: true);
+    });
   }
 
   final String from;
@@ -74,8 +85,12 @@ class ModeSwitchProbe {
   final PerfTraceSink _sink;
   final ThumbnailDiagnostics _diagnostics;
 
+  /// Longest the probe waits for its own thumbnails before reporting anyway.
+  final Duration deadline;
+
   final Stopwatch _watch = Stopwatch();
   late final ThumbnailCounters _start;
+  Timer? _timer;
 
   int? _firstFrameMs;
   bool _done = false;
@@ -89,35 +104,39 @@ class ModeSwitchProbe {
 
   void _check() {
     if (_done || _firstFrameMs == null) return;
-    // Nothing of the new view is still waiting: every visible thumbnail has
-    // either painted, failed or hit its own deadline.
-    if (_diagnostics.inflight > 0) return;
+    final delta = _diagnostics.counters - _start;
+    // Only the switch's own window counts: every request issued after the
+    // switch started has either finished or is still being waited for.
+    if (delta.resolved < delta.issued) return;
     _finish();
   }
 
-  void _finish() {
+  void _finish({bool timedOut = false, bool superseded = false}) {
     if (_done) return;
     _done = true;
+    _timer?.cancel();
     _diagnostics.removeListener(_check);
-    _watch.stop();
     final delta = _diagnostics.counters - _start;
+    final settled = _firstFrameMs != null && delta.resolved >= delta.issued;
+    if (!superseded) _watch.stop();
     _sink(
       'ModeSwitch',
       'from=$from to=$to first_frame_ms=${_firstFrameMs ?? -1} '
           'visible_ready_ms=${_watch.elapsedMilliseconds} '
           'cache_hit=${delta.hits} cache_miss=${delta.misses} '
-          'local_requests=${delta.issued}',
+          'local_requests=${delta.issued}'
+          '${timedOut ? ' timed_out=1' : ''}'
+          '${superseded ? ' superseded=1' : ''}'
+          '${settled ? '' : ' settled=0'}',
     );
   }
 
-  /// The user switched again before this one settled: nothing is reported,
-  /// because the line would describe a view that is no longer on screen.
-  void dispose() {
-    if (_done) return;
-    _done = true;
-    _diagnostics.removeListener(_check);
-    _watch.stop();
-  }
+  /// The user switched again before this one settled. The line is still
+  /// written — the switch did happen, and how far it got is what the line says
+  /// (`first_frame_ms=-1` when the new view never painted, `settled=0` when its
+  /// thumbnails were still arriving) — because "one line per switch" is what
+  /// makes the log measurable at all.
+  void dispose() => _finish(superseded: true);
 }
 
 /// One still of the viewer: from opening the page to the full-resolution frame.

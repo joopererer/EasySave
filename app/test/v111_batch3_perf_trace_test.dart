@@ -74,11 +74,7 @@ void main() {
       final request = ThumbnailDiagnostics.instance.begin('1/thumb/400x400');
 
       probe.firstFrame();
-      expect(
-        _lines,
-        isEmpty,
-        reason: 'a thumbnail is still being fetched',
-      );
+      expect(_lines, isEmpty, reason: 'a thumbnail is still being fetched');
 
       ThumbnailDiagnostics.instance.succeeded(request);
       expect(_lines, hasLength(1));
@@ -118,7 +114,7 @@ void main() {
       expect(_lines.single, contains('cache_hit=0 cache_miss=1'));
     });
 
-    test('a switch left before it settled reports nothing', () {
+    test('a switch left before it settled still reports one line', () {
       _collect();
       final probe = ModeSwitchProbe(from: 'posts', to: 'all');
       final request = ThumbnailDiagnostics.instance.begin('1/thumb/400x400');
@@ -126,7 +122,52 @@ void main() {
       probe.dispose();
       ThumbnailDiagnostics.instance.succeeded(request);
 
-      expect(_lines, isEmpty);
+      expect(_lines, hasLength(1));
+      expect(_lines.single, startsWith('ModeSwitch from=posts to=all'));
+      expect(
+        _lines.single,
+        contains('superseded=1'),
+        reason: 'the switch happened; the line says it did not settle',
+      );
+    });
+
+    test(
+      'a switch whose thumbnails never arrive reports at its deadline',
+      () async {
+        _collect();
+        final probe = ModeSwitchProbe(
+          from: 'posts',
+          to: 'all',
+          deadline: const Duration(milliseconds: 30),
+        );
+        ThumbnailDiagnostics.instance.begin('1/thumb/400x400');
+        probe.firstFrame();
+        expect(_lines, isEmpty, reason: 'still inside the window');
+
+        await Future<void>.delayed(const Duration(milliseconds: 80));
+
+        expect(_lines, hasLength(1));
+        expect(_lines.single, contains('timed_out=1'));
+        expect(_lines.single, contains('settled=0'));
+      },
+    );
+
+    test('an unrelated request cannot keep the line open', () {
+      _collect();
+      // A thumbnail of another surface that is in flight when the switch
+      // starts and stays in flight the whole time.
+      final other = ThumbnailDiagnostics.instance.begin('9/thumb/400x400');
+      final probe = ModeSwitchProbe(from: 'creators', to: 'posts');
+      probe.firstFrame();
+
+      expect(
+        _lines,
+        hasLength(1),
+        reason: 'the window only waits for the requests it issued',
+      );
+      expect(_lines.single, contains('local_requests=0'));
+      expect(ThumbnailDiagnostics.instance.inflight, 1);
+      ThumbnailDiagnostics.instance.abandon(other);
     });
   });
 
@@ -172,8 +213,7 @@ void main() {
         'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==',
       );
       VerifiedAssetImage.existenceForTesting = (_) async => true;
-      VerifiedAssetImage.providerForTesting = (_, _, _) =>
-          MemoryImage(png);
+      VerifiedAssetImage.providerForTesting = (_, _, _) => MemoryImage(png);
       final asset = _LocalAsset(id: 'local-7');
       await tester.pumpWidget(
         MaterialApp(

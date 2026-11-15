@@ -71,6 +71,7 @@ class ThumbnailCounters {
     required this.issued,
     required this.hits,
     required this.misses,
+    this.resolved = 0,
   });
 
   /// Native thumbnail requests issued since the process started.
@@ -82,10 +83,21 @@ class ThumbnailCounters {
   /// Thumbnails that had to issue a request.
   final int misses;
 
+  /// Requests completed since the process started, whichever way they ended
+  /// (frame, decode failure, deadline, card gone).
+  ///
+  /// The [ModeSwitch] line is closed on *this* — the requests issued after the
+  /// switch have all finished — instead of on "nothing is in flight anywhere in
+  /// the app". Build 55 device report: no `[ModeSwitch]` line at all, because a
+  /// single long-lived or unrelated request elsewhere kept the app-wide
+  /// in-flight count above zero, so the condition never came true.
+  final int resolved;
+
   ThumbnailCounters operator -(ThumbnailCounters other) => ThumbnailCounters(
     issued: issued - other.issued,
     hits: hits - other.hits,
     misses: misses - other.misses,
+    resolved: resolved - other.resolved,
   );
 }
 
@@ -125,10 +137,15 @@ class ThumbnailDiagnostics extends ChangeNotifier {
   int _issued = 0;
   int _hits = 0;
   int _misses = 0;
+  int _resolved = 0;
 
   /// Snapshot of the counters, for a caller that measures a window.
-  ThumbnailCounters get counters =>
-      ThumbnailCounters(issued: _issued, hits: _hits, misses: _misses);
+  ThumbnailCounters get counters => ThumbnailCounters(
+    issued: _issued,
+    hits: _hits,
+    misses: _misses,
+    resolved: _resolved,
+  );
 
   /// A thumbnail found its decoded image in the image cache.
   void noteCacheHit() {
@@ -187,7 +204,8 @@ class ThumbnailDiagnostics extends ChangeNotifier {
     _totalDecodeErrors++;
     _account(
       elapsed,
-      log: 'event=local_decode_failed '
+      log:
+          'event=local_decode_failed '
           'kind=${_kindOf(request.key)} reason=$reason key=${request.key}',
     );
     _afterChange();
@@ -222,7 +240,8 @@ class ThumbnailDiagnostics extends ChangeNotifier {
     }
     _account(
       elapsed,
-      log: 'event=local_decode_failed '
+      log:
+          'event=local_decode_failed '
           'kind=${_kindOf(request.key)} '
           'reason=${queued ? 'queue_timeout' : 'system_timeout'} '
           'key=${request.key} '
@@ -255,17 +274,22 @@ class ThumbnailDiagnostics extends ChangeNotifier {
     _issued = 0;
     _hits = 0;
     _misses = 0;
+    _resolved = 0;
   }
 
   /// Frees a request without recording an outcome (e.g. the card scrolled
   /// away or was rebuilt).
   void abandon(ThumbnailRequest? request) {
     if (request == null) return;
-    if (_open.remove(request.id) != null) _afterChange();
+    if (_open.remove(request.id) != null) {
+      _resolved++;
+      _afterChange();
+    }
   }
 
   Duration? _resolve(ThumbnailRequest request) {
     if (_open.remove(request.id) == null) return null;
+    _resolved++;
     return DateTime.now().difference(request.issuedAt);
   }
 
@@ -286,10 +310,7 @@ class ThumbnailDiagnostics extends ChangeNotifier {
     if (ms > _maxMs) _maxMs = ms;
     if (log.isNotEmpty) {
       unawaited(
-        DevLog.write(
-          'ThumbLoad',
-          '$log waited_ms=$ms inflight=$inflight',
-        ),
+        DevLog.write('ThumbLoad', '$log waited_ms=$ms inflight=$inflight'),
       );
     }
   }
@@ -303,10 +324,10 @@ class ThumbnailDiagnostics extends ChangeNotifier {
         DevLog.write(
           'ThumbStat',
           'window_s=${window.inSeconds} ok=$_ok '
-          'timeout=${_queueTimeouts + _systemTimeouts} '
-          'queue=$_queueTimeouts system=$_systemTimeouts '
-          'decode_fail=$_decodeErrors avg_ms=$average max_ms=$_maxMs '
-          'max_inflight=$_maxInflight inflight=$inflight',
+              'timeout=${_queueTimeouts + _systemTimeouts} '
+              'queue=$_queueTimeouts system=$_systemTimeouts '
+              'decode_fail=$_decodeErrors avg_ms=$average max_ms=$_maxMs '
+              'max_inflight=$_maxInflight inflight=$inflight',
         ),
       );
       _ok = 0;
