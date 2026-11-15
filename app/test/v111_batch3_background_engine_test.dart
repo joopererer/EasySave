@@ -178,8 +178,14 @@ void main() {
     bg.backgroundDownloadsInitForTesting = () async {};
     bg.backgroundParseForTesting =
         (url, {required source, onCacheMiss}) async => _post();
-    bg.backgroundStartBatchForTesting = (post, indices, settings) async =>
-        _finishedBatch(post, indices);
+    // The batch reports itself the moment it is queued, exactly like
+    // DownloadManager.startBatch does (v1.11 build 57).
+    bg.backgroundStartBatchForTesting = (post, indices, settings,
+        {onBatchReady}) async {
+      final batch = _finishedBatch(post, indices);
+      onBatchReady?.call(batch);
+      return batch;
+    };
     bg.backgroundNativeTimeout = const Duration(seconds: 3);
     bg.backgroundStepTimeout = const Duration(seconds: 10);
   });

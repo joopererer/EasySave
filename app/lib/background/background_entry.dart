@@ -43,6 +43,16 @@ const String _channelName = 'easysave/bgtask';
 @visibleForTesting
 Duration backgroundNativeTimeout = const Duration(seconds: 3);
 
+/// Deadline of a startup step that is *supposed* to be quick: reading the
+/// settings, asking the connectivity plugin, starting the parser and the
+/// downloader.
+///
+/// It must never wrap work whose cost grows with the post: starting a batch
+/// does one storage preflight per file (a ranged request), so an 8-image post
+/// needs about 10 s and a 9-image one more. Build 56 put this deadline around
+/// `batch-start`, and every 8+ image post was then logged as
+/// `step=batch-start TIMEOUT -> safe default -> gave up`: the batch kept
+/// downloading while the user was told 开始下载失败 (v1.11 build 57).
 @visibleForTesting
 Duration backgroundStepTimeout = const Duration(seconds: 10);
 
@@ -73,8 +83,9 @@ backgroundParseForTesting;
 Future<DownloadBatch> Function(
   ParsedPost post,
   List<int> indices,
-  AppSettings settings,
-)?
+  AppSettings settings, {
+  void Function(DownloadBatch)? onBatchReady,
+})?
 backgroundStartBatchForTesting;
 
 /// Pending "选择下载" panel: completed by the native panel's result callback.
@@ -161,6 +172,11 @@ Future<void> _invoke(
 /// Returns null when the step timed out or failed; the caller then continues
 /// with what it has, exactly as if the step had reported "unknown". Nothing
 /// here decides behaviour beyond that default.
+///
+/// Only work that is *supposed* to be quick may be wrapped in this: a step whose
+/// cost grows with the post (parsing, starting a batch, downloading) gets no
+/// fixed deadline, because a slow-but-healthy step must never be read as a
+/// failure (v1.11 build 57).
 Future<T?> _step<T>(
   MethodChannel channel,
   String name,
@@ -217,10 +233,13 @@ Future<ParsedPost> _parsePost(
 Future<DownloadBatch> _startBatch(
   ParsedPost post,
   List<int> indices,
-  AppSettings settings,
-) {
+  AppSettings settings, {
+  void Function(DownloadBatch)? onBatchReady,
+}) {
   final injected = backgroundStartBatchForTesting;
-  if (injected != null) return injected(post, indices, settings);
+  if (injected != null) {
+    return injected(post, indices, settings, onBatchReady: onBatchReady);
+  }
   final author = post.author.name ?? '';
   return DownloadManager.instance.startBatch(
     post,
@@ -229,6 +248,7 @@ Future<DownloadBatch> _startBatch(
     nameFor: (label, seq, ext) =>
         settings.fileName(postId: post.id, seq: seq, author: author),
     requestGalleryAccess: false,
+    onBatchReady: onBatchReady,
   );
 }
 
@@ -237,6 +257,89 @@ Future<DownloadBatch> _startBatch(
 /// are redacted, so nothing sensitive can reach logcat.
 Future<void> _log(MethodChannel channel, String msg) =>
     _invoke(channel, 'log', DevLog.scrub(msg));
+
+/// Starts one batch and reports it the moment it is queued (v1.11 build 57).
+///
+/// A batch is "started" as soon as it is registered and its jobs are queued:
+/// `DOWNLOAD started` and the bubble progress go out then, and the per-file
+/// preflight (a storage check per file, which is why a big post needs 10 s or
+/// more) continues in the background. Nothing here has a deadline, and a start
+/// that fails *after* the batch was queued keeps the batch's own reporting:
+/// the real outcome of the download is what the user sees.
+///
+/// Returns normally once the batch was queued; rethrows when the start failed
+/// before anything was queued (no album access, nothing left to download), so
+/// the caller can report it exactly as before.
+Future<void> _beginBatch(
+  MethodChannel channel,
+  ParsedPost post,
+  List<int> indices,
+  AppSettings settings,
+  DateTime started,
+  String url,
+  bool toasts, {
+  required bool selected,
+}) async {
+  final watch = Stopwatch()..start();
+  DownloadBatch? queued;
+  final pending = _startBatch(
+    post,
+    indices,
+    settings,
+    onBatchReady: (batch) {
+      queued = batch;
+      unawaited(
+        _announceBatchStarted(
+          channel,
+          batch,
+          started,
+          url,
+          toasts,
+          selected: selected,
+        ),
+      );
+    },
+  );
+  try {
+    await pending;
+  } on AlreadyDownloading {
+    // An existing batch already owns these files: not a failure, and not this
+    // task's to report.
+    rethrow;
+  } catch (e) {
+    if (queued == null) rethrow;
+    await _log(
+      channel,
+      'step=batch-start late failure type=${e.runtimeType} '
+      'after=${watch.elapsedMilliseconds}ms (batch already queued)',
+    );
+    return;
+  }
+  await _log(
+    channel,
+    'step=batch-start ok ${watch.elapsedMilliseconds}ms '
+    'files=${queued?.jobs.length ?? 0}',
+  );
+}
+
+/// The report of a batch that is queued: the tile and bubble switch to real
+/// progress before the first file has been preflighted, and the batch is
+/// watched to its end here.
+Future<void> _announceBatchStarted(
+  MethodChannel channel,
+  DownloadBatch batch,
+  DateTime started,
+  String url,
+  bool toasts, {
+  required bool selected,
+}) async {
+  await _log(
+    channel,
+    'DOWNLOAD started ${batch.jobs.length} files${selected ? ' (selected)' : ''}',
+  );
+  if (toasts) await _toast(channel, '开始下载 ${batch.jobs.length} 个文件');
+  await _awaitBatchAndNotify(channel, batch, started, url, toasts);
+}
 
 Future<void> _notify(MethodChannel channel, String msg) =>
     _invoke(channel, 'notify', msg);
@@ -545,35 +648,17 @@ Future<void> _handleSubmit(
           await _invoke(channel, 'idle');
           break;
         }
-        final batch = await _step<DownloadBatch>(
+        await _beginBatch(
           channel,
-          'batch-start',
-          () => _startBatch(post, selected, settings),
+          post,
+          selected,
+          settings,
+          started,
+          url,
+          toasts,
+          selected: true,
         );
-        if (batch == null) {
-          await _log(channel, 'step=batch-start gave up');
-          await _tile(channel, false, null);
-          await _bubble(
-            channel,
-            false,
-            0,
-            0,
-            null,
-            true,
-            url,
-            ParseErrorCode.invalidPage,
-            '开始下载失败',
-          );
-          await _error(channel, url, ParseErrorCode.invalidPage, '开始下载失败');
-          break;
-        }
         anyStarted = true;
-        await _log(
-          channel,
-          'DOWNLOAD started ${batch.jobs.length} files (selected)',
-        );
-        if (toasts) await _toast(channel, '开始下载 ${batch.jobs.length} 个文件');
-        unawaited(_awaitBatchAndNotify(channel, batch, started, url, toasts));
         break;
       }
       if (post.items.isEmpty) {
@@ -584,34 +669,17 @@ Future<void> _handleSubmit(
         await _notify(channel, '该帖子没有可保存的内容');
         continue;
       }
-      final batch = await _step<DownloadBatch>(
+      await _beginBatch(
         channel,
-        'batch-start',
-        () => _startBatch(post, [
-          for (var i = 0; i < post.items.length; i++) i,
-        ], settings),
+        post,
+        [for (var i = 0; i < post.items.length; i++) i],
+        settings,
+        started,
+        url,
+        toasts,
+        selected: false,
       );
-      if (batch == null) {
-        await _log(channel, 'step=batch-start gave up');
-        await _tile(channel, false, null);
-        await _bubble(
-          channel,
-          false,
-          0,
-          0,
-          null,
-          true,
-          url,
-          ParseErrorCode.invalidPage,
-          '开始下载失败',
-        );
-        await _error(channel, url, ParseErrorCode.invalidPage, '开始下载失败');
-        continue;
-      }
       anyStarted = true;
-      await _log(channel, 'DOWNLOAD started ${batch.jobs.length} files');
-      if (toasts) await _toast(channel, '开始下载 ${batch.jobs.length} 个文件');
-      unawaited(_awaitBatchAndNotify(channel, batch, started, url, toasts));
     } on TimeoutException {
       await _log(
         channel,

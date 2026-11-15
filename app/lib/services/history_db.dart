@@ -206,6 +206,20 @@ bool isShowableHistoryFile(HistoryFile file) =>
         file.mediaId?.isNotEmpty == true ||
         file.assetId?.isNotEmpty == true);
 
+/// Records the home page may list under 「最近保存」 (v1.11 build 57).
+///
+/// A download writes a file-less placeholder the moment it starts, so the post
+/// is already in the history while its files are fetched. That record holds no
+/// saved file yet, and the home list rendered it as 「0 个文件」 — the count a
+/// failed or abandoned start left on screen (build 56: a batch that timed out in
+/// `batch-start` but kept downloading). Only records with at least one saved
+/// file are listed here; the history page keeps showing the placeholder, its
+/// progress and a failed post with its retry.
+List<HistoryRecord> recentSavedRecords(Iterable<HistoryRecord> records) => [
+  for (final record in records)
+    if (record.savedFiles.isNotEmpty) record,
+];
+
 /// A row kept through the one-time cleanup: anything that is neither a deleted
 /// item nor a known leftover the album already reported missing.
 bool isRetainedHistoryFile(HistoryFile file) =>

@@ -178,7 +178,9 @@ class ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
   Future<void> _readRecentList() async {
     final db = await HistoryDb.instance();
     final all = await db.recent(limit: 30);
-    final records = all.take(3).toList();
+    // 「最近保存」 lists saved posts only: a placeholder written when a batch
+    // starts holds no file yet and must never read 「0 个文件」 (v1.11 build 57).
+    final records = recentSavedRecords(all).take(3).toList();
     final locator = GalleryLocatorService.instance;
     if (locator.hasAccess && records.isNotEmpty) {
       await locator.preloadMediaIds(records);
@@ -203,8 +205,10 @@ class ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
 
   Future<void> _reloadRecent() async {
     final db = await HistoryDb.instance();
-    final records = await db.recent(limit: 3);
+    // One read serves both lists: the home card shows saved posts only, while
+    // `_recentAll` keeps every known post for the link dedupe.
     final all = await db.recent(limit: 30);
+    final records = recentSavedRecords(all).take(3).toList();
     final locator = GalleryLocatorService.instance;
     await locator.checkPermission();
     if (locator.hasAccess && records.isNotEmpty) {
