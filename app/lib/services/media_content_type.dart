@@ -362,13 +362,18 @@ int stillCandidateRank(String url) {
 ///
 /// Every branch is a pure reordering of what the parser delivered (plus the
 /// CDN's own jpeg transcode); nothing here fetches or decodes anything.
+///
+/// The ladder that comes out holds each final URL once, in ladder order (see
+/// [dedupeFinalCandidates]): parser 1.4.17 will hand out the same
+/// `imageView2/format/jpg/q/100` candidate this build derives on its own, and
+/// the same bytes must never be requested twice for one item.
 List<String> stillCandidatesFor(
   Iterable<String> urls, {
   ImageFormatPreference formatPref = ImageFormatPreference.compat,
 }) {
   final given = [for (final url in urls) if (url.trim().isNotEmpty) url];
   final withJpeg = withDerivedJpegOriginals(given);
-  final compat = _compatStillLadder(withJpeg);
+  final compat = dedupeFinalCandidates(_compatStillLadder(withJpeg));
   switch (formatPref) {
     case ImageFormatPreference.compat:
       return compat;
@@ -387,20 +392,36 @@ List<String> stillCandidatesFor(
         for (final url in compat)
           if (!plain.contains(url)) url,
       ];
-      return [
+      return dedupeFinalCandidates([
         ...plain,
         for (final url in rest)
           if (!isPreviewStillCandidate(url)) url,
         for (final url in rest)
           if (isPreviewStillCandidate(url)) url,
-      ];
+      ]);
     case ImageFormatPreference.jpeg:
       final jpegs = [
         for (final url in compat)
           if (_stillFormatTokenOf(url) == 'jpg') url,
       ];
-      return jpegs.isEmpty ? compat : jpegs;
+      return jpegs.isEmpty ? compat : dedupeFinalCandidates(jpegs);
   }
+}
+
+/// Keeps the first occurrence of every final URL, so one item never spends two
+/// attempts on the same bytes.
+///
+/// This is the last step of every candidate ladder — after the parser's own
+/// tokens, the App's derived candidates and the quality ranking — because only
+/// then is it known which URLs are really the same request. A derived candidate
+/// that equals a parser-delivered one collapses into the single URL that is
+/// tried first.
+List<String> dedupeFinalCandidates(Iterable<String> urls) {
+  final seen = <String>{};
+  return [
+    for (final url in urls)
+      if (seen.add(url)) url,
+  ];
 }
 
 /// The v1.10.3 ladder, unchanged.

@@ -1002,10 +1002,15 @@ List<PlannedFile> planFiles(
           // With a separate videoUrl, url/fallbacks describe the still poster.
           // Otherwise the parser ranks the video first and its fallbacks are
           // the next renditions to try (e.g. when a file has no audio track).
+          // One final URL is tried once, whichever list it came from.
           urls: item.videoUrl != null
               ? [url]
-              : filterMediaCandidates([item.url, ...item.fallbacks],
-                  isImage: false),
+              : dedupeFinalCandidates(
+                  filterMediaCandidates(
+                    [item.url, ...item.fallbacks],
+                    isImage: false,
+                  ),
+                ),
           filename: '${nameFor(label, seq, 'mp4')}.mp4',
           isImage: false,
           itemIndex: index + 1, // 1-based position in original post
@@ -4384,7 +4389,10 @@ List<String>? planFilesForItem(
     final url = item.videoUrl ?? item.url;
     return item.videoUrl != null
         ? [url]
-        : filterMediaCandidates([item.url, ...item.fallbacks], isImage: false);
+        : dedupeFinalCandidates(
+            filterMediaCandidates([item.url, ...item.fallbacks],
+                isImage: false),
+          );
   }
   return imageUrls;
 }
