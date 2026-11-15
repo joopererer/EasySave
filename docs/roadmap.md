@@ -50,6 +50,11 @@
 
 ## v1.12
 
+- [ ] 后台引擎 `downloads-init` 4–8 秒的缩短（依据
+      [`docs/tasks/build57-download-start-evidence.md`](tasks/build57-download-start-evidence.md) §6，
+      任务拆分见 [`docs/tasks/v1.12.md`](tasks/v1.12.md)）：已结算的终态批次跳过
+      `_afterTerminal`；`cancel-notification` 只在本次会话显示过通知时调用；
+      `reconcile` 不阻塞入队。
 - [ ] 本地缩略图原生按缩小比例解码：独立线程池、可取消，替代 photo_manager 缩略图。
 - [ ] 缩略图超时回退网络封面并延迟重试（v1.11 第一批只加诊断日志，不改行为）。
 - [ ] 断点续传：`Range` + `If-Range`，用 ETag / Last-Modified 校验。
