@@ -29,6 +29,12 @@ internal object NetworkStatusChannel {
     private val main = Handler(Looper.getMainLooper())
 
     fun register(context: Context, messenger: BinaryMessenger) {
+        // Build 55: the background engine is destroyed after being idle and a
+        // later task creates a new one. The old callback belonged to the engine
+        // that is gone, and keeping it made `register` return without
+        // registering anything — the rebuilt engine then never heard about a
+        // connection change. Every engine starts from a clean state.
+        reset()
         val cm = context.applicationContext
             .getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
         manager = cm
@@ -40,7 +46,7 @@ internal object NetworkStatusChannel {
                 else -> result.notImplemented()
             }
         }
-        if (cm == null || callback != null) return
+        if (cm == null) return
         val cb = object : ConnectivityManager.NetworkCallback() {
             override fun onAvailable(network: Network) = push(cm)
             override fun onLost(network: Network) = push(cm)
@@ -59,7 +65,15 @@ internal object NetworkStatusChannel {
     }
 
     /** Unregisters the system callback (engine teardown). */
-    fun detach() {
+    fun detach() = reset()
+
+    /**
+     * Drops the callback and the channel of the engine that is going away.
+     *
+     * Called before registering a new engine, and on teardown, so no state of a
+     * destroyed engine survives into the next one.
+     */
+    fun reset() {
         val cm = manager
         val cb = callback
         callback = null

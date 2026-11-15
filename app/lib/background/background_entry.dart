@@ -18,6 +18,7 @@ import '../services/download_claims.dart';
 import '../services/gallery_locator_service.dart';
 import '../services/history_db.dart';
 import '../services/links.dart';
+import '../services/network_status.dart';
 import '../services/parse_service.dart';
 import '../services/preview_resources.dart';
 import '../services/shared_preview_cache.dart';
@@ -25,6 +26,56 @@ import '../services/settings.dart';
 import '../services/update_service.dart';
 
 const String _channelName = 'easysave/bgtask';
+
+/// Deadlines for every await on a native channel in a background task
+/// (v1.11 batch 3).
+///
+/// Build 55 device report: after the background engine had been destroyed for
+/// being idle and then rebuilt, a submitted task logged `submit: mode=select
+/// urls=1 source=bubble` and nothing else — no ShortLink, no ParseWebView, no
+/// batch — while the notification stayed on 「准备中」. Any await on a channel
+/// the rebuilt engine had not (re)registered, or on a platform call that never
+/// answers, stops the whole task silently, because the step after it never
+/// runs and nobody ever calls `idle`.
+///
+/// Now every such await has a deadline and a safe default, and every step logs
+/// how long it took, so the log says exactly where a task stalled.
+@visibleForTesting
+Duration backgroundNativeTimeout = const Duration(seconds: 3);
+
+@visibleForTesting
+Duration backgroundStepTimeout = const Duration(seconds: 10);
+
+/// Longest a parse may take before the task gives up on that link. Parsing is
+/// not a channel call (it drives a WebView), so it gets its own budget.
+const Duration _parseTimeout = Duration(seconds: 120);
+
+// Test seams (v1.11 batch 3): let a test drive the submit pipeline — including
+// a rebuilt engine — without a device, a network or a WebView.
+@visibleForTesting
+Future<AppSettings> Function()? backgroundSettingsForTesting;
+
+@visibleForTesting
+Future<void> Function()? backgroundParserInitForTesting;
+
+@visibleForTesting
+Future<void> Function()? backgroundDownloadsInitForTesting;
+
+@visibleForTesting
+Future<ParsedPost> Function(
+  String url, {
+  required String source,
+  Future<void> Function()? onCacheMiss,
+})?
+backgroundParseForTesting;
+
+@visibleForTesting
+Future<DownloadBatch> Function(
+  ParsedPost post,
+  List<int> indices,
+  AppSettings settings,
+)?
+backgroundStartBatchForTesting;
 
 /// Pending "选择下载" panel: completed by the native panel's result callback.
 Completer<List<int>?>? _selectCompleter;
@@ -86,10 +137,99 @@ Future<void> _invoke(
   dynamic args,
 ]) async {
   try {
-    await channel.invokeMethod<void>(method, args);
+    await channel
+        .invokeMethod<void>(method, args)
+        .timeout(backgroundNativeTimeout);
+  } on TimeoutException {
+    // A channel that is silent must not stop the task; DevLog has its own
+    // guard, so this line cannot hang either.
+    unawaited(
+      DevLog.write(
+        'BgTask',
+        'event=native_timeout call=$method '
+            'after=${backgroundNativeTimeout.inMilliseconds}ms',
+      ),
+    );
   } catch (_) {
     // Channel may be gone; nothing else we can do in a headless isolate.
   }
+}
+
+/// Runs one startup step (a native channel, a plugin, a settings read) with a
+/// deadline and a safe default.
+///
+/// Returns null when the step timed out or failed; the caller then continues
+/// with what it has, exactly as if the step had reported "unknown". Nothing
+/// here decides behaviour beyond that default.
+Future<T?> _step<T>(
+  MethodChannel channel,
+  String name,
+  Future<T> Function() run, {
+  Duration? timeout,
+}) async {
+  final watch = Stopwatch()..start();
+  try {
+    final value = await run().timeout(timeout ?? backgroundStepTimeout);
+    unawaited(_log(channel, 'step=$name ok ${watch.elapsedMilliseconds}ms'));
+    return value;
+  } on TimeoutException {
+    unawaited(
+      _log(
+        channel,
+        'step=$name TIMEOUT after=${watch.elapsedMilliseconds}ms '
+        '-> safe default',
+      ),
+    );
+    return null;
+  } catch (e) {
+    unawaited(
+      _log(
+        channel,
+        'step=$name FAILED type=${e.runtimeType} '
+        'after=${watch.elapsedMilliseconds}ms -> safe default',
+      ),
+    );
+    return null;
+  }
+}
+
+/// The app's parse entry point; a test replaces it through
+/// [backgroundParseForTesting].
+Future<ParsedPost> _parsePost(
+  String url, {
+  required String source,
+  Future<void> Function()? onCacheMiss,
+}) async {
+  final injected = backgroundParseForTesting;
+  if (injected != null) {
+    return injected(url, source: source, onCacheMiss: onCacheMiss);
+  }
+  final outcome = await parsePostOutcome(
+    url,
+    source: source,
+    onCacheMiss: onCacheMiss,
+  );
+  return outcome.data;
+}
+
+/// Starts the batch through [DownloadManager]; a test replaces it through
+/// [backgroundStartBatchForTesting].
+Future<DownloadBatch> _startBatch(
+  ParsedPost post,
+  List<int> indices,
+  AppSettings settings,
+) {
+  final injected = backgroundStartBatchForTesting;
+  if (injected != null) return injected(post, indices, settings);
+  final author = post.author.name ?? '';
+  return DownloadManager.instance.startBatch(
+    post,
+    indices,
+    album: settings.albumName,
+    nameFor: (label, seq, ext) =>
+        settings.fileName(postId: post.id, seq: seq, author: author),
+    requestGalleryAccess: false,
+  );
 }
 
 /// Log to the native sink. The message is scrubbed first: URLs lose their
@@ -163,9 +303,23 @@ Future<void> _handleSubmit(
   if (urls.isEmpty && text != null && text.isNotEmpty) {
     urls = extractLinks(text);
   }
-  await _log(channel, 'submit: mode=$mode urls=${urls.length} source=$source');
+  // Every step of a submit logs where it is: build 55 stopped right after this
+  // line, and without the steps below the log could not say why.
+  await _log(
+    channel,
+    'submit: step=received mode=$mode urls=${urls.length} source=$source',
+  );
   await _invoke(channel, 'keepAlive');
-  final settings = await AppSettings.load();
+  // A settings read that does not answer falls back to the defaults, so the
+  // task continues (album name, name pattern and toast setting are all the
+  // same values a fresh install uses).
+  final settings =
+      await _step<AppSettings>(
+        channel,
+        'settings',
+        () => backgroundSettingsForTesting?.call() ?? AppSettings.load(),
+      ) ??
+      AppSettings();
   final toasts = settings.backgroundToast;
   final emptyHint = args['hint']?.toString() ?? '没有可解析的链接';
 
@@ -177,14 +331,24 @@ Future<void> _handleSubmit(
   }
   if (toasts) await _toast(channel, '下载准备中…');
 
-  try {
-    await ParserManager.instance.init();
-  } catch (e) {
-    await _log(channel, 'ParserManager init FAILED type=${e.runtimeType}');
-  }
+  // Connectivity is display only; an unknown state counts as online and the
+  // downloader decides for itself.
+  await _step<void>(channel, 'network', () => NetworkStatus.instance.start());
+  await _log(channel, 'step=network online=${NetworkStatus.instance.online}');
 
-  final manager = DownloadManager.instance;
-  await manager.init();
+  await _step<void>(
+    channel,
+    'parser-init',
+    () =>
+        backgroundParserInitForTesting?.call() ?? ParserManager.instance.init(),
+  );
+  await _step<void>(
+    channel,
+    'downloads-init',
+    () =>
+        backgroundDownloadsInitForTesting?.call() ??
+        DownloadManager.instance.init(),
+  );
 
   var anyStarted = false;
   for (final raw in urls) {
@@ -193,7 +357,11 @@ Future<void> _handleSubmit(
     final started = DateTime.now();
     final sw = Stopwatch()..start();
     try {
-      final outcome = await parsePostOutcome(
+      await _log(
+        channel,
+        'step=parse begin source=${mode == 'select' ? 'bubble_select' : 'bubble_background'}',
+      );
+      final post = await _parsePost(
         url,
         source: mode == 'select' ? 'bubble_select' : 'bubble_background',
         onCacheMiss: () async {
@@ -201,8 +369,8 @@ Future<void> _handleSubmit(
           await _tile(channel, true, '解析中…');
           await _bubble(channel, true, 0, 0, '解析中…', false);
         },
-      );
-      final post = outcome.data;
+      ).timeout(_parseTimeout);
+      await _log(channel, 'step=parse done ${sw.elapsedMilliseconds}ms');
       if (mode == 'caption') {
         final cap = _captionText(post);
         // The headless engine has no PlatformPlugin, so Clipboard.setData would
@@ -230,7 +398,8 @@ Future<void> _handleSubmit(
         final savedAssets = <int, String>{};
         try {
           final found = await GalleryLocatorService.instance
-              .findDownloadedAssets(post, refreshAlbum: true);
+              .findDownloadedAssets(post, refreshAlbum: true)
+              .timeout(backgroundStepTimeout);
           for (final entry in found.entries) {
             savedIdx.add(entry.key);
             final id = entry.value.id;
@@ -376,15 +545,28 @@ Future<void> _handleSubmit(
           await _invoke(channel, 'idle');
           break;
         }
-        final author = post.author.name ?? '';
-        final batch = await manager.startBatch(
-          post,
-          selected,
-          album: settings.albumName,
-          nameFor: (label, seq, ext) =>
-              settings.fileName(postId: post.id, seq: seq, author: author),
-          requestGalleryAccess: false,
+        final batch = await _step<DownloadBatch>(
+          channel,
+          'batch-start',
+          () => _startBatch(post, selected, settings),
         );
+        if (batch == null) {
+          await _log(channel, 'step=batch-start gave up');
+          await _tile(channel, false, null);
+          await _bubble(
+            channel,
+            false,
+            0,
+            0,
+            null,
+            true,
+            url,
+            ParseErrorCode.invalidPage,
+            '开始下载失败',
+          );
+          await _error(channel, url, ParseErrorCode.invalidPage, '开始下载失败');
+          break;
+        }
         anyStarted = true;
         await _log(
           channel,
@@ -402,19 +584,53 @@ Future<void> _handleSubmit(
         await _notify(channel, '该帖子没有可保存的内容');
         continue;
       }
-      final author = post.author.name ?? '';
-      final batch = await manager.startBatch(
-        post,
-        [for (var i = 0; i < post.items.length; i++) i],
-        album: settings.albumName,
-        nameFor: (label, seq, ext) =>
-            settings.fileName(postId: post.id, seq: seq, author: author),
-        requestGalleryAccess: false,
+      final batch = await _step<DownloadBatch>(
+        channel,
+        'batch-start',
+        () => _startBatch(post, [
+          for (var i = 0; i < post.items.length; i++) i,
+        ], settings),
       );
+      if (batch == null) {
+        await _log(channel, 'step=batch-start gave up');
+        await _tile(channel, false, null);
+        await _bubble(
+          channel,
+          false,
+          0,
+          0,
+          null,
+          true,
+          url,
+          ParseErrorCode.invalidPage,
+          '开始下载失败',
+        );
+        await _error(channel, url, ParseErrorCode.invalidPage, '开始下载失败');
+        continue;
+      }
       anyStarted = true;
       await _log(channel, 'DOWNLOAD started ${batch.jobs.length} files');
       if (toasts) await _toast(channel, '开始下载 ${batch.jobs.length} 个文件');
       unawaited(_awaitBatchAndNotify(channel, batch, started, url, toasts));
+    } on TimeoutException {
+      await _log(
+        channel,
+        'step=parse TIMEOUT after=${_parseTimeout.inSeconds}s',
+      );
+      if (toasts) await _toast(channel, '解析超时，请重试');
+      await _tile(channel, false, null);
+      await _bubble(
+        channel,
+        false,
+        0,
+        0,
+        null,
+        true,
+        url,
+        ParseErrorCode.invalidPage,
+        '解析超时',
+      );
+      await _error(channel, url, ParseErrorCode.invalidPage, '解析超时');
     } on AlreadyDownloading {
       if (toasts) await _toast(channel, '已在下载中');
       await _tile(channel, false, null);
@@ -512,7 +728,9 @@ Future<void> _awaitBatchAndNotify(
     failed = batch.jobs.where((j) => j.state == JobState.failed).length;
     final secs = DateTime.now().difference(started).inSeconds;
     if (failed > 0) {
-      final firstFailed = batch.jobs.firstWhere((j) => j.state == JobState.failed);
+      final firstFailed = batch.jobs.firstWhere(
+        (j) => j.state == JobState.failed,
+      );
       // Never the raw exception ("Bad state: …") in a notification: the
       // download manager already stores a per-item sentence, and history uses
       // shortFailureReason() for the same reason.
