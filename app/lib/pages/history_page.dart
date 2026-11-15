@@ -8,6 +8,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:photo_manager/photo_manager.dart';
 import 'package:share_plus/share_plus.dart';
@@ -23,6 +24,7 @@ import '../services/history_db.dart';
 import '../services/history_decode_check.dart';
 import '../services/history_deletion.dart';
 import '../services/history_io.dart';
+import '../services/history_scroll_memory.dart';
 import '../services/host_bridge.dart';
 import '../services/live_pairs.dart';
 import '../services/media_delete_service.dart';
@@ -121,9 +123,20 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
   final Set<HistoryView> _modePendingUpdate = {};
 
   /// One scroll controller per mode. Each mode owns its own, so a list never
-  /// inherits the offset of another and the offset of the mode being returned
-  /// to is restored from [PageStorage] on its first layout.
+  /// inherits the offset of another; the offset itself comes from
+  /// [_scrollMemory], keyed by mode + filter + sort (v1.11 batch 3).
   final Map<HistoryView, ScrollController> _modeScroll = {};
+
+  /// Remembered positions, by mode + filter + sort (v1.11 batch 3).
+  final HistoryScrollMemory _scrollMemory = HistoryScrollMemory();
+
+  /// One key per card, so the card the user was looking at can be found again
+  /// after a data update reorders the list.
+  final Map<String, GlobalKey> _anchors = <String, GlobalKey>{};
+
+  /// A position waiting for the target list to exist and have a height.
+  _PendingScroll? _pendingScroll;
+  int _pendingFrames = 0;
 
   // Keys: posts view -> 'p{recordId}'; all view -> 'm{recordId}:{itemIndex}'.
   final Set<String> _selected = {};
@@ -395,6 +408,11 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
         _dbError = null;
       });
     }
+    // New or deleted records must not move the list: the card under the top
+    // edge is held where it is (v1.11 batch 3). A read that changes nothing
+    // restores the same offset, so pull-to-refresh is unchanged.
+    final anchor = _captureAnchor();
+    final offset = _activeOffset;
     try {
       final records = await retryHistoryRead(
           () => HistoryDb.instance().then((db) => db.recent(limit: 10000)),
@@ -410,6 +428,11 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
         _loading = false;
         _dbError = null;
       });
+      _scheduleScroll(
+        offset,
+        anchorKey: anchor?.key,
+        anchorDelta: anchor?.top ?? 0,
+      );
       // A quiet, read-only pass over stills the album already holds: a HEIC
       // this device cannot decode is marked so its card can say so. It runs
       // once per session, one file at a time, and never opens a decode path
@@ -449,7 +472,172 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
       _searchOpen = false;
       _searchController.clear();
     });
+    _afterPositionKeyChange();
   }
+
+  // ------------------------------------------------------- scroll positions
+
+  /// The position the list is remembered at: mode + filter + sort (v1.11 batch
+  /// 3). The layout is deliberately not part of it — switching 瀑布流 ↔ 列表
+  /// keeps the card the user was looking at instead of starting a new position.
+  HistoryScrollKey get _positionKey => HistoryScrollKey(
+    view: _view.name,
+    author: _author,
+    platform: _platform,
+    query: _query,
+    sort: _sort.name,
+    creatorSort: _creatorSort.name,
+    creatorSortDescending: _creatorSortDescending,
+  );
+
+  ScrollController get _activeController =>
+      _modeScroll.putIfAbsent(_view, () => _newController(_view));
+
+  ScrollController _newController(HistoryView view) {
+    final created = ScrollController();
+    // Every scroll is remembered at the key it belongs to, so switching away
+    // and back always finds the place it was left at.
+    created.addListener(() {
+      if (view == _view) _rememberScrollNow();
+    });
+    return created;
+  }
+
+  bool get _activeAttached =>
+      _activeController.hasClients && _activeController.positions.length == 1;
+
+  double get _activeOffset => _activeAttached
+      ? _activeController.position.pixels
+      : (_scrollMemory.offsetFor(_positionKey) ?? 0);
+
+  void _rememberScrollNow() {
+    if (!_activeAttached) return;
+    _scrollMemory.remember(_positionKey, _activeController.position.pixels);
+  }
+
+  /// After a filter or sort change: back to the top, except when the change
+  /// goes back to the unfiltered list, which returns to where it was left.
+  void _afterPositionKeyChange() {
+    final key = _positionKey;
+    final remembered = _scrollMemory.offsetFor(key);
+    final destination = destinationForChange(key, remembered: remembered);
+    _scheduleScroll(
+      destination == ScrollDestination.remembered ? remembered! : 0,
+    );
+  }
+
+  /// A position for the list of the mode in view.
+  ///
+  /// [anchorKey] and [anchorDelta] name the card the user was looking at: when
+  /// it is there after the rebuild, the list is put back so that card sits
+  /// where it sat before. Nothing is applied before the target list has been
+  /// laid out with a real height — restoring earlier is what clamped the offset
+  /// away in build 55.
+  void _scheduleScroll(
+    double offset, {
+    String? anchorKey,
+    double anchorDelta = 0,
+  }) {
+    _pendingScroll = _PendingScroll(
+      offset: offset,
+      anchorKey: anchorKey,
+      anchorDelta: anchorDelta,
+    );
+    _pendingFrames = 0;
+    WidgetsBinding.instance.addPostFrameCallback(_applyPendingScroll);
+  }
+
+  void _applyPendingScroll(Duration _) {
+    final pending = _pendingScroll;
+    if (pending == null || !mounted) return;
+    // Still reading, or nothing to lay out yet: wait for a frame with content.
+    if (_loading || _dbError != null || _filtered.isEmpty) {
+      _retryPendingScroll();
+      return;
+    }
+    if (!_activeAttached || !_activeController.position.hasContentDimensions) {
+      _retryPendingScroll();
+      return;
+    }
+    final position = _activeController.position;
+    final max = position.hasContentDimensions ? position.maxScrollExtent : 0.0;
+    double? anchorOffset;
+    if (pending.anchorKey != null) {
+      anchorOffset = _anchorTarget(pending);
+      // The card may not be built yet in the list that just replaced the old
+      // one; a few frames are worth waiting for before falling back to the
+      // pixel offset (which the new layout cannot compare to the old one).
+      if (anchorOffset == null && _pendingFrames <= 8) {
+        _retryPendingScroll();
+        return;
+      }
+    }
+    final resolved = resolveOffset(anchorOffset ?? pending.offset, max);
+    _pendingScroll = null;
+    if ((position.pixels - resolved).abs() > 0.5) {
+      _activeController.jumpTo(resolved);
+    }
+    _scrollMemory.remember(_positionKey, resolved);
+  }
+
+  /// Where the anchored card is now, or null when it is not built (yet).
+  double? _anchorTarget(_PendingScroll pending) {
+    final key = pending.anchorKey;
+    if (key == null) return null;
+    final box = _anchors[key]?.currentContext?.findRenderObject();
+    if (box is! RenderBox || !box.attached) return null;
+    final viewport = RenderAbstractViewport.maybeOf(box);
+    if (viewport == null) return null;
+    final reveal = viewport.getOffsetToReveal(box, 0).offset;
+    if (!reveal.isFinite) return null;
+    return anchorRestoreOffset(reveal: reveal, delta: pending.anchorDelta);
+  }
+
+  void _retryPendingScroll() {
+    // A handful of frames is enough for a read to land and lay out; after that
+    // the position is left alone instead of fighting the page.
+    if (_pendingFrames++ > 120) {
+      _pendingScroll = null;
+      return;
+    }
+    WidgetsBinding.instance.addPostFrameCallback(_applyPendingScroll);
+  }
+
+  /// The card under the top edge right now, and where it sits, for a data
+  /// update or a layout switch that is about to reorder the list.
+  ScrollAnchor? _captureAnchor({
+    AnchorPreference preference = AnchorPreference.visible,
+  }) {
+    if (!_activeAttached) return null;
+    final offset = _activeController.position.pixels;
+    final candidates = <ScrollAnchor>[];
+    for (final entry in _anchors.entries) {
+      final box = entry.value.currentContext?.findRenderObject();
+      if (box is! RenderBox || !box.attached) continue;
+      final viewport = RenderAbstractViewport.maybeOf(box);
+      if (viewport == null) continue;
+      // Same measure as the restore below: where the list would have to stand
+      // for this card to touch the top edge. `reveal - offset` is how far the
+      // card is from the edge (negative: it starts above it).
+      final reveal = viewport.getOffsetToReveal(box, 0).offset;
+      if (!reveal.isFinite) continue;
+      candidates.add(
+        ScrollAnchor(
+          key: entry.key,
+          top: reveal - offset,
+          height: box.size.height,
+        ),
+      );
+    }
+    final anchor = pickAnchor(candidates, preference: preference);
+    return anchor;
+  }
+
+  /// Wraps a card with the key the anchor rules find it by (v1.11 batch 3).
+  /// The card keeps its own key, so nothing about the list's own diffing
+  /// changes.
+  Widget _anchored(String itemKey, Widget child) =>
+      KeyedSubtree(key: _anchors.putIfAbsent(itemKey, GlobalKey.new), child: child);
 
   // -------------------------------------------------------------- selection
 
@@ -1187,12 +1375,24 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
             active: false,
             tooltip: _layout == HistoryLayout.waterfall ? '切换列表' : '切换瀑布流',
             onTap: () {
+              // 瀑布流 ↔ 列表 keeps the first fully visible post on screen; the
+              // pixel offsets of the two layouts are not comparable (v1.11
+              // batch 3).
+              final anchor = _captureAnchor(
+                preference: AnchorPreference.aligned,
+              );
+              final offset = _activeOffset;
               setState(() {
                 _layout = _layout == HistoryLayout.waterfall
                     ? HistoryLayout.list
                     : HistoryLayout.waterfall;
               });
               _persistPrefs();
+              _scheduleScroll(
+                offset,
+                anchorKey: anchor?.key,
+                anchorDelta: anchor?.top ?? 0,
+              );
             },
           ),
         if (_records.isNotEmpty)
@@ -1468,6 +1668,10 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
                     key: ValueKey('view_switcher_${view.name}'),
                     onTap: () {
                       if (_view == view) return;
+                      // Remember the position of the view being left, and
+                      // start the one being entered where it was left
+                      // (v1.11 batch 3).
+                      _rememberScrollNow();
                       _beginModeSwitch(view);
                       setState(() {
                         _view = view;
@@ -1476,6 +1680,7 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
                       });
                       widget.onSelectionModeChanged?.call(false);
                       _persistPrefs();
+                      _scheduleScroll(_scrollMemory.offsetFor(_positionKey) ?? 0);
                     },
                     child: AnimatedContainer(
                       duration: const Duration(milliseconds: 150),
@@ -1517,12 +1722,18 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
                     if (_author != null)
                       _filterChip(
                         _author!,
-                        () => setState(() => _author = null),
+                        () {
+                          setState(() => _author = null);
+                          _afterPositionKeyChange();
+                        },
                       ),
                     if (_platform != 'all')
                       _filterChip(
                         _platformLabel(_platform),
-                        () => setState(() => _platform = 'all'),
+                        () {
+                          setState(() => _platform = 'all');
+                          _afterPositionKeyChange();
+                        },
                       ),
                   ],
                 ),
@@ -1557,7 +1768,11 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
       child: TextField(
         controller: _searchController,
         autofocus: true,
-        onChanged: (v) => setState(() => _query = v),
+        onChanged: (v) {
+          if (v == _query) return;
+          setState(() => _query = v);
+          _afterPositionKeyChange();
+        },
         decoration: InputDecoration(
           hintText: '搜索标题或作者',
           prefixIcon: const Icon(Icons.search, size: 20),
@@ -1565,10 +1780,13 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
               ? null
               : IconButton(
                   icon: const Icon(Icons.close, size: 18),
-                  onPressed: () => setState(() {
-                    _query = '';
-                    _searchController.clear();
-                  }),
+                  onPressed: () {
+                    setState(() {
+                      _query = '';
+                      _searchController.clear();
+                    });
+                    _afterPositionKeyChange();
+                  },
                 ),
           filled: true,
           fillColor: Theme.of(context).cardColor,
@@ -1614,7 +1832,13 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
     return PopupMenuButton<String>(
       key: const ValueKey('canonical-platform-filter'),
       tooltip: '平台筛选',
-      onSelected: (v) => setState(() => _platform = v),
+      onSelected: (v) {
+        if (v == _platform) return;
+        setState(() => _platform = v);
+        // A platform filter is a filter change: top, unless it goes back to the
+        // unfiltered list (v1.11 batch 3).
+        _afterPositionKeyChange();
+      },
       itemBuilder: (_) => [
         const PopupMenuItem(value: 'all', child: Text('全部')),
         for (final siteId in {
@@ -1632,10 +1856,14 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
 
   Widget _sortMenu() {
     return PopupMenuButton<HistorySort>(
+      key: const ValueKey('sort-menu'),
       tooltip: '排序',
       onSelected: (v) {
+        if (v == _sort) return;
         setState(() => _sort = v);
         _persistPrefs();
+        // A new order starts at the top (v1.11 batch 3).
+        _afterPositionKeyChange();
       },
       itemBuilder: (_) => const [
         PopupMenuItem(value: HistorySort.latest, child: Text('最新保存')),
@@ -1671,6 +1899,9 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
           _creatorSortDescending = value.descending;
         });
         _persistPrefs();
+        // 创作者 ordering is one of the page's own sorts: a change starts the
+        // grid at the top (v1.11 batch 3).
+        _afterPositionKeyChange();
       },
       itemBuilder: (_) => [
         for (final mode in CreatorSort.values)
@@ -1756,7 +1987,10 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
   }
 
   Widget _buildModeView(HistoryView view) {
-    final controller = _modeScroll.putIfAbsent(view, ScrollController.new);
+    final controller = _modeScroll.putIfAbsent(
+      view,
+      () => _newController(view),
+    );
     switch (view) {
       case HistoryView.posts:
         return _layout == HistoryLayout.waterfall
@@ -1787,6 +2021,47 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
 
   @visibleForTesting
   int get filteredCountForTesting => _filtered.length;
+
+  // The position rules are about where the list ends up, so they are asserted
+  // on the real offsets rather than on the pixels of a rendered card
+  // (v1.11 batch 3).
+
+  @visibleForTesting
+  double get scrollOffsetForTesting => _activeOffset;
+
+  @visibleForTesting
+  void scrollToForTesting(double offset) {
+    if (!_activeAttached) return;
+    _activeController.jumpTo(
+      offset.clamp(0.0, _activeController.position.maxScrollExtent),
+    );
+  }
+
+  /// The card nearest the top edge right now — what an update that must not
+  /// move anything holds on to.
+  @visibleForTesting
+  String? get firstVisibleKeyForTesting => _captureAnchor()?.key;
+
+  /// The first fully visible card — what a layout switch holds on to.
+  @visibleForTesting
+  String? get firstAlignedKeyForTesting =>
+      _captureAnchor(preference: AnchorPreference.aligned)?.key;
+
+  /// A card's top relative to the viewport edge and its height, for tests.
+  @visibleForTesting
+  (double, double)? itemPlacementForTesting(String key) {
+    if (!_activeAttached) return null;
+    final box = _anchors[key]?.currentContext?.findRenderObject();
+    if (box is! RenderBox || !box.attached) return null;
+    final viewport = RenderAbstractViewport.maybeOf(box);
+    if (viewport == null) return null;
+    final reveal = viewport.getOffsetToReveal(box, 0).offset;
+    if (!reveal.isFinite) return null;
+    return (reveal - _activeController.position.pixels, box.size.height);
+  }
+
+  @visibleForTesting
+  HistoryScrollKey get scrollKeyForTesting => _positionKey;
 
   /// Hidden modes that still owe themselves a rebuild, for tests.
   @visibleForTesting
@@ -1886,7 +2161,7 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
               itemBuilder: (context, index) {
                 final record = group.posts[index];
                 final key = _postKey(record);
-                return WaterfallPostCard(
+                return _anchored(key, WaterfallPostCard(
                   key: ValueKey('wf-${record.id}'),
                   record: record,
                   selectionMode: _selectionMode,
@@ -1905,7 +2180,7 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
                   onTap: () => _openRecord(record),
                   onLongPress: () => _enterSelection(key),
                   onToggleSelect: () => _toggleSelection(key),
-                );
+                ));
               },
               ),
             ),
@@ -1933,7 +2208,7 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
                 delegate: SliverChildBuilderDelegate((context, index) {
                   final record = group.posts[index];
                   final key = _postKey(record);
-                  return Padding(
+                  return _anchored(key, Padding(
                     padding: const EdgeInsets.only(bottom: 12),
                     child: Dismissible(
                       key: ValueKey('row-${record.id}'),
@@ -1984,7 +2259,7 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
                         onOpenOriginal: () => _openOriginal(record.postUrl),
                       ),
                     ),
-                  );
+                  ));
                 }, childCount: group.posts.length),
               ),
               ),
@@ -2021,7 +2296,9 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
               itemBuilder: (context, index) {
                 final ref = group.media[index];
                 final key = _mediaKey(ref.record, ref.itemIndex);
-                return AllMediaCard(
+                return _anchored(
+                  key,
+                  AllMediaCard(
                   key: ValueKey('all-${ref.record.id}-${ref.itemIndex}'),
                   record: ref.record,
                   itemIndex: ref.itemIndex,
@@ -2031,6 +2308,7 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
                       _openRecord(ref.record, highlightItemIndex: ref.itemIndex),
                   onLongPress: () => _enterSelection(key),
                   onToggleSelect: () => _toggleSelection(key),
+                ),
                 );
               },
               ),
@@ -2057,18 +2335,28 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
         itemCount: creators.length,
         itemBuilder: (context, index) {
           final c = creators[index];
-          return CreatorCard(
+          return _anchored(
+            'c:${c.platform}:${c.authorName}',
+            CreatorCard(
             authorName: c.authorName,
             platform: c.platform,
             savedDisplayName: _platformLabel(c.platform),
             postCount: c.postCount,
             fileCount: c.fileCount,
             thumbs: c.thumbs,
-            onTap: () => setState(() {
-              _beginModeSwitch(HistoryView.posts);
-              _view = HistoryView.posts;
-              _author = c.authorName;
-            }),
+            onTap: () {
+              // 创作者 → 帖子 with this author is a filter change, so the list
+              // starts at its top (v1.11 batch 3) instead of inheriting the
+              // creators offset, which parked it at the end.
+              _rememberScrollNow();
+              setState(() {
+                _beginModeSwitch(HistoryView.posts);
+                _view = HistoryView.posts;
+                _author = c.authorName;
+              });
+              _afterPositionKeyChange();
+            },
+          ),
           );
         },
       ),
@@ -2274,4 +2562,27 @@ class VideoBackfillHintBanner extends StatelessWidget {
       ),
     );
   }
+}
+
+/// A list position that is applied once the target list has been laid out
+/// (v1.11 batch 3).
+///
+/// Restoring straight after a rebuild is what put the lists back at the top in
+/// build 55: the content had no height yet, so the offset was clamped away.
+class _PendingScroll {
+  const _PendingScroll({
+    required this.offset,
+    this.anchorKey,
+    this.anchorDelta = 0,
+  });
+
+  /// The pixel offset to return to.
+  final double offset;
+
+  /// The card the user was looking at, when the change was a data update or a
+  /// layout switch: the list is then put back so that card stays in place.
+  final String? anchorKey;
+
+  /// That card's top relative to the viewport top when it was captured.
+  final double anchorDelta;
 }
