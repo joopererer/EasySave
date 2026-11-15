@@ -30,6 +30,14 @@ import 'staged_photo.dart';
 import 'verified_asset_image.dart';
 import 'ai_label_badge.dart';
 
+/// How many live photos started their motion clip (v1.11 batch 3).
+///
+/// Test seam only: a widget test cannot create a real video player, and "长按
+/// 播放" versus "长按选中" is exactly what has to be asserted. Production never
+/// reads it.
+@visibleForTesting
+int liveMotionStartsForTesting = 0;
+
 class GalleryBrowserItem {
   GalleryBrowserItem({
     required this.index,
@@ -2133,6 +2141,7 @@ class _BrowserItemViewState extends State<_BrowserItemView> {
   Future<void> _startLiveMotion() async {
     if (_isLiveHolding) return;
     setState(() => _isLiveHolding = true);
+    liveMotionStartsForTesting++;
 
     try {
       final it = widget.item;
@@ -2511,10 +2520,17 @@ class _BrowserItemViewState extends State<_BrowserItemView> {
       final c = _videoController;
       final showVideo = _isLiveHolding && c != null && c.value.isInitialized;
 
-      return _withSelectionTap(GestureDetector(
+      // A live photo's long press is the animation itself, in both viewers and
+      // in multi-select mode too (v1.11 batch 3). This branch deliberately does
+      // not take the transparent selection layer: a layer on top would receive
+      // the press and turn "长按播放" into "长按选中", which is what the remote
+      // preview did in build 55. The tap is handled here instead, so selecting
+      // while multi-select is active stays one tap.
+      return GestureDetector(
         behavior: HitTestBehavior.opaque,
         onLongPressStart: (_) => _startLiveMotion(),
         onLongPressEnd: (_) => _stopLiveMotion(),
+        onTap: widget.selectionMode ? widget.onToggleSelect : null,
         child: Stack(
           alignment: Alignment.center,
           children: [
@@ -2598,7 +2614,7 @@ class _BrowserItemViewState extends State<_BrowserItemView> {
               ),
           ],
         ),
-      ));
+      );
     }
 
     // 5. Standard Image: Zoomable with double-tap zoom & pinch pan
@@ -2616,6 +2632,10 @@ class _BrowserItemViewState extends State<_BrowserItemView> {
   /// selection of the page in view — the only thing a tap can mean then. The
   /// pictures below keep their own gestures (long press, zoom, playback), so
   /// this sits on top instead of fighting them in the gesture arena.
+  ///
+  /// Live photos do **not** take this layer (v1.11 batch 3): their own long
+  /// press is the animation, and an opaque layer would receive the press and
+  /// turn "长按播放" into "长按选中". That branch handles the tap itself.
   Widget _withSelectionTap(Widget child) {
     if (!widget.selectionMode) return child;
     return Stack(
