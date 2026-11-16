@@ -241,10 +241,12 @@ void main() {
         await writeBatchHistory(db, batch, recovered: false);
       });
       final record = await tester.runAsync(() => db.getByPostId(batch.postId));
+      final itemCount =
+          deletableItemCountFor([record!], deletableMediaFor([record]));
       final future = showDeleteRecordsSheet(
         host,
         recordCount: 1,
-        fileCount: deletableMediaFor([record!]).length,
+        itemCount: itemCount,
         cancelDownloads: true,
       );
       await tester.pumpAndSettle();

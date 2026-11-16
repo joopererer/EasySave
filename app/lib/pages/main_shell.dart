@@ -287,7 +287,7 @@ class _MainShellState extends State<MainShell> with WidgetsBindingObserver {
                 '· 新增记录：${importResult.insertedPosts} 条\n'
                 '· 合并记录：${importResult.mergedPosts} 条\n'
                 '· 跳过记录：${importResult.skippedPosts} 条\n'
-                '· 恢复媒体文件：${importResult.restoredFiles} 个',
+                '· 恢复媒体：${importResult.restoredItems} 项',
               ),
               actions: [
                 TextButton(

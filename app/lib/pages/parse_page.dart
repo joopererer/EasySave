@@ -618,7 +618,7 @@ class ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
-        content: Text('已开始下载 $count 个文件'),
+        content: Text('已开始下载 $count 项'),
         duration: const Duration(seconds: 3),
         action: SnackBarAction(
           label: '查看',
@@ -1032,7 +1032,7 @@ class ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
                     ),
                     subtitle: Text(
                       '${record.authorName ?? ''} · '
-                      '${savedMediaEntryCount(record.savedFiles)} 个文件',
+                      '${savedMediaEntryCount(record.savedFiles)} 项',
                     ),
                     trailing: _openingRecordId == (record.id ?? -1)
                         ? const SizedBox(

@@ -42,6 +42,6 @@ String restoreSummaryText(ImportResult result) =>
     '· 恢复帖子：${result.restoredPosts - result.skippedPosts} 个'
     '（新增 ${result.insertedPosts}，合并 ${result.mergedPosts}'
     '${result.skippedPosts > 0 ? '，跳过 ${result.skippedPosts}' : ''}）\n'
-    '· 恢复文件：${result.restoredFiles} 个\n'
-    '· 不在本机：${result.notOnDevice} 个'
+    '· 恢复媒体：${result.restoredItems} 项\n'
+    '· 不在本机：${result.notOnDeviceItems} 项'
     '${result.overlayNotice ? '\n\n提示：由于系统未授予悬浮窗权限，悬浮球已设为关闭，可在权限管理中授权后开启。' : ''}';

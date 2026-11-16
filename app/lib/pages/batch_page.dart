@@ -174,7 +174,7 @@ class _BatchPageState extends State<BatchPage> {
         return const Text('解析中…');
       case BatchItemState.done:
         final post = item.post!;
-        return Text('${post.author.name ?? ''} · ${post.items.length} 个文件');
+        return Text('${post.author.name ?? ''} · ${post.items.length} 项');
       case BatchItemState.failed:
         final copy = errorCopyFor(item.errorCode ?? ParseErrorCode.invalidPage);
         return Text(

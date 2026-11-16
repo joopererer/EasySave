@@ -75,8 +75,8 @@ void main() {
         );
         await tester.pump();
       }
-      expect(find.textContaining('0 个文件 ·'), findsOneWidget);
-      expect(find.textContaining('9 个文件 ·'), findsNothing);
+      expect(find.textContaining('0 项 ·'), findsOneWidget);
+      expect(find.textContaining('9 项 ·'), findsNothing);
       await tester.tap(find.text('Unbound candidates'));
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 400));

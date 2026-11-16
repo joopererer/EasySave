@@ -129,7 +129,7 @@ void main() {
                 platform: 'xhs',
                 savedDisplayName: '小红书',
                 postCount: 1,
-                fileCount: 4,
+                itemCount: 4,
                 thumbs: [
                   for (var i = 1; i <= 4; i++) HistThumbRef(_record(), i),
                 ],

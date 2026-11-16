@@ -440,7 +440,7 @@ class _PreviewPageState extends State<PreviewPage> {
       widget.onSaved?.call();
       ScaffoldMessenger.of(
         context,
-      ).showSnackBar(SnackBar(content: Text('已将 $associated 个本地文件关联到历史记录')));
+      ).showSnackBar(SnackBar(content: Text('已将 $associated 项本地内容关联到历史记录')));
       // Notify history page to refresh
       HostBridge.historyRevision.value = HostBridge.historyRevision.value + 1;
       Navigator.of(context).pop(true);
@@ -465,7 +465,7 @@ class _PreviewPageState extends State<PreviewPage> {
         SnackBar(
           content: Text(
             associated > 0
-                ? '已保存 $done 项，并关联 $associated 个本地文件'
+                ? '已保存 $done 项，并关联 $associated 项本地内容'
                 : '已保存 $done 项到相册',
           ),
         ),

@@ -477,12 +477,12 @@ String? videoDurationLabel(MediaItem? item) {
   return '$mm:$ss';
 }
 
-/// Overlays shared by the waterfall cover and the all-media card: multi count
+/// Overlays shared by the waterfall cover and the all-media card: item count
 /// (top-right), video ▶/duration and LIVE/GIF (top-left).
 List<Widget> coverBadges(
   BuildContext context, {
   required MediaItem? cover,
-  required int fileCount,
+  required int itemCount,
   bool showInfo = true,
   bool notOriginal = false,
 }) {
@@ -537,7 +537,7 @@ List<Widget> coverBadges(
       );
     }
   }
-  if (fileCount > 1) {
+  if (itemCount > 1) {
     widgets.add(
       Positioned(
         top: 8,
@@ -549,7 +549,7 @@ List<Widget> coverBadges(
               const Icon(Icons.collections, color: Colors.white, size: 11),
               const SizedBox(width: 3),
               Text(
-                '$fileCount',
+                '$itemCount',
                 style: const TextStyle(
                   color: Colors.white,
                   fontSize: 10,
@@ -626,7 +626,7 @@ class WaterfallPostCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final cover = coverItemFor(record);
-    final fileCount = savedMediaEntryCount(record.savedFiles);
+    final itemCount = savedMediaEntryCount(record.savedFiles);
     final title = (record.title?.isNotEmpty == true) ? record.title! : '无标题';
     final radius = BorderRadius.circular(20);
 
@@ -712,7 +712,7 @@ class WaterfallPostCard extends StatelessWidget {
                     ...coverBadges(
                       context,
                       cover: cover,
-                      fileCount: fileCount,
+                      itemCount: itemCount,
                       notOriginal: record.savedFiles.any((f) => f.notOriginal),
                     ),
                     if (downloadProgress != null)
@@ -863,7 +863,9 @@ class ListPostRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final cover = coverItemFor(record);
-    final fileCount = savedMediaEntryCount(record.savedFiles);
+    // Items, never files: a Live photo's still and clip are one item, and this
+    // number is what the row says (v1.11 build 59).
+    final itemCount = savedMediaEntryCount(record.savedFiles);
     final title = (record.title?.isNotEmpty == true) ? record.title! : '无标题';
     final badge = listTypeBadge(cover);
 
@@ -912,7 +914,7 @@ class ListPostRow extends StatelessWidget {
                           left: 4,
                           child: WhiteBadge(label: badge),
                         ),
-                      if (fileCount > 1)
+                      if (itemCount > 1)
                         Positioned(
                           right: 4,
                           bottom: 4,
@@ -923,7 +925,7 @@ class ListPostRow extends StatelessWidget {
                               shape: BoxShape.circle,
                             ),
                             child: Text(
-                              '$fileCount',
+                              '$itemCount',
                               style: const TextStyle(
                                 color: Colors.white,
                                 fontSize: 10,
@@ -982,7 +984,7 @@ class ListPostRow extends StatelessWidget {
                     ),
                     const SizedBox(height: 4),
                     Text(
-                      '$fileCount 个文件 · ${formatSavedAt(record.createdAt)}',
+                      '$itemCount 项 · ${formatSavedAt(record.createdAt)}',
                       style: const TextStyle(
                         fontSize: 12,
                         color: AppTokens.textSecondary,
@@ -1151,7 +1153,7 @@ class CreatorCard extends StatelessWidget {
     required this.platform,
     this.savedDisplayName,
     required this.postCount,
-    required this.fileCount,
+    required this.itemCount,
     required this.thumbs,
     required this.onTap,
   });
@@ -1160,7 +1162,9 @@ class CreatorCard extends StatelessWidget {
   final String platform;
   final String? savedDisplayName;
   final int postCount;
-  final int fileCount;
+
+  /// Items across this creator's posts (a Live photo counts once).
+  final int itemCount;
   final List<HistThumbRef> thumbs;
   final VoidCallback onTap;
 
@@ -1202,7 +1206,7 @@ class CreatorCard extends StatelessWidget {
               const SizedBox(width: 6),
               Flexible(
                 child: Text(
-                  '$postCount 帖 · $fileCount 个文件',
+                  '$postCount 帖 · $itemCount 项',
                   overflow: TextOverflow.ellipsis,
                   style: const TextStyle(
                     fontSize: 12,

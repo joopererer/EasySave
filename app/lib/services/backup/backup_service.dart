@@ -12,13 +12,20 @@ import '../../core/dev_log.dart';
 import '../../metadata/url_normalizer.dart';
 import '../history_db.dart';
 import '../image_format_preference.dart';
+import '../live_pairs.dart';
 import '../settings.dart';
 import 'backup_model.dart';
 import 'backup_restore_matcher.dart';
 
 class ImportResult {
   final int restoredPosts;
+
+  /// Files the restore brought back. Internal: every user-visible number is
+  /// [restoredItems] (a Live photo's still and clip are one item).
   final int restoredFiles;
+
+  /// Items the restore brought back (v1.11 build 59).
+  final int restoredItems;
   final bool restoredSettings;
   final bool overlayNotice;
   final int insertedPosts;
@@ -28,16 +35,22 @@ class ImportResult {
   /// Backup files with no matching album file on this device.
   final int notOnDevice;
 
+  /// Items among [notOnDevice]; this is what the summary shows.
+  final int notOnDeviceItems;
+
   ImportResult({
     required this.restoredPosts,
     required this.restoredFiles,
+    int? restoredItems,
     required this.restoredSettings,
     this.overlayNotice = false,
     this.insertedPosts = 0,
     this.mergedPosts = 0,
     this.skippedPosts = 0,
     this.notOnDevice = 0,
-  });
+    int? notOnDeviceItems,
+  }) : restoredItems = restoredItems ?? restoredFiles,
+       notOnDeviceItems = notOnDeviceItems ?? notOnDevice;
 }
 
 abstract final class BackupService {
@@ -206,17 +219,31 @@ abstract final class BackupService {
     }
     final data = BackupData.fromMap(decoded.cast<String, dynamic>());
     // An item the user deleted is not a file a restore will bring back, so it
-    // is not part of the "N 个文件" the preview promises (v1.11 batch 4).
-    final totalFiles = data.posts.fold<int>(
-      0,
-      (sum, p) => sum + p.files.where((f) => !f.status.isDeleted).length,
-    );
+    // is not part of the "N 项" the preview promises (v1.11 batch 4). The
+    // preview counts items, never files (v1.11 build 59): a Live photo's still
+    // and clip are one item.
+    final files = [
+      for (final p in data.posts)
+        for (final f in p.files)
+          if (!f.status.isDeleted) f,
+    ];
+    final totalFiles = files.length;
+    final totalItems = savedMediaEntryCount([
+      for (final f in files)
+        HistoryFile(
+          filename: f.filename,
+          savedAt: DateTime.tryParse(f.savedAt)?.millisecondsSinceEpoch ?? 0,
+          itemIndex: f.itemIndex,
+          isImage: f.mediaType != 'video',
+        ),
+    ]);
 
     return BackupPreview(
       exportedAt: data.exportedAt,
       appVersion: data.appVersion,
       postCount: data.posts.length,
       fileCount: totalFiles,
+      itemCount: totalItems,
       settings: data.settings,
       formatVersion: data.formatVersion,
     );
@@ -250,6 +277,8 @@ abstract final class BackupService {
     final indexed = await matcher.prepare();
 
     var restoredFilesCount = 0;
+    var restoredItemsCount = 0;
+    var notOnDeviceItemsCount = 0;
     var insertedPosts = 0;
     var mergedPosts = 0;
     var skippedPosts = 0;
@@ -349,6 +378,13 @@ abstract final class BackupService {
       }
       final restoredFiles = repairHistoryFiles(files) ?? files;
       restoredFilesCount += restoredFiles.where(isVisibleHistoryFile).length;
+      // Items, not files, for everything the user reads (v1.11 build 59).
+      restoredItemsCount += savedMediaEntryCount(
+        restoredFiles.where(isVisibleHistoryFile),
+      );
+      notOnDeviceItemsCount += savedMediaEntryCount(
+        restoredFiles.where(isMissingHistoryFile),
+      );
 
       DateTime? resolvedCreatedAt = DateTime.tryParse(post.savedAt);
       if (resolvedCreatedAt == null && files.isNotEmpty) {
@@ -465,12 +501,14 @@ abstract final class BackupService {
     return ImportResult(
       restoredPosts: data.posts.length,
       restoredFiles: restoredFilesCount,
+      restoredItems: restoredItemsCount,
       restoredSettings: restoreSettings,
       overlayNotice: overlayNotice,
       insertedPosts: insertedPosts,
       mergedPosts: mergedPosts,
       skippedPosts: skippedPosts,
       notOnDevice: notOnDevice,
+      notOnDeviceItems: notOnDeviceItemsCount,
     );
   }
 }

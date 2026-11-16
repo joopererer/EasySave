@@ -434,6 +434,10 @@ class BackupPreview {
   final String appVersion;
   final int postCount;
   final int fileCount;
+
+  /// Items among [fileCount]: a Live photo's still and clip are one item, and
+  /// every user-visible number counts items (v1.11 build 59).
+  final int itemCount;
   final BackupSettings? settings;
   final int formatVersion;
 
@@ -442,7 +446,8 @@ class BackupPreview {
     required this.appVersion,
     required this.postCount,
     required this.fileCount,
+    int? itemCount,
     this.settings,
     required this.formatVersion,
-  });
+  }) : itemCount = itemCount ?? fileCount;
 }
