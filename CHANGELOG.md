@@ -124,10 +124,14 @@ This file documents notable user-facing changes following [Keep a Changelog](htt
 
 ## [1.10.2] - 2026-11-12
 
-### 修复 / Fixed
+### 修复 / Fixed （build 59）
 
-- 修复小红书 jpg 候选连接失败后回退到 HEIC 原图时写入相册失败的问题：协议栈、HTTP 方法与预检请求的差异导致原生下载连接被重置，现重置与超时时先在同一候选上做一次短暂退避重试，仍失败再换下一个候选，每次尝试写一条日志；重试成功后立即清除旧批次的失败标记，无需离开页面或重新进入。
-  Fixed saving to the gallery after a Xiaohongshu jpg candidate connection failure falls back to the HEIC original: after a stack/method difference against the preflight HEAD request caused the native download connection to be reset, a reset or timeout now retries the same candidate once after a short backoff, then moves on; one log line is written per attempt. A successful retry clears the stale batch failure immediately, without leaving the page.
+- 悬浮球下载的帖子不在历史页的回归。历史页把本页删除过的帖子记住到了会话结束，后来同一帖子又下载回来（`restoreDeleted`），记录留在数据库和「最近保存」里，历史页却永远过滤掉；读取开始于删帖之前的另一次读取也会被永久屏蔽。现在只屏蔽读取开始前的删帖，删帖条目在它服务过一次读取后就清除，恢复后的帖子按本次保存时间排序，与「最近保存」一致出现在「今天」；后台引擎写入后回到前台的读取若与写入重叠，会补一次读取，所以三种模式都会显示新帖子。
+  A post downloaded with the bubble never reached the history page. The page remembered every post it deleted in the session and filtered it out of every later read — so a post deleted once and then re-downloaded (restoreDeleted) stayed invisible in history while showing up in the database and 「最近保存」, exactly as 1.10.x used to. The page now suppresses only the reads that started before a delete committed, and drops a delete as soon as one read has passed it; a re-downloaded post is dated by this save and appears in 今天 just like 「最近保存」. A resume read that overlapped the other engine's write runs again once it finishes, so 帖子 / 全部 / 创作者 all show the new post.
+- 删除确认对话框的「同时删除相册中的 N 个文件」、删除结果提示、历史页顶部统计、帖子卡片与列表行、创作者卡片「N 帖 · N 个文件」、排序「文件最多」、备份预览「媒体文件」与恢复结果「恢复文件 / 不在本机」都改为按项计数：实况的静态图与视频是 1 项，文案改用「项」。系统删除确认仍把整个相册中的文件一起删（实况两半一起删），内部逻辑与日志仍按文件，仅附带 items=。
+  Every user-visible count now counts items instead of files: the delete sheet's 同时删除相册中的 N 项, the deletion result prompt, the history page's statistics, post cards and list rows, the 创作者 card's N 帖 · N 项, the 项最多 sort, the backup preview's 媒体项 and the restore summary's 恢复媒体 / 不在本机. A Live photo's still and clip are one item; the wording uses 项 throughout. The system deletion still removes every related file (both halves of a Live photo together); internal logic and logs keep counting files.
+
+## [1.10.2] - 2026-11-12
 - HEIC / HEIF / AVIF / GIF 原图按原格式写入相册：当 `provenance=skipped` 时，原生导入链路不再执行任何依赖内嵌来源信息或限定容器格式的检查（inspectTarget、pair 校验、来源验证等），直接按文件真实 MIME 写入；实况 HEIC 静态图的配对只依赖历史行的 pair_id，不依赖文件内 XMP。
   Originals kept in their own format (HEIC / HEIF / AVIF / GIF): when provenance is skipped, the native import chain runs no check that depends on embedded provenance or restricts container format (inspectTarget, pair validation, provenance verification), and imports straight by the file's real MIME type. A Live photo's HEIC still pairs only through its history-row pairId, not through XMP in the file.
 - 扩展原生导入链路的容器白名单：`ExportNames`、`PublicMediaWriter`、`ProvenancePairWriter` 均接受 gif、heic、heif、avif；来源信息可嵌入的容器集合保持不变。

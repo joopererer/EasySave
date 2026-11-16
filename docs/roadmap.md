@@ -5,7 +5,7 @@
 
 ## 当前版本
 
-- App：**v1.11.0**（versionCode 58）。下一版 **v1.12**。
+- App：**v1.11.0**（versionCode 59）。下一版 **v1.12**。
 - 内置 parser：**1.4.16**（manifestVersion 12）。
 
 ## v1.11
