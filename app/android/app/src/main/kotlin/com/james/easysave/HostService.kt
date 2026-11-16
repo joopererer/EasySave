@@ -140,12 +140,15 @@ class HostService : Service() {
             }
 
             val e = FlutterEngine(applicationContext, null, true)
-            NativeLog.register(applicationContext, e.dartExecutor.binaryMessenger)
-            SharedPreviewBridge.register(applicationContext, e.dartExecutor.binaryMessenger, background = true)
-            ProvenancePairWriter.register(applicationContext, e.dartExecutor.binaryMessenger)
-            DownloadControl.register(e.dartExecutor.binaryMessenger)
+            // Every channel is registered on **this** engine, every time: a
+            // rebuilt engine must not depend on something the first engine did
+            // (build 55: the task stopped right after `submit`).
+            NativeChannels.registerShared(
+                applicationContext, e.dartExecutor.binaryMessenger, background = true
+            )
             SafStorageBridge.register(applicationContext, e.dartExecutor.binaryMessenger)
             MediaStoreBridge.register(applicationContext, e.dartExecutor.binaryMessenger)
+            NativeLog.i(TAG, "native channels registered (new engine)")
             engine = e
             val ch = MethodChannel(e.dartExecutor.binaryMessenger, "easysave/bgtask")
             channel = ch
@@ -361,6 +364,7 @@ class HostService : Service() {
         try {
             channel?.setMethodCallHandler(null)
             engine?.let { SharedPreviewBridge.detach(it.dartExecutor.binaryMessenger) }
+            NetworkStatusChannel.detach()
             engine?.destroy()
         } catch (_: Exception) {
         }

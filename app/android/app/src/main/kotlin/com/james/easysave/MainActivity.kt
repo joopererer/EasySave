@@ -162,11 +162,10 @@ class MainActivity : FlutterActivity() {
     }
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
-        NativeLog.register(this, flutterEngine.dartExecutor.binaryMessenger)
-        SharedPreviewBridge.register(this, flutterEngine.dartExecutor.binaryMessenger)
+        // Same set as the background engine, from the same place (v1.11 batch
+        // 3): the two engines can no longer drift apart.
+        NativeChannels.registerShared(this, flutterEngine.dartExecutor.binaryMessenger)
         super.configureFlutterEngine(flutterEngine)
-        ProvenancePairWriter.register(this, flutterEngine.dartExecutor.binaryMessenger)
-        DownloadControl.register(flutterEngine.dartExecutor.binaryMessenger)
 
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, SEAL_CHANNEL)
             .setMethodCallHandler { call, result ->

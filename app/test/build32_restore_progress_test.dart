@@ -77,14 +77,15 @@ void main() {
     expect(find.byType(RestoreProgressDialog), findsOneWidget, reason: 'back does not close it');
   });
 
-  test('summary lists posts, files and files not on this device', () {
+  test('summary lists posts, restored media items and items not on this device',
+      () {
     final text = restoreSummaryText(ImportResult(
-      restoredPosts: 4, restoredFiles: 9, restoredSettings: false,
-      insertedPosts: 3, mergedPosts: 1, notOnDevice: 2,
+      restoredPosts: 4, restoredFiles: 9, restoredItems: 7, restoredSettings: false,
+      insertedPosts: 3, mergedPosts: 1, notOnDevice: 2, notOnDeviceItems: 1,
     ));
     expect(text, contains('恢复帖子：4 个'));
-    expect(text, contains('恢复文件：9 个'));
-    expect(text, contains('不在本机：2 个'));
+    expect(text, contains('恢复媒体：7 项'));
+    expect(text, contains('不在本机：1 项'));
   });
 
   testWidgets('the restore button is disabled for the whole flow and the '

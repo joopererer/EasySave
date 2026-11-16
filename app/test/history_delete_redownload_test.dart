@@ -221,9 +221,8 @@ void main() {
     expect(stored.files.single.status, FileStatus.found);
   });
 
-  test('the one-time migration drops rows of deleted posts and missing files', () async {
-    // A version-6 database still holds the file rows of soft-deleted records and
-    // the rows an album scan already reported missing.
+  test('the one-time migration drops the rows of deleted posts only', () async {
+    // A version-6 database still holds the file rows of soft-deleted records.
     HistoryDb.resetInstanceForTesting();
     final dir = await Directory.systemTemp.createTemp('easysave_migration_');
     final path = '${dir.path}/history_v6.db';
@@ -284,10 +283,12 @@ void main() {
     expect(deletedPost.files, isEmpty);
 
     final activePost = (await migrated.getByPostId('active-post'))!;
-    // The row the scan reported missing is gone; the unresolved guess stays as
-    // a scan hint (it is never counted) and the confirmed row is untouched.
-    expect(activePost.files.map((f) => f.itemIndex).toList(), [1, 3]);
+    // Since v1.11 a row the album reported missing is the "不在本机" state the
+    // viewer shows with its re-download button, so the migration keeps it (and
+    // the unresolved guess, which is a scan hint and never counted).
+    expect(activePost.files.map((f) => f.itemIndex).toList(), [1, 2, 3]);
     expect(activePost.savedFiles.length, 1);
+    expect(activePost.missingFiles.length, 1);
 
     // No album file was touched: the cleanup is a database rewrite only.
     HistoryDb.resetInstanceForTesting();

@@ -13,12 +13,15 @@ class DeleteSheetResult {
   final bool deleteFiles;
 }
 
-/// [recordCount] records are about to be deleted; [fileCount] of their files
-/// were located (status == found) and can optionally be removed from the album.
+/// [recordCount] records are about to be deleted; [itemCount] of their items
+/// were saved and can optionally be removed from the album.
+///
+/// The count is items, never files (v1.11 build 59): a Live photo's still and
+/// motion clip are one item. Both halves are still deleted from the album.
 Future<DeleteSheetResult?> showDeleteRecordsSheet(
   BuildContext context, {
   required int recordCount,
-  required int fileCount,
+  required int itemCount,
   bool cancelDownloads = false,
 }) {
   return showModalBottomSheet<DeleteSheetResult>(
@@ -30,18 +33,18 @@ Future<DeleteSheetResult?> showDeleteRecordsSheet(
     ),
     builder: (context) => _DeleteSheet(
       recordCount: recordCount,
-      fileCount: fileCount,
+      itemCount: itemCount,
       cancelDownloads: cancelDownloads,
     ),
   );
 }
 
 class _DeleteSheet extends StatefulWidget {
-  const _DeleteSheet({required this.recordCount, required this.fileCount, required this.cancelDownloads});
+  const _DeleteSheet({required this.recordCount, required this.itemCount, required this.cancelDownloads});
   final bool cancelDownloads;
 
   final int recordCount;
-  final int fileCount;
+  final int itemCount;
 
   @override
   State<_DeleteSheet> createState() => _DeleteSheetState();
@@ -52,7 +55,7 @@ class _DeleteSheetState extends State<_DeleteSheet> {
 
   @override
   Widget build(BuildContext context) {
-    final canDeleteFiles = widget.fileCount > 0;
+    final canDeleteFiles = widget.itemCount > 0;
     return SafeArea(
       child: Padding(
         padding: const EdgeInsets.fromLTRB(20, 20, 20, 20),
@@ -96,7 +99,7 @@ class _DeleteSheetState extends State<_DeleteSheet> {
                           ),
                           Expanded(
                             child: Text(
-                              '同时删除相册中的 ${widget.fileCount} 个文件',
+                              '同时删除相册中的 ${widget.itemCount} 项',
                               style: const TextStyle(fontSize: 14),
                             ),
                           ),

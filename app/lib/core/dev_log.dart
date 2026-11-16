@@ -49,6 +49,53 @@ abstract final class DevLog {
 
   static const String _redacted = '<redacted>';
 
+  /// Recent lines kept in memory so a failed download batch can save the log
+  /// around it (v1.11 batch 1). Capacity is generously above the 200 lines a
+  /// snapshot takes from before the batch.
+  static const int recentCapacity = 4096;
+
+  static final List<String> _recent = <String>[];
+  static int _totalLines = 0;
+
+  /// Number of lines written since the process started.
+  static int get totalLines => _totalLines;
+
+  /// The last [count] lines, oldest first.
+  static List<String> recentLines(int count) {
+    if (count <= 0) return const <String>[];
+    final from = _recent.length > count ? _recent.length - count : 0;
+    return _recent.sublist(from);
+  }
+
+  /// Lines with absolute indices in `[fromLine, toLine)`; missing ends are
+  /// clamped to what is still in memory.
+  static List<String> linesInRange(int fromLine, int toLine) {
+    if (toLine <= fromLine) return const <String>[];
+    final firstKept = _totalLines - _recent.length;
+    final start = fromLine < firstKept ? firstKept : fromLine;
+    final end = toLine > _totalLines ? _totalLines : toLine;
+    if (end <= start) return const <String>[];
+    return _recent.sublist(start - firstKept, end - firstKept);
+  }
+
+  /// Clears the in-memory buffer (tests).
+  @visibleForTesting
+  static void resetRecentForTesting() {
+    _recent.clear();
+    _totalLines = 0;
+  }
+
+  @visibleForTesting
+  static void appendRecentForTesting(String line) => _remember(line);
+
+  static void _remember(String line) {
+    _recent.add(line);
+    _totalLines++;
+    if (_recent.length > recentCapacity * 2) {
+      _recent.removeRange(0, _recent.length - recentCapacity);
+    }
+  }
+
   /// Any http(s) URL inside a message.
   static final RegExp _urlPattern = RegExp(r'''https?://[^\s"'<>]+''');
 
@@ -66,6 +113,7 @@ abstract final class DevLog {
         '[${level.name.toUpperCase()}] [${scrub(tag)}] ${scrub(message)}'
             .replaceAll('\r', r'\r')
             .replaceAll('\n', r'\n');
+    _remember(line);
     debugPrint(line);
     try {
       if (defaultTargetPlatform == TargetPlatform.android) {

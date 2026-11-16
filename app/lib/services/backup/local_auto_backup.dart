@@ -13,6 +13,17 @@ abstract final class LocalAutoBackup {
   static const throttleDuration = Duration(hours: 1);
   static int? _lastBackupTimestampMs;
 
+  /// Serialises the backups of this process.
+  ///
+  /// Two batches can finish at the same moment (the download manager starts one
+  /// unawaited auto backup per finished batch), and both used to write the same
+  /// `<dir>/backup/easysave-backup.json.tmp` and then rename it. On Windows the
+  /// second rename found the file still open and failed with
+  /// `Cannot rename …backup.json.tmp`; on Android the same race would simply
+  /// lose one of the two writes. One backup at a time, each with its own temp
+  /// name, makes that impossible.
+  static Future<void> _tail = Future<void>.value();
+
   /// Resets throttling state (for unit testing).
   static void resetThrottleForTest() {
     _lastBackupTimestampMs = null;
@@ -47,6 +58,28 @@ abstract final class LocalAutoBackup {
     bool force = false,
     String? customSupportDirPath,
     DateTime? now,
+  }) {
+    // One at a time: a second caller waits for the first to finish instead of
+    // writing the same temp file (see [_tail]).
+    final next = _tail.then(
+      (_) => _performAutoBackup(
+        db: db,
+        settings: settings,
+        force: force,
+        customSupportDirPath: customSupportDirPath,
+        now: now,
+      ),
+    );
+    _tail = next.then<void>((_) {}, onError: (Object _, StackTrace _) {});
+    return next;
+  }
+
+  static Future<bool> _performAutoBackup({
+    HistoryDb? db,
+    AppSettings? settings,
+    bool force = false,
+    String? customSupportDirPath,
+    DateTime? now,
   }) async {
     final store = db ?? await HistoryDb.instance();
     if (await BackupService.isHistoryEmpty(db: store)) {
@@ -73,16 +106,14 @@ abstract final class LocalAutoBackup {
     );
 
     final file = await getBackupFile(customSupportDirPath: customSupportDirPath);
-    final tmpFile = File('${file.path}.tmp');
+    // A temp name of this write only: even a second writer of the same target
+    // (another process, a test that shares the directory) can never collide
+    // with this one.
+    final tmpFile = File(
+      '${file.path}.${DateTime.now().microsecondsSinceEpoch}.tmp',
+    );
     await tmpFile.writeAsString(jsonContent, flush: true);
-    try {
-      await tmpFile.rename(file.path);
-    } on FileSystemException {
-      if (await file.exists()) {
-        await file.delete();
-      }
-      await tmpFile.rename(file.path);
-    }
+    await _replaceFile(tmpFile, file);
     _lastBackupTimestampMs = currentTime.millisecondsSinceEpoch;
     try {
       currentSettings.lastBackupTime = currentTime.millisecondsSinceEpoch;
@@ -91,5 +122,36 @@ abstract final class LocalAutoBackup {
       // Best effort saving lastBackupTime
     }
     return true;
+  }
+
+  /// Moves [tmp] onto [target], retrying the rename.
+  ///
+  /// Windows refuses a rename while the target is open in another handle (a
+  /// virus scanner, another isolate, the previous writer): a short retry
+  /// ladder turns that into a successful write instead of an exception that
+  /// loses the whole backup.
+  static Future<void> _replaceFile(File tmp, File target) async {
+    const waits = [
+      Duration(milliseconds: 10),
+      Duration(milliseconds: 40),
+      Duration(milliseconds: 120),
+      Duration(milliseconds: 300),
+    ];
+    for (var attempt = 0; ; attempt++) {
+      try {
+        await tmp.rename(target.path);
+        return;
+      } on FileSystemException {
+        if (attempt >= waits.length) rethrow;
+        if (await target.exists()) {
+          try {
+            await target.delete();
+          } on FileSystemException {
+            // Still held: the retry below waits for it.
+          }
+        }
+        await Future<void>.delayed(waits[attempt]);
+      }
+    }
   }
 }

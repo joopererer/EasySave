@@ -8,6 +8,8 @@
 import 'dart:io';
 import 'dart:typed_data';
 
+import 'image_format_preference.dart';
+
 enum MediaContentKind { image, video }
 
 /// A concrete container as the file header declares it.
@@ -343,11 +345,120 @@ int stillCandidateRank(String url) {
   return (isPreviewStillCandidate(url) ? 8 : 0) + byFormat;
 }
 
+/// The still candidates of one item, ordered for the user's 图片格式
+/// preference (v1.11 batch 3).
+///
+/// [ImageFormatPreference.compat] is the v1.10.3 ladder and the default:
+/// jpeg transcode first, then the original, then the preview-size copy.
+///
+/// [ImageFormatPreference.original] puts the parser's own tokens first — the
+/// bytes the post really stores, HEIC / WebP / AVIF included — and keeps the
+/// jpeg transcode and the preview copies after them, so a failed original still
+/// falls back instead of failing the item.
+///
+/// [ImageFormatPreference.jpeg] keeps only jpeg-labelled candidates. When an
+/// item has none, the whole compat ladder is returned: the caller reports
+/// 「未取得 JPEG，已按兼容优先保存」 rather than failing the download.
+///
+/// Every branch is a pure reordering of what the parser delivered (plus the
+/// CDN's own jpeg transcode); nothing here fetches or decodes anything.
+///
+/// The ladder that comes out holds each final URL once, in ladder order (see
+/// [dedupeFinalCandidates]): parser 1.4.17 will hand out the same
+/// `imageView2/format/jpg/q/100` candidate this build derives on its own, and
+/// the same bytes must never be requested twice for one item.
+List<String> stillCandidatesFor(
+  Iterable<String> urls, {
+  ImageFormatPreference formatPref = ImageFormatPreference.compat,
+}) {
+  final given = [for (final url in urls) if (url.trim().isNotEmpty) url];
+  final withJpeg = withDerivedJpegOriginals(given);
+  final compat = dedupeFinalCandidates(_compatStillLadder(withJpeg));
+  switch (formatPref) {
+    case ImageFormatPreference.compat:
+      return compat;
+    case ImageFormatPreference.original:
+      final rankedGiven = _compatStillLadder(given);
+      if (rankedGiven.isEmpty) return compat;
+      // The parser's own tokens first — the bytes the post really stores — and
+      // only then everything the compat ladder adds or prefers: the CDN's jpeg
+      // transcode of the same token, and the preview-size copies last of all.
+      final plain = [
+        for (final url in rankedGiven)
+          if (!_isTransformedStillUrl(url) && !isPreviewStillCandidate(url))
+            url,
+      ];
+      final rest = [
+        for (final url in compat)
+          if (!plain.contains(url)) url,
+      ];
+      return dedupeFinalCandidates([
+        ...plain,
+        for (final url in rest)
+          if (!isPreviewStillCandidate(url)) url,
+        for (final url in rest)
+          if (isPreviewStillCandidate(url)) url,
+      ]);
+    case ImageFormatPreference.jpeg:
+      final jpegs = [
+        for (final url in compat)
+          if (_stillFormatTokenOf(url) == 'jpg') url,
+      ];
+      return jpegs.isEmpty ? compat : dedupeFinalCandidates(jpegs);
+  }
+}
+
+/// Keeps the first occurrence of every final URL, so one item never spends two
+/// attempts on the same bytes.
+///
+/// This is the last step of every candidate ladder — after the parser's own
+/// tokens, the App's derived candidates and the quality ranking — because only
+/// then is it known which URLs are really the same request. A derived candidate
+/// that equals a parser-delivered one collapses into the single URL that is
+/// tried first.
+List<String> dedupeFinalCandidates(Iterable<String> urls) {
+  final seen = <String>{};
+  return [
+    for (final url in urls)
+      if (seen.add(url)) url,
+  ];
+}
+
+/// The v1.10.3 ladder, unchanged.
+List<String> _compatStillLadder(List<String> urls) => rankStillCandidates(
+  filterMediaCandidates(verifyOnlyStillCandidates(urls), isImage: true),
+);
+
+String _stillFormatTokenOf(String url) {
+  final label = candidateLabelOf(url);
+  return label.contains(':') ? label.split(':').last : '';
+}
+
+/// Whether [url] carries the CDN's own transcode parameters, i.e. it asks for
+/// re-encoded bytes rather than the stored original.
+bool _isTransformedStillUrl(String url) =>
+    url.toLowerCase().contains('imageview2');
+
+/// Whether [stillCandidatesFor] had to fall back for [formatPref]: the item
+/// asked for JPEG only and no jpeg candidate existed. Drives the completion
+/// note 「未取得 JPEG，已按兼容优先保存」.
+bool stillFormatFellBack(
+  Iterable<String> urls, {
+  ImageFormatPreference formatPref = ImageFormatPreference.compat,
+}) {
+  if (formatPref != ImageFormatPreference.jpeg) return false;
+  final withJpeg = withDerivedJpegOriginals([
+    for (final url in urls) if (url.trim().isNotEmpty) url,
+  ]);
+  return !_compatStillLadder(withJpeg).any(
+    (url) => _stillFormatTokenOf(url) == 'jpg',
+  );
+}
+
 /// Stable quality-first ordering of the still candidates of one item:
 /// original-resolution candidates first (jpeg before HEIC / AVIF), then
 /// preview-size derivatives. Live photo stills and ordinary images share it.
-List<String> rankStillCandidates(Iterable<String> urls) {
-  final indexed = urls.toList().indexed.toList();
+List<String> rankStillCandidates(Iterable<String> urls) {  final indexed = urls.toList().indexed.toList();
   indexed.sort((a, b) {
     final byRank = stillCandidateRank(a.$2).compareTo(stillCandidateRank(b.$2));
     return byRank != 0 ? byRank : a.$1.compareTo(b.$1);

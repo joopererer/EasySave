@@ -5,12 +5,12 @@
 
 import 'package:flutter/material.dart';
 import 'package:photo_manager/photo_manager.dart';
-import 'package:photo_manager_image_provider/photo_manager_image_provider.dart';
 
 import '../core/models.dart';
 import '../services/gallery_locator_service.dart';
 import '../services/history_db.dart';
 import '../services/live_pairs.dart';
+import '../services/local_thumbnail_tiers.dart';
 import '../theme/app_theme.dart';
 import 'shared.dart';
 import 'verified_asset_image.dart';
@@ -34,12 +34,17 @@ String formatSavedAt(DateTime time) {
 
 /// The representative (cover) media item of a post: the item matching the
 /// lowest-index saved file, else the first parsed item.
+///
+/// Built from the rows the browser may show, so a post whose first file left
+/// the device still points at that same item (its placeholder) instead of
+/// silently jumping to another one.
 MediaItem? coverItemFor(HistoryRecord record) {
   final post = record.toPost();
   if (post.items.isEmpty) return null;
-  if (record.savedFiles.isNotEmpty) {
-    final idx = record.savedFiles.first.itemIndex;
-    final is1Based = record.savedFiles.every((f) => f.itemIndex > 0);
+  final visible = record.visibleFiles;
+  if (visible.isNotEmpty) {
+    final idx = visible.first.itemIndex;
+    final is1Based = visible.every((f) => f.itemIndex > 0);
     final zeroBased = is1Based ? idx - 1 : idx;
     if (zeroBased >= 0 && zeroBased < post.items.length) {
       return post.items[zeroBased];
@@ -70,6 +75,41 @@ double aspectRatioFor(MediaItem? item) {
   return 0.75;
 }
 
+/// Padding the waterfall card keeps inside its column cell (back layer peek).
+const double kWaterfallCardInset = 5;
+
+/// Exact height of a [WaterfallPostCard] in a column [width] wide.
+///
+/// The card is a [AspectRatio] on the cover's own size, inset by
+/// [kWaterfallCardInset] on the right and bottom, so its height is known from
+/// the record before the card exists. The waterfall uses this instead of
+/// building a card to measure it (v1.11 batch 2: measuring off-screen cards
+/// flooded the local thumbnail pipeline).
+double waterfallCardHeight(HistoryRecord record, double width) {
+  final inner = (width - kWaterfallCardInset).clamp(0.0, double.infinity);
+  return inner / aspectRatioFor(coverItemFor(record)) + kWaterfallCardInset;
+}
+
+/// Exact height of an [AllMediaCard] in a column [width] wide.
+double allMediaCardHeight(MediaItem? item, double width) =>
+    width / aspectRatioFor(item);
+
+/// The media item an [AllMediaCard] shows for [itemIndex].
+MediaItem? allMediaItemFor(HistoryRecord record, int itemIndex) {
+  final post = record.toPost();
+  final visible = record.visibleFiles;
+  final is1Based = visible.isNotEmpty &&
+      visible.every((f) => f.itemIndex > 0);
+  final zeroBased = is1Based ? itemIndex - 1 : itemIndex;
+  if (zeroBased >= 0 && zeroBased < post.items.length) {
+    return post.items[zeroBased];
+  }
+  if (itemIndex >= 0 && itemIndex < post.items.length) {
+    return post.items[itemIndex];
+  }
+  return null;
+}
+
 /// Local-album thumbnail for a record (optionally a specific file). Falls back
 /// to a shimmer while locating, a "deleted" placeholder when fully authorized
 /// and missing, or a neutral placeholder otherwise. Never uses the CDN.
@@ -82,6 +122,7 @@ class HistoryThumb extends StatelessWidget {
     this.width,
     this.height,
     this.brokenIconSize = 24,
+    this.thumbnailSize = LocalThumbnailTiers.medium,
   });
 
   final HistoryRecord record;
@@ -91,13 +132,19 @@ class HistoryThumb extends StatelessWidget {
   final double? height;
   final double brokenIconSize;
 
+  /// Which of the two local thumbnail tiers this thumb asks for (v1.11 batch
+  /// 3). The default is the history cover; a cell in the creator card's 2×2
+  /// grid asks for [LocalThumbnailTiers.small].
+  final ThumbnailSize thumbnailSize;
+
   @override
   Widget build(BuildContext context) {
     final locator = GalleryLocatorService.instance;
     final items = record.toPost().items;
+    final visible = record.visibleFiles;
     final index = itemIndex == null
         ? 0
-        : (record.savedFiles.every((f) => f.itemIndex > 0)
+        : (visible.every((f) => f.itemIndex > 0)
               ? itemIndex! - 1
               : itemIndex!);
     final remote = itemIndex == null ? coverItemFor(record)
@@ -106,7 +153,7 @@ class HistoryThumb extends StatelessWidget {
 
     AssetEntity? asset;
     HistoryFile? matched;
-    for (final f in record.savedFiles) {
+    for (final f in visible) {
       if (itemIndex != null && f.itemIndex != itemIndex) continue;
       matched ??= f;
       asset =
@@ -120,6 +167,12 @@ class HistoryThumb extends StatelessWidget {
     // shows the post's own cover instead, with the warning strip.
     final undecodable = matched?.undecodable == true;
 
+    // The album already answered that this item is not on the device: the card
+    // keeps its broken-file icon and never falls back to the network cover
+    // (v1.11 batch 4). A lookup that merely failed produces no such row.
+    final coverMissing =
+        asset == null && matched != null && isMissingHistoryFile(matched);
+
     if (asset != null && !undecodable) {
       return _withDecodeWarning(
         VerifiedAssetImage(
@@ -132,7 +185,7 @@ class HistoryThumb extends StatelessWidget {
             height: height,
           ),
           isOriginal: false,
-          thumbnailSize: const ThumbnailSize.square(400),
+          thumbnailSize: thumbnailSize,
           fit: fit,
           width: width,
           height: height,
@@ -144,7 +197,7 @@ class HistoryThumb extends StatelessWidget {
       );
     }
 
-    if (remote != null && remote.url.startsWith('http')) {
+    if (!coverMissing && remote != null && remote.url.startsWith('http')) {
       return _withDecodeWarning(
         CoverImage(
           item: remote,
@@ -160,19 +213,20 @@ class HistoryThumb extends StatelessWidget {
       );
     }
 
-    final isUnlocated = record.files.any(
+    final isUnlocated = visible.any(
       (f) =>
           f.status == FileStatus.unknown &&
           (f.mediaId == null || f.mediaId!.isEmpty),
     );
-    if (isUnlocated && (locator.isScanning || !locator.scanned)) {
+    if (!coverMissing && isUnlocated && (locator.isScanning || !locator.scanned)) {
       return ShimmerBox(width: width, height: height);
     }
 
     final allNotFound =
-        record.files.isNotEmpty &&
-        record.files.every((f) => f.status == FileStatus.notFound);
-    final missing = locator.isFullyAuthorized && locator.scanned && allNotFound;
+        visible.isNotEmpty && visible.every((f) => f.status == FileStatus.notFound);
+    final missing =
+        coverMissing ||
+        (locator.isFullyAuthorized && locator.scanned && allNotFound);
 
     return _withDecodeWarning(
       ColoredBox(
@@ -251,6 +305,7 @@ class DownloadingOverlay extends StatelessWidget {
     this.paused = false,
     this.stalled = false,
     this.failed = false,
+    this.waitingForNetwork = false,
     this.partial = false,
     this.failureReason,
     this.onTogglePause,
@@ -266,6 +321,12 @@ class DownloadingOverlay extends StatelessWidget {
   /// No sign of life for a while: the toggle becomes "retry".
   final bool stalled;
   final bool failed;
+
+  /// The system has no connection: the batch keeps its place in the queue and
+  /// resumes by itself, so the overlay explains the wait instead of spinning
+  /// silently (v1.11 batch 2). Display only — nothing here pauses anything.
+  final bool waitingForNetwork;
+
   final bool partial;
 
   /// Short failure reason ("存储空间不足", "HTTP 403", ...) shown in the label.
@@ -283,6 +344,9 @@ class DownloadingOverlay extends StatelessWidget {
     final size = compact ? 28.0 : 44.0;
     final reason = failureReason?.isNotEmpty == true ? '（$failureReason）' : '';
     final label = failed ? (partial ? '部分保存成功$reason，点击重试' : '下载失败$reason，点击重试') : paused ? '已暂停 $pct%' : (stalled ? '已停滞 $pct%' : '下载中 $pct%');
+    final shownLabel = !failed && !paused && waitingForNetwork
+        ? '等待网络…联网后自动继续'
+        : label;
     final toggleIcon = paused
         ? Icons.play_arrow_rounded
         : (stalled || failed ? Icons.refresh : Icons.pause_rounded);
@@ -306,7 +370,7 @@ class DownloadingOverlay extends StatelessWidget {
     }
 
     return Semantics(
-      label: label,
+      label: shownLabel,
       child: ColoredBox(
         color: Colors.black.withValues(alpha: 0.45),
         child: Center(
@@ -329,7 +393,8 @@ class DownloadingOverlay extends StatelessWidget {
               if (!compact) ...[
                 const SizedBox(height: 6),
                 Text(
-                  label,
+                  shownLabel,
+                  textAlign: TextAlign.center,
                   style: const TextStyle(
                     color: Colors.white,
                     fontSize: 12,
@@ -412,12 +477,12 @@ String? videoDurationLabel(MediaItem? item) {
   return '$mm:$ss';
 }
 
-/// Overlays shared by the waterfall cover and the all-media card: multi count
+/// Overlays shared by the waterfall cover and the all-media card: item count
 /// (top-right), video ▶/duration and LIVE/GIF (top-left).
 List<Widget> coverBadges(
   BuildContext context, {
   required MediaItem? cover,
-  required int fileCount,
+  required int itemCount,
   bool showInfo = true,
   bool notOriginal = false,
 }) {
@@ -472,7 +537,7 @@ List<Widget> coverBadges(
       );
     }
   }
-  if (fileCount > 1) {
+  if (itemCount > 1) {
     widgets.add(
       Positioned(
         top: 8,
@@ -484,7 +549,7 @@ List<Widget> coverBadges(
               const Icon(Icons.collections, color: Colors.white, size: 11),
               const SizedBox(width: 3),
               Text(
-                '$fileCount',
+                '$itemCount',
                 style: const TextStyle(
                   color: Colors.white,
                   fontSize: 10,
@@ -530,6 +595,7 @@ class WaterfallPostCard extends StatelessWidget {
     this.downloadPaused = false,
     this.downloadStalled = false,
     this.downloadFailed = false,
+    this.downloadWaitingForNetwork = false,
     this.downloadFailureReason,
     this.onToggleDownload,
     this.onCancelDownload,
@@ -547,6 +613,10 @@ class WaterfallPostCard extends StatelessWidget {
   final bool downloadPaused;
   final bool downloadStalled;
   final bool downloadFailed;
+
+  /// No system connection: the overlay explains the wait (display only).
+  final bool downloadWaitingForNetwork;
+
   final String? downloadFailureReason;
 
   /// Pause / resume (retry when stalled) and cancel of the running download.
@@ -556,7 +626,7 @@ class WaterfallPostCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final cover = coverItemFor(record);
-    final fileCount = savedMediaEntryCount(record.savedFiles);
+    final itemCount = savedMediaEntryCount(record.savedFiles);
     final title = (record.title?.isNotEmpty == true) ? record.title! : '无标题';
     final radius = BorderRadius.circular(20);
 
@@ -642,7 +712,7 @@ class WaterfallPostCard extends StatelessWidget {
                     ...coverBadges(
                       context,
                       cover: cover,
-                      fileCount: fileCount,
+                      itemCount: itemCount,
                       notOriginal: record.savedFiles.any((f) => f.notOriginal),
                     ),
                     if (downloadProgress != null)
@@ -652,6 +722,7 @@ class WaterfallPostCard extends StatelessWidget {
                           paused: downloadPaused,
                           stalled: downloadStalled,
                           failed: downloadFailed,
+                          waitingForNetwork: downloadWaitingForNetwork,
                           failureReason: downloadFailureReason,
                           partial: record.savedFiles.isNotEmpty,
                           // Hidden in multi-select so taps keep selecting.
@@ -792,7 +863,9 @@ class ListPostRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final cover = coverItemFor(record);
-    final fileCount = savedMediaEntryCount(record.savedFiles);
+    // Items, never files: a Live photo's still and clip are one item, and this
+    // number is what the row says (v1.11 build 59).
+    final itemCount = savedMediaEntryCount(record.savedFiles);
     final title = (record.title?.isNotEmpty == true) ? record.title! : '无标题';
     final badge = listTypeBadge(cover);
 
@@ -841,7 +914,7 @@ class ListPostRow extends StatelessWidget {
                           left: 4,
                           child: WhiteBadge(label: badge),
                         ),
-                      if (fileCount > 1)
+                      if (itemCount > 1)
                         Positioned(
                           right: 4,
                           bottom: 4,
@@ -852,7 +925,7 @@ class ListPostRow extends StatelessWidget {
                               shape: BoxShape.circle,
                             ),
                             child: Text(
-                              '$fileCount',
+                              '$itemCount',
                               style: const TextStyle(
                                 color: Colors.white,
                                 fontSize: 10,
@@ -911,7 +984,7 @@ class ListPostRow extends StatelessWidget {
                     ),
                     const SizedBox(height: 4),
                     Text(
-                      '$fileCount 个文件 · ${formatSavedAt(record.createdAt)}',
+                      '$itemCount 项 · ${formatSavedAt(record.createdAt)}',
                       style: const TextStyle(
                         fontSize: 12,
                         color: AppTokens.textSecondary,
@@ -1002,15 +1075,7 @@ class AllMediaCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final post = record.toPost();
-    final is1Based =
-        record.savedFiles.isNotEmpty && record.savedFiles.every((f) => f.itemIndex > 0);
-    final zeroBased = is1Based ? itemIndex - 1 : itemIndex;
-    final item = (zeroBased >= 0 && zeroBased < post.items.length)
-        ? post.items[zeroBased]
-        : ((itemIndex >= 0 && itemIndex < post.items.length)
-              ? post.items[itemIndex]
-              : null);
+    final item = allMediaItemFor(record, itemIndex);
     final radius = BorderRadius.circular(16);
     final badge = listTypeBadge(item);
 
@@ -1035,7 +1100,7 @@ class AllMediaCard extends StatelessWidget {
                   left: 6,
                   child: _TranslucentBadge(label: badge),
                 ),
-              if (record.savedFiles.any(
+              if (record.visibleFiles.any(
                 (f) => f.itemIndex == itemIndex && f.notOriginal,
               ))
                 const Positioned(
@@ -1088,7 +1153,7 @@ class CreatorCard extends StatelessWidget {
     required this.platform,
     this.savedDisplayName,
     required this.postCount,
-    required this.fileCount,
+    required this.itemCount,
     required this.thumbs,
     required this.onTap,
   });
@@ -1097,7 +1162,9 @@ class CreatorCard extends StatelessWidget {
   final String platform;
   final String? savedDisplayName;
   final int postCount;
-  final int fileCount;
+
+  /// Items across this creator's posts (a Live photo counts once).
+  final int itemCount;
   final List<HistThumbRef> thumbs;
   final VoidCallback onTap;
 
@@ -1139,7 +1206,7 @@ class CreatorCard extends StatelessWidget {
               const SizedBox(width: 6),
               Flexible(
                 child: Text(
-                  '$postCount 帖 · $fileCount 个文件',
+                  '$postCount 帖 · $itemCount 项',
                   overflow: TextOverflow.ellipsis,
                   style: const TextStyle(
                     fontSize: 12,
@@ -1170,6 +1237,9 @@ class _CreatorCell extends StatelessWidget {
       itemIndex: r.itemIndex,
       fit: BoxFit.cover,
       brokenIconSize: 16,
+      // A cell of the 2×2 grid: the small tier, shared with the thumbnail
+      // strip and the parse page (v1.11 batch 3).
+      thumbnailSize: LocalThumbnailTiers.small,
     );
   }
 }

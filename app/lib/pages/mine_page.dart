@@ -14,12 +14,15 @@ import '../services/bubble_service.dart';
 import '../services/gallery_locator_service.dart';
 import '../services/history_backfill_service.dart';
 import '../services/history_rebuild_service.dart';
+import '../services/image_format_preference.dart';
 import '../services/provenance_pair.dart';
 import '../services/backup/saf_service.dart';
+import '../services/dev_download_failure.dart';
 import '../services/settings.dart';
 import '../services/tile_service.dart';
 import '../services/update_service.dart';
 import 'backup_restore_page.dart';
+import 'failure_log_page.dart';
 import 'login_page.dart';
 
 class MinePage extends StatefulWidget {
@@ -213,8 +216,28 @@ class _MinePageState extends State<MinePage> with WidgetsBindingObserver {
     });
   }
 
+  /// Consecutive taps on the version row. Seven of them reveal (or hide) the
+  /// 开发者选项 group; the state is persisted in the settings (v1.11 batch 4).
+  int _versionTaps = 0;
+
+  Future<void> _onVersionTap() async {
+    _versionTaps++;
+    if (_versionTaps < 7) return;
+    _versionTaps = 0;
+    final show = !_settings.developerOptionsVisible;
+    setState(() => _settings.developerOptionsVisible = show);
+    await _saveSettings();
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(show ? '已开启开发者选项' : '已隐藏开发者选项')),
+    );
+  }
+
   Future<void> _load() async {
     final settings = await AppSettings.load();
+    // The switch may have been armed or consumed by the other engine, so show
+    // the stored value, not this isolate's copy (v1.11 batch 4).
+    await DevDownloadFailure.refresh();
     final states = <String, bool>{};
     SessionStatus? xhsStatus;
     for (final platform in loginSiteIds) {
@@ -242,6 +265,39 @@ class _MinePageState extends State<MinePage> with WidgetsBindingObserver {
     // Never persist the pre-load default snapshot.
     if (!_settingsLoaded) return;
     await _settings.save();
+  }
+
+  /// 「图片格式」: three options, each with what it does (v1.11 batch 3).
+  Future<void> _pickImageFormat() async {
+    final chosen = await showDialog<ImageFormatPreference>(
+      context: context,
+      builder: (context) => SimpleDialog(
+        title: const Text('图片格式'),
+        children: [
+          for (final option in ImageFormatPreference.values)
+            ListTile(
+              key: ValueKey('image_format_${option.name}'),
+              selected: _settings.imageFormat == option,
+              title: Text(option.label),
+              subtitle: Text(option.description),
+              trailing: _settings.imageFormat == option
+                  ? const Icon(Icons.check)
+                  : null,
+              onTap: () => Navigator.of(context).pop(option),
+            ),
+          const Padding(
+            padding: EdgeInsets.fromLTRB(16, 4, 16, 12),
+            child: Text(
+              '目前仅对小红书图片生效',
+              style: TextStyle(fontSize: 12),
+            ),
+          ),
+        ],
+      ),
+    );
+    if (chosen == null || !mounted) return;
+    setState(() => _settings.imageFormat = chosen);
+    await _saveSettings();
   }
 
   Future<void> _addTileToControlCenter() async {
@@ -843,6 +899,18 @@ class _MinePageState extends State<MinePage> with WidgetsBindingObserver {
                   title: const Text('文件名格式'),
                   subtitle: const Text('帖子ID_序号.扩展名'),
                 ),
+                ListTile(
+                  key: const ValueKey('image_format_setting'),
+                  title: const Text('图片格式'),
+                  subtitle: Text(
+                    '${_settings.imageFormat.label} · '
+                    '${_settings.imageFormat.description}\n'
+                    '目前仅对小红书图片生效',
+                  ),
+                  isThreeLine: true,
+                  trailing: const Icon(Icons.chevron_right),
+                  onTap: _pickImageFormat,
+                ),
                 SwitchListTile(
                   title: const Text('保存来源信息（图片和视频）'),
                   subtitle: const Text('下载的图片和视频中会记录来源链接、作者和标题，方便以后整理和溯源'),
@@ -983,8 +1051,30 @@ class _MinePageState extends State<MinePage> with WidgetsBindingObserver {
                   subtitle: const Text('调试用：把脱敏后的运行日志复制到可读取目录'),
                   onTap: _exportLog,
                 ),
+                ListTile(
+                  key: const Key('failure_logs_entry'),
+                  title: const Text('下载失败日志'),
+                  subtitle: const Text('下载批次失败时自动保存的脱敏日志，可查看与导出'),
+                  trailing: const Icon(Icons.chevron_right),
+                  onTap: () => openFailureLogs(context),
+                ),
                 ListTile(title: const Text('清空日志'), onTap: _clearLog),
-                ListTile(title: const Text('版本号'), subtitle: Text(_version)),
+                // Developer switch for the failure-snapshot path (v1.11 batch
+                // 2, moved into 开发者选项 in batch 4): the next download batch
+                // fails its first file on purpose, once, so a real device can
+                // produce a snapshot on demand. The flag is persisted, so the
+                // engine that starts the download (main UI, bubble or share)
+                // sees it too.
+                ListTile(
+                  key: const Key('version_entry'),
+                  title: const Text('版本号'),
+                  subtitle: Text(
+                    _settings.developerOptionsVisible
+                        ? '$_version · 开发者选项已开启'
+                        : _version,
+                  ),
+                  onTap: _onVersionTap,
+                ),
                 ListTile(
                   title: const Text('解析器版本'),
                   subtitle: Text(
@@ -1013,6 +1103,37 @@ class _MinePageState extends State<MinePage> with WidgetsBindingObserver {
               ],
             ),
           ),
+          if (_settings.developerOptionsVisible) ...[
+            const _GroupTitle('开发者选项'),
+            Card(
+              child: Column(
+                children: [
+                  ListTile(
+                    title: const Text('开发者选项'),
+                    subtitle: const Text('连点版本号七次可隐藏此分组'),
+                    dense: true,
+                  ),
+                  SwitchListTile(
+                    key: const Key('simulate_download_failure'),
+                    title: const Text('下一次下载模拟失败'),
+                    subtitle: const Text(
+                      '开发者开关：下一个下载批次的第一个文件在写入相册前模拟失败，'
+                      '仅生效一次。重启 App 后仍保持开启，触发一次或手动关闭后清除',
+                    ),
+                    value: DevDownloadFailure.armed,
+                    onChanged: (on) {
+                      if (on) {
+                        DevDownloadFailure.arm();
+                      } else {
+                        DevDownloadFailure.disarm();
+                      }
+                      setState(() {});
+                    },
+                  ),
+                ],
+              ),
+            ),
+          ],
         ],
       ),
     );

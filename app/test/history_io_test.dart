@@ -90,7 +90,13 @@ void main() {
         for (var i = 0; i < 10; i++)
           controller.refresh(load, () => media.future),
       ]).timeout(const Duration(seconds: 1));
-      expect(loads, 1);
+      // v1.11 build 59: a burst during one read collapses into a single
+      // follow-up read instead of being dropped. The running read may have
+      // started before the change committed (a resume read that overlapped the
+      // other engine's write hid a downloaded post), so a request that arrives
+      // mid-read is served by a read that starts after it. The burst still
+      // costs one extra read, not ten.
+      expect(loads, 2);
       expect(count, 1);
       expect(media.isCompleted, isFalse);
       expect((await manager.liveBatches()).single.failedCount, 1);

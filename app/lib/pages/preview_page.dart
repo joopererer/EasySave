@@ -57,6 +57,7 @@ class PreviewPage extends StatefulWidget {
     required this.post,
     this.rawImages = const [],
     this.onSaved,
+    this.initialSelection,
   });
 
   final ParsedPost post;
@@ -65,6 +66,12 @@ class PreviewPage extends StatefulWidget {
   /// Called once a save (or local association) succeeds, so the caller can
   /// clear the paste box.
   final VoidCallback? onSaved;
+
+  /// Item indices to tick on open. Null (the default) ticks everything, which
+  /// is what a fresh parse wants; a re-download of missing items passes only
+  /// those, so the user can still adjust the selection before saving
+  /// (v1.11 batch 4).
+  final Set<int>? initialSelection;
 
   /// Rebuild a post from a stored history record (shared by the history
   /// list and the home "recent" cards).
@@ -77,11 +84,16 @@ class PreviewPage extends StatefulWidget {
     required ParsedPost post,
     List<RawImageEntry> rawImages = const [],
     VoidCallback? onSaved,
+    Set<int>? initialSelection,
   }) {
     return MaterialPageRoute<void>(
       settings: RouteSettings(name: kPreviewRouteName, arguments: post.id),
-      builder: (_) =>
-          PreviewPage(post: post, rawImages: rawImages, onSaved: onSaved),
+      builder: (_) => PreviewPage(
+        post: post,
+        rawImages: rawImages,
+        onSaved: onSaved,
+        initialSelection: initialSelection,
+      ),
     );
   }
 
@@ -89,9 +101,15 @@ class PreviewPage extends StatefulWidget {
     required ParsedPost post,
     List<RawImageEntry> rawImages = const [],
     VoidCallback? onSaved,
+    Set<int>? initialSelection,
   }) async {
     if (PreviewRouteObserver.instance.revealPreview(post.id)) return;
-    await Navigator.of(context).push(route(post: post, rawImages: rawImages, onSaved: onSaved));
+    await Navigator.of(context).push(route(
+      post: post,
+      rawImages: rawImages,
+      onSaved: onSaved,
+      initialSelection: initialSelection,
+    ));
   }
 
   @override
@@ -100,9 +118,22 @@ class PreviewPage extends StatefulWidget {
 
 class _PreviewPageState extends State<PreviewPage> {
   late ParsedPost _post = widget.post;
-  late final List<int> _order = [
-    for (var i = 0; i < _post.items.length; i++) i,
-  ];
+  late final List<int> _order = _initialOrder();
+
+  /// Everything is ticked by default; a re-download of missing items passes the
+  /// indices to tick instead (v1.11 batch 4).
+  List<int> _initialOrder() {
+    final preselected = widget.initialSelection;
+    final all = [for (var i = 0; i < widget.post.items.length; i++) i];
+    if (preselected == null) return all;
+    final wanted = <int>[
+      for (final index in all)
+        if (preselected.contains(index)) index,
+    ];
+    // An empty result would leave the 保存 button dead on a page the user just
+    // asked to resave: fall back to the whole post.
+    return wanted.isEmpty ? all : wanted;
+  }
   Set<int> _downloaded = {};
   Map<int, AssetEntity> _localAssets = {};
   Map<int, AssetEntity> _localMotions = {};
@@ -159,7 +190,7 @@ class _PreviewPageState extends State<PreviewPage> {
     final pct = (batch.progress * 100).round();
     final text = running
         ? (stalled ? '下载已停滞 · $pct%' : '下载中 · $pct%')
-        : '${batch.failedCount} 个文件下载失败';
+        : '${batch.itemFailed} 项下载失败';
     return Material(
       color: Theme.of(context).colorScheme.surfaceContainerHighest,
       child: Padding(
@@ -409,7 +440,7 @@ class _PreviewPageState extends State<PreviewPage> {
       widget.onSaved?.call();
       ScaffoldMessenger.of(
         context,
-      ).showSnackBar(SnackBar(content: Text('已将 $associated 个本地文件关联到历史记录')));
+      ).showSnackBar(SnackBar(content: Text('已将 $associated 项本地内容关联到历史记录')));
       // Notify history page to refresh
       HostBridge.historyRevision.value = HostBridge.historyRevision.value + 1;
       Navigator.of(context).pop(true);
@@ -421,8 +452,12 @@ class _PreviewPageState extends State<PreviewPage> {
     // User chose "后台下载": the batch keeps running, stay on the preview.
     if (!batch.isTerminal) return;
 
-    final failed = batch.jobs.where((j) => j.state == JobState.failed).length;
-    final done = batch.succeeded;
+    // Every number in these prompts counts items, not files (v1.11 build 58):
+    // a Live photo's still and clip are one saved item, and one failed half
+    // fails the item — so 「已保存 N 项」 and 「N 项保存失败」 agree with the
+    // bubble, the notification and the panel.
+    final failed = batch.itemFailed;
+    final done = batch.itemDone;
     if (failed == 0 && done > 0) {
       widget.onSaved?.call();
       if (!mounted) return;
@@ -430,8 +465,8 @@ class _PreviewPageState extends State<PreviewPage> {
         SnackBar(
           content: Text(
             associated > 0
-                ? '已保存 $done 个文件，并关联 $associated 个本地文件'
-                : '已保存 $done 个文件到相册',
+                ? '已保存 $done 项，并关联 $associated 项本地内容'
+                : '已保存 $done 项到相册',
           ),
         ),
       );
@@ -445,7 +480,7 @@ class _PreviewPageState extends State<PreviewPage> {
       // Keep the preview open; the sheet already carries per-row retry.
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text('$failed 个文件保存失败'),
+          content: Text('$failed 项保存失败'),
           action: SnackBarAction(
             label: '重试',
             onPressed: () => DownloadManager.instance.retryBatch(batch),
@@ -715,6 +750,7 @@ class _PreviewPageState extends State<PreviewPage> {
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 4, 16, 16),
             child: GradientButton(
+              height: 48,
               label: _saving ? '处理中…' : '保存到相册（${_order.length}）',
               onPressed: _selected && !_saving ? _save : null,
             ),

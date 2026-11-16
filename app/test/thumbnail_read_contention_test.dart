@@ -13,7 +13,7 @@ import 'package:http/testing.dart';
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
   test(
-    'cache hits finish under 100ms with foreground/prefetch downloads and display decoders blocked',
+    'a cache hit takes no download permit and no decode slot while the queues are full',
     () async {
       final png = base64Decode(
         'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==',
@@ -23,12 +23,17 @@ void main() {
       ).create(recursive: true);
       final cached = File('${directory.path}/cached.png');
       await cached.writeAsBytes(png);
-      // Warm host VM file-I/O initialization, not the cache under test. The
-      // first cache lookup, file read and header validation remain timed below.
-      // This benchmark measures isolation from busy download/decode queues.
+      // Warm host VM file-I/O initialization, not the cache under test: the
+      // first lookup, file read and header validation still happen while the
+      // queues below are full. Nothing here is timed — what matters is which
+      // queues a hit touches, not how fast a loaded machine is (build 49 made
+      // the same change in ThumbnailQueuesTest).
       await cached.readAsBytes();
       const hit = 'instagram:cached:0:thumb';
       final files = <String, String>{opaquePreviewKey(hit): cached.path};
+      // Every key that was handed to the native queue. A cache hit must not be
+      // in here: it is answered from the file, without a permit.
+      final acquired = <String>[];
       const channel = MethodChannel('test/build23-read-contention');
       final messenger =
           TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
@@ -42,6 +47,7 @@ void main() {
         final key = args['key'] as String;
         switch (call.method) {
           case 'thumbnailAcquire':
+            acquired.add(key);
             return true;
           case 'thumbnailPrefetchIdle':
             return true;
@@ -114,14 +120,29 @@ void main() {
         }
         await fiveStarted.future.timeout(const Duration(seconds: 5));
         expect(responses.length, 5);
-        final stopwatch = Stopwatch()..start();
         final result = await cache
             .load(policy, resource, identity: hit)
-            .timeout(const Duration(milliseconds: 100));
-        stopwatch.stop(); // Measure the operation, not matcher/JIT assertion work.
+            // A generous bound: this test is about *which* queues a cache hit
+            // touches, never about how fast the machine is. Build 49 removed
+            // the wall-clock assertions from ThumbnailQueuesTest for the same
+            // reason — a loaded CI box made a correct implementation fail.
+            .timeout(const Duration(seconds: 5));
         expect(result.bytes, png);
-        expect(stopwatch.elapsedMilliseconds, lessThan(100));
-        expect(releaseDecode.isCompleted, isFalse);
+        expect(
+          responses.length,
+          5,
+          reason: 'the hit is answered from the file, not from the network',
+        );
+        expect(
+          releaseDecode.isCompleted,
+          isFalse,
+          reason: 'no decode slot was taken from the busy display decoders',
+        );
+        expect(
+          acquired,
+          isNot(contains(opaquePreviewKey(hit))),
+          reason: 'no native permit was taken for a file that is already there',
+        );
       } finally {
         releasing = true;
         for (final response in responses) {

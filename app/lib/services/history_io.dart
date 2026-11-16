@@ -126,12 +126,34 @@ class HistoryRefreshController {
   void dispose() => deadline.dispose();
   Future<void>? _load;
   Future<void>? _media;
+  bool _queuedAgain = false;
+
+  /// Run [load], then [media].
+  ///
+  /// A request that arrives while a read is running is never dropped: the
+  /// running read may have started before the change committed, so a second
+  /// read runs as soon as it finishes (v1.11 build 59 — a resume read that
+  /// overlapped the other engine's write used to leave the page showing the
+  /// state from before it).
   Future<void> refresh(
     Future<void> Function() load,
     Future<void> Function() media,
   ) {
-    return _load ??= (() async {
-      try {
+    final inFlight = _load;
+    if (inFlight != null) {
+      _queuedAgain = true;
+      return inFlight;
+    }
+    return _load = _refresh(load, media);
+  }
+
+  Future<void> _refresh(
+    Future<void> Function() load,
+    Future<void> Function() media,
+  ) async {
+    try {
+      do {
+        _queuedAgain = false;
         await historyStep('refresh-records', load,
             timeout: const Duration(seconds: 22), deadline: deadline);
         if (_media == null) {
@@ -144,11 +166,11 @@ class HistoryRefreshController {
           _media = work;
           unawaited(work.whenComplete(() => _media = null));
         }
-      } on HistoryRefreshCancelled {
-        // A late native result must not keep a disposed page alive.
-      } finally {
-        _load = null;
-      }
-    })();
+      } while (_queuedAgain && !deadline.isDisposed);
+    } on HistoryRefreshCancelled {
+      // A late native result must not keep a disposed page alive.
+    } finally {
+      _load = null;
+    }
   }
 }

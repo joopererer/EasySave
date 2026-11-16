@@ -2,6 +2,9 @@
 
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'creator_sort.dart';
+import 'image_format_preference.dart';
+
 /// History page view modes (ui-spec §2.4.1).
 enum HistoryView { posts, all, creators }
 
@@ -57,8 +60,22 @@ class AppSettings {
   HistoryLayout historyLayout = HistoryLayout.waterfall;
   HistorySort historySort = HistorySort.latest;
 
+  /// 我的 → 设置 → 下载 → 图片格式 (v1.11 batch 3). Only 小红书 stills are
+  /// affected: other platforms hand out one kind of still URL.
+  ImageFormatPreference imageFormat = ImageFormatPreference.compat;
+
+  /// 创作者 view ordering (v1.11 batch 1): key plus direction, remembered
+  /// across launches. 最近保存 descending is the default.
+  CreatorSort creatorSort = CreatorSortState.defaults.mode;
+  bool creatorSortDescending = CreatorSortState.defaults.descending;
+
   /// User-chosen directory tree URI for external automatic backups (v1.8).
   String? backupTreeUri;
+
+  /// Display name of [backupTreeUri] (e.g. the folder name as the system shows
+  /// it). Written into the backup so a restore can ask the user to re-authorise
+  /// the same folder; the URI grant itself is never backed up.
+  String? backupFolderName;
 
   /// Whether automatic backup to external SAF folder is enabled (v1.8).
   ///
@@ -85,6 +102,11 @@ class AppSettings {
 
   /// Whether user has dismissed the one-time video provenance backfill hint (v1.8.2).
   bool videoBackfillHintDismissed = false;
+
+  /// Whether the 开发者选项 group on the 我的 page is visible. Hidden for
+  /// normal users and revealed by tapping the version number seven times
+  /// (v1.11 batch 4); the state is persisted so it stays revealed.
+  bool developerOptionsVisible = false;
 
   /// Set only by [clearBackupFolder]: a regular [save] must keep the folder.
   bool _forgetBackupFolder = false;
@@ -117,15 +139,30 @@ class AppSettings {
         prefs.getString('historySort'),
         HistorySort.latest,
       )
+      ..imageFormat = _enumFromName(
+        ImageFormatPreference.values,
+        prefs.getString('imageFormat'),
+        ImageFormatPreference.compat,
+      )
+      ..creatorSort = _enumFromName(
+        CreatorSort.values,
+        prefs.getString('creatorSort'),
+        CreatorSortState.defaults.mode,
+      )
+      ..creatorSortDescending =
+          prefs.getBool('creatorSortDescending') ??
+              CreatorSortState.defaults.descending
       ..saveProvenanceInImages = prefs.getBool('saveProvenanceInImages') ?? true
       ..usedAlbumNames = List<String>.from(
         prefs.getStringList('usedAlbumNames') ?? const <String>[],
       )
       ..backupTreeUri = prefs.getString('backupTreeUri')
+      ..backupFolderName = prefs.getString('backupFolderName')
       ..autoFolderBackupEnabled = prefs.getBool('autoFolderBackupEnabled') ?? false
       ..lastBackupTime = prefs.getInt('lastBackupTime')
       ..skipRestoreHint = prefs.getBool('skipRestoreHint') ?? false
       ..backupFolderHintDismissed = prefs.getBool('backupFolderHintDismissed') ?? false
+      ..developerOptionsVisible = prefs.getBool('developerOptionsVisible') ?? false
       ..videoBackfillHintDismissed = prefs.getBool('videoBackfillHintDismissed') ?? false;
   }
 
@@ -143,6 +180,9 @@ class AppSettings {
     await prefs.setString('historyView', historyView.name);
     await prefs.setString('historyLayout', historyLayout.name);
     await prefs.setString('historySort', historySort.name);
+    await prefs.setString('imageFormat', imageFormat.name);
+    await prefs.setString('creatorSort', creatorSort.name);
+    await prefs.setBool('creatorSortDescending', creatorSortDescending);
     await prefs.setBool('saveProvenanceInImages', saveProvenanceInImages);
     await prefs.setStringList('usedAlbumNames', usedAlbumNames);
     // The backup folder is only ever forgotten by clearBackupFolder(). A
@@ -155,6 +195,11 @@ class AppSettings {
     } else if (_forgetBackupFolder) {
       await prefs.remove('backupTreeUri');
     }
+    if (backupFolderName != null && backupFolderName!.isNotEmpty) {
+      await prefs.setString('backupFolderName', backupFolderName!);
+    } else if (_forgetBackupFolder) {
+      await prefs.remove('backupFolderName');
+    }
     if (_autoFolderBackupKnown) {
       await prefs.setBool('autoFolderBackupEnabled', _autoFolderBackup);
     }
@@ -165,6 +210,7 @@ class AppSettings {
     }
     await prefs.setBool('skipRestoreHint', skipRestoreHint);
     await prefs.setBool('backupFolderHintDismissed', backupFolderHintDismissed);
+    await prefs.setBool('developerOptionsVisible', developerOptionsVisible);
     await prefs.setBool('videoBackfillHintDismissed', videoBackfillHintDismissed);
   }
 
@@ -188,6 +234,7 @@ class AppSettings {
   /// grant keeps both values so the user can re-authorise the same directory.
   Future<void> clearBackupFolder() async {
     backupTreeUri = null;
+    backupFolderName = null;
     autoFolderBackupEnabled = false;
     _forgetBackupFolder = true;
     try {

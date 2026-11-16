@@ -9,12 +9,20 @@ import 'package:gal/gal.dart';
 
 import '../core/models.dart';
 import '../services/download_manager.dart';
+import '../services/network_status.dart';
 import '../services/saver.dart';
 import '../services/settings.dart';
 import '../services/share_service.dart';
 import '../services/media_request_policy.dart';
 import '../theme/app_theme.dart';
 import 'shared.dart';
+
+/// What the app says when a download is started (v1.11 batch 2).
+///
+/// Offline the batch is still queued and starts by itself once the connection
+/// returns, so the message explains the wait instead of claiming it started.
+String downloadStartMessage({required bool online}) =>
+    online ? '已加入下载队列' : '当前无网络，联网后自动开始';
 
 class DownloadSheet extends StatefulWidget {
   const DownloadSheet({super.key, required this.batchId});
@@ -47,7 +55,15 @@ class DownloadSheet extends StatefulWidget {
       },
     );
     if (!context.mounted) return batch;
-    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('已加入下载队列')));
+    // The batch is queued either way; offline it simply waits for the
+    // connection and starts by itself (v1.11 batch 2 says so out loud).
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          downloadStartMessage(online: NetworkStatus.instance.online),
+        ),
+      ),
+    );
     await panel;
     return batch;
   }
@@ -87,7 +103,10 @@ class _DownloadSheetState extends State<DownloadSheet> {
   @override
   Widget build(BuildContext context) {
     return ListenableBuilder(
-      listenable: DownloadManager.instance,
+      listenable: Listenable.merge([
+        DownloadManager.instance,
+        NetworkStatus.instance,
+      ]),
       builder: (context, _) {
         final batch = _batch;
         if (batch == null) {
@@ -96,13 +115,19 @@ class _DownloadSheetState extends State<DownloadSheet> {
           );
         }
         unawaited(_maybeSaveCaption(batch));
-        final failed = batch.jobs
-            .where((j) => j.state == JobState.failed)
-            .length;
+        // The panel's headline counts items, not files (v1.11 build 58): a
+        // Live photo's still and clip are one item, and an item only counts as
+        // done when both halves are in the album. The rows below stay per file.
+        final failed = batch.itemFailed;
         final running = !batch.isTerminal;
-        final doneCount = batch.jobs
-            .where((j) => j.state == JobState.done)
-            .length;
+        final doneCount = batch.itemDone;
+        // Display only: an offline batch keeps its queue position and resumes
+        // by itself; the panel just stops pretending it is transferring. A file
+        // parked waiting for the connection says so even while the system still
+        // reports one (v1.11 batch 3).
+        final waitingForNetwork =
+            running &&
+            (!NetworkStatus.instance.online || batch.waitingForNetwork);
         return SafeArea(
           child: Padding(
             padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
@@ -117,7 +142,9 @@ class _DownloadSheetState extends State<DownloadSheet> {
                     Expanded(
                       child: Text(
                         running
-                            ? '正在保存 $doneCount/${batch.jobs.length}'
+                            ? waitingForNetwork
+                            ? '等待网络…联网后自动继续'
+                            : '正在保存 $doneCount/${batch.itemTotal}'
                             : failed == 0
                             ? '全部完成 ✓'
                             : '$failed 项失败',
@@ -129,6 +156,15 @@ class _DownloadSheetState extends State<DownloadSheet> {
                     ),
                   ],
                 ),
+                if (!running && failed == 0)
+                  if (imageFormatCompletionNote(batch) != null)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 4),
+                      child: Text(
+                        imageFormatCompletionNote(batch)!,
+                        style: const TextStyle(fontSize: 12),
+                      ),
+                    ),
                 if (_captionPath != null)
                   Padding(
                     padding: const EdgeInsets.only(top: 4),
@@ -142,8 +178,12 @@ class _DownloadSheetState extends State<DownloadSheet> {
                   child: ListView.builder(
                     shrinkWrap: true,
                     itemCount: batch.jobs.length,
-                    itemBuilder: (context, i) =>
-                        _row(context, batch, batch.jobs[i]),
+                    itemBuilder: (context, i) => _row(
+                      context,
+                      batch,
+                      batch.jobs[i],
+                      waitingForNetwork: waitingForNetwork,
+                    ),
                   ),
                 ),
                 const SizedBox(height: 8),
@@ -225,7 +265,12 @@ class _DownloadSheetState extends State<DownloadSheet> {
     );
   }
 
-  Widget _row(BuildContext context, DownloadBatch batch, DownloadJob job) {
+  Widget _row(
+    BuildContext context,
+    DownloadBatch batch,
+    DownloadJob job, {
+    bool waitingForNetwork = false,
+  }) {
     final isFailed = job.state == JobState.failed;
     final isDone = job.state == JobState.done;
     return ListTile(
@@ -241,7 +286,7 @@ class _DownloadSheetState extends State<DownloadSheet> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(
-            _statusText(batch, job),
+            _statusText(batch, job, waitingForNetwork: waitingForNetwork),
             style: TextStyle(
               color: isFailed
                   ? Theme.of(context).colorScheme.error
@@ -270,11 +315,16 @@ class _DownloadSheetState extends State<DownloadSheet> {
     );
   }
 
-  String _statusText(DownloadBatch batch, DownloadJob job) {
+  String _statusText(
+    DownloadBatch batch,
+    DownloadJob job, {
+    bool waitingForNetwork = false,
+  }) {
     switch (job.state) {
       case JobState.queued:
-        return '等待中';
+        return waitingForNetwork ? '等待网络…联网后自动继续' : '等待中';
       case JobState.active:
+        if (waitingForNetwork) return '等待网络…联网后自动继续';
         return job.progress > 0
             ? '下载中 ${(job.progress * 100).round()}%'
             : '下载中…';
@@ -290,6 +340,9 @@ class _DownloadSheetState extends State<DownloadSheet> {
         return '已取消';
       case JobState.paused:
         return '已暂停';
+      case JobState.waitingNetwork:
+        // A parked file: not a failure, not a spent attempt (v1.11 batch 3).
+        return '等待网络…联网后自动继续';
     }
   }
 

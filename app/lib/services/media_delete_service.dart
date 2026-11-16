@@ -18,6 +18,7 @@ import 'package:flutter/services.dart';
 
 import 'gallery_locator_service.dart';
 import 'history_db.dart';
+import 'live_pairs.dart';
 
 class MediaDeleteService {
   MediaDeleteService._();
@@ -148,10 +149,14 @@ class MediaDeleteOutcome {
   bool get deletedAll => approved && remaining == 0;
 
   /// Fixed, user-facing copy for the case where files stayed behind.
+  ///
+  /// No number: `remaining` counts files, and every user-visible number counts
+  /// items (a Live photo's still and clip are one item), so a file number must
+  /// never reach the screen (v1.11 build 59).
   String? get problem => !approved
       ? '相册文件未删除（已取消或系统不允许）'
       : remaining > 0
-      ? '有 $remaining 个相册文件未能删除'
+      ? '部分相册文件未能删除'
       : null;
 }
 
@@ -176,11 +181,47 @@ List<MediaRef> deletableMediaFor(Iterable<HistoryRecord> records) {
 /// two posts holding 3 + 4 files because it counted only the rows that already
 /// carried a located album id. A row the album never confirmed still counts as
 /// a file the user saved — it is just not one that can be deleted by id.
+///
+/// Files, not items: this is the count the album delete itself works with, and
+/// it stays internal (logs and tests). Everything the user reads counts items —
+/// see [savedItemCountFor] (v1.11 build 59).
 int savedFileCountFor(Iterable<HistoryRecord> records) => records.fold<int>(
   0,
   (sum, record) =>
       sum + record.files.where(isRetainedHistoryFile).length,
 );
+
+/// How many items the selected posts actually saved.
+///
+/// A Live photo's still and motion clip are two files but one item, so every
+/// user-visible number is this one (v1.11 build 59): the delete sheet's
+/// 「同时删除相册中的 N 项」 and the result prompt after the system dialog.
+int savedItemCountFor(Iterable<HistoryRecord> records) => records.fold<int>(
+  0,
+  (sum, record) =>
+      sum + savedMediaEntryCount(record.files.where(isRetainedHistoryFile)),
+);
+
+/// How many items [media] covers across [records]: an item counts once even
+/// when the request names both halves of a Live photo.
+int deletableItemCountFor(
+  Iterable<HistoryRecord> records,
+  List<MediaRef> media,
+) {
+  final ids = {for (final ref in media) ref.mediaId};
+  if (ids.isEmpty) return 0;
+  var items = 0;
+  for (final record in records) {
+    for (final entry in pairSavedMedia(
+      record.files.where(isRetainedHistoryFile),
+    )) {
+      if (entry.files.any((f) => f.mediaId != null && ids.contains(f.mediaId))) {
+        items++;
+      }
+    }
+  }
+  return items;
+}
 
 /// The album files of [records] as they stand right now.
 ///

@@ -6,6 +6,7 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/widget_previews.dart';
 import 'package:photo_manager/photo_manager.dart';
 import 'package:photo_manager_image_provider/photo_manager_image_provider.dart';
 import 'package:share_plus/share_plus.dart';
@@ -20,11 +21,92 @@ import '../services/history_db.dart';
 import '../services/live_pairs.dart';
 import '../services/media_delete_service.dart';
 import '../services/preview_video.dart';
-import '../services/media_request_policy.dart';
+import '../services/local_thumbnail_tiers.dart';
+import '../services/perf_trace.dart';
 import 'shared.dart';
 import 'decoded_image_keeper.dart';
+import 'staged_photo.dart';
 import 'verified_asset_image.dart';
 import 'ai_label_badge.dart';
+
+/// How many live photos started their motion clip (v1.11 batch 3).
+///
+/// Test seam only: a widget test cannot create a real video player, and "长按
+/// 播放" versus "长按选中" is exactly what has to be asserted. Production never
+/// reads it.
+@visibleForTesting
+int liveMotionStartsForTesting = 0;
+
+/// How long a live photo has to rest in view before its motion clip is
+/// prepared (v1.11 build 57).
+///
+/// A remote clip is fetched in full before a player can start it, which took
+/// long enough that a long press looked broken ("长按要等动态视频下载完才播放").
+/// Half a second of dwell is long enough to mean "this is the photo the user is
+/// looking at" and short enough to be ready before the press.
+const Duration kLiveMotionPreloadDelay = Duration(milliseconds: 500);
+
+/// The key of the small spinner shown in the LIVE badge while a pressed clip is
+/// still being prepared.
+const Key kLiveMotionLoadingKey = Key('viewer_live_motion_loading');
+
+/// A live photo's motion clip, prepared for playback.
+///
+/// Production wraps a [VideoPlayerController] ([PlayerLiveMotion]); a widget
+/// test substitutes its own implementation through
+/// [liveMotionLoaderForTesting], because a real player needs the platform
+/// plugin.
+abstract class LiveMotion {
+  /// Whether the clip can be shown right now.
+  bool get ready;
+
+  /// Frame aspect ratio, 1 when the player does not know it.
+  double get aspectRatio;
+
+  /// The picture to show in the viewer.
+  Widget buildView();
+
+  Future<void> play();
+
+  Future<void> dispose();
+}
+
+/// The production [LiveMotion]: an initialized [VideoPlayerController].
+class PlayerLiveMotion implements LiveMotion {
+  PlayerLiveMotion(this._controller);
+
+  final VideoPlayerController _controller;
+
+  @override
+  bool get ready => _controller.value.isInitialized;
+
+  @override
+  double get aspectRatio {
+    final ratio = _controller.value.aspectRatio;
+    return ratio == 0 ? 1 : ratio;
+  }
+
+  @override
+  Widget buildView() => VideoPlayer(_controller);
+
+  @override
+  Future<void> play() async {
+    await _controller.setLooping(true);
+    await _controller.setVolume(0);
+    await _controller.play();
+  }
+
+  @override
+  Future<void> dispose() => _controller.dispose();
+}
+
+/// Prepares the motion clip of one live photo — the local album clip when the
+/// still is local, the clip fetched through the request policy when it is not.
+///
+/// Test seam only (see [LiveMotion]).
+@visibleForTesting
+Future<LiveMotion> Function(GalleryBrowserItem item, String platform)?
+liveMotionLoaderForTesting;
 
 class GalleryBrowserItem {
   GalleryBrowserItem({
@@ -40,10 +122,13 @@ class GalleryBrowserItem {
     this.asset,
     this.liveVideoAsset,
     this.status = FileStatus.found,
+    this.missing = false,
     this.filename,
     this.cachePostId,
     this.cacheItemIndex,
     this.undecodable = false,
+    this.width,
+    this.height,
   });
 
   factory GalleryBrowserItem.fromMediaItem(
@@ -53,6 +138,7 @@ class GalleryBrowserItem {
     AssetEntity? asset,
     AssetEntity? liveVideoAsset,
     FileStatus status = FileStatus.found,
+    bool missing = false,
     String? filename,
   }) => GalleryBrowserItem(
     index: index,
@@ -69,7 +155,10 @@ class GalleryBrowserItem {
     asset: asset,
     liveVideoAsset: liveVideoAsset,
     status: status,
+    missing: missing,
     filename: filename ?? item.localFilename,
+    width: item.width?.toDouble(),
+    height: item.height?.toDouble(),
   );
 
   final int index;
@@ -88,6 +177,13 @@ class GalleryBrowserItem {
   final AssetEntity? asset;
   final AssetEntity? liveVideoAsset;
   final FileStatus status;
+
+  /// The album answered and this item is not on the device any more ("不在本机").
+  ///
+  /// A separate flag on purpose: the post may still carry a network URL for the
+  /// item, and a missing file must show the placeholder instead of quietly
+  /// falling back to the CDN (v1.11 batch 4).
+  final bool missing;
   final String? filename;
   final String? cachePostId;
   final int? cacheItemIndex;
@@ -96,6 +192,12 @@ class GalleryBrowserItem {
   /// auxiliary image on Android 12). The page then offers a replacement
   /// instead of trying to draw a file the platform rejects.
   final bool undecodable;
+
+  /// Declared size of the still in the post, when it is known. The viewer uses
+  /// it to give the placeholder and the full-resolution image one display box
+  /// (v1.11 batch 3).
+  final double? width;
+  final double? height;
 
   /// Build the [MediaItem] that drives [CoverImage] with the full URL set.
   MediaItem toMediaItem() =>
@@ -117,6 +219,103 @@ class GalleryBrowserItem {
 /// item indices ([GalleryBrowserItem.index]); null means nothing is selected.
 Set<int> initialGallerySelection(Set<int>? selectedIndices) =>
     Set<int>.from(selectedIndices ?? const <int>{});
+
+/// Where the page in view sits: inside this browser, and inside the post.
+///
+/// The browser's own numbering counts what it shows — items on this device and
+/// the "不在本机" placeholders — so a delete shrinks it at once. The post's
+/// numbering never moves: it is where the item sits in the original post, which
+/// is what makes `1 / 3  2 / 8` useful after the first picture was deleted.
+/// Both are always shown, even when they agree: the post's place is what the
+/// user came for, so hiding it would only make the two numbers appear and
+/// disappear as pages change.
+class BrowserPosition {
+  const BrowserPosition({
+    required this.position,
+    required this.total,
+    required this.postPosition,
+    required this.postTotal,
+  });
+
+  /// 1-based place of the page in this browser.
+  final int position;
+
+  /// How many items this browser shows.
+  final int total;
+
+  /// 1-based place of the item in the post; null when the post no longer has
+  /// that place (a re-parse came back with fewer items than the stored index).
+  final int? postPosition;
+
+  /// The post's item total as last parsed.
+  final int postTotal;
+
+  /// The post's numbering is always shown: the pill on the right of the
+  /// counter reads `2 / 8`, or `— / 8` when the post no longer reaches the
+  /// item's place.
+  String get label => '$position / $total';
+
+  String get originLabel => '${postPosition?.toString() ?? '—'} / $postTotal';
+
+  /// Both numbers as one string (semantics only), e.g. `1 / 3  2 / 8`.
+  String get fullLabel => '$label  $originLabel';
+}
+
+/// The two numbering systems of one viewer page (v1.11 batch 6).
+///
+/// [listIndex] and [listLength] are the page's place and the browser's item
+/// count; [itemIndex] is the item's own 0-based index in the post and
+/// [postTotal] the post's item total (a Live photo counts once). A stored index
+/// the post no longer reaches keeps the place empty instead of guessing.
+BrowserPosition browserPositionFor({
+  required int listIndex,
+  required int listLength,
+  required int itemIndex,
+  required int postTotal,
+}) {
+  final total = listLength < 1 ? 1 : listLength;
+  var position = listIndex + 1;
+  if (position < 1) position = 1;
+  if (position > total) position = total;
+
+  final origin = postTotal < 1 ? 1 : postTotal;
+  final postPosition = itemIndex >= 0 && itemIndex < origin ? itemIndex + 1 : null;
+  return BrowserPosition(
+    position: position,
+    total: total,
+    postPosition: postPosition,
+    postTotal: origin,
+  );
+}
+
+/// What a re-download changed: what the viewer shows now, and — when the post
+/// was parsed again — its new total, so the counter's post numbering follows.
+class GalleryBrowserRefresh {
+  const GalleryBrowserRefresh({required this.items, this.postTotal});
+
+  final List<GalleryBrowserItem> items;
+  final int? postTotal;
+}
+
+/// What deleting one item of a post did, so the viewer can say it and offer the
+/// undo that "仅删除记录" supports.
+class GalleryBrowserItemDeletion {
+  const GalleryBrowserItemDeletion({
+    required this.ok,
+    this.message,
+    this.undo,
+  });
+
+  /// The change was written (or the album deletion was confirmed).
+  final bool ok;
+
+  /// Short user-facing sentence (e.g. that the album file was kept).
+  final String? message;
+
+  /// Restores the records the deletion removed. Null when the deletion cannot
+  /// be undone (an album file already went to the system trash).
+  final Future<void> Function()? undo;
+}
 
 /// Locates the album asset behind one stored history row.
 typedef HistoryAssetLocator = Future<AssetEntity?> Function(HistoryFile file);
@@ -173,6 +372,19 @@ Future<({List<GalleryBrowserItem> items, int initial})> savedBrowserItems({
     final imageAsset = entry.image == null ? null : await resolver(entry.image!);
     final videoAsset = entry.video == null ? null : await resolver(entry.video!);
 
+    // "不在本机" is only ever read from a row the album already confirmed as
+    // gone. A row whose lookup merely failed (no permission, no scan) keeps its
+    // status, so an unanswered album never turns an item into a missing one.
+    // A Live photo counts as missing when **either** half is: the pair cannot
+    // be viewed or re-downloaded by halves.
+    final imageMissing = entry.image != null &&
+        imageAsset == null &&
+        isMissingHistoryFile(entry.image!);
+    final videoMissing = entry.video != null &&
+        videoAsset == null &&
+        isMissingHistoryFile(entry.video!);
+    final missing = imageMissing || videoMissing;
+
     if (highlightItemIndex != null &&
         (rawIndex == highlightItemIndex || zeroBased == highlightItemIndex)) {
       initial = items.length;
@@ -203,9 +415,12 @@ Future<({List<GalleryBrowserItem> items, int initial})> savedBrowserItems({
         isGif: postItem?.isGif ?? false,
         asset: coverAsset,
         liveVideoAsset: entry.isLive ? videoAsset : null,
-        status: coverAsset != null
-            ? FileStatus.found
-            : (scanned ? coverFile.status : FileStatus.unknown),
+        status: missing
+            ? FileStatus.notFound
+            : (coverAsset != null
+                  ? FileStatus.found
+                  : (scanned ? coverFile.status : FileStatus.unknown)),
+        missing: missing,
         filename: coverFile.filename,
         undecodable: coverFile.undecodable == true,
       ),
@@ -347,9 +562,14 @@ class GalleryBrowserPage extends StatefulWidget {
     required this.title,
     required this.platform,
     required this.postUrl,
+    this.originalTotal,
+    this.deletedIndices = const <int>{},
     this.selectedIndices,
     this.onSelectionChanged,
     this.onRedownload,
+    this.onRedownloadItems,
+    this.onDeleteItem,
+    this.onDeletePost,
     this.onReparse,
     this.showSave = false,
     this.aiLabel,
@@ -364,9 +584,37 @@ class GalleryBrowserPage extends StatefulWidget {
   final String postUrl;
   final String? aiLabel;
   final String? aiLabelSource;
+
+  /// How many media items the post had when it was parsed. The counter reads
+  /// "position / total" — the item's own place in the post, not its place in
+  /// this list — minus the items the user deleted ([deletedIndices]).
+  /// Null keeps the number of [items] (a remote preview shows them all).
+  final int? originalTotal;
+
+  /// Original post item indices the user already deleted in the app, so the
+  /// counter opens with the shrunk total instead of the post's old one.
+  final Set<int> deletedIndices;
   final Set<int>? selectedIndices;
   final ValueChanged<Set<int>>? onSelectionChanged;
+
+  /// Legacy single-item re-download, addressed by the item's original index.
   final Future<void> Function(int index)? onRedownload;
+
+  /// Preferred re-download entry: asks the caller to re-parse the post and open
+  /// the selection panel with exactly these items preselected. Returning a new
+  /// item list replaces what the viewer shows, so the state updates in place.
+  final Future<GalleryBrowserRefresh?> Function(Set<int> indices)?
+      onRedownloadItems;
+
+  /// Deletes one item of the post (v1.11 batch 4). Null hides the action.
+  final Future<GalleryBrowserItemDeletion?> Function(
+    GalleryBrowserItem item, {
+    required bool deleteAlbumFiles,
+  })? onDeleteItem;
+
+  /// Called when every remaining item of the post has been deleted and the user
+  /// agrees to drop the post record as well.
+  final Future<void> Function()? onDeletePost;
   final VoidCallback? onReparse;
 
   /// When opened from the parse-preview flow, shows a 保存 button that closes
@@ -378,6 +626,11 @@ class GalleryBrowserPage extends StatefulWidget {
 }
 
 class _GalleryBrowserPageState extends State<GalleryBrowserPage> {
+  /// The pages shown right now. A delete or a re-download replaces this, so the
+  /// viewer updates in place instead of asking the user to open the post again.
+  late List<GalleryBrowserItem> _items = List<GalleryBrowserItem>.of(
+    widget.items,
+  );
   late int _currentIndex = widget.initialIndex;
   late final PageController _pageController = PageController(
     initialPage: widget.initialIndex,
@@ -389,6 +642,284 @@ class _GalleryBrowserPageState extends State<GalleryBrowserPage> {
   late final Set<int> _selected = initialGallerySelection(
     widget.selectedIndices,
   );
+
+  /// A re-download or a delete is running; the buttons stay disabled.
+  bool _busy = false;
+
+  /// Original post item indices the current post lost to the user's deletes.
+  /// Kept apart from [_items] because a deleted item leaves the viewer: the
+  /// post's fallback total only stays right if we remember what is no longer
+  /// there.
+  late final Set<int> _deleted = {
+    for (final index in widget.deletedIndices)
+      if (index >= 0) index,
+  };
+
+  /// The post's item total a re-parse reported, null until one succeeds.
+  int? _parsedPostTotal;
+
+  /// Original post item index of the page in view.
+  int? get _currentItemIndex {
+    if (_items.isEmpty) return null;
+    final i = _currentIndex.clamp(0, _items.length - 1);
+    return _items[i].index;
+  }
+
+  GalleryBrowserItem? get _currentItem {
+    if (_items.isEmpty) return null;
+    return _items[_currentIndex.clamp(0, _items.length - 1)];
+  }
+
+  /// Items the album confirmed as gone. A Live photo whose still or motion clip
+  /// is gone counts once, because the pair is re-downloaded whole.
+  List<int> get _missingIndices => [
+    for (final item in _items)
+      if (item.missing) item.index,
+  ];
+
+  /// The post's item total as last known: the total a re-parse reported, else
+  /// the record's, else — for a record written before it was stored — what the
+  /// viewer holds plus what was deleted from it (the old fallback, unchanged).
+  int get _postTotal {
+    final parsed = _parsedPostTotal;
+    if (parsed != null && parsed > 0) return parsed;
+    final declared = widget.originalTotal;
+    if (declared != null && declared > 0) return declared;
+    final living = _items.length + _deleted.length;
+    return living == 0 ? 1 : living;
+  }
+
+  /// "1/3 (2/8)": the page's place in this browser, then its place in the post.
+  BrowserPosition get _position => browserPositionFor(
+    listIndex: _items.isEmpty ? 0 : _currentIndex.clamp(0, _items.length - 1),
+    listLength: _items.length,
+    itemIndex: _currentItemIndex ?? 0,
+    postTotal: _postTotal,
+  );
+
+  /// Re-download [indices]: the caller re-parses the post and opens the preview
+  /// selection with exactly those items ticked. The refreshed items replace what
+  /// this viewer shows, so the counts and placeholders update in place.
+  Future<void> _redownload(Set<int> indices) async {
+    if (indices.isEmpty || _busy) return;
+    setState(() => _busy = true);
+    try {
+      final refresh = widget.onRedownloadItems;
+      if (refresh != null) {
+        final rebuilt = await refresh(indices);
+        if (rebuilt != null && mounted) _replaceItems(rebuilt);
+        return;
+      }
+      for (final index in indices) {
+        await widget.onRedownload?.call(index);
+      }
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  /// Ask how the current item should be deleted. Returns false for "仅删除
+  /// 记录" (the default), true for "同时删除相册文件", null when cancelled.
+  Future<bool?> _askDeleteMode(String title) => showModalBottomSheet<bool>(
+    context: context,
+    builder: (sheetContext) => SafeArea(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(20, 16, 20, 8),
+            child: Text(
+              '删除「$title」',
+              style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+            ),
+          ),
+          ListTile(
+            leading: const Icon(Icons.delete_outline),
+            title: const Text('仅删除记录'),
+            subtitle: const Text('相册中的文件保留，可撤销'),
+            onTap: () => Navigator.of(sheetContext).pop(false),
+          ),
+          ListTile(
+            leading: const Icon(Icons.delete_forever),
+            title: const Text('同时删除相册文件'),
+            subtitle: const Text('会先请求系统确认，删除后无法撤销'),
+            onTap: () => Navigator.of(sheetContext).pop(true),
+          ),
+          const SizedBox(height: 8),
+        ],
+      ),
+    ),
+  );
+
+  /// Delete what the bar acts on — the page in view, or every selected item.
+  ///
+  /// One dialog asks how (record only / album file too) for the whole batch,
+  /// then each item goes through the same single-item deletion, so "仅删除记录"
+  /// stays undoable and the system dialog for the album files is the same one.
+  Future<void> _deleteTargets() async {
+    final remove = widget.onDeleteItem;
+    if (_targets.isEmpty || remove == null || _busy) return;
+    // Remember where every item sits before the first one leaves, so an undo
+    // can put each of them back exactly where it was.
+    final items = [
+      for (final item in _targets)
+        (item: item, at: _items.indexWhere((it) => it.index == item.index)),
+    ];
+    final title = items.length == 1
+        ? '第 ${_position.position} 项'
+        : '已选的 ${items.length} 项';
+    final withFile = await _askDeleteMode(title);
+    if (withFile == null || !mounted) return;
+    setState(() => _busy = true);
+    final removed =
+        <({GalleryBrowserItem item, int at, GalleryBrowserItemDeletion result})>[];
+    var failed = 0;
+    try {
+      for (final entry in items) {
+        if (!mounted) break;
+        GalleryBrowserItemDeletion? result;
+        try {
+          result = await remove(
+            entry.item,
+            deleteAlbumFiles: withFile,
+          );
+        } catch (_) {
+          result = null;
+        }
+        if (result == null || !result.ok) {
+          failed++;
+          continue;
+        }
+        _removeItem(entry.item.index);
+        removed.add((item: entry.item, at: entry.at, result: result));
+      }
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+    if (!mounted) return;
+
+    // Whatever left the viewer cannot stay selected.
+    setState(
+      () => _selected.removeWhere(
+        (index) => !_items.any((item) => item.index == index),
+      ),
+    );
+    widget.onSelectionChanged?.call(_selected);
+
+    final messenger = ScaffoldMessenger.of(context);
+    messenger.hideCurrentSnackBar();
+    if (removed.isEmpty) {
+      messenger.showSnackBar(const SnackBar(content: Text('删除失败，请重试')));
+      return;
+    }
+    final undos = [
+      for (final entry in removed)
+        if (entry.result.undo != null) entry.result.undo!,
+    ];
+    final undoAll = undos.length == removed.length && undos.isNotEmpty
+        ? () async {
+            for (final undo in undos) {
+              await undo();
+            }
+          }
+        : null;
+    final message = removed.length == 1
+        ? (removed.single.result.message ?? '已删除这张')
+        : (failed > 0 ? '已删除 ${removed.length} 项，$failed 项删除失败' : '已删除 ${removed.length} 项');
+    messenger.showSnackBar(
+      SnackBar(
+        content: Text(message),
+        duration: const Duration(seconds: 6),
+        action: undoAll == null
+            ? null
+            : SnackBarAction(
+                label: '撤销',
+                onPressed: () async {
+                  await undoAll();
+                  if (!mounted) return;
+                  for (final entry in removed) {
+                    _insertItem(entry.item, entry.at);
+                  }
+                },
+              ),
+      ),
+    );
+    if (_items.isEmpty) await _askDeletePost();
+  }
+
+  void _removeItem(int index) {
+    final at = _items.indexWhere((it) => it.index == index);
+    if (at < 0) return;
+    setState(() {
+      _deleted.add(index);
+      _items.removeAt(at);
+      _currentIndex = _items.isEmpty
+          ? 0
+          : (at >= _items.length ? _items.length - 1 : at);
+    });
+    if (_items.isNotEmpty && _pageController.hasClients) {
+      _pageController.jumpToPage(_currentIndex);
+    }
+  }
+
+  void _insertItem(GalleryBrowserItem item, int at) {
+    if (_items.any((it) => it.index == item.index)) return;
+    setState(() {
+      _deleted.remove(item.index);
+      final position = at < 0 || at > _items.length ? _items.length : at;
+      _items.insert(position, item);
+      _currentIndex = position;
+    });
+    if (_pageController.hasClients) _pageController.jumpToPage(_currentIndex);
+  }
+
+  /// Nothing of the post is left: offer to drop the record as well.
+  Future<void> _askDeletePost() async {
+    final agreed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('这个帖子已经全部删除'),
+        content: const Text('帖子里的媒体都已删除，是否同时删除整条历史记录？'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('保留记录'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: const Text('删除记录'),
+          ),
+        ],
+      ),
+    );
+    if (!mounted) return;
+    if (agreed == true) await widget.onDeletePost?.call();
+    if (mounted) Navigator.of(context).pop();
+  }
+
+  /// Swap the visible pages, keeping the page the user was looking at.
+  void _replaceItems(GalleryBrowserRefresh rebuilt) {
+    final keep = _currentItemIndex;
+    final keepSelection = Set<int>.of(_selected);
+    setState(() {
+      _items = List<GalleryBrowserItem>.of(rebuilt.items);
+      final parsed = rebuilt.postTotal;
+      if (parsed != null && parsed > 0) _parsedPostTotal = parsed;
+      final at = keep == null
+          ? -1
+          : _items.indexWhere((item) => item.index == keep);
+      _currentIndex = at >= 0
+          ? at
+          : (_currentIndex.clamp(0, _items.isEmpty ? 0 : _items.length - 1));
+      _selected
+        ..clear()
+        ..addAll(keepSelection.where((i) => _items.any((it) => it.index == i)));
+    });
+    if (_pageController.hasClients && _items.isNotEmpty) {
+      _pageController.jumpToPage(_currentIndex);
+    }
+  }
 
   double _dragOffset = 0.0;
   bool _isZoomed = false;
@@ -411,8 +942,8 @@ class _GalleryBrowserPageState extends State<GalleryBrowserPage> {
   void _keepDecodedAround(int index) {
     final configuration = createLocalImageConfiguration(context);
     for (final i in [index, index + 1, index - 1]) {
-      if (i < 0 || i >= widget.items.length) continue;
-      final item = widget.items[i];
+      if (i < 0 || i >= _items.length) continue;
+      final item = _items[i];
       final asset = item.asset;
       if (asset == null || item.type == 'video' || item.isGif) continue;
       _decoded.keep(VerifiedAssetImage.providerFor(asset, isOriginal: true), configuration);
@@ -438,20 +969,114 @@ class _GalleryBrowserPageState extends State<GalleryBrowserPage> {
     widget.onSelectionChanged?.call(_selected);
   }
 
-  Future<void> _shareCurrent() async {
-    final item = widget.items[_currentIndex];
-    if (item.asset != null) {
-      try {
-        final file = await item.asset!.file;
-        if (file != null && await file.exists()) {
-          await SharePlus.instance.share(
-            ShareParams(text: widget.postUrl, files: [XFile(file.path)]),
-          );
-          return;
-        }
-      } catch (_) {}
+  /// A selection turns every action into "this, for all of them" (v1.11 batch
+  /// 6): the bar never needs a second row of buttons.
+  bool get _selectionMode => _selected.isNotEmpty;
+
+  /// What the bar acts on: the selected items, or the page in view.
+  List<GalleryBrowserItem> get _targets {
+    if (_selected.isEmpty) {
+      final item = _currentItem;
+      return item == null ? const <GalleryBrowserItem>[] : [item];
     }
-    await SharePlus.instance.share(ShareParams(text: widget.postUrl));
+    return [
+      for (final item in _items)
+        if (_selected.contains(item.index)) item,
+    ];
+  }
+
+  void _selectAll() {
+    setState(() {
+      _selected
+        ..clear()
+        ..addAll([for (final item in _items) item.index]);
+    });
+    widget.onSelectionChanged?.call(_selected);
+  }
+
+  void _clearSelection() {
+    if (_selected.isEmpty) return;
+    setState(_selected.clear);
+    widget.onSelectionChanged?.call(_selected);
+  }
+
+  /// A compact top-bar tool (全选 / 取消选择): 40 dp wide so the two of them and
+  /// the selection circle still fit beside the title on a 320 dp screen.
+  Widget _topTool({
+    required Key key,
+    required String label,
+    required IconData icon,
+    required VoidCallback onPressed,
+  }) => IconButton(
+    key: key,
+    tooltip: label,
+    onPressed: onPressed,
+    iconSize: 20,
+    padding: EdgeInsets.zero,
+    constraints: const BoxConstraints.tightFor(width: 40, height: 40),
+    style: IconButton.styleFrom(
+      foregroundColor: Colors.white,
+      backgroundColor: Colors.white.withValues(alpha: 0.12),
+      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+    ),
+    icon: Icon(icon, semanticLabel: label),
+  );
+
+  /// 重新下载: with a selection, only the selected items are ticked in the
+  /// preview that re-parses the post; without one, the post is parsed again
+  /// with everything selected, exactly like the old 「重新解析」.
+  Future<void> _redownloadFromBar() async {
+    if (_selectionMode) {
+      await _redownload(Set<int>.of(_selected));
+      return;
+    }
+    widget.onReparse?.call();
+  }
+
+  /// Share what the bar acts on: the page in view, or every selected item that
+  /// is actually on this device ("不在本机" 的项 cannot leave the phone).
+  Future<void> _shareTargets() async {
+    final items = _targets;
+    if (items.isEmpty) return;
+    final messenger = ScaffoldMessenger.of(context);
+    final shareable = <XFile>[];
+    var offline = 0;
+    for (final item in items) {
+      final asset = item.asset;
+      if (item.missing || asset == null) {
+        offline++;
+        continue;
+      }
+      try {
+        final file = await asset.file;
+        if (file != null && await file.exists()) {
+          shareable.add(XFile(file.path));
+        } else {
+          offline++;
+        }
+      } catch (_) {
+        offline++;
+      }
+    }
+    if (items.length > 1 && offline > 0) {
+      messenger.showSnackBar(
+        SnackBar(
+          content: Text(
+            shareable.isEmpty
+                ? '$offline 项不在本机，没有可分享的内容'
+                : '$offline 项不在本机，只分享还在的 ${shareable.length} 项',
+          ),
+        ),
+      );
+    }
+    if (shareable.isEmpty) {
+      // Only the network post itself can travel then.
+      await SharePlus.instance.share(ShareParams(text: widget.postUrl));
+      return;
+    }
+    await SharePlus.instance.share(
+      ShareParams(text: widget.postUrl, files: shareable),
+    );
   }
 
   Future<void> _openOriginal() async {
@@ -463,8 +1088,8 @@ class _GalleryBrowserPageState extends State<GalleryBrowserPage> {
 
   @override
   Widget build(BuildContext context) {
-    final currentItem = widget.items.isNotEmpty
-        ? widget.items[_currentIndex.clamp(0, widget.items.length - 1)]
+    final currentItem = _items.isNotEmpty
+        ? _items[_currentIndex.clamp(0, _items.length - 1)]
         : null;
     final isSelected =
         currentItem != null && _selected.contains(currentItem.index);
@@ -550,7 +1175,7 @@ class _GalleryBrowserPageState extends State<GalleryBrowserPage> {
                   physics: (_isZoomed || _pointerCount > 1)
                       ? const NeverScrollableScrollPhysics()
                       : const BouncingScrollPhysics(),
-                  itemCount: widget.items.length,
+                  itemCount: _items.length,
                   onPageChanged: (idx) {
                     setState(() {
                       _currentIndex = idx;
@@ -567,8 +1192,13 @@ class _GalleryBrowserPageState extends State<GalleryBrowserPage> {
                     }
                   },
                   itemBuilder: (context, idx) {
-                    final item = widget.items[idx];
+                    final item = _items[idx];
                     return _BrowserItemView(
+                      // A replaced list must rebuild the page state, not reuse
+                      // the state of whatever item used to sit at this index.
+                      key: ValueKey<String>(
+                        '${item.index}:${item.asset?.id ?? (item.missing ? 'missing' : 'remote')}',
+                      ),
                       item: item,
                       platform: widget.platform,
                       onZoomChanged: (zoomed) {
@@ -576,10 +1206,17 @@ class _GalleryBrowserPageState extends State<GalleryBrowserPage> {
                           setState(() => _isZoomed = zoomed);
                         }
                       },
-                      onRedownload: widget.onRedownload != null
-                          ? () => widget.onRedownload!(item.index)
+                      onRedownload:
+                          widget.onRedownload != null ||
+                              widget.onRedownloadItems != null
+                          ? () => _redownload({item.index})
                           : null,
                       onToggleSelect: () => _toggleSelect(item.index),
+                      selectionMode: _selectionMode,
+                      // Only the page in view prepares a live photo's motion
+                      // clip, so the viewer never fetches two clips at once
+                      // (v1.11 build 57).
+                      isCurrentPage: idx == _currentIndex,
                     );
                   },
                 ),
@@ -622,12 +1259,57 @@ class _GalleryBrowserPageState extends State<GalleryBrowserPage> {
                             crossAxisAlignment: CrossAxisAlignment.center,
                             mainAxisSize: MainAxisSize.min,
                             children: [
-                              Text(
-                                '${_currentIndex + 1} / ${widget.items.length}',
-                                style: const TextStyle(
-                                  color: Colors.white,
-                                  fontSize: 16,
-                                  fontWeight: FontWeight.bold,
+                              // Both numbers, always: `1 / 3` then the post's
+                              // own place in a translucent stadium pill. The
+                              // pair scales down together on the narrowest
+                              // screens so the top bar never overflows.
+                              Semantics(
+                                container: true,
+                                label: _position.fullLabel,
+                                child: ExcludeSemantics(
+                                  child: FittedBox(
+                                    fit: BoxFit.scaleDown,
+                                    child: Row(
+                                      key: const Key('browser_counter'),
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        Text(
+                                          _position.label,
+                                          style: const TextStyle(
+                                            color: Colors.white,
+                                            fontSize: 16,
+                                            fontWeight: FontWeight.bold,
+                                          ),
+                                        ),
+                                        const SizedBox(width: 6),
+                                        Container(
+                                          key: const Key(
+                                            'browser_counter_post',
+                                          ),
+                                          padding: const EdgeInsets.symmetric(
+                                            horizontal: 8,
+                                            vertical: 2,
+                                          ),
+                                          decoration: BoxDecoration(
+                                            color: Colors.white.withValues(
+                                              alpha: 0.12,
+                                            ),
+                                            borderRadius: BorderRadius.circular(
+                                              999,
+                                            ),
+                                          ),
+                                          child: Text(
+                                            _position.originLabel,
+                                            style: const TextStyle(
+                                              color: Colors.white70,
+                                              fontSize: 12,
+                                              fontWeight: FontWeight.normal,
+                                            ),
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
                                 ),
                               ),
                               if (widget.authorName.isNotEmpty ||
@@ -653,33 +1335,58 @@ class _GalleryBrowserPageState extends State<GalleryBrowserPage> {
                           text: widget.aiLabel,
                           source: widget.aiLabelSource,
                         ),
+                        // Selection tools: 全选 and 取消选择 only make sense once
+                        // something is selected, and they belong next to the
+                        // circle that starts the selection.
+                        if (_selectionMode) ...[
+                          _topTool(
+                            key: const Key('select_all'),
+                            label: '全选',
+                            icon: Icons.select_all,
+                            onPressed: _selectAll,
+                          ),
+                          _topTool(
+                            key: const Key('clear_selection'),
+                            label: '取消选择',
+                            icon: Icons.deselect,
+                            onPressed: _clearSelection,
+                          ),
+                        ],
                         // Checkbox
-                        GestureDetector(
-                          onTap: currentItem != null
-                              ? () => _toggleSelect(currentItem.index)
-                              : null,
-                          child: Container(
-                            width: 32,
-                            height: 32,
-                            decoration: BoxDecoration(
-                              shape: BoxShape.circle,
-                              color: isSelected
-                                  ? const Color(0xFFFF2442)
-                                  : Colors.white.withValues(alpha: 0.2),
-                              border: Border.all(
-                                color: isSelected
-                                    ? Colors.transparent
-                                    : Colors.white70,
-                                width: 2,
+                        Tooltip(
+                          message: isSelected ? '取消选中' : '选中',
+                          child: Semantics(
+                            button: true,
+                            label: isSelected ? '取消选中' : '选中',
+                            child: GestureDetector(
+                              key: const Key('browser_select_toggle'),
+                              onTap: currentItem != null
+                                  ? () => _toggleSelect(currentItem.index)
+                                  : null,
+                              child: Container(
+                                width: 32,
+                                height: 32,
+                                decoration: BoxDecoration(
+                                  shape: BoxShape.circle,
+                                  color: isSelected
+                                      ? const Color(0xFFFF2442)
+                                      : Colors.white.withValues(alpha: 0.2),
+                                  border: Border.all(
+                                    color: isSelected
+                                        ? Colors.transparent
+                                        : Colors.white70,
+                                    width: 2,
+                                  ),
+                                ),
+                                child: isSelected
+                                    ? const Icon(
+                                        Icons.check,
+                                        color: Colors.white,
+                                        size: 18,
+                                      )
+                                    : null,
                               ),
                             ),
-                            child: isSelected
-                                ? const Icon(
-                                    Icons.check,
-                                    color: Colors.white,
-                                    size: 18,
-                                  )
-                                : null,
                           ),
                         ),
                       ],
@@ -715,7 +1422,7 @@ class _GalleryBrowserPageState extends State<GalleryBrowserPage> {
                       mainAxisSize: MainAxisSize.min,
                       children: [
                         // Thumbnails strip
-                        if (widget.items.length > 1)
+                        if (_items.length > 1)
                           SizedBox(
                             height: 56,
                             child: ListView.builder(
@@ -724,13 +1431,14 @@ class _GalleryBrowserPageState extends State<GalleryBrowserPage> {
                               padding: const EdgeInsets.symmetric(
                                 horizontal: 16,
                               ),
-                              itemCount: widget.items.length,
+                              itemCount: _items.length,
                               itemBuilder: (context, idx) {
-                                final it = widget.items[idx];
+                                final it = _items[idx];
                                 final isCur = idx == _currentIndex;
                                 final isSel = _selected.contains(it.index);
 
                                 return GestureDetector(
+                                  key: Key('thumb_${it.index}'),
                                   onTap: () {
                                     _pageController.animateToPage(
                                       idx,
@@ -740,6 +1448,10 @@ class _GalleryBrowserPageState extends State<GalleryBrowserPage> {
                                       curve: Curves.easeInOut,
                                     );
                                   },
+                                  // The strip is the fastest way to build a
+                                  // selection: long-press ticks an item, and a
+                                  // second long-press unticks it.
+                                  onLongPress: () => _toggleSelect(it.index),
                                   child: Container(
                                     width: 44,
                                     height: 44,
@@ -791,104 +1503,34 @@ class _GalleryBrowserPageState extends State<GalleryBrowserPage> {
                           ),
 
                         // Bottom action bar
-                        Padding(
-                          padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
-                          child: Row(
-                            children: [
-                              // Left info text
-                              Text(
-                                _selected.isEmpty
-                                    ? '点右上角选择'
-                                    : '已选 ${_selected.length} 项',
-                                style: const TextStyle(
-                                  color: Colors.white70,
-                                  fontSize: 13,
-                                ),
-                              ),
-                              const Spacer(),
-                              // Actions
-                              if (widget.onRedownload != null &&
-                                  currentItem != null)
-                                IconButton(
-                                  tooltip: '重新下载',
-                                  color: Colors.white,
-                                  icon: const Icon(Icons.download_outlined),
-                                  onPressed: () =>
-                                      widget.onRedownload!(currentItem.index),
-                                ),
-                              if (!widget.showSave && widget.onReparse != null)
-                                Padding(
-                                  padding: const EdgeInsets.only(right: 8),
-                                  child: TextButton.icon(
-                                    style: TextButton.styleFrom(
-                                      backgroundColor: Colors.white12,
-                                      foregroundColor: Colors.white,
-                                      shape: const StadiumBorder(),
-                                      padding: const EdgeInsets.symmetric(
-                                        horizontal: 12,
-                                        vertical: 6,
-                                      ),
-                                    ),
-                                    onPressed: widget.onReparse,
-                                    icon: const Icon(Icons.refresh, size: 16),
-                                    label: const Text(
-                                      '重新解析',
-                                      style: TextStyle(fontSize: 12),
-                                    ),
-                                  ),
-                                ),
-                              if (!widget.showSave)
-                                IconButton(
-                                  style: IconButton.styleFrom(
-                                    backgroundColor: Colors.white12,
-                                    foregroundColor: Colors.white,
-                                  ),
-                                  icon: const Icon(Icons.open_in_new, size: 18),
-                                  tooltip: '打开原帖',
-                                  onPressed: _openOriginal,
-                                ),
-                              const SizedBox(width: 8),
-                              if (widget.showSave)
-                                ElevatedButton.icon(
-                                  style: ElevatedButton.styleFrom(
-                                    backgroundColor: const Color(0xFFFF2442),
-                                    foregroundColor: Colors.white,
-                                    shape: const StadiumBorder(),
-                                    padding: const EdgeInsets.symmetric(
-                                      horizontal: 14,
-                                      vertical: 8,
-                                    ),
-                                  ),
-                                  // Close the viewer and let the preview page
-                                  // start the save with the synced selection.
-                                  onPressed: () =>
-                                      Navigator.of(context).pop(true),
-                                  icon: const Icon(Icons.download, size: 16),
-                                  label: const Text(
-                                    '保存',
-                                    style: TextStyle(fontSize: 13),
-                                  ),
-                                )
-                              else
-                                ElevatedButton.icon(
-                                  style: ElevatedButton.styleFrom(
-                                    backgroundColor: const Color(0xFFFF2442),
-                                    foregroundColor: Colors.white,
-                                    shape: const StadiumBorder(),
-                                    padding: const EdgeInsets.symmetric(
-                                      horizontal: 14,
-                                      vertical: 8,
-                                    ),
-                                  ),
-                                  onPressed: _shareCurrent,
-                                  icon: const Icon(Icons.share, size: 16),
-                                  label: const Text(
-                                    '分享',
-                                    style: TextStyle(fontSize: 13),
-                                  ),
-                                ),
-                            ],
-                          ),
+                        _BrowserActionBar(
+                          selectionCount: _selected.length,
+                          missingCount: _missingIndices.length,
+                          showSave: widget.showSave,
+                          busy: _busy,
+                          onRedownloadMissing:
+                              widget.onRedownloadItems != null ||
+                                  widget.onRedownload != null
+                              ? () => _redownload(_missingIndices.toSet())
+                              : null,
+                          onRedownload:
+                              widget.onRedownloadItems != null ||
+                                  widget.onRedownload != null ||
+                                  widget.onReparse != null
+                              ? _redownloadFromBar
+                              : null,
+                          onDelete:
+                              widget.onDeleteItem != null &&
+                                  currentItem != null
+                              ? _deleteTargets
+                              : null,
+                          onShare: widget.showSave ? null : _shareTargets,
+                          onOpenOriginal: widget.showSave ? null : _openOriginal,
+                          // Close the viewer and let the preview page start the
+                          // save with the synced selection.
+                          onSave: widget.showSave
+                              ? () => Navigator.of(context).pop(true)
+                              : null,
                         ),
                       ],
                     ),
@@ -897,6 +1539,411 @@ class _GalleryBrowserPageState extends State<GalleryBrowserPage> {
               ],
             ),
           ),
+        ),
+      ),
+    );
+  }
+}
+
+/// What the 「更多」 menu keeps once the bar cannot fit them all.
+enum _BrowserMoreAction { openOriginal, redownloadMissing }
+
+/// Bottom action bar of the fullscreen viewer.
+///
+/// One thing at a time: with nothing selected, every button acts on the page
+/// in view; with a selection, every button acts on the whole selection. This is
+/// the only row the viewer needs — 「重新下载这张」 leaves with it.
+///
+/// Every button is [_extent] dp high with the icon and text vertically
+/// centered, so the row reads as one line. It never overflows: first the hint
+/// goes, then the gaps tighten, then the missing-items button shrinks and
+/// finally moves into 「更多」; 分享 is never folded away.
+class _BrowserActionBar extends StatelessWidget {
+  const _BrowserActionBar({
+    required this.selectionCount,
+    required this.missingCount,
+    required this.showSave,
+    required this.busy,
+    required this.onRedownloadMissing,
+    required this.onRedownload,
+    required this.onDelete,
+    required this.onShare,
+    required this.onOpenOriginal,
+    required this.onSave,
+  });
+
+  final int selectionCount;
+  final int missingCount;
+  final bool showSave;
+  final bool busy;
+  final Future<void> Function()? onRedownloadMissing;
+  final Future<void> Function()? onRedownload;
+  final Future<void> Function()? onDelete;
+  final Future<void> Function()? onShare;
+  final VoidCallback? onOpenOriginal;
+  final VoidCallback? onSave;
+
+  /// One button slot: 48 dp high, and 48 dp wide keeps four of them side by
+  /// side with the hint or the missing-items button on a 320 dp screen.
+  static const double _extent = 48;
+  static const double _looseGap = 8;
+  static const double _tightGap = 2;
+
+  /// The measured width is only an estimate of the rendered one; keep this much
+  /// room so a rounding difference can never turn into an overflow.
+  static const double _reserve = 12;
+
+  static const TextStyle _hintStyle = TextStyle(color: Colors.white70, fontSize: 13);
+  static const TextStyle _missingStyle = TextStyle(fontSize: 12);
+  static const TextStyle _saveStyle = TextStyle(color: Colors.white, fontSize: 13);
+  static const EdgeInsets _missingPadding = EdgeInsets.symmetric(horizontal: 10);
+
+  static double _textWidth(BuildContext context, String text, TextStyle style) {
+    final painter = TextPainter(
+      text: TextSpan(text: text, style: style),
+      textDirection: Directionality.maybeOf(context) ?? TextDirection.ltr,
+      textScaler: MediaQuery.textScalerOf(context),
+      maxLines: 1,
+    )..layout();
+    final width = painter.width;
+    painter.dispose();
+    return width;
+  }
+  @override
+  Widget build(BuildContext context) {
+    if (showSave) return _saveButtonRow();
+
+    final hintText = selectionCount > 0 ? '已选 $selectionCount 项' : '点右上角选择';
+    final hintWidth = _textWidth(context, hintText, _hintStyle);
+    final missingLabel = '补下缺失($missingCount)';
+    final missingWidth = _textWidth(context, missingLabel, _missingStyle);
+    // icon 16 + the 8 dp gap and 20 dp of padding a labelled button adds.
+    final missingFullWidth = missingWidth + 44;
+    final missingTextWidth = missingWidth + 16;
+    final showMissing = missingCount > 0 && onRedownloadMissing != null;
+    final iconCount =
+        (onRedownload != null ? 1 : 0) +
+        (onDelete != null ? 1 : 0) +
+        (onShare != null ? 1 : 0);
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
+      child: SizedBox(
+        height: _extent,
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            final available = constraints.maxWidth;
+
+            double needed({
+              required bool hint,
+              required bool missingFull,
+              required bool missingOnlyText,
+              required double slot,
+              required double gap,
+            }) {
+              final widths = <double>[
+                if (hint) hintWidth,
+                if (showMissing && missingFull) missingFullWidth,
+                if (showMissing && missingOnlyText) missingTextWidth,
+                ...List<double>.filled(
+                  iconCount + 1, // the 「更多」 button is always here
+                  slot,
+                ),
+              ];
+              return widths.reduce((a, b) => a + b) +
+                  gap * (widths.length - 1);
+            }
+
+            bool fits(double width) => width <= available - _reserve;
+
+            // Retreat order: the hint, then the gaps, then the width of the
+            // missing-items button, and only then its place in 「更多」.
+            final tier =
+                fits(needed(hint: true, missingFull: true, missingOnlyText: false, slot: _extent, gap: _looseGap))
+                ? 1
+                : fits(needed(hint: false, missingFull: true, missingOnlyText: false, slot: _extent, gap: _looseGap))
+                ? 2
+                : fits(needed(hint: false, missingFull: true, missingOnlyText: false, slot: _extent, gap: _tightGap))
+                ? 3
+                : fits(needed(hint: false, missingFull: true, missingOnlyText: false, slot: 44, gap: _tightGap))
+                ? 4
+                : fits(needed(hint: false, missingFull: false, missingOnlyText: true, slot: 44, gap: _tightGap))
+                ? 5
+                : 6;
+            final showHint = tier == 1;
+            final missingInMenu = tier == 6;
+            final gap = tier >= 5 ? 0.0 : (tier <= 2 ? _looseGap : _tightGap);
+            final slot = tier >= 4 ? 44.0 : _extent;
+
+            final trailing = <Widget>[
+              if (showMissing && !missingInMenu)
+                _missingButton(textOnly: tier >= 5),
+              if (onRedownload != null)
+                _actionButton(
+                  slot: slot,
+                  key: const Key('redownload'),
+                  badgeKey: const Key('badge_redownload'),
+                  label: selectionCount > 0 ? '重新下载选中项' : '重新下载',
+                  icon: Icons.refresh,
+                  onPressed: () => onRedownload?.call(),
+                ),
+              if (onDelete != null)
+                _actionButton(
+                  slot: slot,
+                  key: const Key('delete_item'),
+                  badgeKey: const Key('badge_delete'),
+                  label: selectionCount > 0 ? '删除选中项' : '删除这张',
+                  icon: Icons.delete_outline,
+                  onPressed: () => onDelete?.call(),
+                ),
+              if (onShare != null)
+                _actionButton(
+                  slot: slot,
+                  key: const Key('share_item'),
+                  badgeKey: const Key('badge_share'),
+                  label: selectionCount > 0 ? '分享选中项' : '分享',
+                  icon: Icons.share,
+                  onPressed: () => onShare?.call(),
+                ),
+              _moreButton(missingInMenu: missingInMenu),
+            ];
+
+            return Row(
+              crossAxisAlignment: CrossAxisAlignment.center,
+              children: [
+                if (showHint)
+                  Expanded(
+                    child: Text(
+                      hintText,
+                      key: const Key('browser_hint'),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: _hintStyle,
+                    ),
+                  )
+                else
+                  const Spacer(),
+                for (var i = 0; i < trailing.length; i++) ...[
+                  if (i > 0 && gap > 0) SizedBox(width: gap),
+                  trailing[i],
+                ],
+              ],
+            );
+          },
+        ),
+      ),
+    );
+  }
+  /// One round icon action, with the number of selected items in a corner badge
+  /// once the button speaks for a selection.
+  Widget _actionButton({
+    required double slot,
+    required Key key,
+    required Key badgeKey,
+    required String label,
+    required IconData icon,
+    required VoidCallback onPressed,
+  }) {
+    final button = IconButton(
+      key: key,
+      tooltip: label,
+      onPressed: busy ? null : onPressed,
+      iconSize: 20,
+      padding: EdgeInsets.zero,
+      constraints: BoxConstraints.tightFor(width: slot, height: _extent),
+      style: IconButton.styleFrom(
+        backgroundColor: Colors.white.withValues(alpha: 0.12),
+        foregroundColor: Colors.white,
+        shape: const CircleBorder(),
+        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+      ),
+      icon: Icon(icon, semanticLabel: label),
+    );
+    if (selectionCount <= 0) return button;
+    return SizedBox(
+      width: slot,
+      height: _extent,
+      child: Stack(
+        clipBehavior: Clip.none,
+        children: [
+          Positioned.fill(child: button),
+          Positioned(
+            top: 2,
+            right: 2,
+            child: IgnorePointer(
+              // Just the number: no plate behind it, so the button underneath
+              // stays whole. A shadow keeps it readable over bright pictures.
+              child: Container(
+                key: badgeKey,
+                constraints: const BoxConstraints(minWidth: 16),
+                height: 16,
+                alignment: Alignment.center,
+                child: Text(
+                  selectionCount.toString(),
+                  maxLines: 1,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 10,
+                    fontWeight: FontWeight.bold,
+                    shadows: [Shadow(color: Color(0x8A000000), blurRadius: 3)],
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// The one action that keeps its words: an icon cannot say "N items are gone".
+  Widget _missingButton({required bool textOnly}) => Tooltip(
+    message: '补下缺失的 $missingCount 张',
+    child: SizedBox(
+      height: _extent,
+      child: TextButton.icon(
+        key: const Key('redownload_missing'),
+        style: TextButton.styleFrom(
+          backgroundColor: Colors.white.withValues(alpha: 0.12),
+          foregroundColor: Colors.white,
+          shape: const StadiumBorder(),
+          padding: textOnly
+              ? const EdgeInsets.symmetric(horizontal: 8)
+              : _missingPadding,
+          minimumSize: Size.zero,
+          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+          alignment: Alignment.center,
+        ),
+        onPressed: busy ? null : () => onRedownloadMissing?.call(),
+        icon: textOnly
+            ? null
+            : const Icon(Icons.cloud_download_outlined, size: 16),
+        label: Text(
+          '补下缺失($missingCount)',
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: _missingStyle,
+        ),
+      ),
+    ),
+  );
+
+  Widget _moreButton({required bool missingInMenu}) => PopupMenuButton<_BrowserMoreAction>(
+    key: const Key('browser_more'),
+    tooltip: '更多操作',
+    padding: EdgeInsets.zero,
+    color: const Color(0xFF232323),
+    // The menu hugs its entries: no 112 dp minimum width and no wide margin on
+    // the right of the words.
+    constraints: const BoxConstraints(minWidth: 0, maxWidth: 220),
+    menuPadding: const EdgeInsets.symmetric(vertical: 4),
+    onSelected: (action) {
+      switch (action) {
+        case _BrowserMoreAction.openOriginal:
+          onOpenOriginal?.call();
+        case _BrowserMoreAction.redownloadMissing:
+          onRedownloadMissing?.call();
+      }
+    },
+    itemBuilder: (context) => [
+      if (onOpenOriginal != null)
+        _menuItem(_BrowserMoreAction.openOriginal, Icons.open_in_new, '打开原帖'),
+      if (missingInMenu && missingCount > 0 && onRedownloadMissing != null)
+        _menuItem(
+          _BrowserMoreAction.redownloadMissing,
+          Icons.cloud_download_outlined,
+          '补下缺失($missingCount)',
+        ),
+    ],
+    // A bare vertical ellipsis: the disc behind the icon goes, like the one
+    // behind every other icon on the bar.
+    child: SizedBox(
+      width: _extent/2,
+      height: _extent,
+      child: Stack(
+        alignment: Alignment.center,
+        children: [
+          const Icon(
+            Icons.more_vert,
+            size: 20,
+            color: Colors.white,
+            semanticLabel: '更多操作',
+          ),
+          if (missingInMenu && missingCount > 0)
+            Positioned(
+              top: 6,
+              right: 6,
+              child: Container(
+                width: 8,
+                height: 8,
+                decoration: const BoxDecoration(
+                  color: Color(0xFFFF2442),
+                  shape: BoxShape.circle,
+                ),
+              ),
+            ),
+        ],
+      ),
+    ),
+  );
+
+  PopupMenuItem<_BrowserMoreAction> _menuItem(
+    _BrowserMoreAction value,
+    IconData icon,
+    String label,
+  ) => PopupMenuItem<_BrowserMoreAction>(
+    value: value,
+    height: 44,
+    padding: const EdgeInsets.only(left: 12, right: 12),
+    child: Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Icon(icon, size: 18, semanticLabel: label),
+        const SizedBox(width: 8),
+        Text(label, style: const TextStyle(fontSize: 13)),
+      ],
+    ),
+  );
+
+  /// The remote preview's bar keeps one button: 保存, carrying how many items it
+  /// would download.
+  Widget _saveButtonRow() {
+    final label = selectionCount > 0 ? '保存 ($selectionCount)' : '保存';
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
+      child: SizedBox(
+        height: _extent,
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: [
+            const Spacer(),
+            SizedBox(
+              height: _extent,
+              child: Tooltip(
+                message: '保存',
+                child: FilledButton.icon(
+                  key: const Key('browser_primary_action'),
+                  style: FilledButton.styleFrom(
+                    backgroundColor: const Color(0xFFFF2442),
+                    foregroundColor: Colors.white,
+                    minimumSize: Size.zero,
+                    padding: const EdgeInsets.symmetric(horizontal: 16),
+                    shape: const StadiumBorder(),
+                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    alignment: Alignment.center,
+                  ),
+                  onPressed: busy || selectionCount == 0 ? null : onSave,
+                  icon: const Icon(Icons.download, size: 18),
+                  label: Text(
+                    label,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: _saveStyle,
+                  ),
+                ),
+              ),
+            ),
+          ],
         ),
       ),
     );
@@ -950,7 +1997,7 @@ class _ThumbnailImage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    if (item.status == FileStatus.notFound && !item.url.startsWith('http')) {
+    if (item.missing || item.status == FileStatus.notFound) {
       return Container(
         color: Colors.grey.shade800,
         child: const Icon(Icons.broken_image, size: 18, color: Colors.white54),
@@ -965,7 +2012,7 @@ class _ThumbnailImage extends StatelessWidget {
           fit: BoxFit.contain,
         ),
         isOriginal: false,
-        thumbnailSize: const ThumbnailSize.square(120),
+        thumbnailSize: LocalThumbnailTiers.small,
         fit: BoxFit.cover,
       );
     }
@@ -980,11 +2027,20 @@ class _ThumbnailImage extends StatelessWidget {
 
 class _BrowserItemView extends StatefulWidget {
   const _BrowserItemView({
+    super.key,
     required this.item,
     required this.platform,
     this.onZoomChanged,
     this.onRedownload,
     this.onToggleSelect,
+    /// The viewer is in multi-select mode: a short tap on the picture toggles
+    /// selection instead of playback controls (a real life photo's long press
+    /// still plays the motion clip).
+    this.selectionMode = false,
+    /// This page is the one in view. Only that page prepares a live photo's
+    /// motion clip, so the viewer never loads two clips at once (v1.11 build
+    /// 57).
+    this.isCurrentPage = true,
   });
 
   final GalleryBrowserItem item;
@@ -992,6 +2048,8 @@ class _BrowserItemView extends StatefulWidget {
   final ValueChanged<bool>? onZoomChanged;
   final Future<void> Function()? onRedownload;
   final VoidCallback? onToggleSelect;
+  final bool selectionMode;
+  final bool isCurrentPage;
 
   @override
   State<_BrowserItemView> createState() => _BrowserItemViewState();
@@ -1006,6 +2064,31 @@ class _BrowserItemViewState extends State<_BrowserItemView> {
   bool _redownloading = false;
   bool _isNotFound = false;
   String? _error;
+
+  /// A motion clip prepared while this page rested (v1.11 build 57).
+  LiveMotion? _liveClip;
+
+  /// The clip being prepared right now; shared by the dwell timer and a press
+  /// that arrives before it finished.
+  Future<LiveMotion?>? _liveClipLoad;
+
+  /// The clip on screen during a press.
+  LiveMotion? _livePlaying;
+
+  Timer? _livePreloadTimer;
+
+  /// A pressed clip is still being prepared: the LIVE badge says so.
+  bool _liveLoading = false;
+
+  /// Invalidates a prepared clip when the page is left: whatever the load
+  /// returns afterwards is released instead of kept.
+  int _liveClipGeneration = 0;
+
+  /// The live photo's still, measured from the page opening (v1.11 batch 3).
+  late final ViewerImageProbe _trace = ViewerImageProbe(
+    index: widget.item.index,
+    source: widget.item.asset != null ? 'local' : 'remote',
+  );
 
   @override
   void initState() {
@@ -1022,6 +2105,7 @@ class _BrowserItemViewState extends State<_BrowserItemView> {
         _initVideo();
       }
     }
+    _scheduleLivePreload();
   }
 
   Future<void> _checkAssetExistence() async {
@@ -1038,9 +2122,123 @@ class _BrowserItemViewState extends State<_BrowserItemView> {
 
   @override
   void dispose() {
+    _trace.dispose();
     _hideTimer?.cancel();
+    _livePreloadTimer?.cancel();
+    _liveClipGeneration++;
+    // Leaving the page releases whatever was prepared for it: a clip is only
+    // ever kept for the photo in view (v1.11 build 57).
+    final prepared = _liveClip;
+    final playing = _livePlaying;
+    _liveClip = null;
+    _livePlaying = null;
+    if (prepared != null) unawaited(prepared.dispose());
+    if (playing != null) unawaited(playing.dispose());
     _videoController?.dispose();
     super.dispose();
+  }
+
+  @override
+  void didUpdateWidget(covariant _BrowserItemView oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    final replaced = oldWidget.item.index != widget.item.index ||
+        oldWidget.item.asset?.id != widget.item.asset?.id;
+    if (replaced || oldWidget.isCurrentPage != widget.isCurrentPage) {
+      _dropLiveClip();
+      _scheduleLivePreload();
+    }
+  }
+
+  /// Whether this live photo's clip has to be fetched (a remote preview): a
+  /// local pair comes from the album and needs no preparation.
+  bool _needsRemoteLiveClip(GalleryBrowserItem item) =>
+      item.type == 'live' &&
+      item.liveVideoAsset == null &&
+      (item.videoUrl?.startsWith('http') ?? false);
+
+  /// Prepare the motion clip after the page has rested for
+  /// [kLiveMotionPreloadDelay]. Only the page in view does this, and a press
+  /// takes over whatever was already prepared.
+  void _scheduleLivePreload() {
+    _livePreloadTimer?.cancel();
+    if (!widget.isCurrentPage || !_needsRemoteLiveClip(widget.item)) {
+      return;
+    }
+    if (_liveClip != null) return;
+    _livePreloadTimer = Timer(kLiveMotionPreloadDelay, () {
+      if (!mounted || _isLiveHolding || !widget.isCurrentPage) return;
+      unawaited(_ensureLiveClip());
+    });
+  }
+
+  /// Drop the prepared clip (the page is no longer in view). A load still in
+  /// flight releases its clip when it arrives.
+  void _dropLiveClip() {
+    _livePreloadTimer?.cancel();
+    _livePreloadTimer = null;
+    _liveClipGeneration++;
+    _liveClipLoad = null;
+    final prepared = _liveClip;
+    _liveClip = null;
+    if (prepared != null) unawaited(prepared.dispose());
+  }
+
+  /// The clip of this live photo: the prepared one when it is ready, otherwise
+  /// the load in flight, otherwise a new load.
+  Future<LiveMotion?> _ensureLiveClip() {
+    final prepared = _liveClip;
+    if (prepared != null) return Future<LiveMotion?>.value(prepared);
+    return _liveClipLoad ??= _loadLiveClip().whenComplete(() {
+      _liveClipLoad = null;
+    });
+  }
+
+  Future<LiveMotion?> _loadLiveClip() async {
+    final generation = _liveClipGeneration;
+    LiveMotion? clip;
+    try {
+      final loader = liveMotionLoaderForTesting;
+      clip = loader != null
+          ? await loader(widget.item, widget.platform)
+          : await _prepareLiveClip(widget.item);
+    } catch (error) {
+      // A clip that cannot be prepared leaves the long press to the still, as
+      // before: nothing is reported as a download failure here.
+      unawaited(DevLog.write(
+        'PreviewPlayer',
+        'event=live_preload_failed '
+            'source=${widget.item.asset == null ? 'network' : 'local'} '
+            'type=${playbackFailureType(error)}',
+      ));
+      return null;
+    }
+    if (!mounted || generation != _liveClipGeneration || !widget.isCurrentPage) {
+      await clip.dispose();
+      return null;
+    }
+    _liveClip = clip;
+    return clip;
+  }
+
+  /// Production loader: the album clip of a local live photo, otherwise the
+  /// remote clip fetched through the request policy.
+  Future<LiveMotion> _prepareLiveClip(GalleryBrowserItem item) async {
+    final asset = item.liveVideoAsset;
+    if (asset != null) {
+      final file = await asset.file;
+      if (file != null && await file.exists()) {
+        final controller = VideoPlayerController.file(file);
+        await controller.initialize();
+        return PlayerLiveMotion(controller);
+      }
+    }
+    final videoUrl = item.videoUrl;
+    if (videoUrl == null || videoUrl.isEmpty) {
+      throw const FileSystemException('LIVE_CLIP_MISSING');
+    }
+    final controller = await _createPlayerController(videoUrl);
+    await controller.initialize();
+    return PlayerLiveMotion(controller);
   }
 
   /// Keep the play/pause icons and the controls bar in sync with the player,
@@ -1152,49 +2350,49 @@ class _BrowserItemViewState extends State<_BrowserItemView> {
     }
   }
 
+  /// A long press on a live photo plays its motion clip (v1.11 batch 3).
+  ///
+  /// Build 57: the clip is normally already prepared (the page rested for
+  /// [kLiveMotionPreloadDelay]), so the press plays at once. If it is not ready
+  /// yet, the LIVE badge shows a spinner and playback starts the moment the clip
+  /// arrives — still while the finger is down; releasing cancels.
   Future<void> _startLiveMotion() async {
     if (_isLiveHolding) return;
-    setState(() => _isLiveHolding = true);
+    _livePreloadTimer?.cancel();
+    _livePreloadTimer = null;
+    final prepared = _liveClip;
+    _liveClip = null;
+    setState(() {
+      _isLiveHolding = true;
+      _liveLoading = prepared == null;
+    });
+    liveMotionStartsForTesting++;
 
-    try {
-      final it = widget.item;
-      VideoPlayerController controller;
-
-      if (it.liveVideoAsset != null) {
-        final f = await it.liveVideoAsset!.file;
-        if (f != null && await f.exists()) {
-          controller = VideoPlayerController.file(f);
-        } else {
-          final videoUrl = it.videoUrl;
-          if (videoUrl == null || videoUrl.isEmpty) return;
-          controller = await _createPlayerController(videoUrl);
-        }
-      } else {
-        final videoUrl = it.videoUrl;
-        if (videoUrl == null || videoUrl.isEmpty) return;
-        controller = await _createPlayerController(videoUrl);
-      }
-
-      await controller.initialize();
-      await controller.setLooping(true);
-      await controller.setVolume(0);
-      if (!mounted || !_isLiveHolding) {
-        await controller.dispose();
-        return;
-      }
-      _videoController = controller;
-      await controller.play();
-      setState(() {});
-    } catch (error) {
-      if (mounted) {
-        setState(() => _isLiveHolding = false);
-        if (error is MediaPolicyException) {
-          ScaffoldMessenger.maybeOf(
-            context,
-          )?.showSnackBar(const SnackBar(content: Text('该资源地址不在允许范围内')));
-        }
-      }
+    final clip = prepared ?? await _ensureLiveClip();
+    if (!mounted) {
+      if (clip != null) unawaited(clip.dispose());
+      return;
     }
+    if (clip == null) {
+      setState(() {
+        _isLiveHolding = false;
+        _liveLoading = false;
+      });
+      return;
+    }
+    if (!_isLiveHolding) {
+      // Released while it was still being prepared: keep the clip ready for the
+      // next press instead of throwing the work away.
+      _liveClip = clip;
+      setState(() => _liveLoading = false);
+      return;
+    }
+    setState(() {
+      _livePlaying = clip;
+      _liveLoading = false;
+    });
+    await clip.play();
+    if (mounted) setState(() {});
   }
 
   Future<VideoPlayerController> _createPlayerController(String target) async {
@@ -1211,15 +2409,20 @@ class _BrowserItemViewState extends State<_BrowserItemView> {
     }
   }
 
+  /// The finger lifted: playback stops and the clip is released, and the page
+  /// starts preparing the next one (v1.11 build 57).
   Future<void> _stopLiveMotion() async {
-    setState(() => _isLiveHolding = false);
-    final c = _videoController;
-    _videoController = null;
-    if (c != null) {
-      await c.pause();
-      await c.dispose();
-    }
-    if (mounted) setState(() {});
+    _livePreloadTimer?.cancel();
+    _livePreloadTimer = null;
+    if (!_isLiveHolding && !_liveLoading && _livePlaying == null) return;
+    final playing = _livePlaying;
+    _livePlaying = null;
+    setState(() {
+      _isLiveHolding = false;
+      _liveLoading = false;
+    });
+    if (playing != null) await playing.dispose();
+    _scheduleLivePreload();
   }
 
   @override
@@ -1246,9 +2449,8 @@ class _BrowserItemViewState extends State<_BrowserItemView> {
       );
     }
 
-    // 1. Missing file: "已从相册删除" placeholder + [重新下载]
-    if ((it.status == FileStatus.notFound || _isNotFound) &&
-        !it.url.startsWith('http')) {
+    // 1. Missing file: "不在本机" placeholder + [重新下载这张]
+    if (it.missing || _isNotFound || it.status == FileStatus.notFound) {
       return Center(
         child: Column(
           mainAxisSize: MainAxisSize.min,
@@ -1267,7 +2469,7 @@ class _BrowserItemViewState extends State<_BrowserItemView> {
             ),
             const SizedBox(height: 16),
             const Text(
-              '已从相册删除',
+              '不在本机',
               style: TextStyle(
                 color: Colors.white,
                 fontSize: 16,
@@ -1311,7 +2513,7 @@ class _BrowserItemViewState extends State<_BrowserItemView> {
                         ),
                       )
                     : const Icon(Icons.download, size: 18),
-                label: Text(_redownloading ? '下载中...' : '重新下载'),
+                label: Text(_redownloading ? '下载中...' : '重新下载这张'),
               ),
             ],
           ],
@@ -1322,7 +2524,7 @@ class _BrowserItemViewState extends State<_BrowserItemView> {
     // 2. GIF playback: auto loop, muted, tap to pause/play, GIF badge
     if (it.isGif) {
       final c = _videoController;
-      return GestureDetector(
+      return _withSelectionTap(GestureDetector(
         behavior: HitTestBehavior.opaque,
         // Long-press toggles selection (tap still pauses/plays).
         onLongPress: widget.onToggleSelect,
@@ -1399,13 +2601,13 @@ class _BrowserItemViewState extends State<_BrowserItemView> {
               ),
           ],
         ),
-      );
+      ));
     }
 
     // 3. Regular Video playback: starts paused, tap the play button to start
     if (it.type == 'video') {
       final c = _videoController;
-      return GestureDetector(
+      return _withSelectionTap(GestureDetector(
         behavior: HitTestBehavior.opaque,
         // Long-press toggles selection; tap shows/hides the controls bar.
         onLongPress: widget.onToggleSelect,
@@ -1526,28 +2728,33 @@ class _BrowserItemViewState extends State<_BrowserItemView> {
               ),
           ],
         ),
-      );
+      ));
     }
 
     // 4. Live Photo: static cover + "LIVE" badge + "长按播放实况" + press to play loop
     if (it.type == 'live') {
-      final c = _videoController;
-      final showVideo = _isLiveHolding && c != null && c.value.isInitialized;
+      final playing = _livePlaying;
+      final showVideo = _isLiveHolding && playing != null && playing.ready;
 
+      // A live photo's long press is the animation itself, in both viewers and
+      // in multi-select mode too (v1.11 batch 3). This branch deliberately does
+      // not take the transparent selection layer: a layer on top would receive
+      // the press and turn "长按播放" into "长按选中", which is what the remote
+      // preview did in build 55. The tap is handled here instead, so selecting
+      // while multi-select is active stays one tap.
       return GestureDetector(
         behavior: HitTestBehavior.opaque,
         onLongPressStart: (_) => _startLiveMotion(),
         onLongPressEnd: (_) => _stopLiveMotion(),
+        onTap: widget.selectionMode ? widget.onToggleSelect : null,
         child: Stack(
           alignment: Alignment.center,
           children: [
             if (showVideo)
               Center(
                 child: AspectRatio(
-                  aspectRatio: c.value.aspectRatio == 0
-                      ? 1
-                      : c.value.aspectRatio,
-                  child: VideoPlayer(c),
+                  aspectRatio: playing.aspectRatio,
+                  child: playing.buildView(),
                 ),
               )
             else
@@ -1555,41 +2762,34 @@ class _BrowserItemViewState extends State<_BrowserItemView> {
                 minScale: 1.0,
                 maxScale: 4.0,
                 child: Center(
-                  child: it.asset != null
-                      ? VerifiedAssetImage(
-                          it.asset!,
-                          fallback: CoverImage(
-                            item: it.toMediaItem(),
-                            platform: (widget.platform),
-                            fit: BoxFit.contain,
-                            fullResolution: true,
-                          ),
-                          isOriginal: true,
-                          fit: BoxFit.contain,
-                        )
-                      : Stack(
-                          fit: StackFit.passthrough,
-                          alignment: Alignment.center,
-                          children: [
-                            CoverImage(
-                              item: it.toMediaItem(),
-                              platform: (widget.platform),
-                              fit: BoxFit.contain,
-                              cacheWidth: 400,
-                            ),
-                            CoverImage(
-                              item: it.toMediaItem(),
-                              platform: (widget.platform),
-                              fit: BoxFit.contain,
-                              fullResolution: true,
-                              placeholder: const Center(child: CircularProgressIndicator()),
-                            ),
-                          ],
-                        ),
+                  child: StagedPhoto(
+                    aspectRatio: stillAspectOf(it),
+                    placeholder: viewerStillPlaceholder(
+                      item: it,
+                      platform: widget.platform,
+                      fit: stillAspectOf(it) == null
+                          ? BoxFit.contain
+                          : BoxFit.cover,
+                      onFrame: _trace.placeholderShown,
+                    ),
+                    buildFull: (signals) => viewerFullStill(
+                      item: it,
+                      platform: widget.platform,
+                      fit: stillAspectOf(it) == null
+                          ? BoxFit.contain
+                          : BoxFit.cover,
+                      signals: signals,
+                      onFrame: _trace.fullShown,
+                      onFailed: _trace.failed,
+                    ),
+                  ),
                 ),
               ),
 
-            // "LIVE" Badge top-left
+            // "LIVE" Badge top-left. While a pressed clip is still being
+            // prepared the badge carries the spinner, so the wait is explained
+            // where the LIVE mark already tells the user what will happen
+            // (v1.11 build 57).
             Positioned(
               top: 56,
               left: 16,
@@ -1599,13 +2799,32 @@ class _BrowserItemViewState extends State<_BrowserItemView> {
                   color: Colors.white,
                   borderRadius: BorderRadius.circular(6),
                 ),
-                child: const Text(
-                  'LIVE',
-                  style: TextStyle(
-                    color: Colors.black,
-                    fontSize: 11,
-                    fontWeight: FontWeight.bold,
-                  ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    if (_liveLoading) ...[
+                      const SizedBox(
+                        key: kLiveMotionLoadingKey,
+                        width: 10,
+                        height: 10,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          valueColor: AlwaysStoppedAnimation<Color>(
+                            Colors.black87,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 6),
+                    ],
+                    const Text(
+                      'LIVE',
+                      style: TextStyle(
+                        color: Colors.black,
+                        fontSize: 11,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ],
                 ),
               ),
             ),
@@ -1635,23 +2854,144 @@ class _BrowserItemViewState extends State<_BrowserItemView> {
     }
 
     // 5. Standard Image: Zoomable with double-tap zoom & pinch pan
-    return _ZoomableImageView(
-      item: it,
-      platform: widget.platform,
-      onZoomChanged: widget.onZoomChanged,
-      onLongPress: widget.onToggleSelect,
+    return _withSelectionTap(
+      _ZoomableImageView(
+        item: it,
+        platform: widget.platform,
+        onZoomChanged: widget.onZoomChanged,
+        onLongPress: widget.onToggleSelect,
+      ),
+    );
+  }
+
+  /// While the viewer is in multi-select mode a tap on the picture toggles the
+  /// selection of the page in view — the only thing a tap can mean then. The
+  /// pictures below keep their own gestures (long press, zoom, playback), so
+  /// this sits on top instead of fighting them in the gesture arena.
+  ///
+  /// Live photos do **not** take this layer (v1.11 batch 3): their own long
+  /// press is the animation, and an opaque layer would receive the press and
+  /// turn "长按播放" into "长按选中". That branch handles the tap itself.
+  Widget _withSelectionTap(Widget child) {
+    if (!widget.selectionMode) return child;
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        child,
+        Positioned.fill(
+          child: GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: widget.onToggleSelect,
+          ),
+        ),
+      ],
     );
   }
 }
 
-class _ZoomableImageView extends StatefulWidget {
-  const _ZoomableImageView({
+/// Display frame of a still: the size the post declared, else the album file's
+/// own, else unknown (v1.11 batch 3).
+double? stillAspectOf(GalleryBrowserItem item) {
+  final declared = stagedAspectRatio(item.width, item.height);
+  if (declared != null) return declared;
+  final asset = item.asset;
+  if (asset == null) return null;
+  return stagedAspectRatio(asset.width, asset.height);
+}
+
+/// The low-resolution layer of a still in the viewer (v1.11 batch 3).
+///
+/// A local file shows the same medium-tier thumbnail its card uses, so it is
+/// usually already decoded — no original bytes are ever read into Dart. A
+/// remote file shows the cached preview thumbnail (400 px wide).
+Widget viewerStillPlaceholder({
+  required GalleryBrowserItem item,
+  required String platform,
+  required BoxFit fit,
+  VoidCallback? onFrame,
+}) {
+  final asset = item.asset;
+  if (asset != null) {
+    return Image(
+      image: VerifiedAssetImage.providerFor(
+        asset,
+        thumbnailSize: LocalThumbnailTiers.medium,
+      ),
+      fit: fit,
+      gaplessPlayback: true,
+      frameBuilder: (context, child, frame, wasSync) {
+        if (frame != null) onFrame?.call();
+        return child;
+      },
+      // A thumbnail this device cannot decode simply leaves the frame empty;
+      // the full-resolution layer below still tries.
+      errorBuilder: (_, _, _) => const SizedBox.shrink(),
+    );
+  }
+  return CoverImage(
+    item: item.toMediaItem(),
+    platform: platform,
+    fit: fit,
+    cacheWidth: 400,
+    onFrame: onFrame,
+  );
+}
+
+/// The full-resolution layer of a still in the viewer. It reports its first
+/// frame and its failures so [StagedPhoto] can fade it in or keep the
+/// placeholder on screen.
+Widget viewerFullStill({
+  required GalleryBrowserItem item,
+  required String platform,
+  required BoxFit fit,
+  required StagedPhotoSignals signals,
+  VoidCallback? onFrame,
+  VoidCallback? onFailed,
+}) {
+  final asset = item.asset;
+  if (asset != null) {
+    return VerifiedAssetImage(
+      asset,
+      fallback: CoverImage(
+        item: item.toMediaItem(),
+        platform: platform,
+        fit: fit,
+        fullResolution: true,
+      ),
+      isOriginal: true,
+      fit: fit,
+      onFrame: () {
+        onFrame?.call();
+        signals.onFrame();
+      },
+      onFailed: () {
+        onFailed?.call();
+        signals.onFailure();
+      },
+    );
+  }
+  return CoverImage(
+    item: item.toMediaItem(),
+    platform: platform,
+    fit: fit,
+    fullResolution: true,
+    onFrame: () {
+      onFrame?.call();
+      signals.onFrame();
+    },
+    onError: () {
+      onFailed?.call();
+      signals.onFailure();
+    },
+  );
+}
+
+class _ZoomableImageView extends StatefulWidget {  const _ZoomableImageView({
     required this.item,
     required this.platform,
     this.onZoomChanged,
     this.onLongPress,
   });
-
   final GalleryBrowserItem item;
   final String platform;
   final ValueChanged<bool>? onZoomChanged;
@@ -1668,6 +3008,16 @@ class _ZoomableImageViewState extends State<_ZoomableImageView>
   TapDownDetails? _doubleTapDetails;
   late final AnimationController _animController;
 
+  /// `[ViewerImage] index=… placeholder_ms=… full_ms=… source=…` (v1.11 batch
+  /// 3). Measurement only: nothing below waits for it.
+  late final ViewerImageProbe _trace = ViewerImageProbe(
+    index: widget.item.index,
+    source: widget.item.asset != null ? 'local' : 'remote',
+  );
+
+  /// Display frame shared by the placeholder and the full image.
+  double? get _aspect => stillAspectOf(widget.item);
+
   @override
   void initState() {
     super.initState();
@@ -1680,6 +3030,7 @@ class _ZoomableImageViewState extends State<_ZoomableImageView>
 
   @override
   void dispose() {
+    _trace.dispose();
     _transformationController.removeListener(_handleTransform);
     _transformationController.dispose();
     _animController.dispose();
@@ -1736,39 +3087,38 @@ class _ZoomableImageViewState extends State<_ZoomableImageView>
         maxScale: 5.0,
         clipBehavior: Clip.none,
         child: Center(
-          child: widget.item.asset != null
-              ? VerifiedAssetImage(
-                  widget.item.asset!,
-                  fallback: CoverImage(
-                    item: widget.item.toMediaItem(),
-                    platform: (widget.platform),
-                    fit: BoxFit.contain,
-                    fullResolution: true,
-                  ),
-                  isOriginal: true,
-                  fit: BoxFit.contain,
-                )
-              : Stack(
-                  fit: StackFit.passthrough,
-                  alignment: Alignment.center,
-                  children: [
-                    CoverImage(
-                      item: widget.item.toMediaItem(),
-                      platform: (widget.platform),
-                      fit: BoxFit.contain,
-                      cacheWidth: 400,
-                    ),
-                    CoverImage(
-                      item: widget.item.toMediaItem(),
-                      platform: (widget.platform),
-                      fit: BoxFit.contain,
-                      fullResolution: true,
-                      placeholder: const Center(child: CircularProgressIndicator()),
-                    ),
-                  ],
-                ),
+          child: StagedPhoto(
+            aspectRatio: _aspect,
+            placeholder: viewerStillPlaceholder(
+              item: widget.item,
+              platform: widget.platform,
+              fit: _aspect == null ? BoxFit.contain : BoxFit.cover,
+              onFrame: _trace.placeholderShown,
+            ),
+            buildFull: (signals) => viewerFullStill(
+              item: widget.item,
+              platform: widget.platform,
+              fit: _aspect == null ? BoxFit.contain : BoxFit.cover,
+              signals: signals,
+              onFrame: _trace.fullShown,
+              onFailed: _trace.failed,
+            ),
+          ),
         ),
       ),
     );
   }
+}
+
+@Preview(name: 'MoreButton')
+Widget previewMoreButton() {
+  return GalleryBrowserPage(
+    items: [
+      GalleryBrowserItem(
+        index: 0,
+        type: 'image',
+        url: 'https://www.example.com/image.jpg',
+      ),
+    ], authorName: '', title: '', platform: '', postUrl: '',
+  );
 }

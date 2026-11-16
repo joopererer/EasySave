@@ -158,7 +158,9 @@
   "saveCaptionTxt": false,
   "historyView": "posts",
   "historyLayout": "waterfall",
-  "historySort": "latest"
+  "historySort": "latest",
+  "autoFolderBackupEnabled": true,
+  "autoBackupFolderName": "EasySave Backup"
 }
 ```
 
@@ -173,6 +175,8 @@
 - `autoClipboard`: 自动检测剪贴板（Boolean）
 - `saveCaptionTxt`: 保存文案为 txt 开关（Boolean）
 - `historyView` / `historyLayout` / `historySort`: 历史页视图与排序偏好
+- `autoFolderBackupEnabled`（v1.11）: 外部文件夹自动备份开关（Boolean）。缺失即表示备份来自 v1.11 之前的版本（见 §3.5）
+- `autoBackupFolderName`（v1.11）: 备份文件夹的**显示名**（String），仅用于恢复后提示用户重新授权同一目录；**不得**写入 `content://` 形式的 tree URI
 
 #### 严格排除字段（黑名单与隐私边界）：
 - **绝对不备份的设置项**：`backupTreeUri`（设备特定的文件夹 URI）、`lastBackupTime`（上次备份时间）、`skipRestoreHint`（首次启动或历史为空恢复引导的跳过标记）。
@@ -223,6 +227,15 @@
   若备份文件中的 `formatVersion > 1`，解析器立即中断，抛出 `IncompatibleBackupVersionException`，UI 弹出友好的提示对话框："此备份由更新版本的 EasySave 创建，请先前往更新应用后再恢复"，严禁强行解析导致崩溃或数据错乱。
 - **低版本与缺损容错**：
   若备份文件来自低版本或缺少非关键字段（如缺少 `relativePath`、缺少 `provenance` 对象、缺少某项设置、或 `items` 仍为旧版 `itemsJson` 字符串），赋予合理默认值，确保平滑导入。
+
+### 3.4 自动备份设置的恢复（v1.11）
+- **写出的内容**：`settings.autoFolderBackupEnabled`（开关状态）与 `settings.autoBackupFolderName`（文件夹显示名）。**不写** `backupTreeUri`：SAF 授权与设备绑定，无法通过 JSON 迁移。
+- **恢复流程**：
+  1. 导入设置时，若备份带有上述字段，先把本地 `autoFolderBackupEnabled` 置为关闭（授权尚未重建，不能显示为开启）。
+  2. 导入与结果提示完成后，若备份里自动备份为开启，弹出「是否继续自动备份到“<文件夹名>”？」。
+  3. 用户确认 → 打开系统文件夹选择器（`ACTION_OPEN_DOCUMENT_TREE`，本机仍有原目录时用 `EXTRA_INITIAL_URI` 定位）→ **授权成功后**才把开关置为开启并保存新的显示名；取消或不授权则保持关闭。
+  4. 用户取消提示 → 保持关闭，不打开选择器。
+- **旧版本备份**：没有这两个字段时照常恢复其余设置，不弹提示，也不改动本机的自动备份开关。
 
 ---
 

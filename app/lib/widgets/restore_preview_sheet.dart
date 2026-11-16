@@ -123,7 +123,7 @@ class _RestorePreviewSheetState extends State<RestorePreviewSheet> {
                   const Divider(height: 16),
                   _buildMetaRow('帖子数量', '${preview.postCount} 条'),
                   const Divider(height: 16),
-                  _buildMetaRow('媒体文件', '${preview.fileCount} 个'),
+                  _buildMetaRow('媒体项', '${preview.itemCount} 项'),
                   if (preview.settings != null) ...[
                     const Divider(height: 16),
                     _buildMetaRow(

@@ -140,7 +140,11 @@ void main() {
       remaining: 2,
     );
     expect(partial.deletedAll, isFalse);
-    expect(partial.problem, contains('2'));
+    // v1.11 build 59: `remaining` counts files, and a file number must never
+    // reach the screen (every user-visible number counts items), so the copy
+    // says some files stayed without naming a count.
+    expect(partial.problem, contains('未能删除'));
+    expect(partial.problem, isNot(contains('2')));
   });
 
   test('a deleted post never comes back from an in-flight snapshot', () {

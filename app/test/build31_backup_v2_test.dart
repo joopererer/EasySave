@@ -234,6 +234,8 @@ void main() {
       'savedAt': file['savedAt'],
       'itemCount': 3,
       'capturedBy': 'EasySave/1.10.0',
+      // v1.11 batch 4: the on-device state travels with the file.
+      'status': 'inDevice',
     });
     final x = posts.firstWhere((p) => p['sourceId'] == _xPost);
     expect(x['canonicalUrl'], 'https://x.com/i/status/$_xPost');

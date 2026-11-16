@@ -911,6 +911,12 @@ class GalleryLocatorService extends ChangeNotifier {
     final updatedFiles = <HistoryFile>[];
 
     for (final file in record.files) {
+      // A row the user deleted in the app is a decision, not an observation:
+      // the album scan neither revisits it nor brings it back.
+      if (isDeletedHistoryFile(file)) {
+        updatedFiles.add(file);
+        continue;
+      }
       AssetEntity? asset;
       var answered = true;
       try {
@@ -1040,6 +1046,9 @@ class GalleryLocatorService extends ChangeNotifier {
       if (record != null && !record.isDeleted && record.files.isNotEmpty) {
         final is1Based = record.files.every((f) => f.itemIndex > 0);
         for (final file in record.files) {
+          // An item the user deleted in the app is not "already saved": the
+          // preview panel must not tick it as 本地已有.
+          if (isDeletedHistoryFile(file)) continue;
           final zeroBased = is1Based ? file.itemIndex - 1 : file.itemIndex;
           if (zeroBased < 0 || zeroBased >= post.items.length) continue;
           if (liveVideoOnly && (file.isImage || post.items[zeroBased].type != 'live')) continue;

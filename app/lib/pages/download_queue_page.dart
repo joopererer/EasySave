@@ -284,8 +284,10 @@ class _BatchCard extends StatelessWidget {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text(
-                '$_status · ${batch.doneCount}/${batch.jobs.length} 个文件'
-                '${batch.failedCount > 0 ? ' · ${batch.failedCount} 个失败' : ''}',
+                // Items, not files (v1.11 build 58): a Live photo's still and
+                // clip are one item, and one failed half fails the item.
+                '$_status · ${batch.itemDone}/${batch.itemTotal} 项'
+                '${batch.itemFailed > 0 ? ' · ${batch.itemFailed} 项失败' : ''}',
                 style: TextStyle(
                   fontSize: 12,
                   color: stalled || batch.failedCount > 0
@@ -371,6 +373,7 @@ class _JobTile extends StatelessWidget {
     JobState.failed => job.error ?? '失败',
     JobState.canceled => '已取消',
     JobState.paused => '已暂停',
+    JobState.waitingNetwork => '等待网络…联网后自动继续',
   };
 
   @override
@@ -387,7 +390,10 @@ class _JobTile extends StatelessWidget {
       ),
       subtitle: Text(_label, maxLines: 1, overflow: TextOverflow.ellipsis),
       trailing: switch (job.state) {
-        JobState.queued || JobState.active || JobState.paused => IconButton(
+        JobState.queued ||
+        JobState.active ||
+        JobState.paused ||
+        JobState.waitingNetwork => IconButton(
           tooltip: '取消此文件',
           icon: const Icon(Icons.close),
           onPressed: busy ? null : onCancel,

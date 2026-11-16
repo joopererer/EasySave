@@ -11,6 +11,7 @@ import 'services/download_manager.dart';
 import 'services/gallery_locator_service.dart';
 import 'services/heic_self_check.dart';
 import 'services/host_bridge.dart';
+import 'services/network_status.dart';
 import 'services/preview_route_observer.dart';
 import 'services/settings.dart';
 import 'services/update_service.dart';
@@ -33,6 +34,8 @@ Future<void> main() async {
   unawaited(BubbleService.ensureStarted());
   unawaited(HostBridge.pullPendingError());
   unawaited(HostBridge.pullPendingOpen());
+  // Display-only connectivity for the download UI (v1.11 batch 2).
+  unawaited(NetworkStatus.instance.start());
   // Register background-download callbacks and recover batches that
   // finished while the app was dead.
   await DownloadManager.instance.init();

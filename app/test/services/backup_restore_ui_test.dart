@@ -77,7 +77,7 @@ void main() {
 
       expect(find.text('确认从备份恢复'), findsOneWidget);
       expect(find.text('5 条'), findsOneWidget);
-      expect(find.text('12 个'), findsOneWidget);
+      expect(find.text('12 项'), findsOneWidget);
       expect(find.text('EasySave v1.8.0'), findsOneWidget);
       expect(find.text('MyAlbum'), findsOneWidget);
 

@@ -185,7 +185,7 @@ void main() {
     await tester.pumpWidget(const MaterialApp(home: DownloadQueuePage()));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 100));
-    expect(find.text('下载中 · 0/4 个文件'), findsOneWidget);
+    expect(find.text('下载中 · 0/4 项'), findsOneWidget);
     await tester.tap(find.text('Four selected images'));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 300));
@@ -241,10 +241,12 @@ void main() {
         await writeBatchHistory(db, batch, recovered: false);
       });
       final record = await tester.runAsync(() => db.getByPostId(batch.postId));
+      final itemCount =
+          deletableItemCountFor([record!], deletableMediaFor([record]));
       final future = showDeleteRecordsSheet(
         host,
         recordCount: 1,
-        fileCount: deletableMediaFor([record!]).length,
+        itemCount: itemCount,
         cancelDownloads: true,
       );
       await tester.pumpAndSettle();

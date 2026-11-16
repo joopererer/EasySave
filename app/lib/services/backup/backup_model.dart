@@ -29,6 +29,40 @@ enum BackupPostStatus {
       .firstWhere((s) => s.name == value, orElse: () => BackupPostStatus.success);
 }
 
+/// Local state of one backed-up file, as the exporting device knew it.
+///
+/// Written so a restore can tell three situations apart (v1.11 batch 4):
+/// * [inDevice] — the album held the file;
+/// * [missing] — the album answered and the file was gone ("不在本机");
+/// * [deleted] — the user deleted the item inside the app, so it is neither
+///   saved nor missing and must never be offered for a re-download.
+///
+/// [unknown] covers rows that were never resolved against an album and is
+/// written as "no field at all", which is exactly how a pre-v1.11 backup reads.
+enum BackupFileStatus {
+  unknown,
+  inDevice,
+  missing,
+  deleted;
+
+  static BackupFileStatus parse(Object? value) {
+    switch (value) {
+      case 'inDevice':
+      case 'found':
+        return BackupFileStatus.inDevice;
+      case 'missing':
+      case 'notFound':
+        return BackupFileStatus.missing;
+      case 'deleted':
+        return BackupFileStatus.deleted;
+      default:
+        return BackupFileStatus.unknown;
+    }
+  }
+
+  bool get isDeleted => this == BackupFileStatus.deleted;
+}
+
 class BackupFile {
   final int itemIndex;
 
@@ -54,6 +88,9 @@ class BackupFile {
   final int? itemCount;
   final String? capturedBy;
 
+  /// On-device state at export time (v1.11 batch 4).
+  final BackupFileStatus status;
+
   BackupFile({
     required this.itemIndex,
     required this.mediaType,
@@ -65,6 +102,7 @@ class BackupFile {
     required this.savedAt,
     this.itemCount,
     this.capturedBy,
+    this.status = BackupFileStatus.unknown,
   });
 
   Map<String, dynamic> toMap() => {
@@ -78,6 +116,9 @@ class BackupFile {
         'savedAt': savedAt,
         if (itemCount != null) 'itemCount': itemCount,
         if (capturedBy != null) 'capturedBy': capturedBy,
+        // Unknown is left out on purpose: a reader that predates the field
+        // behaves exactly like the device that wrote it did.
+        if (status != BackupFileStatus.unknown) 'status': status.name,
       };
 
   /// Reads v2 files and v1 files. From v1 only identity fields are kept: its
@@ -101,6 +142,7 @@ class BackupFile {
           (source is Map ? (source['itemCount'] as num?)?.toInt() : null),
       capturedBy: map['capturedBy'] as String? ??
           (provenance is Map ? provenance['capturedBy'] as String? : null),
+      status: BackupFileStatus.parse(map['status']),
     );
   }
 }
@@ -211,6 +253,19 @@ class BackupSettings {
   final String historyLayout;
   final String historySort;
 
+  /// v1.11 batch 3: 「图片格式」. Defaults to `compat` for backups written
+  /// before the setting existed.
+  final String imageFormat;
+
+  /// v1.11 batch 1: the automatic folder backup switch and the folder's
+  /// display name. The SAF tree URI (the permission grant itself) is never
+  /// written — a restore has to re-authorise the folder.
+  ///
+  /// Both are nullable so a backup written before v1.11 can be told apart
+  /// from one that says "auto backup was off".
+  final bool? autoFolderBackupEnabled;
+  final String? autoBackupFolderName;
+
   BackupSettings({
     this.albumName = 'EasySave',
     List<String>? usedAlbumNames,
@@ -225,9 +280,15 @@ class BackupSettings {
     this.historyView = 'posts',
     this.historyLayout = 'waterfall',
     this.historySort = 'latest',
+    this.imageFormat = 'compat',
+    this.autoFolderBackupEnabled,
+    this.autoBackupFolderName,
   }) : usedAlbumNames = usedAlbumNames != null
             ? List<String>.from(usedAlbumNames)
             : <String>[];
+
+  /// True when the backup carries the auto-backup fields at all.
+  bool get hasAutoBackupFields => autoFolderBackupEnabled != null;
 
   Map<String, dynamic> toMap() => {
         'albumName': albumName,
@@ -243,6 +304,11 @@ class BackupSettings {
         'historyView': historyView,
         'historyLayout': historyLayout,
         'historySort': historySort,
+        'imageFormat': imageFormat,
+        if (autoFolderBackupEnabled != null)
+          'autoFolderBackupEnabled': autoFolderBackupEnabled,
+        if (autoBackupFolderName != null)
+          'autoBackupFolderName': autoBackupFolderName,
       };
 
   factory BackupSettings.fromMap(Map<String, dynamic> map) {
@@ -270,6 +336,9 @@ class BackupSettings {
       historyView: map['historyView'] as String? ?? 'posts',
       historyLayout: map['historyLayout'] as String? ?? 'waterfall',
       historySort: map['historySort'] as String? ?? 'latest',
+      imageFormat: map['imageFormat'] as String? ?? 'compat',
+      autoFolderBackupEnabled: map['autoFolderBackupEnabled'] as bool?,
+      autoBackupFolderName: (map['autoBackupFolderName'] as String?)?.trim(),
     );
   }
 }
@@ -365,6 +434,10 @@ class BackupPreview {
   final String appVersion;
   final int postCount;
   final int fileCount;
+
+  /// Items among [fileCount]: a Live photo's still and clip are one item, and
+  /// every user-visible number counts items (v1.11 build 59).
+  final int itemCount;
   final BackupSettings? settings;
   final int formatVersion;
 
@@ -373,7 +446,8 @@ class BackupPreview {
     required this.appVersion,
     required this.postCount,
     required this.fileCount,
+    int? itemCount,
     this.settings,
     required this.formatVersion,
-  });
+  }) : itemCount = itemCount ?? fileCount;
 }
