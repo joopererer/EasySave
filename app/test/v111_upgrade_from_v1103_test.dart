@@ -58,7 +58,7 @@ Map<String, Object?> _oldFileRow(
   bool image = true,
 }) =>
     <String, Object?>{
-      'filename': '$_postId\_$index.${image ? 'jpg' : 'mp4'}',
+      'filename': '${_postId}_$index.${image ? 'jpg' : 'mp4'}',
       'saved_at': DateTime.utc(2026, 10, 1, 8).millisecondsSinceEpoch,
       if (mediaId != null) 'media_id': mediaId,
       'item_index': index,
@@ -252,7 +252,7 @@ void main() {
               {
                 'itemIndex': 1,
                 'mediaType': 'image',
-                'filename': '$_postId\_1.jpg',
+                'filename': '${_postId}_1.jpg',
                 'relativePath': 'Pictures/EasySave/',
                 'savedAt': '2026-10-01T09:00:00+08:00',
                 'mediaIdHint': '201',
@@ -304,7 +304,7 @@ void main() {
 
     // 旧快照由 liveBatches() 从 SharedPreferences 读取后经 DownloadBatch.fromJson
     // 反序列化；此处直接驱动 fromJson，等价于验证升级后读取旧快照的兼容性。
-    DownloadBatch _batchFromOldSnapshot(Map<String, dynamic> json) =>
+    DownloadBatch batchFromOldSnapshot(Map<String, dynamic> json) =>
         DownloadBatch.fromJson(json.cast<String, Object?>());
 
     test('等待网络批次的旧快照反序列化后状态保留，新字段取默认', () async {
@@ -324,7 +324,7 @@ void main() {
           {
             'key': 'k1',
             'label': '图片 1',
-            'filename': '$_postId\_1.jpg',
+            'filename': '${_postId}_1.jpg',
             'urls': ['https://cdn/1.jpg'],
             'isImage': true,
             'itemIndex': 1,
@@ -335,7 +335,7 @@ void main() {
           {
             'key': 'k2',
             'label': '图片 2',
-            'filename': '$_postId\_2.jpg',
+            'filename': '${_postId}_2.jpg',
             'urls': ['https://cdn/2.jpg'],
             'isImage': true,
             'itemIndex': 2,
@@ -350,7 +350,7 @@ void main() {
       // 刻意不写 formatPref / postItemCount / jpegFallback / source / settledBy
       // 等 v1.11 新增字段。
 
-      final waiting = _batchFromOldSnapshot(waitingJson);
+      final waiting = batchFromOldSnapshot(waitingJson);
       expect(waiting.waitingForNetwork, isTrue,
           reason: '等待网络的批次升级后仍应处于等待');
       expect(waiting.isTerminal, isFalse);
@@ -375,7 +375,7 @@ void main() {
           {
             'key': 'k1',
             'label': '图片 1',
-            'filename': '$_postId\_1.jpg',
+            'filename': '${_postId}_1.jpg',
             'urls': ['https://cdn/1.jpg'],
             'isImage': true,
             'itemIndex': 1,
@@ -389,7 +389,7 @@ void main() {
         'startedAt': DateTime.utc(2026, 10, 1).millisecondsSinceEpoch,
       };
 
-      final failed = _batchFromOldSnapshot(failedJson);
+      final failed = batchFromOldSnapshot(failedJson);
       expect(failed.failedCount, 1);
       // 原始错误随快照保留；failureReason 会按固定原因集归一化，此处只
       // 断言失败已被读取且不为空。
