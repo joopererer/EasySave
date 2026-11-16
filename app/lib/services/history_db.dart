@@ -1189,8 +1189,17 @@ class HistoryDb {
         final hasNewFiles = record.files.any(
           (file) => !carriedKeys.contains('${file.itemIndex}_${file.isImage}'),
         );
+        // A user-initiated save sets the record's time to *this* save when it
+        // actually brings files (new files or a fresh download batch): a
+        // re-download must sort into 今天 like 「最近保存」 lists it. Repeatedly
+        // associating files the album already holds (gallery_locator passes no
+        // downloadStartedAt) is not a save, so it preserves the earlier time;
+        // recovery, rebuild and backup-restore writes (userSave: false) do the
+        // same (v1.11 build 59).
+        final userSaveNow =
+            userSave && (hasNewFiles || downloadStartedAt != null);
         final resolvedCreatedAt =
-            userSave && (hasNewFiles || (restoreDeleted && existing.isDeleted))
+            userSaveNow || (restoreDeleted && userSave && existing.isDeleted)
             ? record.createdAt
             : record.createdAt.isBefore(existing.createdAt)
             ? record.createdAt

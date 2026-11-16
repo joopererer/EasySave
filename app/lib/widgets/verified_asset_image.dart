@@ -156,7 +156,12 @@ class _VerifiedAssetImageState extends State<VerifiedAssetImage> with WidgetsBin
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
       _startWatchdog();
-      setState(() => _exists = _verify());
+      // The assignment must not be the value of the setState callback: an
+      // arrow body would hand setState the Future of _verify() (v1.11 build 59).
+      final exists = _verify();
+      setState(() {
+        _exists = exists;
+      });
     }
   }
   @override

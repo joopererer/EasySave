@@ -14,6 +14,7 @@ import 'package:photo_manager/photo_manager.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import '../core/dev_log.dart';
 import '../core/models.dart';
 import '../services/auth.dart';
 import '../services/creator_sort.dart';
@@ -81,11 +82,17 @@ class HistoryPage extends StatefulWidget {
 class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
   List<HistoryRecord> _records = [];
 
-  /// Records this page removed, by id and by `platform:postId`. A reload whose
-  /// read started before the delete committed still returns them; they must
-  /// never come back on screen.
-  final Set<int> _deletedRecordIds = {};
-  final Set<String> _deletedPostKeys = {};
+  /// Records this page removed, by id and by `platform:postId`, with the moment
+  /// their delete committed (v1.11 build 59).
+  ///
+  /// Only a read that *started* before that moment can still return the row, so
+  /// only such a read suppresses it; the entry is dropped as soon as a read
+  /// that started after the delete lands. Keeping it for the session instead
+  /// hid every post the page had deleted once — including one a later download
+  /// brought back (`restoreDeleted`), which the database and the home list were
+  /// already showing.
+  final Map<int, DateTime> _deletedRecordIds = {};
+  final Map<String, DateTime> _deletedPostKeys = {};
 
   bool _loading = true;
   String? _dbError;
@@ -413,6 +420,9 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
     // restores the same offset, so pull-to-refresh is unchanged.
     final anchor = _captureAnchor();
     final offset = _activeOffset;
+    // Only a read that started before a delete committed can still return the
+    // deleted rows (v1.11 build 59).
+    final readStartedAt = DateTime.now();
     try {
       final records = await retryHistoryRead(
           () => HistoryDb.instance().then((db) => db.recent(limit: 10000)),
@@ -422,12 +432,15 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
         _markHiddenModesPending();
         _records = dropDeletedRecords(
           records,
-          ids: _deletedRecordIds,
-          postKeys: _deletedPostKeys,
+          ids: _suppressedIds(readStartedAt),
+          postKeys: _suppressedPostKeys(readStartedAt),
         );
         _loading = false;
         _dbError = null;
       });
+      // Reads are serialised (one refresh at a time), so a delete older than
+      // this read has served its purpose and can no longer be needed.
+      _forgetDeletionsBefore(readStartedAt);
       _scheduleScroll(
         offset,
         anchorKey: anchor?.key,
@@ -1013,13 +1026,19 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
     // The sheet reports what the user actually saved for these posts, not just
     // the rows that already carry a located album id: build 46 offered
     // "1 个文件" for two posts holding 3 + 4 files, because the other rows had
-    // not been synced yet.
-    final savedFileCount = savedFileCountFor(records);
+    // not been synced yet. It counts items (v1.11 build 59): a Live photo's
+    // still and clip are one item, and the album delete still removes both.
+    final savedItemCount = savedItemCountFor(records);
+    DevLog.write(
+      'HIST',
+      'delete sheet records=${records.length} files=${savedFileCountFor(records)} '
+          'items=$savedItemCount',
+    );
     if (!mounted) return;
     final result = await showDeleteRecordsSheet(
       context,
       recordCount: records.length,
-      fileCount: savedFileCount,
+      itemCount: savedItemCount,
       cancelDownloads: true,
     );
     if (result == null || !mounted) return;
@@ -1057,7 +1076,7 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(
-            '未能在相册中找到这 $savedFileCount 个文件，仅删除了历史记录',
+            '未能在相册中找到这 $savedItemCount 项，仅删除了历史记录',
           ),
         ),
       );
@@ -1080,7 +1099,8 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
       SnackBar(
         content: Text(
           problem == null
-              ? '已删除 ${records.length} 条记录，并删除 ${media.length} 个相册文件'
+              ? '已删除 ${records.length} 条记录，并从相册删除 '
+                  '${deletableItemCountFor(records, media)} 项'
               : '$problem，仅删除了 ${records.length} 条记录',
         ),
       ),
@@ -1092,19 +1112,26 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
     try {
       await deleteHistoryRecords(db, records);
       if (mounted) {
+        final committedAt = DateTime.now();
         final ids = records.map((record) => record.id).whereType<int>().toSet();
         final posts = records.map(postKeyOf).toSet();
-        // Remember what this page already removed: a snapshot read that was
-        // still in flight when the delete committed must never put one of
-        // these posts back on screen. Build 46 left one of two deleted posts
-        // visible (and openable) until the page was left.
-        _deletedRecordIds.addAll(ids);
-        _deletedPostKeys.addAll(posts);
+        // Remember what this page removed, and when: a read that was still in
+        // flight when the delete committed must never put one of these posts
+        // back on screen (build 46 left one of two deleted posts visible and
+        // openable until the page was left). A read that starts *after* this
+        // moment cannot return them, so the guard is dropped then — a post a
+        // later download restores must show up again (v1.11 build 59).
+        for (final id in ids) {
+          _deletedRecordIds[id] = committedAt;
+        }
+        for (final post in posts) {
+          _deletedPostKeys[post] = committedAt;
+        }
         setState(
           () => _records = dropDeletedRecords(
             _records,
-            ids: _deletedRecordIds,
-            postKeys: _deletedPostKeys,
+            ids: ids,
+            postKeys: posts,
           ),
         );
         unawaited(_reload());
@@ -1115,6 +1142,29 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
       return false;
     }
   }
+
+  /// Ids this page deleted after [readStartedAt] started reading: only those
+  /// can still be in that read's result.
+  Set<int> _suppressedIds(DateTime readStartedAt) => {
+    for (final entry in _deletedRecordIds.entries)
+      if (!entry.value.isBefore(readStartedAt)) entry.key,
+  };
+
+  Set<String> _suppressedPostKeys(DateTime readStartedAt) => {
+    for (final entry in _deletedPostKeys.entries)
+      if (!entry.value.isBefore(readStartedAt)) entry.key,
+  };
+
+  /// Drop the deletions a read that started at [readStartedAt] has overtaken.
+  void _forgetDeletionsBefore(DateTime readStartedAt) {
+    _deletedRecordIds.removeWhere((_, at) => at.isBefore(readStartedAt));
+    _deletedPostKeys.removeWhere((_, at) => at.isBefore(readStartedAt));
+  }
+
+  /// Deletions the page is still guarding against, for tests (v1.11 build 59).
+  @visibleForTesting
+  int get guardedDeletionsForTesting =>
+      _deletedRecordIds.length + _deletedPostKeys.length;
 
   String _dateGroupTitle(DateTime time) {
     final now = DateTime.now();
@@ -1169,8 +1219,8 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
       case HistorySort.mostFiles:
         final sorted = [...posts]
           ..sort(
-            (a, b) => (b.savedFiles.length)
-                .compareTo(a.savedFiles.length),
+            (a, b) => savedMediaEntryCount(b.savedFiles)
+                .compareTo(savedMediaEntryCount(a.savedFiles)),
           );
         return [_PostGroup('', sorted)];
       case HistorySort.author:
@@ -1235,8 +1285,8 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
         ];
       case HistorySort.mostFiles:
         all.sort((a, b) {
-          final av = a.record.savedFiles.length;
-          final bv = b.record.savedFiles.length;
+          final av = savedMediaEntryCount(a.record.savedFiles);
+          final bv = savedMediaEntryCount(b.record.savedFiles);
           return bv.compareTo(av);
         });
         return [_MediaGroup('', all)];
@@ -1329,9 +1379,9 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
 
   PreferredSizeWidget _appBar() {
     final filtered = _filtered;
-    final fileCount = filtered.fold<int>(
+    final itemCount = filtered.fold<int>(
       0,
-      (sum, r) => sum + (r.savedFiles.length),
+      (sum, r) => sum + savedMediaEntryCount(r.savedFiles),
     );
     return AppBar(
       title: Column(
@@ -1340,7 +1390,7 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
         children: [
           const Text('历史'),
           Text(
-            '${filtered.length} 个帖子 · $fileCount 个文件',
+            '${filtered.length} 个帖子 · $itemCount 项',
             style: const TextStyle(
               fontSize: 12,
               color: AppTokens.textSecondary,
@@ -1869,7 +1919,7 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
         PopupMenuItem(value: HistorySort.latest, child: Text('最新保存')),
         PopupMenuItem(value: HistorySort.earliest, child: Text('最早保存')),
         PopupMenuItem(value: HistorySort.type, child: Text('按类型')),
-        PopupMenuItem(value: HistorySort.mostFiles, child: Text('文件最多')),
+        PopupMenuItem(value: HistorySort.mostFiles, child: Text('项最多')),
         PopupMenuItem(value: HistorySort.author, child: Text('按作者')),
       ],
       child: _toolbarButtonInner(
@@ -2019,6 +2069,11 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
   @visibleForTesting
   int get recordCountForTesting => _records.length;
 
+  /// The records the page is showing, in the order it read them (v1.11
+  /// build 59).
+  @visibleForTesting
+  List<HistoryRecord> get recordsForTesting => List.of(_records);
+
   @visibleForTesting
   int get filteredCountForTesting => _filtered.length;
 
@@ -2067,6 +2122,21 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
   @visibleForTesting
   Set<HistoryView> get pendingModeUpdatesForTesting =>
       Set<HistoryView>.of(_modePendingUpdate);
+
+  /// Every card of the 帖子 mode in the order it is shown, with its group
+  /// title (今天 / 昨天 / 本周 / a date), for tests (v1.11 build 59).
+  @visibleForTesting
+  List<({String group, int? id, String postId})> get postGroupsForTesting => [
+    for (final group in _groupPosts(_filtered))
+      for (final record in group.posts)
+        (group: group.title, id: record.id, postId: record.postId),
+  ];
+
+  /// Delete [records] through the page's own delete path, for tests
+  /// (v1.11 build 59).
+  @visibleForTesting
+  Future<void> deleteRecordsForTesting(List<HistoryRecord> records) async =>
+      _deleteDatabaseRecords(await HistoryDb.instance(), records);
 
   Widget _emptyAll() {
     return Center(
@@ -2342,7 +2412,7 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
             platform: c.platform,
             savedDisplayName: _platformLabel(c.platform),
             postCount: c.postCount,
-            fileCount: c.fileCount,
+            itemCount: c.itemCount,
             thumbs: c.thumbs,
             onTap: () {
               // 创作者 → 帖子 with this author is a filter change, so the list
@@ -2372,7 +2442,7 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
         () => _CreatorGroup(authorName: author, platform: SiteRegistry.current.canonicalId(r.platform)),
       );
       group.postCount++;
-      group.fileCount += r.savedFiles.length;
+      group.itemCount += savedMediaEntryCount(r.savedFiles);
       final createdMs = r.createdAt.millisecondsSinceEpoch;
       if (createdMs > group.latestSavedMs) group.latestSavedMs = createdMs;
       for (final f in r.savedFiles) {
@@ -2436,7 +2506,10 @@ class _CreatorGroup implements CreatorSortable {
   final String authorName;
   final String platform;
   int postCount = 0;
-  int fileCount = 0;
+
+  /// Items, not files: a Live photo's still and clip are one item (v1.11
+  /// build 59), so the 创作者 card reads 「N 帖 · N 项」.
+  int itemCount = 0;
 
   /// Newest save among this creator's files (falls back to the post time), the
   /// 创作者 view's "最近保存" key.
