@@ -13,13 +13,28 @@ import {
 } from "../src/xhs";
 
 const fixtureDir = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "spec", "fixtures", "xhs");
+// A release that changes an existing fixture's output adds
+// `<name>.expected.<version>.json`; the vector for the version being built wins.
+const parserVersion = readFileSync(
+  join(dirname(fileURLToPath(import.meta.url)), "..", "..", "spec", "PARSER_VERSION"),
+  "utf-8",
+).trim();
+const expectedFileFor = (name: string) => {
+  const versioned = join(fixtureDir, `${name}.expected.${parserVersion}.json`);
+  try {
+    readFileSync(versioned, "utf-8");
+    return versioned;
+  } catch {
+    return join(fixtureDir, `${name}.expected.json`);
+  }
+};
 
 const cases = readdirSync(fixtureDir)
   .filter((name) => name.endsWith(".html"))
   .map((name) => basename(name, ".html"))
   .filter((name) => {
     try {
-      readFileSync(join(fixtureDir, `${name}.expected.json`), "utf-8");
+      readFileSync(expectedFileFor(name), "utf-8");
       return true;
     } catch {
       return false;
@@ -40,9 +55,9 @@ describe("xhs fixtures", () => {
     });
   }
   for (const name of cases) {
-    it(`${name}.html matches ${name}.expected.json`, () => {
+    it(`${name}.html matches the ${parserVersion} expectation`, () => {
       const html = readFileSync(join(fixtureDir, `${name}.html`), "utf-8");
-      const expected = JSON.parse(readFileSync(join(fixtureDir, `${name}.expected.json`), "utf-8")) as
+      const expected = JSON.parse(readFileSync(expectedFileFor(name), "utf-8")) as
         | { error: { code: string; message: string } }
         | Record<string, unknown>;
       const id = typeof (expected as Record<string, unknown>)["id"] === "string"
@@ -109,6 +124,7 @@ describe("sanitizeJsUndefined", () => {
           width: 1290,
           height: 1608,
           fallbacks: [
+            "https://sns-img-bd.xhscdn.com/notes_pre_post/1040g3k83264voo1al0dg5o2e1l408pfcf1dl208?imageView2/format/jpg/q/100",
             "https://ci.xiaohongshu.com/notes_pre_post/1040g3k83264voo1al0dg5o2e1l408pfcf1dl208?imageView2/format/jpg",
             "https://sns-webpic-qc.xhscdn.com/202610112129/eb1fb79a62c72f9dbe14dd2909e2d83c/notes_pre_post/1040g3k83264voo1al0dg5o2e1l408pfcf1dl208!nd_dft_wlteh_webp_3",
             "https://ci.xiaohongshu.com/notes_pre_post/1040g3k83264voo1al0dg5o2e1l408pfcf1dl208",
@@ -161,6 +177,7 @@ describe("sanitizeJsUndefined", () => {
             width: 10,
             height: 20,
             fallbacks: [
+              "https://sns-img-bd.xhscdn.com/trace?imageView2/format/jpg/q/100",
               "https://ci.xiaohongshu.com/trace?imageView2/format/jpg",
               "https://ci.xiaohongshu.com/trace",
             ],
@@ -313,6 +330,7 @@ describe("imageUrlOf fallbacks", () => {
     if (result.ok) {
       expect(result.data.items[0].url).toBe("https://sns-img-bd.xhscdn.com/notes_pre_post/x");
       expect(result.data.items[0].fallbacks).toEqual([
+        "https://sns-img-bd.xhscdn.com/notes_pre_post/x?imageView2/format/jpg/q/100",
         "https://ci.xiaohongshu.com/notes_pre_post/x?imageView2/format/jpg",
         "https://sns-webpic-qc.xhscdn.com/202610112129/a657f0bce4b0d577975cf2d1df487c06/notes_pre_post/x!nd_prv_wlteh_webp_3",
         "https://sns-webpic-qc.xhscdn.com/202610112129/eb1fb79a62c72f9dbe14dd2909e2d83c/notes_pre_post/x!nd_dft_wlteh_webp_3",
@@ -363,7 +381,7 @@ describe("imageUrlOf fallbacks", () => {
     }
   });
 
-  it("serves the bare token URL with JPEG transcode first fallback", () => {
+  it("serves the bare token URL with the full-quality JPEG transcode first", () => {
     const token = "notes_pre_post/1040g3k0325c98ukf4e00499d8a6r31c1c4anqs0";
     const h5 = `http://sns-webpic-qc.xhscdn.com/202610132252/fccfbed52a062a916648e7d56c157af7/${token}!h5_1080jpg`;
     const result = buildNoteFromRecord(
@@ -388,7 +406,10 @@ describe("imageUrlOf fallbacks", () => {
     if (result.ok) {
       expect(result.data.items[0].url).toBe(`https://sns-img-bd.xhscdn.com/${token}`);
       const fallbacks = result.data.items[0].fallbacks ?? [];
-      expect(fallbacks[0]).toBe(`https://ci.xiaohongshu.com/${token}?imageView2/format/jpg`);
+      expect(fallbacks[0]).toBe(
+        `https://sns-img-bd.xhscdn.com/${token}?imageView2/format/jpg/q/100`,
+      );
+      expect(fallbacks[1]).toBe(`https://ci.xiaohongshu.com/${token}?imageView2/format/jpg`);
       expect(fallbacks).toContain(`https://ci.xiaohongshu.com/${token}`);
     }
   });

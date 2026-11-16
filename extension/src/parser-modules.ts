@@ -1,8 +1,8 @@
 import { withMediaResources } from './media-resources';
 import { parseX, parseXGraphql, xProbe, calculateToken, extractTweetId, X_SENSITIVE_MEDIA_HINT, X_SESSION_EXPIRED } from './x';
-import { findNoteInStates, xhsImageDownloadOrder, xhsImageProbe, xhsStreamProbe } from './xhs';
+import { findNoteInStates, xhsImageDownloadOrder, xhsImageProbe, xhsPageSignal, xhsStreamProbe } from './xhs';
 import { parseTiktok, extractTiktokPostId, tiktokExpiresAt } from './tiktok';
-import { gateMediaUnavailable } from './instagram';
+import { gateMediaUnavailable, instagramPageSignal } from './instagram';
 import { parsePageForModule as legacyPage, parse as legacyParse } from './_parse_page';
 import { installIgSniff, installXGraphqlSniff, readXhsAccount, tiktokReady } from './page-hooks';
 
@@ -11,6 +11,12 @@ type Hooks = Partial<Record<'install' | 'request' | 'ready' | 'navigate' | 'prep
   & { decorate?: (result: any) => any };
 const page = () => window as any;
 const failure = (code: string, message: string) => ({ code, message });
+/** Shown when an App that believes it is signed in meets a login wall. */
+const SESSION_EXPIRED = '登录可能已失效，请重新登录';
+/** The page a failed parse landed on; empty when the document is unreadable. */
+const pageHtml = (): string => {
+  try { return document.documentElement.outerHTML || ''; } catch (_) { return ''; }
+};
 /** An older App gets a code it renders with login guidance. */
 const appFacing = (moduleId: string, result: any, caps: unknown) =>
   moduleId === 'instagram' ? gateMediaUnavailable(result, caps) : result;
@@ -82,11 +88,15 @@ const modules: Record<string, Hooks> = {
       if ((c.input || '').includes('"loggedIn":false')) return false;
       return true;
     },
-    classify: (c) => ['LOGIN_REQUIRED', 'INVALID_PAGE'].includes(c.error?.code)
-      ? (c.loggedIn
-        ? failure('PRIVATE_OR_UNAVAILABLE', '未能读取笔记内容（分享链接可能已过期，请重新粘贴原分享链接再试）')
-        : failure('LOGIN_REQUIRED', '需要先登录小红书才能解析该笔记'))
-      : c.error,
+    classify: (c) => {
+      if (!['LOGIN_REQUIRED', 'INVALID_PAGE'].includes(c.error?.code)) return c.error;
+      if (!c.loggedIn) return failure('LOGIN_REQUIRED', '需要先登录小红书才能解析该笔记');
+      // A login wall on a page the App believes it is signed in for means the
+      // stored session stopped working; anything else (the note's own
+      // unavailable notice, or no signal at all) keeps the old answer.
+      if (xhsPageSignal(pageHtml(), c.url) === 'login_wall') return failure('LOGIN_REQUIRED', SESSION_EXPIRED);
+      return failure('PRIVATE_OR_UNAVAILABLE', '未能读取笔记内容（分享链接可能已过期，请重新粘贴原分享链接再试）');
+    },
   },
   instagram: {
     install: () => installIgSniff(),
@@ -104,9 +114,17 @@ const modules: Record<string, Hooks> = {
       return false;
     },
     probe: () => null,
-    classify: (c) => c.error?.code === 'LOGIN_REQUIRED' && c.loggedIn
-      ? failure('PRIVATE_OR_UNAVAILABLE', /敏感内容|年龄限制/.test(c.error.message || '')
-        ? c.error.message : '未能读取帖子内容（可能包含受限内容或已被删除）') : c.error,
+    classify: (c) => {
+      if (c.error?.code !== 'LOGIN_REQUIRED' || !c.loggedIn) return c.error;
+      // A login wall on a page the App believes it is signed in for means the
+      // stored session stopped working; an age / sensitive-content gate and a
+      // page with no signal keep the old answer.
+      if (instagramPageSignal(pageHtml(), c.url) === 'login_wall') {
+        return failure('LOGIN_REQUIRED', SESSION_EXPIRED);
+      }
+      return failure('PRIVATE_OR_UNAVAILABLE', /敏感内容|年龄限制/.test(c.error.message || '')
+        ? c.error.message : '未能读取帖子内容（可能包含受限内容或已被删除）');
+    },
   },
   tiktok: {
     expiresAt: (c) => tiktokExpiresAt(c.url),

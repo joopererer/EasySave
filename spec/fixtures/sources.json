@@ -9,6 +9,8 @@
     "xhs_ads": "https://www.xiaohongshu.com/explore/648f0c6a0000000019004b3e",
     "xhs_blocked": "https://www.xiaohongshu.com/explore/6a342fd20000000021017867",
     "xhs_profile_route": "https://www.xiaohongshu.com/explore/670f1a2b000000001e028b12",
+    "xhs_session_expired": "https://www.xiaohongshu.com/explore/6aca089a000000000a01efb4",
+    "xhs_note_deleted": "https://www.xiaohongshu.com/explore/6aca089a000000000a01efb4?xsec_token=fixture-deleted",
     "build29_video_audio_stream": "https://www.xiaohongshu.com/explore/6720aa0b000000001b0299a1"
   },
   "instagram": {
@@ -17,7 +19,9 @@
     "blocked": "https://www.instagram.com/p/Ddl1WWnGyCN/",
     "ig_og_only_reel": "https://www.instagram.com/reel/DflxolxpdHT/",
     "ig_og_only_post": "https://www.instagram.com/p/ig_og_only_post/",
-    "ig_login_wall": "https://www.instagram.com/p/ig_login_wall/"
+    "ig_login_wall": "https://www.instagram.com/p/ig_login_wall/",
+    "ig_session_expired": "https://www.instagram.com/p/ig_session_expired/",
+    "ig_post_deleted": "https://www.instagram.com/p/ig_post_deleted/"
   },
   "x": {
     "photo": "https://x.com/Lucy_love_AI/status/2110916144072913327",

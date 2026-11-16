@@ -427,6 +427,7 @@ var EasySaveParser = (() => {
       const primary = originalImageUrl(token);
       const direct2 = pickString(entry, ["urlDefault", "url"]);
       const rest = [
+        fullQualityJpegImageUrl(token),
         jpegImageUrl(token),
         ...sceneRaws(entry),
         ...direct2 ? [toHttps(direct2)] : [],
@@ -505,6 +506,9 @@ var EasySaveParser = (() => {
   }
   function jpegImageUrl(token) {
     return `https://ci.xiaohongshu.com/${token}?imageView2/format/jpg`;
+  }
+  function fullQualityJpegImageUrl(token) {
+    return `https://sns-img-bd.xhscdn.com/${token}?imageView2/format/jpg/q/100`;
   }
   function num(value) {
     return typeof value === "number" && Number.isFinite(value) ? value : void 0;
@@ -731,10 +735,12 @@ var EasySaveParser = (() => {
     const bang = parsed.pathname.indexOf("!");
     const style = bang >= 0 ? parsed.pathname.slice(bang + 1).toLowerCase() : "";
     if (/prv/.test(style) || /(?:^|[^a-z])prv(?:[^a-z]|$)/i.test(parsed.search)) return "preview";
+    const transcoded = /imageView2/i.test(parsed.search) && !/thumbnail|\/w\/|\/h\//i.test(parsed.search);
     if (host === "ci.xiaohongshu.com") {
-      if (/imageView2/i.test(parsed.search) && !/thumbnail|\/w\/|\/h\//i.test(parsed.search)) return "jpeg";
+      if (transcoded) return "jpeg";
       return parsed.search || style ? "other" : "original_ci";
     }
+    if (host.endsWith(".xhscdn.com") && host.startsWith("sns-img-") && transcoded) return "jpeg";
     if (host.endsWith(".xhscdn.com") && !style && !parsed.search && host.startsWith("sns-img-")) return "original";
     if (/dft/.test(style)) return "default";
     return "other";
@@ -774,6 +780,39 @@ var EasySaveParser = (() => {
       return [probe];
     });
   }
+  var XHS_UNAVAILABLE_MARKERS = [
+    /当前笔记暂时无法浏览/,
+    /笔记暂时无法浏览/,
+    /该笔记暂时无法浏览/,
+    /内容暂时无法查看/,
+    /当前内容无法查看/,
+    /笔记不存在/,
+    /该笔记不存在/,
+    /笔记已被删除/,
+    /笔记已删除/,
+    /该笔记为私密笔记/,
+    /笔记已设为私密/,
+    /作者已将笔记设为私密/,
+    /笔记无法查看/
+  ];
+  var XHS_LOGIN_WALL_MARKERS = [
+    /id=["']login-container["']/i,
+    /class=["'][^"']*\blogin-container\b/i,
+    /扫码登录/,
+    /登录后查看/,
+    /登录后可查看/,
+    /登录以继续/,
+    /请先登录/,
+    /立即登录/,
+    /"loggedIn"\s*:\s*false/
+  ];
+  function xhsPageSignal(html, pageUrl = "") {
+    const page2 = html || "";
+    if (XHS_UNAVAILABLE_MARKERS.some((marker) => marker.test(page2))) return "unavailable";
+    if (pageUrl && /^https?:\/\/[^/]+\/login(?:[/?#]|$)/i.test(pageUrl)) return "login_wall";
+    if (XHS_LOGIN_WALL_MARKERS.some((marker) => marker.test(page2))) return "login_wall";
+    return void 0;
+  }
 
   // src/instagram.ts
   var SHORTCODE_PATTERN = /\/(?:p|reels?|tv)\/([A-Za-z0-9-_]+)/;
@@ -811,6 +850,39 @@ var EasySaveParser = (() => {
   function igParseSourceOfProduct(product) {
     const typename = typeof product["__typename"] === "string" ? product["__typename"] : "";
     return /^Graph(I|Video|Sidecar)/.test(typename) ? "graphql" : "api";
+  }
+  var IG_UNAVAILABLE_MARKERS = [
+    /sorry,?\s+this page isn['’]t available/i,
+    /this page isn['’]t available/i,
+    /page (?:is )?not found/i,
+    /页面不存在/,
+    /该页面无法使用/,
+    /此页面无法使用/,
+    /页面暂时无法使用/,
+    /链接可能已失效/,
+    /内容不存在/,
+    /该帖子不存在/,
+    /帖子不存在/,
+    /该帖子已被删除/,
+    /帖子已被删除/
+  ];
+  var IG_LOGIN_WALL_MARKERS = [
+    /accounts\/login/i,
+    /log ?in to (?:instagram|see)/i,
+    /登录\s*instagram/i,
+    /登录后查看/,
+    /登录后可查看/,
+    /登录以继续/,
+    /登入以繼續/,
+    /登入以继续/,
+    /请先登录/
+  ];
+  function instagramPageSignal(html, pageUrl = "") {
+    const page2 = html || "";
+    if (IG_UNAVAILABLE_MARKERS.some((marker) => marker.test(page2))) return "unavailable";
+    if (pageUrl && /\/accounts\/login(?:[/?#]|$)/i.test(pageUrl)) return "login_wall";
+    if (IG_LOGIN_WALL_MARKERS.some((marker) => marker.test(page2))) return "login_wall";
+    return void 0;
   }
   function igParseLogLine(log) {
     return `[IgParse] source=${log.source} mediaType=${log.mediaType} items=${log.items} loginWall=${log.loginWall}`;
@@ -1852,6 +1924,14 @@ var EasySaveParser = (() => {
   // src/parser-modules.ts
   var page = () => window;
   var failure2 = (code, message) => ({ code, message });
+  var SESSION_EXPIRED = "\u767B\u5F55\u53EF\u80FD\u5DF2\u5931\u6548\uFF0C\u8BF7\u91CD\u65B0\u767B\u5F55";
+  var pageHtml = () => {
+    try {
+      return document.documentElement.outerHTML || "";
+    } catch (_) {
+      return "";
+    }
+  };
   var appFacing = (moduleId, result, caps) => moduleId === "instagram" ? gateMediaUnavailable(result, caps) : result;
   var onXPage = () => {
     try {
@@ -1923,7 +2003,12 @@ var EasySaveParser = (() => {
         if ((c.input || "").includes('"loggedIn":false')) return false;
         return true;
       },
-      classify: (c) => ["LOGIN_REQUIRED", "INVALID_PAGE"].includes(c.error?.code) ? c.loggedIn ? failure2("PRIVATE_OR_UNAVAILABLE", "\u672A\u80FD\u8BFB\u53D6\u7B14\u8BB0\u5185\u5BB9\uFF08\u5206\u4EAB\u94FE\u63A5\u53EF\u80FD\u5DF2\u8FC7\u671F\uFF0C\u8BF7\u91CD\u65B0\u7C98\u8D34\u539F\u5206\u4EAB\u94FE\u63A5\u518D\u8BD5\uFF09") : failure2("LOGIN_REQUIRED", "\u9700\u8981\u5148\u767B\u5F55\u5C0F\u7EA2\u4E66\u624D\u80FD\u89E3\u6790\u8BE5\u7B14\u8BB0") : c.error
+      classify: (c) => {
+        if (!["LOGIN_REQUIRED", "INVALID_PAGE"].includes(c.error?.code)) return c.error;
+        if (!c.loggedIn) return failure2("LOGIN_REQUIRED", "\u9700\u8981\u5148\u767B\u5F55\u5C0F\u7EA2\u4E66\u624D\u80FD\u89E3\u6790\u8BE5\u7B14\u8BB0");
+        if (xhsPageSignal(pageHtml(), c.url) === "login_wall") return failure2("LOGIN_REQUIRED", SESSION_EXPIRED);
+        return failure2("PRIVATE_OR_UNAVAILABLE", "\u672A\u80FD\u8BFB\u53D6\u7B14\u8BB0\u5185\u5BB9\uFF08\u5206\u4EAB\u94FE\u63A5\u53EF\u80FD\u5DF2\u8FC7\u671F\uFF0C\u8BF7\u91CD\u65B0\u7C98\u8D34\u539F\u5206\u4EAB\u94FE\u63A5\u518D\u8BD5\uFF09");
+      }
     },
     instagram: {
       install: () => installIgSniff(),
@@ -1943,7 +2028,13 @@ var EasySaveParser = (() => {
         return false;
       },
       probe: () => null,
-      classify: (c) => c.error?.code === "LOGIN_REQUIRED" && c.loggedIn ? failure2("PRIVATE_OR_UNAVAILABLE", /敏感内容|年龄限制/.test(c.error.message || "") ? c.error.message : "\u672A\u80FD\u8BFB\u53D6\u5E16\u5B50\u5185\u5BB9\uFF08\u53EF\u80FD\u5305\u542B\u53D7\u9650\u5185\u5BB9\u6216\u5DF2\u88AB\u5220\u9664\uFF09") : c.error
+      classify: (c) => {
+        if (c.error?.code !== "LOGIN_REQUIRED" || !c.loggedIn) return c.error;
+        if (instagramPageSignal(pageHtml(), c.url) === "login_wall") {
+          return failure2("LOGIN_REQUIRED", SESSION_EXPIRED);
+        }
+        return failure2("PRIVATE_OR_UNAVAILABLE", /敏感内容|年龄限制/.test(c.error.message || "") ? c.error.message : "\u672A\u80FD\u8BFB\u53D6\u5E16\u5B50\u5185\u5BB9\uFF08\u53EF\u80FD\u5305\u542B\u53D7\u9650\u5185\u5BB9\u6216\u5DF2\u88AB\u5220\u9664\uFF09");
+      }
     },
     tiktok: {
       expiresAt: (c) => tiktokExpiresAt(c.url),

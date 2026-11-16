@@ -566,13 +566,16 @@ export function xhsStreamProbe(video: unknown): XhsStreamProbeEntry[] {
 function imageUrlOf(entry: Record<string, unknown>): { url: string; fallbacks: string[] } | undefined {
   // Primary: the bare original-bucket URL (upstream formula) — the token
   // carries no watermark; the CDN only burns one in when a `!style`
-  // rendition is requested. JPEG transcode, scene renditions and the ci
-  // token trail as fallbacks. A motion-clip URL never becomes a still.
+  // rendition is requested. The full-quality JPEG transcode of that same
+  // token leads the fallbacks (1.4.17), then the CDN's default-quality JPEG,
+  // the scene renditions and the ci token trail. A motion-clip URL never
+  // becomes a still.
   const token = entryToken(entry);
   if (token) {
     const primary = originalImageUrl(token);
     const direct = pickString(entry, ["urlDefault", "url"]);
     const rest = [
+      fullQualityJpegImageUrl(token),
       jpegImageUrl(token),
       ...sceneRaws(entry),
       ...(direct ? [toHttps(direct)] : []),
@@ -667,6 +670,21 @@ export function originalImageUrl(token: string): string {
 /** Same as `originalImageUrl` but transcoded to JPEG by the CDN. */
 export function jpegImageUrl(token: string): string {
   return `https://ci.xiaohongshu.com/${token}?imageView2/format/jpg`;
+}
+
+/**
+ * The CDN's full-quality JPEG transcode of the original token.
+ *
+ * `imageView2/format/jpg` alone re-encodes to about a quarter of the stored
+ * bytes; `/q/100` brings it back to the original size at the original
+ * resolution (measured 2026-11-12: 245,672 B default vs 1,030,648 B at
+ * `/q/100` for a 1,007,645 B original, both 1290x1608). The parser hands this
+ * candidate out itself so an App that does not derive it still gets the
+ * original-quality JPEG, and it is listed before every other JPEG candidate
+ * and before the stored original.
+ */
+export function fullQualityJpegImageUrl(token: string): string {
+  return `https://sns-img-bd.xhscdn.com/${token}?imageView2/format/jpg/q/100`;
 }
 
 function num(value: unknown): number | undefined {
@@ -1008,10 +1026,16 @@ export function xhsImageVariant(url: string): XhsImageVariant {
   const bang = parsed.pathname.indexOf("!");
   const style = bang >= 0 ? parsed.pathname.slice(bang + 1).toLowerCase() : "";
   if (/prv/.test(style) || /(?:^|[^a-z])prv(?:[^a-z]|$)/i.test(parsed.search)) return "preview";
+  // Either image host serves the CDN's own transcode: `ci` is the JPEG entry,
+  // `sns-img-*` is the stored original that also honours `imageView2`. A query
+  // that pins a size (`/w/`, `/h/`, `thumbnail`) is a preview-sized rendition.
+  const transcoded = /imageView2/i.test(parsed.search) &&
+    !/thumbnail|\/w\/|\/h\//i.test(parsed.search);
   if (host === "ci.xiaohongshu.com") {
-    if (/imageView2/i.test(parsed.search) && !/thumbnail|\/w\/|\/h\//i.test(parsed.search)) return "jpeg";
+    if (transcoded) return "jpeg";
     return parsed.search || style ? "other" : "original_ci";
   }
+  if (host.endsWith(".xhscdn.com") && host.startsWith("sns-img-") && transcoded) return "jpeg";
   if (host.endsWith(".xhscdn.com") && !style && !parsed.search && host.startsWith("sns-img-")) return "original";
   if (/dft/.test(style)) return "default";
   return "other";
@@ -1073,4 +1097,57 @@ export function xhsImageProbe(note: unknown): XhsImageProbeEntry[] {
     if (probe.candidates.length > 0) probe.selected = probe.candidates[0];
     return [probe];
   });
+}
+
+/**
+ * What a *failed* Xiaohongshu parse landed on, judged only from that page.
+ *
+ * `unavailable` — the platform itself says the note is gone: deleted,
+ *   non-existent, or set to private.
+ * `login_wall` — the platform asks for a login (login dialog, login
+ *   redirection, or a session flag that reads false). For an App that believes
+ *   it is signed in this means the stored session no longer works.
+ * `undefined` — neither family of signals is present; the caller keeps the
+ *   answer it had before 1.4.17.
+ *
+ * The unavailable family is checked first: a deleted note page still renders
+ * the app shell, which is why the login markers below are the login *dialog's*
+ * own strings and never a bare 「登录」.
+ */
+export type XhsPageSignal = "unavailable" | "login_wall";
+
+const XHS_UNAVAILABLE_MARKERS: RegExp[] = [
+  /当前笔记暂时无法浏览/,
+  /笔记暂时无法浏览/,
+  /该笔记暂时无法浏览/,
+  /内容暂时无法查看/,
+  /当前内容无法查看/,
+  /笔记不存在/,
+  /该笔记不存在/,
+  /笔记已被删除/,
+  /笔记已删除/,
+  /该笔记为私密笔记/,
+  /笔记已设为私密/,
+  /作者已将笔记设为私密/,
+  /笔记无法查看/,
+];
+
+const XHS_LOGIN_WALL_MARKERS: RegExp[] = [
+  /id=["']login-container["']/i,
+  /class=["'][^"']*\blogin-container\b/i,
+  /扫码登录/,
+  /登录后查看/,
+  /登录后可查看/,
+  /登录以继续/,
+  /请先登录/,
+  /立即登录/,
+  /"loggedIn"\s*:\s*false/,
+];
+
+export function xhsPageSignal(html: string, pageUrl = ""): XhsPageSignal | undefined {
+  const page = html || "";
+  if (XHS_UNAVAILABLE_MARKERS.some((marker) => marker.test(page))) return "unavailable";
+  if (pageUrl && /^https?:\/\/[^/]+\/login(?:[/?#]|$)/i.test(pageUrl)) return "login_wall";
+  if (XHS_LOGIN_WALL_MARKERS.some((marker) => marker.test(page))) return "login_wall";
+  return undefined;
 }

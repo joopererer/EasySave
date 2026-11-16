@@ -289,8 +289,8 @@ void main() {
   );
 
   test(
-    'a build 46 device on builtin 1.4.16/12 meets the same channel release as '
-    'the same parser, not an equivocation',
+    'a device left behind by a previous build on the bundled parser meets the '
+    'same channel release as the same parser, not an equivocation',
     () async {
       final previous = debugPrint;
       debugPrint = (message, {wrapWidth}) {
@@ -298,9 +298,9 @@ void main() {
       };
       addTearDown(() => debugPrint = previous);
 
-      // Exactly what build 46 left behind: the bundled parser is what the
-      // device runs, the watermark sits at its sequence and the content hash is
-      // the hash of its signed payload.
+      // Exactly what a previous build left behind: the bundled parser is what
+      // the device runs, the watermark sits at its sequence and the content hash
+      // is the hash of its signed payload.
       File('${directory.path}/state.json').writeAsStringSync(
         jsonEncode({
           'current': 'builtin',
@@ -311,12 +311,12 @@ void main() {
       );
       final before = rawState();
 
-      // The new APK bundles the very same parser: 1.4.16 as manifestVersion 12.
+      // The new APK bundles the very same parser: 1.4.17 as manifestVersion 13.
       await prepare();
-      expect(ParserVersion.version, '1.4.16');
-      expect(builtinVersion, 12);
+      expect(ParserVersion.version, '1.4.17');
+      expect(builtinVersion, 13);
       expect(manager.activeSource, ParserSource.builtin);
-      expect(manager.activeVersion, '1.4.16');
+      expect(manager.activeVersion, '1.4.17');
       expect(manager.activeSignedManifest, isNull);
 
       // The online channel serves the same sequence with the same content.
@@ -328,7 +328,7 @@ void main() {
 
       final line = log();
       expect(line, contains('result=same'), reason: line);
-      expect(line, contains('remoteManifest=12'), reason: line);
+      expect(line, contains('remoteManifest=13'), reason: line);
       expect(line, contains('reason=same_as_builtin'), reason: line);
       // A same-sequence, same-content release is not reported as a conflict and
       // never rolls the device back to an older parser.
@@ -339,9 +339,9 @@ void main() {
 
       expect(rawState(), before, reason: 'nothing was written');
       expect(state()['current'], 'builtin');
-      expect(state()['highestAcceptedManifestVersion'], 12);
+      expect(state()['highestAcceptedManifestVersion'], 13);
       expect(manager.activeSource, ParserSource.builtin);
-      expect(manager.activeVersion, '1.4.16');
+      expect(manager.activeVersion, '1.4.17');
     },
   );
 

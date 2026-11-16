@@ -1,0 +1,6 @@
+{
+  "error": {
+    "code": "LOGIN_REQUIRED",
+    "message": "Xiaohongshu returned an authenticated-only shell without note data."
+  }
+}

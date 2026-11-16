@@ -1,0 +1,6 @@
+{
+  "error": {
+    "code": "LOGIN_REQUIRED",
+    "message": "Instagram returned a login-gated shell without post data."
+  }
+}
