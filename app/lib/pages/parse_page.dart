@@ -10,6 +10,7 @@ import 'package:package_info_plus/package_info_plus.dart';
 import 'package:photo_manager/photo_manager.dart';
 import 'package:photo_manager_image_provider/photo_manager_image_provider.dart';
 import 'package:receive_sharing_intent/receive_sharing_intent.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../core/error_copy.dart';
 import '../core/dev_log.dart';
@@ -80,6 +81,7 @@ class ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
   String? _externalLink;
   String _currentLink = '';
   String _appVersion = '';
+  String? _lastRawException;
   List<HistoryRecord> _recent = [];
   bool _recentLoaded = false;
 
@@ -593,10 +595,12 @@ class ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
   /// Show an error reported by the background engine / an error notification,
   /// using the same error page as a manual parse.
   void showExternalError(String url, String code, String? message) {
+    _lastRawException = message;
+    final sanitizedMessage = displayErrorMessage(code, message);
     setState(() {
       _busy = false;
       _errorCode = code;
-      _errorMessage = message;
+      _errorMessage = sanitizedMessage;
       if (url.isNotEmpty) {
         _currentLink = url;
         if (_linkController.text != url) {
@@ -738,19 +742,23 @@ class ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
       unawaited(_reloadRecent());
     } on ParseFailure catch (e) {
       if (!mounted || _cancelRequested) return;
-      setState(() { _errorCode = e.code; _errorMessage = e.message; });
+      _lastRawException = e.message;
+      final sanitized = displayErrorMessage(e.code, e.message);
+      setState(() { _errorCode = e.code; _errorMessage = sanitized; });
       if (e.code == ParseErrorCode.loginRequired) {
         final platform = platformFromUrl(link);
         if (platform != null) LoginExpiredBus.markParseLoginRequired(platform);
       }
-      if (offscreen) _showOffscreenError(e.code, e.message);
+      if (offscreen) _showOffscreenError(e.code, sanitized);
     } catch (e) {
       if (!mounted || _cancelRequested) return;
+      _lastRawException = e.toString();
       unawaited(DevLog.write('ParseMismatch',
           'check=UNCAUGHT site=${platformFromUrl(link) ?? "-"} post=- '
           'expected=ParseFailure actual=type=${e.runtimeType}'));
-      setState(() { _errorCode = ParseErrorCode.invalidPage; _errorMessage = null; });
-      if (offscreen) _showOffscreenError(ParseErrorCode.invalidPage, null);
+      final sanitized = displayErrorMessage(ParseErrorCode.invalidPage, null);
+      setState(() { _errorCode = ParseErrorCode.invalidPage; _errorMessage = sanitized; });
+      if (offscreen) _showOffscreenError(ParseErrorCode.invalidPage, sanitized);
     } finally {
       if (mounted && _resolveEpoch == resolveToken) {
         setState(() { _busy = false; _resolving = false; });
@@ -797,7 +805,36 @@ class ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
         );
       case ErrorAction.repaste:
         _inputFocus.requestFocus();
+      case ErrorAction.openUrl:
+        final link = _currentLink.isNotEmpty
+            ? _currentLink
+            : _linkController.text.trim();
+        final uri = Uri.tryParse(link);
+        if (uri != null && mounted) {
+          await launchUrl(uri, mode: LaunchMode.externalApplication);
+        }
     }
+  }
+
+  bool _shouldOfferLoginForUnclassifiedError(String code, String url) {
+    final platform = platformFromUrl(url);
+    if (platform == null || !const {'xhs', 'instagram', 'x'}.contains(platform)) {
+      return false;
+    }
+    final copy = errorCopyFor(code);
+    if (copy.action != ErrorAction.retry) return false;
+    final loggedIn = AccountCache.value(platform)?.loggedIn ?? false;
+    return !loggedIn;
+  }
+
+  String _buildDiagnostics() {
+    final link = _linkController.text.trim();
+    final scrubbedUrl = DevLog.scrub(link);
+    final scrubbedException = _lastRawException != null
+        ? DevLog.scrub(_lastRawException!)
+        : '-';
+    final platform = platformFromUrl(link) ?? '-';
+    return 'platform=$platform, code=$_errorCode, error=$scrubbedException, url=$scrubbedUrl, app=$_appVersion, parser=${ParserManager.instance.activeVersion}(${ParserManager.instance.activeSourceLabel})';
   }
 
   /// Clears the error card once [platform] reported a session.
@@ -980,10 +1017,13 @@ class ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
                     : loginSiteIds.contains(
                         platformFromUrl(_linkController.text.trim()),
                       ),
+                showLoginAction: _shouldOfferLoginForUnclassifiedError(
+                  _errorCode!,
+                  _linkController.text.trim(),
+                ),
                 message: _errorMessage,
                 onAction: _onErrorAction,
-                diagnostics: () =>
-                    'platform=?, code=$_errorCode, url=${_linkController.text.trim()}, app=$_appVersion, parser=${ParserManager.instance.activeVersion}(${ParserManager.instance.activeSourceLabel})',
+                diagnostics: _buildDiagnostics,
               ),
             ),
           Padding(

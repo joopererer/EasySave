@@ -9,6 +9,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 
 import '../core/dev_log.dart';
+import '../core/error_copy.dart';
 import '../core/models.dart';
 import '../core/media_request.dart';
 import '../services/media_request_policy.dart';
@@ -360,7 +361,12 @@ Future<void> _error(
   String url,
   String code,
   String message,
-) => _invoke(channel, 'error', {'url': url, 'code': code, 'message': message});
+) =>
+    _invoke(channel, 'error', {
+      'url': url,
+      'code': code,
+      'message': displayErrorMessage(code, message),
+    });
 
 /// Drive the Quick Settings tile state (active + subtitle).
 Future<void> _tile(MethodChannel channel, bool active, String? subtitle) =>
@@ -378,16 +384,17 @@ Future<void> _bubble(
   String? url,
   String? code,
   String? message,
-]) => _invoke(channel, 'bubble', {
-  'active': active,
-  'done': done,
-  'total': total,
-  'label': label,
-  'error': error,
-  'url': url,
-  'code': code,
-  'message': message,
-});
+]) =>
+    _invoke(channel, 'bubble', {
+      'active': active,
+      'done': done,
+      'total': total,
+      'label': label,
+      'error': error,
+      'url': url,
+      'code': code,
+      'message': message != null ? displayErrorMessage(code ?? ParseErrorCode.invalidPage, message) : null,
+    });
 
 /// Build the caption text (title + body) for the bubble's "复制文案".
 String _captionText(ParsedPost post) {
@@ -711,18 +718,19 @@ Future<void> _handleSubmit(
       // This request is handled by an existing batch, not a parse failure.
       anyStarted = true;
     } on ParseFailure catch (e) {
+      final safeMessage = displayErrorMessage(e.code, e.message);
       await _log(
         channel,
         'PARSE FAIL[${e.code}] (${sw.elapsedMilliseconds}ms)',
       );
       if (e.code == ParseErrorCode.loginRequired) {
-        if (toasts) await _toast(channel, '需要登录：${e.message}');
+        if (toasts) await _toast(channel, '需要登录：$safeMessage');
       } else if (toasts) {
-        await _toast(channel, '解析失败：${e.message}');
+        await _toast(channel, '解析失败：$safeMessage');
       }
       await _tile(channel, false, null);
-      await _bubble(channel, false, 0, 0, null, true, url, e.code, e.message);
-      await _error(channel, url, e.code, e.message);
+      await _bubble(channel, false, 0, 0, null, true, url, e.code, safeMessage);
+      await _error(channel, url, e.code, safeMessage);
     } on MediaPolicyException catch (e) {
       await _log(channel, 'REQUEST POLICY ${e.code} host=${e.host}');
       if (toasts) await _toast(channel, '该资源地址不在允许范围内');
@@ -744,6 +752,7 @@ Future<void> _handleSubmit(
         channel,
         'ERROR (${sw.elapsedMilliseconds}ms) type=${e.runtimeType}',
       );
+      final safeMessage = displayErrorMessage(ParseErrorCode.invalidPage, null);
       if (toasts) await _toast(channel, '处理失败');
       await _tile(channel, false, null);
       await _bubble(
@@ -755,9 +764,9 @@ Future<void> _handleSubmit(
         true,
         url,
         ParseErrorCode.invalidPage,
-        '$e',
+        safeMessage,
       );
-      await _error(channel, url, ParseErrorCode.invalidPage, '$e');
+      await _error(channel, url, ParseErrorCode.invalidPage, safeMessage);
     }
   }
 

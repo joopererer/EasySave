@@ -6,7 +6,7 @@ import 'models.dart';
 import '../services/site_registry.dart';
 
 /// UI action attached to an error code.
-enum ErrorAction { goLogin, backHome, retry, repaste }
+enum ErrorAction { goLogin, backHome, retry, repaste, openUrl }
 
 class ErrorCopy {
   const ErrorCopy({required this.message, required this.action});
@@ -15,12 +15,41 @@ class ErrorCopy {
   final ErrorAction action;
 }
 
-/// Text shown for a parse error: the engine's own message when it has one,
-/// otherwise the spec copy for [code].
+/// Checks whether a message looks like a raw exception name, error dump, or stack trace.
+bool isRawExceptionMessage(String? message) {
+  if (message == null || message.trim().isEmpty) return false;
+  final trimmed = message.trim();
+  final rawPatterns = [
+    RegExp(
+      r'\b(?:Format|Platform|State|Type|Range|Argument|NoSuchMethod|NullCheck|Socket|Http|FileSystem|Timeout)?Exception\b',
+      caseSensitive: false,
+    ),
+    RegExp(
+      r'\b(?:Format|Platform|State|Type|Range|Argument|NoSuchMethod|Assertion|NullCheck)?Error\b',
+      caseSensitive: false,
+    ),
+    RegExp(r'\bBad state\b', caseSensitive: false),
+    RegExp(r'#\d+\s+'),
+    RegExp(r'\.dart:\d+:\d+'),
+    RegExp(r'\bnull check operator\b', caseSensitive: false),
+  ];
+  return rawPatterns.any((pattern) => pattern.hasMatch(trimmed));
+}
+
+/// Cleans or maps any raw exception string into a friendly, human-readable copy.
+String sanitizeErrorMessage(String code, String? message) {
+  if (code == ParseErrorCode.regionRestricted) {
+    return errorCopyFor(code).message;
+  }
+  if (message == null || message.trim().isEmpty || isRawExceptionMessage(message)) {
+    return errorCopyFor(code).message;
+  }
+  return message.trim();
+}
+
+/// Text shown for a parse error: sanitized human-readable copy, never raw exception names.
 String displayErrorMessage(String code, String? message) =>
-    (message != null && message.isNotEmpty)
-    ? message
-    : errorCopyFor(code).message;
+    sanitizeErrorMessage(code, message);
 
 /// Copy for parse error codes. Unknown codes fall back to a retry prompt.
 ErrorCopy errorCopyFor(String code) {
@@ -90,6 +119,11 @@ ErrorCopy errorCopyFor(String code) {
       return ErrorCopy(
         message: names.isEmpty ? '不支持的链接，请粘贴帖子链接' : '不支持的链接，请粘贴$names 帖子链接',
         action: ErrorAction.repaste,
+      );
+    case ParseErrorCode.regionRestricted:
+      return const ErrorCopy(
+        message: '该内容在你所在的地区不可用（平台限制），登录也无法查看',
+        action: ErrorAction.openUrl,
       );
     case ParseErrorCode.timeout:
       return const ErrorCopy(

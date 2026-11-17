@@ -469,10 +469,16 @@ class HostService : Service() {
         else
             PendingIntent.FLAG_UPDATE_CURRENT
         val pi = PendingIntent.getActivity(this, 7001, intent, flags)
+        val safeMessage = message?.takeIf { msg ->
+            msg.isNotBlank() &&
+                !msg.contains("Exception") &&
+                !msg.contains("Error") &&
+                !msg.contains("Bad state")
+        }
         val body = if (code == "LOGIN_REQUIRED") {
-            message?.takeIf { it.isNotBlank() } ?: "可能需要登录后重试"
+            safeMessage ?: "可能需要登录后重试"
         } else {
-            message?.takeIf { it.isNotBlank() } ?: "解析失败，请重试"
+            safeMessage ?: "解析失败，请重试"
         }
         val big = if (url.isNullOrBlank()) body else "$body\n$url"
         val err = NotificationCompat.Builder(this, ERROR_CHANNEL_ID)
