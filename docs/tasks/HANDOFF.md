@@ -60,10 +60,10 @@
 3. 在 worktree 里 `flutter test test/parser_1417_compat_test.dart`。
 4. 用完 `git worktree remove --force` + `git worktree prune`。
 
-### 2.5 验证包做法
+### 2.5 验证包与正式包构建规则
 
-- 只改 versionCode：`flutter build apk --release --build-number <N> --target-platform android-arm64`
-  （不动 `pubspec.yaml` 的版本号，避免污染仓库）。
+- 测试包 / 验证包：可只构建单架构，如 `flutter build apk --release --build-number <N> --target-platform android-arm64`（体积约 23MB）。
+- 正式发布包：必须与以往一致构建通用包（`flutter build apk --release`，体积约 65MB，支持全部目标平台与 ABI）；若改变打包方式或只发布特定架构，必须说明改变的理由并等用户确认。
 - 报告里给出 `versionCode`、`versionName`、bundle sha256、包内
   `builtin-manifest.json` 的 `manifestVersion`/`sha256`、证书 SHA-256 指纹。
 - 验证包**不得**推送、不得打 tag，等真机验证通过再发布。
