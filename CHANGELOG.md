@@ -7,6 +7,17 @@ This file documents notable user-facing changes following [Keep a Changelog](htt
 
 ## [Unreleased]
 
+### 客户端 / App
+
+- 小红书域名备选切换收敛：单次解析中主备域名切换严格限制至多 1 次，避免未登录或重定向时在 `xiaohongshu.com` 与 `rednote.com` 之间反复循环；检测到重定向至 `/explore` 或 `/login` 等页面时立即停止切换与冗余重试，交由解析器返回 `LOGIN_REQUIRED`。
+  Bounded Xiaohongshu domain switching: switching between primary and alternate domains is capped at at most 1 time per parse session, preventing ping-pong loops between `xiaohongshu.com` and `rednote.com`; detects redirects to `/explore` or `/login` to halt retries immediately and let the parser return `LOGIN_REQUIRED`.
+- 统一错误文案与原始异常屏蔽：所有错误卡片、Toast、系统通知以及悬浮球错误提示全面屏蔽 `FormatException`、`Bad state`、`PlatformException` 等原始异常类名与堆栈，统一映射为用户友好的可读文案；原始异常仅保留在调试日志与脱敏诊断信息中。对小红书、Instagram、X 等已知需要登录的站点，若未登录且遇到无法归类的错误时，除「重试」外额外提供「去登录」入口。
+  Unified error messages and raw exception masking: error cards, toasts, system notifications, and bubble error states now sanitize raw exception class names and stack traces (e.g. `FormatException`, `Bad state`, `PlatformException`) into friendly, readable text, reserving raw details for logs and sanitized diagnostics. Known sites requiring login (Xiaohongshu, Instagram, X) now provide a "去登录" (Sign in) action alongside "重试" (Retry) on unclassified errors when signed out.
+- TikTok 地区限制文案优化：遇到 `REGION_RESTRICTED` 错误时，文案明确提示「该内容在你所在的地区不可用（平台限制），登录也无法查看」，保留「打开原链接」按钮且不显示无意义的「去登录」。
+  TikTok region restriction copy improvement: `REGION_RESTRICTED` errors now state that content is unavailable in the current region due to platform restrictions, retaining "打开原链接" without offering an ineffective login action.
+- 悬浮球后台引擎冷启动加速：优化启动恢复逻辑，已结算且已写入历史的终态批次跳过重复的 `_afterTerminal` 收尾；通知取消仅针对当前会话活跃的通知并支持批量处理；批次对账（reconcile）在后台异步完成，不阻塞新任务入队开始，启动耗时由 4–8 秒缩短至 1 秒以内。
+  Bubble background engine startup acceleration: settled batches with history already written now bypass redundant `_afterTerminal` teardowns; notification cancellations only target active notifications from the current session and support batch cancellation; reconciliation runs asynchronously in the background without blocking new batch enqueuing, cutting cold start time from 4–8 seconds to under 1 second.
+
 ### 解析器 / Parser
 
 - parser 1.4.17（`manifestVersion` 14，只走解析器通道，不随 App 版本发布）：已登录但会话失效时不再一律报「该帖子不存在、私密或已删除」。小红书与 Instagram 各自区分两类页面信号——平台自己的「内容不存在 / 无法查看」提示仍按原样回答 `PRIVATE_OR_UNAVAILABLE`；而登录表单、登录提示或跳转到登录页说明是会话失效，回答 `LOGIN_REQUIRED` 并显示「登录可能已失效，请重新登录」，用户可以直接去登录后重新解析。两类信号都读不到时保持 1.4.16 的原有答案。没有新增错误码，仍在用旧版 App 的设备看到的是同一个 `LOGIN_REQUIRED` 与「去登录」按钮，提示文案用解析器给的这一句。
