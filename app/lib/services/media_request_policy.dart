@@ -23,6 +23,7 @@ const Set<String> kAllowedRequestHeaderNames = {
   'user-agent',
   'range',
   'accept-encoding',
+  'if-range',
 };
 
 /// Values a whitelisted header may carry when its value changes the bytes on
@@ -91,7 +92,11 @@ class MediaRequestPolicy {
     'user-agent': 'User-Agent',
     'range': 'Range',
     'accept-encoding': 'Accept-Encoding',
+    'if-range': 'If-Range',
   };
+  static final _ifRangeFormat = RegExp(
+    r'^(?:(?:W/)?"[^"\r\n\x00]{1,256}"|[A-Za-z]{3},\s+\d{1,2}\s+[A-Za-z]{3}\s+\d{4}\s+\d{2}:\d{2}:\d{2}\s+GMT)$',
+  );
 
   static Future<String> _systemCookie(Uri actualMediaUrl) async {
     final cookies = await CookieManager.instance().getCookies(
@@ -152,22 +157,20 @@ class MediaRequestPolicy {
   Map<String, String> _headers(Map source, String url) {
     final result = <String, String>{};
     for (final entry in source.entries) {
-      final key = entry.key is String
-          ? _headerNames[(entry.key as String).toLowerCase()]
-          : null;
+      final normalized = entry.key is String ? (entry.key as String).toLowerCase() : null;
+      final key = normalized != null ? _headerNames[normalized] : null;
       final value = entry.value;
-      final allowed = entry.key is String
-          ? kAllowedRequestHeaderValues[(entry.key as String).toLowerCase()]
-          : null;
+      final allowed = normalized != null ? kAllowedRequestHeaderValues[normalized] : null;
       if (key == null ||
           value is! String ||
           _controls.hasMatch(value) ||
           result.containsKey(key) ||
-          (allowed != null && !allowed.contains(value.toLowerCase()))) {
+          (allowed != null && !allowed.contains(value.toLowerCase())) ||
+          (normalized == 'if-range' && !_ifRangeFormat.hasMatch(value))) {
         _reject(
           'REQUEST_HEADER_REJECTED',
           url,
-          header: entry.key is String ? (entry.key as String).toLowerCase() : null,
+          header: normalized,
         );
       }
       result[key] = value;

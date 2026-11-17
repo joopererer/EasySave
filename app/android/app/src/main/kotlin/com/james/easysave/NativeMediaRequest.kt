@@ -88,6 +88,7 @@ internal class NativeMediaRequest(
             "referer" to "Referer", "origin" to "Origin",
             "user-agent" to "User-Agent", "range" to "Range",
             "accept-encoding" to "Accept-Encoding",
+            "if-range" to "If-Range",
         )
         val result = LinkedHashMap<String, String>()
         for ((rawName, rawValue) in headers) {
@@ -97,7 +98,8 @@ internal class NativeMediaRequest(
             val allowedValues = MediaPolicyRedirects.PERMITTED_VALUES[normalized]
             if (value.any { it == '\r' || it == '\n' || it == '\u0000' } ||
                 result.containsKey(name) ||
-                (allowedValues != null && value.lowercase(Locale.ROOT) !in allowedValues)
+                (allowedValues != null && value.lowercase(Locale.ROOT) !in allowedValues) ||
+                (normalized == "if-range" && !MediaPolicyRedirects.isPermittedIfRange(value))
             ) {
                 deny("REQUEST_HEADER_REJECTED", host)
             }

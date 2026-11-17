@@ -140,6 +140,25 @@ void main() {
           expect(preflight['Range'], 'bytes=0-0');
           expectAcceptedByPolicy(siteId, declared, preflight);
 
+          // Resumed transfer carries Range and If-Range (ETag or HTTP-date);
+          // all four sites and both media kinds must accept resume requests.
+          final resumeWithEtag = unifiedTransferHeaders({
+            ...authorized.headers,
+            'Range': 'bytes=5242880-',
+            'If-Range': '"etag-5f8a"',
+          });
+          expect(resumeWithEtag['Range'], 'bytes=5242880-');
+          expect(resumeWithEtag['If-Range'], '"etag-5f8a"');
+          expectAcceptedByPolicy(siteId, declared, resumeWithEtag);
+
+          final resumeWithDate = unifiedTransferHeaders({
+            ...authorized.headers,
+            'Range': 'bytes=5242880-',
+            'If-Range': 'Wed, 21 Oct 2015 07:28:00 GMT',
+          });
+          expect(resumeWithDate['If-Range'], 'Wed, 21 Oct 2015 07:28:00 GMT');
+          expectAcceptedByPolicy(siteId, declared, resumeWithDate);
+
           // The cookie never leaks into the header map the native side checks.
           expect(wire.keys, isNot(contains('Cookie')));
         }

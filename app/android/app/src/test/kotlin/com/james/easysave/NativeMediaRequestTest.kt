@@ -33,6 +33,10 @@ class NativeMediaRequestTest {
             rejected("https://tiktok.com/video", mapOf("Cookie" to "secret")))
         assertEquals("REQUEST_HEADER_REJECTED" to "tiktok.com",
             rejected("https://tiktok.com/video", mapOf("Referer" to "ok\r\nCookie: secret")))
+        assertEquals("REQUEST_HEADER_REJECTED" to "tiktok.com",
+            rejected("https://tiktok.com/video", mapOf("If-Range" to "invalid-unquoted")))
+        assertEquals("REQUEST_HEADER_REJECTED" to "tiktok.com",
+            rejected("https://tiktok.com/video", mapOf("If-Range" to "\"valid\"\r\nBad: true")))
     }
 
     // v1.10.3 build 47: the Dart policy whitelists `Accept-Encoding: identity`
@@ -66,11 +70,11 @@ class NativeMediaRequestTest {
         val request = NativeMediaRequest(
             mapOf(
                 "url" to "https://cdn.tiktok.com/path?token=private",
-                "headers" to mapOf("Referer" to "private", "Range" to "private", "Cookie" to "private"),
+                "headers" to mapOf("Referer" to "private", "Range" to "private", "Cookie" to "private", "If-Range" to "\"etag\""),
             ),
             "videoRequest",
         ) { _, _, _, _ -> }
         assertEquals("cdn.tiktok.com", request.diagnosticHost)
-        assertEquals("range,referer", request.diagnosticHeaderNames)
+        assertEquals("if-range,range,referer", request.diagnosticHeaderNames)
     }
 }

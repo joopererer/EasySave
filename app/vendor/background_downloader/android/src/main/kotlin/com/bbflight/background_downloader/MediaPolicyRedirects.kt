@@ -52,9 +52,18 @@ object MediaPolicyRedirects {
             if (allowedValues != null &&
                 value.lowercase(Locale.ROOT) !in allowedValues
             ) return Rejection("REQUEST_HEADER_REJECTED", host)
+            if (normalized == "if-range" && !isPermittedIfRange(value)) {
+                return Rejection("REQUEST_HEADER_REJECTED", host)
+            }
         }
         return null
     }
+
+    private val IF_RANGE_REGEX = Regex(
+        """^(?:(?:W/)?"[^"\r\n\u0000]{1,256}"|[A-Za-z]{3},\s+\d{1,2}\s+[A-Za-z]{3}\s+\d{4}\s+\d{2}:\d{2}:\d{2}\s+GMT)$"""
+    )
+
+    fun isPermittedIfRange(value: String): Boolean = IF_RANGE_REGEX.matches(value)
 
     /**
      * The names a transfer may carry. Mirrors `kAllowedRequestHeaderNames` in
@@ -62,7 +71,7 @@ object MediaPolicyRedirects {
      * protection, the site's User-Agent, a ranged probe and the transfer
      * encoding that keeps a probe and the transfer byte-identical.
      */
-    val PERMITTED_HEADERS = setOf("referer", "origin", "user-agent", "range", "accept-encoding")
+    val PERMITTED_HEADERS = setOf("referer", "origin", "user-agent", "range", "accept-encoding", "if-range")
 
     /**
      * Values a permitted header may carry when its value changes the bytes on
