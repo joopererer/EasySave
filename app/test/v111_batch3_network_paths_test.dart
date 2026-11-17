@@ -66,6 +66,8 @@ class _ScriptedTransfer implements SessionTransfer {
     MediaRequestPolicy? policy,
     MediaRequestResource? resource,
     required void Function(double progress) onProgress,
+    String? jobKey,
+    int? itemIndex,
   }) async {
     calls++;
     urls.add(url);

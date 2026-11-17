@@ -45,6 +45,7 @@ import 'download_claims.dart';
 import 'provenance_pair.dart';
 import 'save_collision.dart';
 import 'session_media_download.dart';
+import 'resumable_download_store.dart';
 import 'media_request_policy.dart';
 import 'site_registry.dart';
 import 'settings.dart';
@@ -1422,6 +1423,7 @@ class DownloadManager extends ChangeNotifier {
       const Duration(seconds: 15),
       (_) => _heartbeatTick(),
     );
+    unawaited(ResumableDownloadStore.instance.purgeExpired());
     // Reconcile runs in the background so cold engine startup and new batch
     // enqueuing are not blocked by historical snapshot recovery.
     _reconcileFuture = _loadAndReconcile().then((_) {
@@ -2128,6 +2130,8 @@ class DownloadManager extends ChangeNotifier {
       // Best effort - continue without assetId
     }
 
+    final isResumable = !job.isImage &&
+        (job.expectedBytes == null || job.expectedBytes! >= kResumableMinBytes);
     final task = DownloadTask(
       taskId: taskId,
       url: url,
@@ -2138,6 +2142,7 @@ class DownloadManager extends ChangeNotifier {
       group: batch.batchId,
       updates: Updates.statusAndProgress,
       retries: 0,
+      allowPause: isResumable,
       metaData: jsonEncode({
         'batchId': batch.batchId,
         'album': batch.album,
@@ -2493,6 +2498,8 @@ class DownloadManager extends ChangeNotifier {
           notifyListeners();
           unawaited(_refreshNotification(batch));
         },
+        jobKey: job.key,
+        itemIndex: job.itemIndex,
       );
       if (job.state != JobState.active) return;
       await _importFile(
@@ -3618,6 +3625,7 @@ class DownloadManager extends ChangeNotifier {
       ));
     }
     await DownloadClaims.release(batch.batchId);
+    unawaited(ResumableDownloadStore.instance.cleanForJobKeys(batch.jobs.map((j) => j.key)));
     if (batch.cancelledByDeletion ||
         await DownloadClaims.isCancelled(batch.batchId)) {
       return;
@@ -3904,6 +3912,7 @@ class DownloadManager extends ChangeNotifier {
       _batches[batch.batchId] = batch;
       await _persist(batch);
       await DownloadClaims.release(batch.batchId);
+      await ResumableDownloadStore.instance.cleanForJobKeys(batch.jobs.map((j) => j.key));
     }
     notifyListeners();
     if (ids.isNotEmpty) {
@@ -4061,6 +4070,7 @@ class DownloadManager extends ChangeNotifier {
       }
     }
     job.state = JobState.canceled;
+    await ResumableDownloadStore.instance.cleanForJob(job.key);
     await _persist(batch);
     notifyListeners();
     await _afterTerminal(batch, recovered: false);
