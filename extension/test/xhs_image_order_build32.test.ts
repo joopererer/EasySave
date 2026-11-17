@@ -8,6 +8,7 @@ afterEach(() => vi.unstubAllGlobals());
 
 const token = 'notes_pre_post/1040g3k83264voo1al0dg5o2e1l408pfcf1dl208';
 const original = `https://sns-img-bd.xhscdn.com/${token}`;
+const fullQuality = `https://sns-img-bd.xhscdn.com/${token}?imageView2/format/jpg/q/100`;
 const jpeg = `https://ci.xiaohongshu.com/${token}?imageView2/format/jpg`;
 const preview = `https://sns-webpic-qc.xhscdn.com/202610112129/a657f0bce4b0d577975cf2d1df487c06/${token}!nd_prv_wlteh_webp_3`;
 const dft = `https://sns-webpic-qc.xhscdn.com/202610112129/eb1fb79a62c72f9dbe14dd2909e2d83c/${token}!nd_dft_wlteh_webp_3`;
@@ -23,10 +24,11 @@ describe('XHS image download candidates', () => {
     expect(xhsImageVariant(`https://sns-webpic-qc.xhscdn.com/x/${token}!h5_prv_webp`)).toBe('preview');
   });
 
-  it('orders original resolution first and never includes a preview', () => {
-    // The fixture order: url = original, fallbacks = jpeg, preview, default, ci.
-    expect(xhsImageDownloadOrder(original, [jpeg, preview, dft, ciBare]))
-      .toEqual([jpeg, original, ciBare, dft]);
+  it('orders the parser full-quality JPEG transcode first, then other JPEGs, then the original', () => {
+    expect(xhsImageVariant(fullQuality)).toBe('jpeg');
+    // The fixture order: url = original, fallbacks = full-quality jpg, jpeg, preview, default, ci.
+    expect(xhsImageDownloadOrder(original, [fullQuality, jpeg, preview, dft, ciBare]))
+      .toEqual([fullQuality, jpeg, original, ciBare, dft]);
   });
 
   it('falls back to the largest variant when no original is offered', () => {
@@ -36,7 +38,8 @@ describe('XHS image download candidates', () => {
 
   it('adds downloadOrder to App results without changing the legacy fields', () => {
     const html = readFileSync(new URL('../../spec/fixtures/xhs/xhs_multi.html', import.meta.url), 'utf8');
-    const expected = JSON.parse(readFileSync(new URL('../../spec/fixtures/xhs/xhs_multi.expected.json', import.meta.url), 'utf8'));
+    // 1.4.17 expectations: the full-quality JPEG candidate is now the parser's own.
+    const expected = JSON.parse(readFileSync(new URL('../../spec/fixtures/xhs/xhs_multi.expected.1.4.17.json', import.meta.url), 'utf8'));
     const site = sites.find((s) => s.id === 'xhs');
     const value = JSON.parse(moduleCall('xhs', 'parse', {
       url: `https://www.xiaohongshu.com/explore/${expected.id}`, site, input: html,
@@ -48,9 +51,12 @@ describe('XHS image download candidates', () => {
       if (item.type === 'video') return;
       expect(item.downloadOrder.length).toBeGreaterThan(0);
       expect(item.downloadOrder.some((u: string) => xhsImageVariant(u) === 'preview')).toBe(false);
+      expect(item.downloadOrder[0]).toBe(`${item.url}?imageView2/format/jpg/q/100`);
       expect(xhsImageVariant(item.downloadOrder[0])).toBe('jpeg');
     });
-    expect(() => moduleCall('xhs', 'decorate', { url: '', site })).toThrow('UNSUPPORTED_HOOK');
+    // `decorate` is internal to the bundle: asking for it as a hook is answered
+    // with nothing rather than an exception the App would show as a crash.
+    expect(JSON.parse(moduleCall('xhs', 'decorate', { url: '', site })).value).toBeNull();
   });
 
   it('probes field names, scenes, declared size and the selected variant', () => {

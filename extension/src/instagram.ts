@@ -102,6 +102,65 @@ function igParseSourceOfProduct(product: Record<string, unknown>): "api" | "grap
 export { ogMetaOf, hasLoginWall, videoPage, mediaTypeOf, igParseLogLine, igParseSourceOfProduct };
 export type { IgParseLog };
 
+/**
+ * What a *failed* Instagram parse landed on, judged only from that page.
+ *
+ * `unavailable` — the platform itself says the post is gone: deleted,
+ *   non-existent, or unavailable.
+ * `login_wall` — the platform shows its login form, asks for a login, or has
+ *   already redirected to the login page. For an App that believes it is
+ *   signed in this means the stored session no longer works.
+ * `undefined` — neither family of signals is present; the caller keeps the
+ *   answer it had before 1.4.17.
+ *
+ * An age / sensitive-content gate is deliberately *not* a login-wall signal:
+ * it asks for a confirmation, not for a new session, and keeps the existing
+ * answer. The unavailable family is checked first.
+ *
+ * The logged-out shell's own markers (`PolarisLoggedOut*`,
+ * `CurrentUserInitialData` with `USER_ID` 0) are **not** used: an anonymous
+ * capture of a perfectly readable post (`ig_carousel`, `ig_reel`, `blocked`)
+ * carries them too, so they say nothing about the viewer's session. Only a
+ * login form, a login prompt or a login redirect counts.
+ */
+export type InstagramPageSignal = "unavailable" | "login_wall";
+
+const IG_UNAVAILABLE_MARKERS: RegExp[] = [
+  /sorry,?\s+this page isn['’]t available/i,
+  /this page isn['’]t available/i,
+  /page (?:is )?not found/i,
+  /页面不存在/,
+  /该页面无法使用/,
+  /此页面无法使用/,
+  /页面暂时无法使用/,
+  /链接可能已失效/,
+  /内容不存在/,
+  /该帖子不存在/,
+  /帖子不存在/,
+  /该帖子已被删除/,
+  /帖子已被删除/,
+];
+
+const IG_LOGIN_WALL_MARKERS: RegExp[] = [
+  /accounts\/login/i,
+  /log ?in to (?:instagram|see)/i,
+  /登录\s*instagram/i,
+  /登录后查看/,
+  /登录后可查看/,
+  /登录以继续/,
+  /登入以繼續/,
+  /登入以继续/,
+  /请先登录/,
+];
+
+export function instagramPageSignal(html: string, pageUrl = ""): InstagramPageSignal | undefined {
+  const page = html || "";
+  if (IG_UNAVAILABLE_MARKERS.some((marker) => marker.test(page))) return "unavailable";
+  if (pageUrl && /\/accounts\/login(?:[/?#]|$)/i.test(pageUrl)) return "login_wall";
+  if (IG_LOGIN_WALL_MARKERS.some((marker) => marker.test(page))) return "login_wall";
+  return undefined;
+}
+
 interface IgParseLog {
   source: "api" | "graphql" | "embedded_json" | "og_meta";
   mediaType: "image" | "video" | "carousel";

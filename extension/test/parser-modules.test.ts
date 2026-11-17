@@ -7,18 +7,21 @@ const call = (id: string, hook: string, extra: any = {}) => JSON.parse(moduleCal
 afterEach(() => vi.unstubAllGlobals());
 
 describe('manifest-selected parser hooks', () => {
-  it('rejects unknown modules and prototype property names', () => {
+  it('answers unknown modules and prototype property names instead of throwing', () => {
+    // A hot-updated bundle must always answer a value the App can read: a throw
+    // would reach it as an empty WebView result (see parser_hooks.dart).
     for (const id of ['new-site', '__proto__', 'constructor', 'toString']) {
-      expect(() => call(id, 'ready')).toThrow('UNSUPPORTED_MODULE');
+      expect(call(id, 'ready'), id).toBe(false);
+      expect(call(id, 'parsePage').error.code, id).toBe('INVALID_PAGE');
     }
-    expect(() => call('x', 'constructor')).toThrow('UNSUPPORTED_HOOK');
+    expect(call('x', 'constructor')).toBeNull();
   });
   it('builds syndication JSON requests from signed options and the TS token implementation', () => {
     const id = '1234567890123456789';
     const site = {load: {endpointTemplate: 'https://api.example.test/{id}?token={token}', headers: {Accept: 'application/json'}}};
     expect(call('x', 'request', {url: 'https://x.com/user/status/' + id, site}))
       .toEqual({url: 'https://api.example.test/' + id + '?token=' + calculateToken(id), headers: site.load.headers});
-    expect(() => call('x', 'request', {url: 'https://x.com/user'})).toThrow('UNSUPPORTED_URL');
+    expect(call('x', 'request', {url: 'https://x.com/user'})).toBeNull();
     expect(call('x', 'parse', {statusCode:404}).error.code).toBe('PRIVATE_OR_UNAVAILABLE');
   });
   it('waits for the requested note, not stale state for a different note', () => {

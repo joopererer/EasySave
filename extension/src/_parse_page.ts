@@ -1,4 +1,4 @@
-import { parseXhs, findNoteInStates, buildNoteFromRecord } from './xhs';
+import { parseXhs, findNoteInStates, buildNoteFromRecord, XHS_LOGIN_REQUIRED, xhsLandingPage } from './xhs';
 import {
   parseInstagram,
   buildPostFromProduct,
@@ -19,6 +19,36 @@ function noteIdFromUrl(url: string): string | undefined {
 function shortcodeFromUrl(url: string): string | undefined {
   const m = /\/(?:p|reels?|tv)\/([A-Za-z0-9-_]+)/.exec(url);
   return m ? m[1] : undefined;
+}
+
+/** The answer used when the page itself cannot be read or understood. */
+export function unreadablePage(): { ok: false; error: { code: string; message: string } } {
+  return { ok: false, error: { code: 'INVALID_PAGE', message: '页面内容无法识别，可能已改版' } };
+}
+
+/**
+ * The page's HTML, or `undefined` while the document is being replaced.
+ *
+ * A WebView can evaluate the hook in the middle of a navigation, where
+ * `document.documentElement` is null or being torn down. Reading it must never
+ * throw: an exception reaches the App as a null hook result.
+ */
+function readableDocumentHtml(): string | undefined {
+  try {
+    const element = document && document.documentElement;
+    const html = element ? element.outerHTML : undefined;
+    return typeof html === 'string' && html.length > 0 ? html : undefined;
+  } catch (_) {
+    return undefined;
+  }
+}
+
+function currentPageUrl(): string {
+  try {
+    return (window.location && window.location.href) || '';
+  } catch (_) {
+    return '';
+  }
 }
 
 export function parseInstagramFromDom(doc: Document, pageUrl: string): { ok: true; data: any } | undefined {
@@ -90,7 +120,7 @@ export function parseInstagramFromDom(doc: Document, pageUrl: string): { ok: tru
 }
 
 export function parsePage(): string {
-  const url = window.location.href;
+  const url = currentPageUrl();
   const moduleId = isTiktokLink(url) ? 'tiktok' : isXhsHost(url) ? 'xhs' :
     isInstagramHost(url) ? 'instagram' : isXHost(url) ? 'x' : '';
   return parsePageForModule(moduleId);
@@ -98,16 +128,30 @@ export function parsePage(): string {
 
 // The App selects this entry point using the verified manifest, not host guessing.
 export function parsePageForModule(moduleId: string, thumbnailScenes: string[] = [], smallThumbnail = false): string {
-  const url = window.location.href;
-  const html = document.documentElement.outerHTML;
+  try {
+    return JSON.stringify(parsePageObject(moduleId, thumbnailScenes, smallThumbnail));
+  } catch (_) {
+    return JSON.stringify(unreadablePage());
+  }
+}
+
+function parsePageObject(moduleId: string, thumbnailScenes: string[], smallThumbnail: boolean): any {
+  const url = currentPageUrl();
+  // A note request that came back as the home feed means Xiaohongshu would not
+  // serve the note at all; that is a sign-in problem, never a parse result.
+  if (moduleId === 'xhs' && xhsLandingPage(url)) {
+    return { ok: false, error: { code: 'LOGIN_REQUIRED', message: XHS_LOGIN_REQUIRED } };
+  }
+  const html = readableDocumentHtml();
+  if (html === undefined) return unreadablePage();
   if (moduleId === 'tiktok') {
     const result = parseTiktok(html, url);
-    if (result.ok) return JSON.stringify(result);
+    if (result.ok) return result;
     const state = (window as any).__UNIVERSAL_DATA_FOR_REHYDRATION__;
     if (state && typeof state === 'object') {
-      return JSON.stringify(parseTiktok(JSON.stringify(state), url));
+      return parseTiktok(JSON.stringify(state), url);
     }
-    return JSON.stringify(result);
+    return result;
   }
   if (moduleId === 'xhs') {
     const state = (window as any).__INITIAL_STATE__;
@@ -121,14 +165,14 @@ export function parsePageForModule(moduleId: string, thumbnailScenes: string[] =
               ? (note["noteId"] as string)
               : (wantedId ?? "");
           if (noteId) {
-            return JSON.stringify(buildNoteFromRecord(note, noteId, url, thumbnailScenes));
+            return buildNoteFromRecord(note, noteId, url, thumbnailScenes);
           }
         }
       } catch (_) {
         // fall through to regular parsing
       }
     }
-    return JSON.stringify(parseXhs(html, url, thumbnailScenes));
+    return parseXhs(html, url, thumbnailScenes);
   }
   if (moduleId === 'instagram') {
     const shortcode = shortcodeFromUrl(url);
@@ -141,14 +185,14 @@ export function parsePageForModule(moduleId: string, thumbnailScenes: string[] =
             source: igParseSourceOfProduct(product),
             mediaType: mediaTypeOf(result.data.items),
             items: result.data.items.length,
-            loginWall: hasLoginWall(document.documentElement.outerHTML) ? 1 : 0,
+            loginWall: hasLoginWall(html) ? 1 : 0,
           }),
         );
       }
-      return JSON.stringify(result);
+      return result;
     }
     const res = parseInstagram(html, url, smallThumbnail);
-    if (res.ok) return JSON.stringify(res);
+    if (res.ok) return res;
     const domRes = parseInstagramFromDom(document, url);
     if (domRes && domRes.ok) {
       console.info?.(
@@ -156,38 +200,52 @@ export function parsePageForModule(moduleId: string, thumbnailScenes: string[] =
           source: 'og_meta',
           mediaType: mediaTypeOf(domRes.data.items),
           items: domRes.data.items.length,
-          loginWall: hasLoginWall(document.documentElement.outerHTML) ? 1 : 0,
+          loginWall: hasLoginWall(html) ? 1 : 0,
         }),
       );
-      return JSON.stringify(domRes);
+      return domRes;
     }
-    return JSON.stringify(res);
+    return res;
   }
   if (moduleId === 'x') {
-    return JSON.stringify({
+    return {
       ok: false,
       error: { code: 'UNSUPPORTED_URL', message: 'X posts require syndication JSON input to parse(input, pageUrl)' }
-    });
+    };
   }
-  return JSON.stringify({ ok: false, error: { code: 'UNSUPPORTED_URL', message: `Unsupported host: ${url}` } });
+  return { ok: false, error: { code: 'UNSUPPORTED_URL', message: `Unsupported host: ${url}` } };
 }
 
 export function parse(input: string, pageUrl: string, moduleId?: string, thumbnailScenes: string[] = [], smallThumbnail = false): string {
-  if (moduleId ? moduleId === 'tiktok' : isTiktokLink(pageUrl)) return JSON.stringify(parseTiktok(input, pageUrl));
+  try {
+    return JSON.stringify(parseObject(input, pageUrl, moduleId, thumbnailScenes, smallThumbnail));
+  } catch (_) {
+    return JSON.stringify(unreadablePage());
+  }
+}
+
+function parseObject(input: string, pageUrl: string, moduleId: string | undefined, thumbnailScenes: string[], smallThumbnail: boolean): any {
+  if (moduleId ? moduleId === 'tiktok' : isTiktokLink(pageUrl)) return parseTiktok(input || '', pageUrl);
   const host = hostnameOf(pageUrl);
   if (!host) {
-    return JSON.stringify({ ok: false, error: { code: 'UNSUPPORTED_URL', message: `Cannot parse URL: ${pageUrl}` } });
+    return { ok: false, error: { code: 'UNSUPPORTED_URL', message: `Cannot parse URL: ${pageUrl}` } };
   }
   if (moduleId ? moduleId === 'xhs' : isXhsHost(host)) {
-    return JSON.stringify(parseXhs(input, pageUrl, thumbnailScenes));
+    if (xhsLandingPage(pageUrl)) {
+      return { ok: false, error: { code: 'LOGIN_REQUIRED', message: XHS_LOGIN_REQUIRED } };
+    }
+    // The page's own `loggedIn` is readable even when the document is not, so a
+    // signed-out App is told to sign in instead of being shown the platform's
+    // untranslated "authenticated-only shell" answer.
+    return parseXhs(input || '', pageUrl, thumbnailScenes);
   }
   if (moduleId ? moduleId === 'instagram' : isInstagramHost(host)) {
-    return JSON.stringify(parseInstagram(input, pageUrl, smallThumbnail));
+    return parseInstagram(input || '', pageUrl, smallThumbnail);
   }
   if (moduleId ? moduleId === 'x' : isXHost(host)) {
-    return JSON.stringify(parseX(input, pageUrl));
+    return parseX(input || '', pageUrl);
   }
-  return JSON.stringify({ ok: false, error: { code: 'UNSUPPORTED_URL', message: `Unsupported host: ${host}` } });
+  return { ok: false, error: { code: 'UNSUPPORTED_URL', message: `Unsupported host: ${host}` } };
 }
 
 export { parseXhs, parseInstagram, parseX, calculateToken, extractTweetId };

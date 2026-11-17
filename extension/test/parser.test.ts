@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll } from 'vitest';
-import { readFileSync } from 'fs';
+import { existsSync, readFileSync } from 'fs';
 import { join, dirname, resolve } from 'path';
 import { fileURLToPath } from 'url';
 
@@ -10,6 +10,15 @@ const __dirname = dirname(__filename);
 const fixturesDir = resolve(__dirname, '../../spec/fixtures');
 const sourcesPath = resolve(fixturesDir, 'sources.json');
 const parserBundlePath = resolve(__dirname, '../../app/assets/parser/parser.js');
+// A parser release that changes a fixture's output adds `<base>.expected.<version>.json`
+// beside the existing expectation; the vector for the version being built wins,
+// so an older expectation stays as the record of what the previous release produced.
+const parserVersion = readFileSync(resolve(__dirname, '../../spec/PARSER_VERSION'), 'utf-8').trim();
+
+function expectedPathFor(platformDir: string, inputFile: string, ext: string): string {
+  const versioned = join(platformDir, inputFile.replace(ext, `.expected.${parserVersion}.json`));
+  return existsSync(versioned) ? versioned : join(platformDir, inputFile.replace(ext, '.expected.json'));
+}
 
 describe('Parser bundle verification', () => {
   let EasySaveParser: any;
@@ -64,13 +73,13 @@ describe('Parser bundle verification', () => {
     const platformSources = sources[platform] || {};
     const pairs = [];
     for (const file of files) {
-      if (file.endsWith('.expected.json')) continue;
+      if (file.endsWith('.expected.json') || file.includes('.expected.')) continue;
       const isHtml = file.endsWith('.html');
       const isJson = platform === 'x' && file.endsWith('.json');
       if (isHtml || isJson) {
         const ext = isHtml ? '.html' : '.json';
         const inputPath = join(platformDir, file);
-        const jsonPath = join(platformDir, file.replace(ext, '.expected.json'));
+        const jsonPath = expectedPathFor(platformDir, file, ext);
         const input = readFileSync(inputPath, 'utf-8');
         const expected = JSON.parse(readFileSync(jsonPath, 'utf-8'));
         // Keep the original spec vector; assert the new post-level field too.

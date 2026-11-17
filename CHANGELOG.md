@@ -5,6 +5,17 @@ This file documents notable user-facing changes following [Keep a Changelog](htt
 
 本稿依据 `docs/tasks/` 的任务文档与交接记录回顾整理；v1.10 已按用户确认的代码版本 0e367c1 定稿并随本节发布。
 
+## [Unreleased]
+
+### 解析器 / Parser
+
+- parser 1.4.17（`manifestVersion` 14，只走解析器通道，不随 App 版本发布）：已登录但会话失效时不再一律报「该帖子不存在、私密或已删除」。小红书与 Instagram 各自区分两类页面信号——平台自己的「内容不存在 / 无法查看」提示仍按原样回答 `PRIVATE_OR_UNAVAILABLE`；而登录表单、登录提示或跳转到登录页说明是会话失效，回答 `LOGIN_REQUIRED` 并显示「登录可能已失效，请重新登录」，用户可以直接去登录后重新解析。两类信号都读不到时保持 1.4.16 的原有答案。没有新增错误码，仍在用旧版 App 的设备看到的是同一个 `LOGIN_REQUIRED` 与「去登录」按钮，提示文案用解析器给的这一句。
+  Parser 1.4.17 (`manifestVersion` 14, parser channel only — no App release): a signed-in device whose session has expired is no longer always told 该帖子不存在、私密或已删除. Xiaohongshu and Instagram now tell two kinds of page signal apart — the platform's own 内容不存在 / 无法查看 notice keeps answering `PRIVATE_OR_UNAVAILABLE`, while a login form, a login prompt or a redirect to the login page means the session is gone, which answers `LOGIN_REQUIRED` with 登录可能已失效，请重新登录 so the user can sign in and parse again. When neither signal is readable the pre-1.4.16 answer stands. No error code was added: an older App sees the same `LOGIN_REQUIRED` and its 去登录 button, showing the engine's own sentence.
+- 小红书帖子链接被重定向回首页（`/explore`）或登录页时，解析器不再把它当普通失败：App 未登录时回答 `LOGIN_REQUIRED` 并提示先登录，App 认为已登录时按会话失效提示重新登录。同时所有钩子在任何页面状态下都返回 App 能识别的结构——文档正在被替换、模块无法判断时返回 `INVALID_PAGE` 等已有错误码，不再抛异常，界面不会再出现 `FormatException: Invalid parser hook result` 这类原始异常文案与非登录的「重试」。
+  When a Xiaohongshu note link is redirected back to the home feed (`/explore`) or to the login page, the parser no longer treats it as an ordinary failure: a signed-out App gets `LOGIN_REQUIRED` with the sign-in prompt, and an App that believes it is signed in gets the expired-session prompt. Every hook now also answers a shape the App recognises in any page state — a document being replaced, or a module that cannot tell, answers an existing code such as `INVALID_PAGE` instead of throwing, so raw text such as `FormatException: Invalid parser hook result` with a bare 重试 can no longer reach the screen.
+- 小红书图片（含实况的静态图）由解析器直接给出 `imageView2/format/jpg/q/100` 的全质量 JPEG 候选，排在其他 JPEG 候选与原图之前；服务端只转 `format/jpg` 会重编码到约四分之一体积，`/q/100` 才回到原图大小与分辨率。视频候选与其他平台不变。v1.11.0 已在派生后按最终 URL 去重，v1.10.3 会因候选集里已有同一地址的 JPEG 转码而不再派生，v1.10.2 本就不派生——三个版本的候选列表、排序与请求策略均已验证，同一地址不会被请求两次。
+  Xiaohongshu stills (including a Live photo's still) now carry the CDN's full-quality JPEG transcode `imageView2/format/jpg/q/100` from the parser itself, ahead of every other JPEG candidate and of the stored original: `format/jpg` alone re-encodes down to about a quarter of the bytes, and only `/q/100` comes back to the original size and resolution. Video candidates and other platforms are unchanged. v1.11.0 already deduplicates by final URL after derivation, v1.10.3 stops deriving because the candidate set already holds a JPEG transcode of that address, and v1.10.2 never derived — candidate lists, ordering and the request policy were verified on all three, so no address is requested twice.
+
 ## [1.11.0] - 2026-11-16
 
 ### 新增 / Added
