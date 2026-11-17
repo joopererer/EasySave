@@ -20,6 +20,20 @@ String parsePathCategory(Uri? uri) {
   return 'other';
 }
 
+/// True for Xiaohongshu unauthenticated redirect landing routes
+/// (e.g. `/explore` home feed without post id, or `/login`).
+bool isXhsUnauthenticatedRedirect(Uri? uri) {
+  if (uri == null) return false;
+  final path = uri.path.toLowerCase();
+  if (path.isEmpty || path == '/' || RegExp(r'^/explore/?$').hasMatch(path)) {
+    return true;
+  }
+  if (RegExp(r'^/login(?:/|$)').hasMatch(path)) {
+    return true;
+  }
+  return false;
+}
+
 String terminalPathCategory(Uri uri) {
   if (uri.path.isEmpty ||
       uri.path == '/' ||

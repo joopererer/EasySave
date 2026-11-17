@@ -16,6 +16,7 @@ import '../core/models.dart';
 import 'auth.dart'
     show
         SessionStatus,
+        XhsDomainCoordinator,
         isLoopbackHost,
         logXhsWebViewCookies,
         selectXhsPostUrl,
@@ -108,14 +109,21 @@ Future<String> chooseFinalParseUrl(
   String url,
   SiteDefinition site, {
   String entry = 'app_input',
+  XhsDomainCoordinator? coordinator,
 }) async {
   final uri = Uri.tryParse(url);
   if (site.id != 'xhs' || uri == null || !site.hasHost(uri.host)) return url;
+  if (isXhsUnauthenticatedRedirect(uri)) return url;
   final id = site.sourceId(uri);
   if (id == null) return url;
-  final selected = await selectXhsPostUrl(url, id, entry: entry);
+  final selected = await selectXhsPostUrl(
+    url,
+    id,
+    entry: entry,
+    coordinator: coordinator,
+  );
   unawaited(DevLog.write('ParseWebView', 'event=domain source=${safeCacheLabel(entry)} '
-      'site=xhs selected=${Uri.parse(selected).host} result=${selected == url ? 'original' : 'alternate'}'));
+      'site=xhs selected=${Uri.parse(selected).host} result=${selected == url ? 'original' : 'alternate'} switches=${coordinator?.switchCount ?? 0}'));
   return selected;
 }
 
@@ -166,8 +174,10 @@ Future<T> resolveAndEnterParse<T>(
   Future<String?> Function(Uri)? readRedirect,
   Duration? timeout,
   String entry = 'app_input',
+  XhsDomainCoordinator? coordinator,
 }) async {
   final uri = Uri.parse(url);
+  final domainCoordinator = coordinator ?? (site.id == 'xhs' ? XhsDomainCoordinator() : null);
   final rule = site.shortLink(uri);
   if (rule != null && _shortLinkStrategy(rule) != 'http') {
     // WebView strategy: the browser engine follows the short link and the
@@ -236,7 +246,12 @@ Future<T> resolveAndEnterParse<T>(
     );
     throw ParseFailure(ParseErrorCode.invalidPage, '短链跳转目标不是作品页面');
   }
-  final selected = await chooseFinalParseUrl(resolved, site, entry: entry);
+  final selected = await chooseFinalParseUrl(
+    resolved,
+    site,
+    entry: entry,
+    coordinator: domainCoordinator,
+  );
   return enter(selected, canonical);
 }
 
@@ -545,12 +560,19 @@ Future<ParseOutcome> _parsePostOutcomeUncached(
   final hooks = ParserHooks(script, site);
   try {
     return await (() async {
+      final coordinator = site.id == 'xhs' ? XhsDomainCoordinator() : null;
       final result = await resolveAndEnterParse(
         url,
         site,
-        (loadUrl, _) => _run(hooks, loadUrl, source: source),
+        (loadUrl, _) => _run(
+          hooks,
+          loadUrl,
+          source: source,
+          coordinator: coordinator,
+        ),
         timeout: remaining(),
         entry: source,
+        coordinator: coordinator,
       );
       // Diagnostics only: retweets and quote tweets may answer with a payload
       // id that differs from the one in the link (v1.9.0 kept parsing).
@@ -1032,8 +1054,15 @@ Future<ParseOutcome> _run(
   String targetUrl, {
   required String source,
   bool entryPage = false,
+  XhsDomainCoordinator? coordinator,
 }) async {
-  targetUrl = await chooseFinalParseUrl(targetUrl, hooks.site, entry: source);
+  final domainCoordinator = coordinator ?? (hooks.site.id == 'xhs' ? XhsDomainCoordinator() : null);
+  targetUrl = await chooseFinalParseUrl(
+    targetUrl,
+    hooks.site,
+    entry: source,
+    coordinator: domainCoordinator,
+  );
   // A logged-in entry page is a WebView page load even for a JSON site.
   final jsonMode = hooks.site.load['mode'] == 'json' && !entryPage;
   final target = Uri.tryParse(targetUrl);
@@ -1091,7 +1120,8 @@ Future<ParseOutcome> _run(
         checkingReady = true;
         try {
           final current = (await controller.getUrl())?.toString();
-          if (current != null && current == await chooseFinalParseUrl(current, hooks.site, entry: source) &&
+          if (hooks.site.id == 'xhs' && isXhsUnauthenticatedRedirect(Uri.tryParse(current ?? ''))) return;
+          if (current != null && current == await chooseFinalParseUrl(current, hooks.site, entry: source, coordinator: domainCoordinator) &&
               hooks.site.sourceId(Uri.parse(current)) != null &&
               await hooks.call(controller, 'ready', current) == true && !loaded.isCompleted) {
             stage = 'document_ready';
@@ -1107,10 +1137,14 @@ Future<ParseOutcome> _run(
           return NavigationActionPolicy.CANCEL;
         }
         if (action.isForMainFrame == true) {
+          if (hooks.site.id == 'xhs' && isXhsUnauthenticatedRedirect(uri)) {
+            return NavigationActionPolicy.ALLOW;
+          }
           final selected = await chooseFinalParseUrl(
             uri.toString(),
             hooks.site,
             entry: source,
+            coordinator: domainCoordinator,
           );
           if (selected != uri.toString()) {
             await controller.loadUrl(
@@ -1142,11 +1176,20 @@ Future<ParseOutcome> _run(
           if (!jsonMode) {
             stage = 'navigate';
             final current = uri?.toString() ?? targetUrl;
+            if (hooks.site.id == 'xhs' && isXhsUnauthenticatedRedirect(uri)) {
+              DevLog.write(
+                'ParseWebView',
+                'event=unauthenticated_redirect source=$source site=xhs path=$path loads=$loads navigations=$mainNavigations',
+              );
+              loaded.complete(controller);
+              return;
+            }
             // Android may omit shouldOverrideUrlLoading for redirect navigations.
             final selected = await chooseFinalParseUrl(
               current,
               hooks.site,
               entry: source,
+              coordinator: domainCoordinator,
             );
             if (selected != current) {
               await controller.loadUrl(
@@ -1177,6 +1220,7 @@ Future<ParseOutcome> _run(
                   step.url!,
                   hooks.site,
                   entry: source,
+                  coordinator: domainCoordinator,
                 );
                 await controller.loadUrl(
                   urlRequest: URLRequest(url: WebUri(next)),
