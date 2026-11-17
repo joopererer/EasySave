@@ -11,6 +11,7 @@
     "xhs_profile_route": "https://www.xiaohongshu.com/explore/670f1a2b000000001e028b12",
     "xhs_session_expired": "https://www.xiaohongshu.com/explore/6aca089a000000000a01efb4",
     "xhs_note_deleted": "https://www.xiaohongshu.com/explore/6aca089a000000000a01efb4?xsec_token=fixture-deleted",
+    "xhs_redirected_home": "https://www.xiaohongshu.com/explore",
     "build29_video_audio_stream": "https://www.xiaohongshu.com/explore/6720aa0b000000001b0299a1"
   },
   "instagram": {

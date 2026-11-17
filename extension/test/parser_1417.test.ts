@@ -267,3 +267,125 @@ describe('the parser hands out the full-quality JPEG candidate itself', () => {
     }
   });
 });
+
+// ---------------------------------------------------------------------------
+// manifestVersion 14: a note request Xiaohongshu bounces to the home feed, and
+// the rule that no hook may ever answer `null` or throw. A throw reaches the App
+// as an empty WebView answer, which it reported as
+// `FormatException: Invalid parser hook result` with nothing but a retry.
+// ---------------------------------------------------------------------------
+
+const LANDING = 'https://www.xiaohongshu.com/explore';
+const XHS_LOGIN_TEXT = '需要先登录小红书才能解析该笔记';
+
+/** Put a document (or its absence) and a page address in front of the hooks. */
+function pageStub(html: string | null, href: string, tornDown = false): void {
+  const element = html === null ? null : { outerHTML: html };
+  vi.stubGlobal('document', tornDown
+    ? {
+        get documentElement(): { outerHTML: string } { throw new Error('document is being replaced'); },
+        querySelector: () => null,
+        querySelectorAll: () => [],
+      }
+    : { documentElement: element, querySelector: () => null, querySelectorAll: () => [] });
+  const page = { location: { href } };
+  vi.stubGlobal('location', page.location);
+  vi.stubGlobal('window', page);
+}
+
+/** Call one hook and hand back its `value`, or fail loudly on a bad answer. */
+function hookValue(moduleId: string, hook: string, extra: Record<string, unknown> = {}): any {
+  const raw = moduleCall(moduleId, hook, { site: site(moduleId), ...extra } as any);
+  const decoded = JSON.parse(raw);
+  expect(decoded, `${moduleId}.${hook} must answer {value: ...}`).toHaveProperty('value');
+  return decoded.value;
+}
+
+describe('a note request that lands on the home feed', () => {
+  it('answers LOGIN_REQUIRED with the existing sign-in text (parsePage)', () => {
+    pageStub(fixture('xhs/xhs_redirected_home.html'), LANDING);
+    expect(hookValue('xhs', 'parsePage', { url: LANDING }))
+      .toEqual({ ok: false, error: { code: 'LOGIN_REQUIRED', message: XHS_LOGIN_TEXT } });
+  });
+
+  it('answers the same through the guest HTML path', () => {
+    const value = hookValue('xhs', 'parse', {
+      url: LANDING, input: fixture('xhs/xhs_redirected_home.html'),
+    });
+    expect(value.ok).toBe(false);
+    expect(value.error).toEqual({ code: 'LOGIN_REQUIRED', message: XHS_LOGIN_TEXT });
+  });
+
+  it('the login page is the same landing page', () => {
+    pageStub('<html></html>', 'https://www.xiaohongshu.com/login');
+    expect(hookValue('xhs', 'parsePage', { url: 'https://www.xiaohongshu.com/login' }).error.code)
+      .toBe('LOGIN_REQUIRED');
+  });
+
+  it('a signed-out App is told to sign in; a signed-in App that the session died', () => {
+    const error = { code: 'LOGIN_REQUIRED', message: 'Xiaohongshu returned an authenticated-only shell without note data.' };
+    expect(classify('xhs', fixture('xhs/xhs_redirected_home.html'), LANDING, error, false))
+      .toEqual({ code: 'LOGIN_REQUIRED', message: XHS_LOGIN_TEXT });
+    expect(classify('xhs', fixture('xhs/xhs_redirected_home.html'), LANDING, error, true))
+      .toEqual({ code: 'LOGIN_REQUIRED', message: '登录可能已失效，请重新登录' });
+  });
+
+  it('the home feed document itself never parses as a note', () => {
+    // Same document, but the address still names a note: the answer stays a
+    // failure, so a feed card can never be presented as the requested post.
+    pageStub(fixture('xhs/xhs_redirected_home.html'), XHS_URL);
+    expect(hookValue('xhs', 'parsePage', { url: XHS_URL }).ok).toBe(false);
+  });
+});
+
+describe('no hook answers null or throws, whatever the page state', () => {
+  const modulesToCheck = ['xhs', 'instagram', 'tiktok', 'x'];
+  const hooksToCheck = ['install', 'ready', 'prepare', 'parsePage', 'parse', 'classify', 'probe', 'navigate', 'account'];
+  const parseFailureShape = (value: any) => {
+    expect(value.ok).toBe(false);
+    // An existing error code with a readable sentence, never an exception.
+    expect(value.error.code).toMatch(/^[A-Z_]{2,40}$/);
+    expect(value.error.code).not.toBe('UNEXPECTED');
+    expect(typeof value.error.message).toBe('string');
+    expect(value.error.message.length).toBeGreaterThan(0);
+  };
+  const shapes: Record<string, (value: any) => void> = {
+    parse: parseFailureShape,
+    parsePage: parseFailureShape,
+    classify: (value) => expect(typeof value.code).toBe('string'),
+    probe: (value) => expect(value).toBeTypeOf('object'),
+  };
+
+  for (const state of ['absent', 'torn-down'] as const) {
+    it(`survives a ${state} document on every module and hook`, () => {
+      for (const moduleId of modulesToCheck) {
+        for (const hook of hooksToCheck) {
+          pageStub(null, XHS_URL, state === 'torn-down');
+          const value = hookValue(moduleId, hook, {
+            url: XHS_URL, input: '', error: { code: 'INVALID_PAGE', message: 'x' }, loggedIn: false,
+          });
+          if (shapes[hook]) shapes[hook](value);
+          else if (hook === 'install' || hook === 'navigate' || hook === 'account') {
+            // `null` is the documented "nothing to do" answer for these hooks;
+            // the xhs account hook answers an object instead.
+            expect(value === null || typeof value === 'object').toBe(true);
+          } else expect(typeof value).toBe('boolean');
+        }
+      }
+    });
+  }
+
+  it('a note page whose document is gone is INVALID_PAGE, not a login guess', () => {
+    pageStub(null, XHS_URL);
+    expect(hookValue('xhs', 'parsePage', { url: XHS_URL })).toEqual({
+      ok: false, error: { code: 'INVALID_PAGE', message: '页面内容无法识别，可能已改版' },
+    });
+  });
+
+  it('the parser never invents a probe payload', () => {
+    pageStub('<html></html>', XHS_URL);
+    for (const moduleId of modulesToCheck) {
+      expect(hookValue(moduleId, 'probe', { url: XHS_URL }), moduleId).not.toBeNull();
+    }
+  });
+});

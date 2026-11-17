@@ -54,7 +54,9 @@ describe('XHS image download candidates', () => {
       expect(item.downloadOrder[0]).toBe(`${item.url}?imageView2/format/jpg/q/100`);
       expect(xhsImageVariant(item.downloadOrder[0])).toBe('jpeg');
     });
-    expect(() => moduleCall('xhs', 'decorate', { url: '', site })).toThrow('UNSUPPORTED_HOOK');
+    // `decorate` is internal to the bundle: asking for it as a hook is answered
+    // with nothing rather than an exception the App would show as a crash.
+    expect(JSON.parse(moduleCall('xhs', 'decorate', { url: '', site })).value).toBeNull();
   });
 
   it('probes field names, scenes, declared size and the selected variant', () => {

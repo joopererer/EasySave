@@ -30,7 +30,8 @@ var EasySaveParser = (() => {
     parsePage: () => parsePage,
     parsePageForModule: () => parsePageForModule,
     parseX: () => parseX,
-    parseXhs: () => parseXhs
+    parseXhs: () => parseXhs,
+    unreadablePage: () => unreadablePage
   });
 
   // src/ai-label.ts
@@ -812,6 +813,16 @@ var EasySaveParser = (() => {
     if (pageUrl && /^https?:\/\/[^/]+\/login(?:[/?#]|$)/i.test(pageUrl)) return "login_wall";
     if (XHS_LOGIN_WALL_MARKERS.some((marker) => marker.test(page2))) return "login_wall";
     return void 0;
+  }
+  var XHS_LOGIN_REQUIRED = "\u9700\u8981\u5148\u767B\u5F55\u5C0F\u7EA2\u4E66\u624D\u80FD\u89E3\u6790\u8BE5\u7B14\u8BB0";
+  function xhsLandingPage(pageUrl) {
+    try {
+      const { pathname } = new URL(pageUrl);
+      if (/^\/login(?:\/|$)/i.test(pathname)) return true;
+      return /^\/explore\/?$/i.test(pathname);
+    } catch (_) {
+      return false;
+    }
   }
 
   // src/instagram.ts
@@ -1925,6 +1936,7 @@ var EasySaveParser = (() => {
   var page = () => window;
   var failure2 = (code, message) => ({ code, message });
   var SESSION_EXPIRED = "\u767B\u5F55\u53EF\u80FD\u5DF2\u5931\u6548\uFF0C\u8BF7\u91CD\u65B0\u767B\u5F55";
+  var unreadable = () => failure2("INVALID_PAGE", "\u9875\u9762\u5185\u5BB9\u65E0\u6CD5\u8BC6\u522B\uFF0C\u53EF\u80FD\u5DF2\u6539\u7248");
   var pageHtml = () => {
     try {
       return document.documentElement.outerHTML || "";
@@ -2005,8 +2017,10 @@ var EasySaveParser = (() => {
       },
       classify: (c) => {
         if (!["LOGIN_REQUIRED", "INVALID_PAGE"].includes(c.error?.code)) return c.error;
-        if (!c.loggedIn) return failure2("LOGIN_REQUIRED", "\u9700\u8981\u5148\u767B\u5F55\u5C0F\u7EA2\u4E66\u624D\u80FD\u89E3\u6790\u8BE5\u7B14\u8BB0");
-        if (xhsPageSignal(pageHtml(), c.url) === "login_wall") return failure2("LOGIN_REQUIRED", SESSION_EXPIRED);
+        if (!c.loggedIn) return failure2("LOGIN_REQUIRED", XHS_LOGIN_REQUIRED);
+        if (xhsLandingPage(c.url || "") || xhsPageSignal(pageHtml(), c.url) === "login_wall") {
+          return failure2("LOGIN_REQUIRED", SESSION_EXPIRED);
+        }
         return failure2("PRIVATE_OR_UNAVAILABLE", "\u672A\u80FD\u8BFB\u53D6\u7B14\u8BB0\u5185\u5BB9\uFF08\u5206\u4EAB\u94FE\u63A5\u53EF\u80FD\u5DF2\u8FC7\u671F\uFF0C\u8BF7\u91CD\u65B0\u7C98\u8D34\u539F\u5206\u4EAB\u94FE\u63A5\u518D\u8BD5\uFF09");
       }
     },
@@ -2027,7 +2041,7 @@ var EasySaveParser = (() => {
         }
         return false;
       },
-      probe: () => null,
+      probe: () => ({ tag: "IgParse", reason: "no_probe" }),
       classify: (c) => {
         if (c.error?.code !== "LOGIN_REQUIRED" || !c.loggedIn) return c.error;
         if (instagramPageSignal(pageHtml(), c.url) === "login_wall") {
@@ -2047,14 +2061,69 @@ var EasySaveParser = (() => {
     }
   };
   function moduleCall(moduleId, hook, context) {
-    if (!Object.hasOwn(modules, moduleId)) throw new Error("UNSUPPORTED_MODULE");
+    try {
+      return runHook(moduleId, hook, context);
+    } catch (_) {
+      return fallbackHook(hook, context);
+    }
+  }
+  function fallbackHook(hook, context) {
+    switch (hook) {
+      case "parse":
+      case "parsePage":
+        return JSON.stringify({ value: { ok: false, error: unreadable() } });
+      case "classify":
+        return JSON.stringify({ value: context?.error ?? unreadable() });
+      case "ready":
+      case "prepare":
+        return JSON.stringify({ value: false });
+      case "probe":
+        return JSON.stringify({ value: { tag: "NoProbe" } });
+      default:
+        return JSON.stringify({ value: null });
+    }
+  }
+  function emptyHookValue(hook, context) {
+    switch (hook) {
+      case "install":
+      case "navigate":
+      case "account":
+        return null;
+      case "ready":
+      case "prepare":
+        return false;
+      case "classify":
+        return context.error ?? unreadable();
+      case "probe":
+        return { tag: "NoProbe" };
+      default:
+        return null;
+    }
+  }
+  function parseObjectOrUnreadable(raw) {
+    try {
+      const parsed = JSON.parse(String(raw));
+      return parsed && typeof parsed === "object" ? parsed : { ok: false, error: unreadable() };
+    } catch (_) {
+      return { ok: false, error: unreadable() };
+    }
+  }
+  function runHook(moduleId, hook, context) {
+    if (!Object.hasOwn(modules, moduleId)) {
+      return hook === "parse" || hook === "parsePage" ? JSON.stringify({ value: { ok: false, error: unreadable() } }) : fallbackHook(hook, context);
+    }
     if (hook === "decorate") throw new Error("UNSUPPORTED_HOOK");
     if (hook === "classify" && context.error?.code === "PRIVATE_OR_UNAVAILABLE" && context.site.auth.mode !== "none" && !context.loggedIn && moduleId !== "x") {
       context = { ...context, error: failure2("LOGIN_REQUIRED", "\u53EF\u80FD\u9700\u8981\u767B\u5F55" + context.site.displayName) };
     }
     const module = modules[moduleId];
+    const scenes = context.site?.download?.thumbnailScenes;
+    const smallThumbnail = context.site?.download?.thumbnailVariant === "smallestCandidate";
     const output = (value) => JSON.stringify({ value: hook === "parse" || hook === "parsePage" ? withMediaResources(module.decorate ? module.decorate(value) : value, context.site, (url) => module.expiresAt?.({ ...context, url })) : value });
-    if (Object.hasOwn(module, hook)) return output(module[hook](context) ?? null);
+    if (Object.hasOwn(module, hook)) {
+      const value = module[hook](context);
+      return output(value === void 0 ? emptyHookValue(hook, context) : value);
+    }
     switch (hook) {
       case "install":
       case "navigate":
@@ -2065,19 +2134,20 @@ var EasySaveParser = (() => {
       case "ready":
         return JSON.stringify({ value: true });
       case "parsePage": {
-        try {
-          const result = JSON.parse(parsePageForModule(moduleId, context.site.download?.thumbnailScenes, context.site.download?.thumbnailVariant === "smallestCandidate"));
-          if (result.ok) return output(result);
-        } catch (_) {
-        }
-        return output(appFacing(moduleId, JSON.parse(parse(document.documentElement.outerHTML, context.url, moduleId, context.site.download?.thumbnailScenes, context.site.download?.thumbnailVariant === "smallestCandidate")), context.caps));
+        const html = pageHtml();
+        const cached = parseObjectOrUnreadable(parsePageForModule(moduleId, scenes, smallThumbnail));
+        if (cached.ok) return output(cached);
+        if (!html) return output(cached);
+        return output(appFacing(moduleId, parseObjectOrUnreadable(parse(html, context.url, moduleId, scenes, smallThumbnail)), context.caps));
       }
       case "parse":
-        return output(appFacing(moduleId, JSON.parse(parse(context.input || "", context.url, moduleId, context.site.download?.thumbnailScenes, context.site.download?.thumbnailVariant === "smallestCandidate")), context.caps));
+        return output(appFacing(moduleId, parseObjectOrUnreadable(parse(context.input || "", context.url, moduleId, scenes, smallThumbnail)), context.caps));
       case "classify": {
         const error = context.error;
-        return JSON.stringify({ value: error?.code === "PRIVATE_OR_UNAVAILABLE" && context.site.auth.mode !== "none" && !context.loggedIn ? failure2("LOGIN_REQUIRED", "\u53EF\u80FD\u9700\u8981\u767B\u5F55" + context.site.displayName) : error });
+        return JSON.stringify({ value: error?.code === "PRIVATE_OR_UNAVAILABLE" && context.site.auth.mode !== "none" && !context.loggedIn ? failure2("LOGIN_REQUIRED", "\u53EF\u80FD\u9700\u8981\u767B\u5F55" + context.site.displayName) : error ?? unreadable() });
       }
+      case "probe":
+        return JSON.stringify({ value: { tag: "NoProbe" } });
       default:
         throw new Error("UNSUPPORTED_HOOK");
     }
@@ -2091,6 +2161,25 @@ var EasySaveParser = (() => {
   function shortcodeFromUrl(url) {
     const m = /\/(?:p|reels?|tv)\/([A-Za-z0-9-_]+)/.exec(url);
     return m ? m[1] : void 0;
+  }
+  function unreadablePage() {
+    return { ok: false, error: { code: "INVALID_PAGE", message: "\u9875\u9762\u5185\u5BB9\u65E0\u6CD5\u8BC6\u522B\uFF0C\u53EF\u80FD\u5DF2\u6539\u7248" } };
+  }
+  function readableDocumentHtml() {
+    try {
+      const element = document && document.documentElement;
+      const html = element ? element.outerHTML : void 0;
+      return typeof html === "string" && html.length > 0 ? html : void 0;
+    } catch (_) {
+      return void 0;
+    }
+  }
+  function currentPageUrl() {
+    try {
+      return window.location && window.location.href || "";
+    } catch (_) {
+      return "";
+    }
   }
   function parseInstagramFromDom(doc, pageUrl) {
     const shortcodeMatch = /\/(?:p|reels?|tv)\/([A-Za-z0-9-_]+)/.exec(pageUrl);
@@ -2148,21 +2237,32 @@ var EasySaveParser = (() => {
     };
   }
   function parsePage() {
-    const url = window.location.href;
+    const url = currentPageUrl();
     const moduleId = isTiktokLink(url) ? "tiktok" : isXhsHost(url) ? "xhs" : isInstagramHost(url) ? "instagram" : isXHost(url) ? "x" : "";
     return parsePageForModule(moduleId);
   }
   function parsePageForModule(moduleId, thumbnailScenes = [], smallThumbnail = false) {
-    const url = window.location.href;
-    const html = document.documentElement.outerHTML;
+    try {
+      return JSON.stringify(parsePageObject(moduleId, thumbnailScenes, smallThumbnail));
+    } catch (_) {
+      return JSON.stringify(unreadablePage());
+    }
+  }
+  function parsePageObject(moduleId, thumbnailScenes, smallThumbnail) {
+    const url = currentPageUrl();
+    if (moduleId === "xhs" && xhsLandingPage(url)) {
+      return { ok: false, error: { code: "LOGIN_REQUIRED", message: XHS_LOGIN_REQUIRED } };
+    }
+    const html = readableDocumentHtml();
+    if (html === void 0) return unreadablePage();
     if (moduleId === "tiktok") {
       const result = parseTiktok(html, url);
-      if (result.ok) return JSON.stringify(result);
+      if (result.ok) return result;
       const state = window.__UNIVERSAL_DATA_FOR_REHYDRATION__;
       if (state && typeof state === "object") {
-        return JSON.stringify(parseTiktok(JSON.stringify(state), url));
+        return parseTiktok(JSON.stringify(state), url);
       }
-      return JSON.stringify(result);
+      return result;
     }
     if (moduleId === "xhs") {
       const state = window.__INITIAL_STATE__;
@@ -2173,13 +2273,13 @@ var EasySaveParser = (() => {
           if (note) {
             const noteId = typeof note["noteId"] === "string" && note["noteId"].length > 0 ? note["noteId"] : wantedId ?? "";
             if (noteId) {
-              return JSON.stringify(buildNoteFromRecord(note, noteId, url, thumbnailScenes));
+              return buildNoteFromRecord(note, noteId, url, thumbnailScenes);
             }
           }
         } catch (_) {
         }
       }
-      return JSON.stringify(parseXhs(html, url, thumbnailScenes));
+      return parseXhs(html, url, thumbnailScenes);
     }
     if (moduleId === "instagram") {
       const shortcode = shortcodeFromUrl(url);
@@ -2192,14 +2292,14 @@ var EasySaveParser = (() => {
               source: igParseSourceOfProduct(product),
               mediaType: mediaTypeOf(result.data.items),
               items: result.data.items.length,
-              loginWall: hasLoginWall(document.documentElement.outerHTML) ? 1 : 0
+              loginWall: hasLoginWall(html) ? 1 : 0
             })
           );
         }
-        return JSON.stringify(result);
+        return result;
       }
       const res = parseInstagram(html, url, smallThumbnail);
-      if (res.ok) return JSON.stringify(res);
+      if (res.ok) return res;
       const domRes = parseInstagramFromDom(document, url);
       if (domRes && domRes.ok) {
         console.info?.(
@@ -2207,37 +2307,47 @@ var EasySaveParser = (() => {
             source: "og_meta",
             mediaType: mediaTypeOf(domRes.data.items),
             items: domRes.data.items.length,
-            loginWall: hasLoginWall(document.documentElement.outerHTML) ? 1 : 0
+            loginWall: hasLoginWall(html) ? 1 : 0
           })
         );
-        return JSON.stringify(domRes);
+        return domRes;
       }
-      return JSON.stringify(res);
+      return res;
     }
     if (moduleId === "x") {
-      return JSON.stringify({
+      return {
         ok: false,
         error: { code: "UNSUPPORTED_URL", message: "X posts require syndication JSON input to parse(input, pageUrl)" }
-      });
+      };
     }
-    return JSON.stringify({ ok: false, error: { code: "UNSUPPORTED_URL", message: `Unsupported host: ${url}` } });
+    return { ok: false, error: { code: "UNSUPPORTED_URL", message: `Unsupported host: ${url}` } };
   }
   function parse(input, pageUrl, moduleId, thumbnailScenes = [], smallThumbnail = false) {
-    if (moduleId ? moduleId === "tiktok" : isTiktokLink(pageUrl)) return JSON.stringify(parseTiktok(input, pageUrl));
+    try {
+      return JSON.stringify(parseObject(input, pageUrl, moduleId, thumbnailScenes, smallThumbnail));
+    } catch (_) {
+      return JSON.stringify(unreadablePage());
+    }
+  }
+  function parseObject(input, pageUrl, moduleId, thumbnailScenes, smallThumbnail) {
+    if (moduleId ? moduleId === "tiktok" : isTiktokLink(pageUrl)) return parseTiktok(input || "", pageUrl);
     const host = hostnameOf(pageUrl);
     if (!host) {
-      return JSON.stringify({ ok: false, error: { code: "UNSUPPORTED_URL", message: `Cannot parse URL: ${pageUrl}` } });
+      return { ok: false, error: { code: "UNSUPPORTED_URL", message: `Cannot parse URL: ${pageUrl}` } };
     }
     if (moduleId ? moduleId === "xhs" : isXhsHost(host)) {
-      return JSON.stringify(parseXhs(input, pageUrl, thumbnailScenes));
+      if (xhsLandingPage(pageUrl)) {
+        return { ok: false, error: { code: "LOGIN_REQUIRED", message: XHS_LOGIN_REQUIRED } };
+      }
+      return parseXhs(input || "", pageUrl, thumbnailScenes);
     }
     if (moduleId ? moduleId === "instagram" : isInstagramHost(host)) {
-      return JSON.stringify(parseInstagram(input, pageUrl, smallThumbnail));
+      return parseInstagram(input || "", pageUrl, smallThumbnail);
     }
     if (moduleId ? moduleId === "x" : isXHost(host)) {
-      return JSON.stringify(parseX(input, pageUrl));
+      return parseX(input || "", pageUrl);
     }
-    return JSON.stringify({ ok: false, error: { code: "UNSUPPORTED_URL", message: `Unsupported host: ${host}` } });
+    return { ok: false, error: { code: "UNSUPPORTED_URL", message: `Unsupported host: ${host}` } };
   }
   return __toCommonJS(parse_page_exports);
 })();

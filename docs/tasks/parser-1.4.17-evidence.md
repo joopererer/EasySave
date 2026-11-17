@@ -273,3 +273,226 @@ node 目录继续使用，node 版本 `v26.13.0`、npm `11.20.0` 未变。）
 签名密钥与 cookie、未请求断点或调试会话、未卸载 App / 清数据 / 删相册文件、
 未改写既有提交与 fixture 输入、`spec/manifest.json` 与 `spec/parser.js`（冻结 1.2.4）
 未变、所有文本保持 LF。
+
+---
+
+# 附录（manifestVersion 14）：build60 真机 FormatException 的定位与修复
+
+本节记录验证包 versionCode 60（内置 parser 1.4.17 / manifestVersion 13）在真机上退出小红书
+登录后解析帖子失败的报告，以及随后的定位、修复与重新构建。上文表格里的
+「manifestVersion 13 / bundle `482fcc75…`」是 1.4.17 的**首次**构建；本附录完成后
+manifestVersion 改为 **14**、bundle 变为 `f49a8928…`（见 §10）。1.4.17 仍未发布。
+
+## 8. 故障与定位
+
+### 8.1 真机现象（build60）
+
+退出小红书登录后解析帖子，界面只有「重试」，标题行是
+`FormatException: Invalid parser hook result 页面内容无法识别，可能已改版`。
+日志（`v16dl_build60.log`）：
+
+```
+[XhsDomain] event=choose from=rednote.com to=xiaohongshu.com reason=alias_valid   （反复）
+[ParseWebView] navigations=15~17  耗时 8.4–8.8s   最终 path=explore
+[ParseMismatch] check=HOOK_RESULT site=xhs hook=parsePage expected={value:<json>} actual=type=Null
+[ParseWebView] event=failure … condition=parse code=UNEXPECTED
+[ParseMismatch] check=UNCAUGHT expected=ParseFailure actual=type=FormatException
+```
+
+### 8.2 `actual=type=Null` 只有一种来源
+
+`parsePage` 在 1.4.16 / 1.4.17 里都不会返回 `null`：所有分支都经过
+`JSON.stringify({value: …})`，失败也是 `{ok:false,error:{code,message}}`。而
+`app/lib/services/parser_hooks.dart` 的 `unwrapHookResult` 里
+`actual=type=Null` 只出现在**整条 JS 答案为空**时（`raw == null` 或 `"null"`），
+即 `evaluateJavascript` 拿到了空结果——也就是 `EasySaveParser.moduleCall(...)`
+**抛了异常**（WebView 把异常折成空返回值）。
+
+复现（把 document 摆成「正在被替换」的样子，两种形态都试）：
+
+| 场景 | parser 1.4.16 | parser 1.4.17（build60） |
+| --- | --- | --- |
+| `document.documentElement === null` | 抛 `TypeError: Cannot read properties of null (reading 'outerHTML')` | 抛同样的 `TypeError` |
+| 读取 `documentElement` 即抛错 | 抛出该错误 | 抛出该错误 |
+| 正常文档（首页/`/explore`） | `LOGIN_REQUIRED` 错误对象 | `LOGIN_REQUIRED` 错误对象 |
+
+`_parse_page.parsePageForModule` 的 `document.documentElement.outerHTML` 与
+`parser-modules.moduleCall` 的 `case 'parsePage'` 分支当时都没有保护；真机上
+15–17 次导航（8.4–8.8s）正好让钩子落在这类过渡态。同类空答案还有两处：
+Instagram 的 `probe: () => null`、TikTok 无 `probe` 钩子时 `moduleCall` 抛
+`UNSUPPORTED_HOOK`（build60 日志里 tiktok 的那行 `hook=probe … type=Null` 就是它）。
+
+### 8.3 1.4.16 与 1.4.17 的对比实验（三份 App 代码）
+
+页面用新 fixture `xhs_redirected_home.html`（帖子链接被重定向到 `/explore`、未登录），
+在 v1.10.2（`516d184`）/ v1.10.3（`ad345e0`）/ v1.11.0（`dfb5915`）的 worktree 上，
+用同一份 harness 分别跑 1.4.16（`91434d22…`）与 1.4.17/14 的 bundle：
+
+| 钩子 / 页面 | 1.4.16（三版结果一致） | 1.4.17 manifestVersion 14（三版结果一致） |
+| --- | --- | --- |
+| `parsePage`（落在 `/explore`） | `LOGIN_REQUIRED`「Xiaohongshu returned an authenticated-only shell without note data.」 | `LOGIN_REQUIRED`「需要先登录小红书才能解析该笔记」 |
+| `classify`（App 未登录） | `LOGIN_REQUIRED`「需要先登录小红书才能解析该笔记」→「去登录」 | 同左 |
+| `classify`（App 认为已登录） | `PRIVATE_OR_UNAVAILABLE`「分享链接可能已过期…」→「返回首页」 | `LOGIN_REQUIRED`「登录可能已失效，请重新登录」→「去登录」 |
+| `parsePage`（帖子 URL + 文档不可读） | **抛异常 → App 得到空答案 → `FormatException`** | `INVALID_PAGE`「页面内容无法识别，可能已改版」 |
+
+结论：
+
+1. **不是 1.4.17 引入的**。同一个「文档不可读」触发条件在 1.4.16 上抛一样的异常，
+   三个 App 版本都一样；1.4.17 只是把「已登录却被弹回首页」从
+   `PRIVATE_OR_UNAVAILABLE` 改成会话失效提示，异常与它无关。
+2. 「重定向到 `/explore`」这个页面本身在 1.4.16 上也不会崩：它给出
+   `LOGIN_REQUIRED` +「去登录」。真机上的空答案来自**钩子与导航竞争**，不是页面解析。
+3. 1.4.16 在三版上的 `PRIVATE_OR_UNAVAILABLE`（「分享链接可能已过期」）正是 1.4.17
+   要纠正的误导；这部分 1.4.17 是对的，保留。
+
+## 9. 修复（parser 侧，manifestVersion 14）
+
+### 9.1 (a) 帖子链接被弹回首页 / 登录页
+
+* `extension/src/xhs.ts`：新增 `xhsLandingPage(url)`（`pathname` 为 `/login…` 或
+  `/explore`、`/explore/`，即没有笔记 id）与常量 `XHS_LOGIN_REQUIRED`
+  =「需要先登录小红书才能解析该笔记」（沿用既有文案，不新增文案）。
+* `_parse_page.parsePageForModule`：xhs 且落在落地页 → 直接
+  `{ok:false,error:{code:'LOGIN_REQUIRED',message:XHS_LOGIN_REQUIRED}}`；
+  `parse`（guest HTML 路径）同样处理。
+* `parser-modules.xhs.classify`：`LOGIN_REQUIRED` / `INVALID_PAGE` 的失败在
+  App **未登录**时给「需要先登录小红书才能解析该笔记」；App **认为已登录**时，
+  若 URL 是落地页或页面带登录墙信号 → `LOGIN_REQUIRED` +「登录可能已失效，请重新登录」；
+  两类信号都没有才维持 `PRIVATE_OR_UNAVAILABLE`。
+
+### 9.2 (b) 任何 hook 都不再返回 null / 无法识别的结构
+
+`moduleCall` 改为 `runHook(...)` + 兜底 `fallbackHook(...)`：整条钩子包在 try/catch 里，
+任何异常都折成该钩子自己文档化的形状。
+
+| hook | 兜底答案 | 说明 |
+| --- | --- | --- |
+| `parse` / `parsePage` | `{ok:false,error:{code:'INVALID_PAGE',message:'页面内容无法识别，可能已改版'}}` | 不再抛异常、不再空 |
+| `classify` | `context.error`，没有则 `INVALID_PAGE` | 不再返回空 |
+| `ready` / `prepare` | `false` | App 的 `_emptyAnswer` 只接受 `false` |
+| `install` / `navigate` / `account` | `null` | App 明确接受 `null` |
+| `probe` | `{tag:'NoProbe'}` | 之前 IG 是 `null`、TikTok 是抛 `UNSUPPORTED_HOOK`，两处都会在日志里留下 `HOOK_RESULT type=Null` |
+| 其他/未知钩子、未知 module | `{value:null}` / 结构化失败 | 不再 `throw UNSUPPORTED_MODULE/HOOK` |
+
+页面侧同样收紧：
+
+* `readableDocumentHtml()` / `currentPageUrl()` 都 try/catch，`documentElement` 为 null
+  或读取抛错时返回 `undefined`/`''`；
+* `parsePageForModule` / `parse` 外层 try/catch，出错回 `INVALID_PAGE`；
+* `moduleCall` 的 `parsePage` 分支：页面缓存不 ok 且**文档读不出来**时，用页面级答案
+  （`INVALID_PAGE` 或落地页的 `LOGIN_REQUIRED`），不再拿空 HTML 去猜成登录问题；
+  HTML 兜底解析失败时统一 `INVALID_PAGE`。
+
+四个平台逐项检查：
+
+| 平台 | 检查结果 |
+| --- | --- |
+| 小红书 | `parsePage`/`parse`/`classify`/`ready`/`probe`/`probeSession`/`account`/`decorate` 全部有形状；`classify` 新增落地页判断 |
+| Instagram | `probe` 由 `null` 改为 `{tag:'IgParse',reason:'no_probe'}`；`ready`/`prepare` 读 DOM 抛错时回 `false`；`parsePage` 走统一兜底 |
+| X | `request` 抛 `UNSUPPORTED_URL` 时回 `{value:null}`（App 的 `REQUEST_SHAPE` 检查给出可读文案）；`parsePage` 回 `UNSUPPORTED_URL` 对象；`probe` 恒为 `XProbe` 结构 |
+| TikTok | 无 `probe` 钩子时回 `{tag:'NoProbe'}`；`navigate`/`ready`/`parse` 均有形状（`navigate` 无 id 时 `{wait:true}`） |
+
+### 9.3 (c) 新 fixture（只增不改）
+
+`spec/fixtures/xhs/xhs_redirected_home.{html,expected.json}`，`sources.json` 登记
+`xhs_redirected_home` → `https://www.xiaohongshu.com/explore`。
+
+* 文件头注释写明：按**公开匿名**的 `xiaohongshu.com/explore` 结构重写的首页骨架，
+  未使用任何会话、未抓取登录态，id / 昵称 / 图片地址全部虚构。
+* `__INITIAL_STATE__` 只用公开结构（`user.loggedIn:false`、`note.noteDetailMap`
+  带一条空壳、`feed.feeds` 两张示例卡），DOM 只有 `登录` 按钮与两列卡片；
+  刻意**不含**登录弹窗文案，避免把它当成登录墙 fixture。
+* 既有 fixture 输入文件一个字节未改（`git diff --stat spec/fixtures` 只有本文件与
+  `sources.json`）。
+
+### 9.4 (d) 兼容测试补充（该场景 × 三个 App 版本）
+
+`app/test/parser_1417_compat_test.dart` 新增分组
+「a note link Xiaohongshu redirects to the home feed」，5 个用例：
+落地页 `parsePage` 必为 `LOGIN_REQUIRED`；未登录 / 已登录两种 `classify` 文案；
+`validateParserResult` 抛 `ParseFailure(LOGIN_REQUIRED)` 而非 `FormatException`；
+错误卡只有「去登录」、没有「重试」；文档不可读时 `INVALID_PAGE`（`doc=missing` 与
+`doc=throwing` 两种）。harness 新增第 9 个参数 `doc:page|missing|throwing`。
+
+三个 worktree 实跑（同一份测试 + 同一份 harness + 1.4.17/14 bundle 副本 +
+5 份 fixture 输入，全部为未跟踪新增文件）：
+
+| worktree | commit | 用例 | 结果 |
+| --- | --- | --- | --- |
+| `v1.10.2` | `516d184` | 18 | 全部通过 |
+| `v1.10.3` | `ad345e0` | 18 | 全部通过 |
+| `v1.11.0` | `dfb5915` | 18 | 全部通过 |
+
+`git status` 在三个 worktree 里都只有新增的未跟踪文件，没有任何被修改的已跟踪文件。
+用完后已 `git worktree remove --force` + `git worktree prune`。
+
+## 10. 重新构建的验证包（未推送、未打 tag）
+
+| 项目 | 值 |
+| --- | --- |
+| parser 版本 | `1.4.17` |
+| manifestVersion | **14** |
+| bundle sha256（`app/assets/parser/parser.js`） | `f49a8928542842b2f6c1d1730c61815500d8c4ce790e50f4dc8be1bbd207eca1`（100,526 B） |
+| 清单 `sha256` 字段 | 同上，一致 |
+| `app/lib/generated/parser_version.dart` | `1.4.17` |
+| APK | `versionName=1.11.0`、`versionCode=61`、release 签名、arm64-v8a 等（见下） |
+
+`docs/roadmap.md` 已记录：验证包占用了 versionCode 60 / 61，
+**正式 App 的下一个 versionCode 须 ≥ 62**。
+
+### 10.1 构建产物
+
+* 构建命令：`flutter build apk --release --build-number 61 --target-platform android-arm64`
+  （`app/pubspec.yaml` 仍是 `1.11.0+59`，versionCode 只由命令行参数给出，与上一轮一致）。
+* `app/build/app/outputs/flutter-apk/app-release.apk`：24,109,540 B，
+  `versionCode=61`、`versionName=1.11.0`，release 签名，
+  证书 SHA-256 `08d7da286f2a84251ddfa85d1a49dc1b1d6b3ffc59ab7d117d8db783b0633907`
+  （与 build60 同一张证书，只读了 APK 里的公钥证书，未读取、打印或复制任何签名密钥）。
+* APK 内 `assets/flutter_assets/assets/parser/parser.js` sha256
+  = `f49a8928542842b2f6c1d1730c61815500d8c4ce790e50f4dc8be1bbd207eca1`（100,526 B），
+  与仓库 bundle、`builtin-manifest.json` 的 `sha256` 字段完全一致；
+  `builtin-manifest.json` 为 `manifestVersion 14` / `parserVersion 1.4.17`。
+
+## 11. 测试矩阵（本轮实跑）
+
+每条命令先执行 `fnm env --use-on-cd --shell powershell | Out-String | Invoke-Expression`
+（node `v26.13.0`）；`JAVA_HOME` 只在 gradle 那条进程内指向 `D:\Program Files\Java\jdk-21`。
+
+| 命令 | 结果 |
+| --- | --- |
+| `extension: npm test` | 30 个文件 / **333** 项通过；node 检查 33 项、`fail 0`（含「仓库 bundle 与 `config/parser-release.json`、`spec/PARSER_VERSION` 一致」「sha256 与清单一致」「`parser_version.dart` 未过期」） |
+| spec 向量（`spec/test-vectors/site-links.json`，由 `site_registry_links_test.dart` 与 Kotlin `SiteLinksCorpusTest` 两端读同一份） | 随下面两条一起通过 |
+| `app: flutter test` | **1,446** 项全部通过（含 `media_request_policy_test`、`parser_1417_compat_test`、`xhs_redirected_home` fixture 用例） |
+| `app/android: gradlew testDebugUnitTest` | `BUILD SUCCESSFUL` |
+| `app: flutter analyze` | **0 error**；26 warning / 72 info = 98，与基线相同；本次新增与修改的文件 0 条诊断 |
+
+`flutter test` 期间唯一需要跟着改的用例是 `v1103_parser_selection_test.dart` 里
+「上一版 APK 留下的设备」那条：它把**内置**清单号写死为 13，manifestVersion 升到 14
+后必然失败，已同步改为 14（只改这一个常量与对应注释，行为断言未变）。App 的
+`lib/` 代码一行未改。
+
+## 12. 残余风险与不变量
+
+### 12.1 残余风险
+
+1. **触发条件是按日志推断的，未在真机复现**。日志能证明的是「`parsePage` 给出了空答案」，
+   而空答案只有一种来源（`moduleCall` 抛异常）。JS 层能复现的两种形态（`documentElement`
+   为 null、读取即抛）在 1.4.16 与 1.4.17 上都抛同样的异常；若真机实际是 WebView 在导航
+   中**销毁了 JS 上下文**（脚本根本没跑），parser 侧无论怎么改都拿不到执行机会——这一类只能
+   靠 §9.4 之后的 App 待办（不显示原始异常、已知站点给「去登录」）兜住。两种情况用户可见
+   结果都已不再是 `FormatException`：前者现在返回 `INVALID_PAGE`，后者由 App 侧统一文案。
+2. **fixture 是重写的骨架**。真机首页的 `__INITIAL_STATE__` 字段更多（实测 35 张卡、更多
+   子状态），fixture 只保留与判定相关的结构；判定只依赖 URL 路径与 `loggedIn` 位，因此这些
+   差异不影响结论，但「真机页面结构变化」仍需 A/B 观察。
+3. **落地页判定假设「被弹回首页 = 登录问题」**。若某个帖子被删后也重定向到 `/explore`，
+   已登录用户会看到「登录可能已失效，请重新登录」；登录后仍会被弹回，代价可逆，但不如
+   「链接已过期」精确。带平台自身「笔记不存在」提示的页面仍优先判 `PRIVATE_OR_UNAVAILABLE`。
+4. **导航风暴本身未修**：`XhsDomain` 在 `xiaohongshu.com` / `rednote.com` 之间反复选择
+   15–17 次是 App 侧行为，parser 无法阻止，只记入待办（§9 对应 `docs/roadmap.md`）。
+
+### 12.2 本轮不变量
+
+未推送分支、未打 `parser-v*` tag、未发 App 版本、未上传 Release；未读取、打印或复制任何
+签名密钥（只读 APK 内公钥证书）；未读取、输出或记录任何 cookie 值；未使用现有会话抓取
+页面（新 fixture 只依据公开匿名结构与已抓取的公开页面重写）；未请求断点或调试会话；
+未卸载 App、未清数据、未删相册文件；未改写既有提交与既有 fixture 输入文件；所有文本保持 LF。

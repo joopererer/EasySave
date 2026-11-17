@@ -7,6 +7,9 @@
 
 - App：**v1.11.0**（versionCode 59）。下一版 **v1.12**。
 - 内置 parser：**1.4.16**（manifestVersion 12）。
+- 验证包（**仅供真机验证，未发布、未打 tag**）：versionCode 60 内置 parser 1.4.17/13、
+  versionCode 61 内置 parser 1.4.17/14（已通过真机验证并发布 1.4.17）。
+  因此 **正式 App 的下一个 versionCode 须 ≥ 62**（60 与 61 已被验证包占用，不能复用）。
 
 ## v1.11
 
@@ -43,10 +46,18 @@
 
 ## parser 1.4.17
 
+> 已通过真机验证（验证包 versionCode 61），已由 merge commit 并入 `master` 并打
+> annotated tag `parser-v1.4.17`（manifestVersion 14，bundle sha256
+> `f49a8928…`）。验证报告见
+> [`docs/tasks/parser-1.4.17-evidence.md`](tasks/parser-1.4.17-evidence.md)。
+
 - [ ] 「已登录但会话失效」改为引导重新登录（当前归为 `PRIVATE_OR_UNAVAILABLE`）。
 - [ ] 解析器直接生成 `imageView2/format/jpg/q/100` 全质量 jpg 候选，App 侧派生
       候选同时下线，避免重复候选。详见
       [`docs/tasks/parser-1.4.17-proposal.md`](tasks/parser-1.4.17-proposal.md)。
+- [x] 帖子链接被重定向到 `/explore`／`/login` 时按未登录／会话失效回答
+      `LOGIN_REQUIRED`，不再让用户看到 `FormatException`；所有 hook 一律返回
+      App 能识别的结构（判断不出时 `INVALID_PAGE`）。
 
 ## v1.12
 
@@ -80,6 +91,17 @@
 ### 待办
 
 - [ ] 选择并添加开源许可证（由项目所有者决定；在此之前不添加 `LICENSE` 文件）。
+- [ ] **XhsDomain 反复切换**：小红书解析时域名在 `xiaohongshu.com` 与 `rednote.com`
+      之间来回选择（真机日志 `event=choose … reason=alias_valid` 连续 15–17 次，
+      ParseWebView 导航 15–17 次、耗时 8.4–8.8s）。应给切换设上限，并在检测到
+      未登录重定向（`/explore`、`/login`）时立即停止导航并直接报 `LOGIN_REQUIRED`。
+      依据 [`docs/tasks/parser-1.4.17-evidence.md`](tasks/parser-1.4.17-evidence.md) §8。
+- [ ] **App 不再显示原始异常文案**：界面曾出现
+      `FormatException: Invalid parser hook result` + 「页面内容无法识别，可能已改版」
+      （只有「重试」）。要求：`FormatException` 等原始异常一律折成可读文案；已知站点
+      可能需要登录时提供「去登录」，不要只给「重试」。
+- [ ] **TikTok `REGION_RESTRICTED`** 文案改为说明「该内容在当前地区不可用，登录无法解决」，
+      避免用户尝试登录。
 
 ---
 

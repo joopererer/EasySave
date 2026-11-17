@@ -1151,3 +1151,23 @@ export function xhsPageSignal(html: string, pageUrl = ""): XhsPageSignal | undef
   if (XHS_LOGIN_WALL_MARKERS.some((marker) => marker.test(page))) return "login_wall";
   return undefined;
 }
+
+/** Sign-in guidance Xiaohongshu failures have always used. */
+export const XHS_LOGIN_REQUIRED = "需要先登录小红书才能解析该笔记";
+
+/**
+ * Whether [pageUrl] is one of the two pages Xiaohongshu sends a note request to
+ * when it will not show the note: the home feed (`/explore`, no note id) and
+ * the login page. A note page is `/explore/<id>` (or `discovery/item/<id>`,
+ * `user/profile/<user>/<id>`), so a bare `/explore` means the request was
+ * bounced instead of served.
+ */
+export function xhsLandingPage(pageUrl: string): boolean {
+  try {
+    const { pathname } = new URL(pageUrl);
+    if (/^\/login(?:\/|$)/i.test(pathname)) return true;
+    return /^\/explore\/?$/i.test(pathname);
+  } catch (_) {
+    return false;
+  }
+}

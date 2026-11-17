@@ -311,10 +311,10 @@ void main() {
       );
       final before = rawState();
 
-      // The new APK bundles the very same parser: 1.4.17 as manifestVersion 13.
+      // The new APK bundles the very same parser: 1.4.17 as manifestVersion 14.
       await prepare();
       expect(ParserVersion.version, '1.4.17');
-      expect(builtinVersion, 13);
+      expect(builtinVersion, 14);
       expect(manager.activeSource, ParserSource.builtin);
       expect(manager.activeVersion, '1.4.17');
       expect(manager.activeSignedManifest, isNull);
@@ -328,7 +328,7 @@ void main() {
 
       final line = log();
       expect(line, contains('result=same'), reason: line);
-      expect(line, contains('remoteManifest=13'), reason: line);
+      expect(line, contains('remoteManifest=14'), reason: line);
       expect(line, contains('reason=same_as_builtin'), reason: line);
       // A same-sequence, same-content release is not reported as a conflict and
       // never rolls the device back to an older parser.
@@ -339,7 +339,7 @@ void main() {
 
       expect(rawState(), before, reason: 'nothing was written');
       expect(state()['current'], 'builtin');
-      expect(state()['highestAcceptedManifestVersion'], 13);
+      expect(state()['highestAcceptedManifestVersion'], 14);
       expect(manager.activeSource, ParserSource.builtin);
       expect(manager.activeVersion, '1.4.17');
     },

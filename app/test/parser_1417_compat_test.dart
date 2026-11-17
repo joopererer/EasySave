@@ -28,7 +28,7 @@ import 'package:easysave/widgets/shared.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
-const _harness = 'test/parser_1417_compat/harness.mjs';
+const _harnessPath = 'test/parser_1417_compat/harness.mjs';
 
 /// The 1.4.17 bundle under test: the worktree copy when present, otherwise the
 /// bundle this build ships.
@@ -37,6 +37,8 @@ String get _bundle => File('test/parser_1417_compat/parser_1.4.17.js').existsSyn
     : 'assets/parser/parser.js';
 
 const _xhsUrl = 'https://www.xiaohongshu.com/explore/6aca089a000000000a01efb4';
+/// Where Xiaohongshu sends a note request it will not serve (`/explore`, no id).
+const _xhsLandingUrl = 'https://www.xiaohongshu.com/explore';
 const _xhsLiveUrl = 'https://www.xiaohongshu.com/explore/6a342fd20000000021017867';
 const _igUrl = 'https://www.instagram.com/p/ig_session_expired/';
 const _igDeletedUrl = 'https://www.instagram.com/p/ig_post_deleted/';
@@ -70,23 +72,29 @@ Future<HookRun> runHook(
   bool? loggedIn,
   String? errorCode,
   String? errorMessage,
+  String doc = 'page',
 }) async {
   // Every assertion below is written against 1.4.17's own answers, so a stale
   // bundle (an older asset in a worktree, say) fails on the first expectation.
   final node = await Process.run('node', [
-    _harness,
+    _harnessPath,
     _bundle,
     platform,
     '../spec/fixtures/$fixture',
     url,
     hook,
-    if (loggedIn != null) (loggedIn ? '1' : '0'),
-    if (errorCode != null) ...[errorCode, errorMessage ?? ''],
+    loggedIn == null ? '-' : (loggedIn ? '1' : '0'),
+    errorCode ?? '-',
+    errorMessage ?? '-',
+    doc,
   ], stdoutEncoding: utf8, stderrEncoding: utf8);
   if (node.exitCode != 0) {
     fail('node harness exited ${node.exitCode}: ${node.stderr}');
   }
   final decoded = jsonDecode(node.stdout as String) as Map<String, dynamic>;
+  if (!decoded.containsKey('value')) {
+    fail('harness answered without {value}: ${node.stdout}');
+  }
   return HookRun((decoded['value'] as Map).cast<String, dynamic>());
 }
 
@@ -288,6 +296,78 @@ void main() {
       expect(clip.urls, [live.items[0]['videoUrl']]);
       expect(still.urls, isNot(contains(live.items[0]['videoUrl'])));
       expectPolicyAllows(live, still);
+    });
+  });
+
+  // The device report that holds this release back: after signing out of
+  // Xiaohongshu the App parsed a note link, the WebView was sent to `/explore`,
+  // and the hook answered nothing at all — the App then showed
+  // `FormatException: Invalid parser hook result` with nothing but 重试.
+  group('a note link Xiaohongshu redirects to the home feed', () {
+    late HookRun parsePage;
+    late HookRun signedOut;
+    late HookRun sessionGone;
+
+    setUpAll(() async {
+      // The device flow: parsePage on the page the WebView actually landed on,
+      // then classify with the App's own signed-in state.
+      parsePage = await runHook(
+          'xhs', 'xhs/xhs_redirected_home.html', _xhsLandingUrl, 'parsePage');
+      signedOut = await runHook(
+          'xhs', 'xhs/xhs_redirected_home.html', _xhsLandingUrl, 'classify',
+          loggedIn: false, errorCode: parsePage.code, errorMessage: parsePage.message);
+      sessionGone = await runHook(
+          'xhs', 'xhs/xhs_redirected_home.html', _xhsLandingUrl, 'classify',
+          loggedIn: true, errorCode: parsePage.code, errorMessage: parsePage.message);
+    });
+
+    test('the landing page never answers nothing: LOGIN_REQUIRED, not an exception', () {
+      expect(parsePage.value['ok'], false);
+      expect(parsePage.code, 'LOGIN_REQUIRED');
+      expect(parsePage.message, '需要先登录小红书才能解析该笔记');
+    });
+
+    test('signed out the App asks for a login; signed in it reports the dead session', () {
+      expect(signedOut.code, 'LOGIN_REQUIRED');
+      expect(signedOut.message, '需要先登录小红书才能解析该笔记');
+      expect(sessionGone.code, 'LOGIN_REQUIRED');
+      expect(sessionGone.message, '登录可能已失效，请重新登录');
+      for (final run in [signedOut, sessionGone]) {
+        expect(errorCopyFor(run.code).action, ErrorAction.goLogin);
+        expect(displayErrorMessage(run.code, run.message), run.message);
+      }
+    });
+
+    test('the installed App fails the parse with that code, not a FormatException', () {
+      for (final run in [signedOut, sessionGone]) {
+        expect(
+          () => validateParserResult(run.asResult, SiteRegistry.current.byId('xhs')!),
+          throwsA(isA<ParseFailure>()
+              .having((e) => e.code, 'code', 'LOGIN_REQUIRED')
+              .having((e) => e.message, 'message', run.message)),
+          reason: '${run.code}/${run.message}',
+        );
+      }
+    });
+
+    testWidgets('the error card offers 去登录 only', (tester) async {
+      expect(await pumpErrorCard(tester, signedOut), [ErrorAction.goLogin]);
+      expect(find.text('重试'), findsNothing);
+    });
+
+    test('a document being replaced is INVALID_PAGE, never a null hook result', () async {
+      for (final doc in ['missing', 'throwing']) {
+        final run = await runHook(
+            'xhs', 'xhs/xhs_redirected_home.html', _xhsUrl, 'parsePage', doc: doc);
+        expect(run.code, 'INVALID_PAGE', reason: doc);
+        expect(run.message, '页面内容无法识别，可能已改版', reason: doc);
+        expect(
+          () => validateParserResult(run.asResult, SiteRegistry.current.byId('xhs')!),
+          throwsA(isA<ParseFailure>().having((e) => e.code, 'code', 'INVALID_PAGE')),
+          reason: doc,
+        );
+      }
+      expect(errorCopyFor('INVALID_PAGE').action, ErrorAction.retry);
     });
   });
 }

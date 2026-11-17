@@ -4,15 +4,15 @@
 // Used by the parser 1.4.17 compatibility tests on this branch and, unchanged,
 // inside the v1.10.3 / v1.11.0 worktrees.
 //
-// usage: harness.mjs <bundle> <platform> <html> <url> <hook> [loggedIn:0|1] [errorCode] [errorMessage]
+// usage: harness.mjs <bundle> <platform> <html> <url> <hook> [loggedIn:0|1] [errorCode] [errorMessage] [doc:page|missing|throwing]
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 
-const [bundlePath, platform, htmlPath, url, hook, loggedInFlag, errorCode, errorMessage] =
+const [bundlePath, platform, htmlPath, url, hook, loggedInFlag, errorCode, errorMessage, docMode] =
   process.argv.slice(2);
 if (!bundlePath || !platform || !htmlPath || !url || !hook) {
   process.stderr.write(
-    'usage: harness.mjs <bundle> <platform> <html> <url> <hook> [loggedIn:0|1] [errorCode] [errorMessage]\n',
+    'usage: harness.mjs <bundle> <platform> <html> <url> <hook> [loggedIn:0|1] [errorCode] [errorMessage] [doc:page|missing|throwing]\n',
   );
   process.exit(2);
 }
@@ -60,6 +60,17 @@ function initialStateOf(page) {
 }
 
 const page = { location: { href: url } };
+// A WebView can run a hook while its document is being replaced: `missing` has
+// no documentElement at all and `throwing` refuses to hand one out.
+const documentStub = docMode === 'missing'
+  ? { documentElement: null, querySelectorAll: () => [], querySelector: () => null }
+  : docMode === 'throwing'
+    ? {
+        get documentElement() { throw new Error('document is being replaced'); },
+        querySelectorAll: () => [],
+        querySelector: () => null,
+      }
+    : { documentElement: { outerHTML: html }, querySelectorAll: () => [], querySelector: () => null };
 const sandbox = {
   URL, JSON, Date, Math, BigInt, RegExp, Object, Array, String, Number,
   Boolean, Error, TypeError, RangeError, Promise, Set, Map, Symbol, Intl,
@@ -73,11 +84,7 @@ const sandbox = {
   window: page,
   self: page,
   location: page.location,
-  document: {
-    documentElement: { outerHTML: html },
-    querySelectorAll: () => [],
-    querySelector: () => null,
-  },
+  document: documentStub,
 };
 
 const state = initialStateOf(html);
@@ -92,7 +99,7 @@ if (!parser || typeof parser.moduleCall !== 'function') {
 
 const context = { url, site };
 if (loggedInFlag === '1' || loggedInFlag === '0') context.loggedIn = loggedInFlag === '1';
-if (errorCode) context.error = { code: errorCode, message: errorMessage ?? '' };
+if (errorCode && errorCode !== '-') context.error = { code: errorCode, message: errorMessage === '-' ? '' : errorMessage };
 
 const raw = parser.moduleCall(platform, hook, context);
 process.stdout.write(
