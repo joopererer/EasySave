@@ -1,15 +1,25 @@
 import 'dart:async';
 import 'dart:io';
-import 'dart:typed_data';
 
+import 'package:background_downloader/background_downloader.dart' hide Database;
+import 'package:easysave/core/dev_log.dart';
+import 'package:easysave/core/models.dart';
+import 'package:easysave/services/download_claims.dart';
 import 'package:easysave/services/download_manager.dart';
+import 'package:easysave/services/network_status.dart';
+import 'package:easysave/services/parse_service.dart';
 import 'package:easysave/services/resumable_download_store.dart';
 import 'package:easysave/services/session_media_download.dart';
 import 'package:easysave/services/site_registry.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
+  sqfliteFfiInit();
+  databaseFactory = databaseFactoryFfi;
 
   late Directory tempDir;
   late ResumableDownloadStore store;
@@ -396,6 +406,379 @@ void main() {
       expect(await part.exists(), isTrue);
       final meta = await store.readMetadata(jobKey);
       expect(meta?.validator, '"etag-k"');
+    });
+  });
+
+  group('Background downloader path true resume', () {
+    const channel = MethodChannel('dexterous.com/flutter/local_notifications');
+    const downloaderChannel = MethodChannel('com.bbflight.background_downloader');
+    const downloaderBgChannel = MethodChannel('com.bbflight.background_downloader.background');
+    final createdBatches = <String>[];
+    final mockResumeData = <String, ResumeData>{};
+
+    setUp(() {
+      SharedPreferences.setMockInitialValues({});
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(channel, (call) async => true);
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(downloaderChannel, (call) async => true);
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(downloaderBgChannel, (call) async => null);
+
+      DownloadManager.instance.downloaderStartForTesting = () async {};
+      DownloadManager.instance.historyWriterForTesting = (db, batch, rec) async {};
+      DownloadManager.instance.getResumeDataForTesting = (id) async => mockResumeData[id];
+      DownloadManager.instance.setResumeDataForTesting = (rd) async {
+        mockResumeData[rd.task.taskId] = rd;
+      };
+      DownloadManager.instance.removeResumeDataForTesting = (id) async {
+        mockResumeData.remove(id);
+      };
+      DownloadManager.instance.resetInitForTesting();
+      DownloadManager.instance.clearBatchesForTesting();
+      DevLog.resetRecentForTesting();
+      NetworkStatus.instance.setOnlineForTesting(true);
+      createdBatches.clear();
+      mockResumeData.clear();
+    });
+
+    tearDown(() async {
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(channel, null);
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(downloaderChannel, null);
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(downloaderBgChannel, null);
+
+      for (final id in createdBatches) {
+        await DownloadClaims.release(id);
+      }
+      DownloadManager.instance.downloaderStartForTesting = null;
+      DownloadManager.instance.historyWriterForTesting = null;
+      DownloadManager.instance.allRecordsForTesting = null;
+      DownloadManager.instance.resumeForTesting = null;
+      DownloadManager.instance.getResumeDataForTesting = null;
+      DownloadManager.instance.setResumeDataForTesting = null;
+      DownloadManager.instance.removeResumeDataForTesting = null;
+      DownloadManager.instance.candidateRangeProbeForTesting = null;
+      DownloadManager.instance.reparseForTesting = null;
+      DownloadManager.instance.resetInitForTesting();
+      DownloadManager.instance.clearBatchesForTesting();
+      DevLog.resetRecentForTesting();
+      mockResumeData.clear();
+    });
+
+    DownloadBatch createBatch({
+      String platform = 'x',
+      String postId = '12345',
+      int expectedBytes = 1020613970,
+      bool isImage = false,
+    }) {
+      final batchId = 'batch-$postId-${DateTime.now().microsecondsSinceEpoch}';
+      createdBatches.add(batchId);
+      final job = DownloadJob(
+        key: 'job-$postId-0',
+        label: isImage ? '图片 1' : '视频 1',
+        filename: isImage ? 'photo.jpg' : 'video.mp4',
+        urls: [
+          isImage
+              ? 'https://pbs.twimg.com/media/test.jpg'
+              : 'https://video.twimg.com/ext_tw_video/123/pu/vid/720x1280/v.mp4',
+        ],
+        isImage: isImage,
+        itemIndex: 0,
+      );
+      job.expectedBytes = expectedBytes;
+      final batch = DownloadBatch(
+        batchId: batchId,
+        album: 'EasySave',
+        postUrl: 'https://x.com/user/status/$postId',
+        platform: platform,
+        postId: postId,
+        title: 'Title',
+        itemsJson: '[]',
+        postItemCount: 1,
+        jobs: [job],
+      );
+      DownloadManager.instance.setBatchForTesting(batch);
+      return batch;
+    }
+
+    test('mid-flight disconnect -> waitingNetwork -> network returns -> resume (progress not 0, range_accepted)', () async {
+      final batch = createBatch(postId: 'disconnect-test');
+      final job = batch.jobs.first;
+      job.progress = 0.35;
+
+      final update = TaskStatusUpdate(
+        DownloadTask(
+          taskId: job.key,
+          url: job.urls.first,
+          filename: job.filename,
+          group: batch.batchId,
+        ),
+        TaskStatus.failed,
+        TaskConnectionException('java.net.SocketException: Software caused connection abort'),
+      );
+
+      await DownloadManager.instance.taskFailureForTesting(batch, job, update);
+
+      // Verify connection drop is classified as waitingNetwork even if online
+      expect(job.state, JobState.waitingNetwork);
+      expect(job.progress, 0.35); // Progress does NOT reset to 0
+
+      // When network is restored or job resumed
+      bool resumeCalled = false;
+      mockResumeData[job.key] = ResumeData(
+        update.task,
+        '${tempDir.path}/part.tmp',
+        357214889,
+        '"etag-test"',
+      );
+      DownloadManager.instance.resumeForTesting = (t) async {
+        resumeCalled = true;
+        expect(t.taskId, job.key);
+        return true;
+      };
+
+      await DownloadManager.instance.enqueueAttemptForTesting(batch, job);
+
+      expect(resumeCalled, isTrue);
+      final recent = DevLog.recentLines(50);
+      expect(recent.any((l) => l.contains('[V16DL]') && l.contains('result=resumed') && l.contains('reason=range_accepted')), isTrue);
+    });
+
+    test('manual retry resumes from existing progress and ResumeData', () async {
+      final batch = createBatch(postId: 'manual-retry-test');
+      final job = batch.jobs.first;
+      job.state = JobState.failed;
+      job.progress = 0.4;
+      job.attempts = 1;
+
+      bool resumeCalled = false;
+      mockResumeData[job.key] = ResumeData(
+        DownloadTask(taskId: job.key, url: job.urls.first, filename: job.filename, group: batch.batchId),
+        '${tempDir.path}/part.tmp',
+        408245588,
+        '"etag-manual"',
+      );
+      DownloadManager.instance.resumeForTesting = (t) async {
+        resumeCalled = true;
+        expect(t.taskId, job.key);
+        return true;
+      };
+
+      await DownloadManager.instance.retryJob(batch, job);
+
+      expect(resumeCalled, isTrue);
+      final recent = DevLog.recentLines(50);
+      expect(recent.any((l) => l.contains('[V16DL]') && l.contains('result=resumed') && l.contains('reason=range_accepted')), isTrue);
+    });
+
+    test('app killed restart resumes via reconcileBatch', () async {
+      final batch = createBatch(postId: 'app-kill-test');
+      final job = batch.jobs.first;
+      job.state = JobState.active;
+      job.progress = 0.5;
+      job.currentTaskId = job.key;
+
+      final task = DownloadTask(
+        taskId: job.key,
+        url: job.urls.first,
+        filename: job.filename,
+        group: batch.batchId,
+      );
+
+      DownloadManager.instance.allRecordsForTesting = (group) async {
+        return [TaskRecord(task, TaskStatus.failed, 0.5, 50000000)];
+      };
+
+      bool resumeCalled = false;
+      mockResumeData[job.key] = ResumeData(task, '${tempDir.path}/part.tmp', 510306985, '"etag-reconcile"');
+      DownloadManager.instance.resumeForTesting = (t) async {
+        resumeCalled = true;
+        return true;
+      };
+
+      final hasPending = await DownloadManager.instance.reconcileBatchForTesting(batch);
+      expect(hasPending, isTrue);
+      expect(resumeCalled, isTrue);
+
+      final recent = DevLog.recentLines(50);
+      expect(recent.any((l) => l.contains('[V16DL]') && l.contains('result=resumed')), isTrue);
+    });
+
+    test('server returns 200 OK without Range support emits status_200 restart log', () async {
+      final batch = createBatch(postId: 'status-200-test');
+      final job = batch.jobs.first;
+      job.progress = 0.5; // Previously progressed
+      job.currentTaskId = job.key;
+
+      final task = DownloadTask(
+        taskId: job.key,
+        url: job.urls.first,
+        filename: job.filename,
+        group: batch.batchId,
+      );
+
+      // Server drops back to 0 progress (status 200 truncated download)
+      DownloadManager.instance.taskUpdateForTesting(TaskProgressUpdate(task, 0.01));
+
+      final recent = DevLog.recentLines(50);
+      expect(recent.any((l) => l.contains('[V16DL]') && l.contains('result=restart') && l.contains('reason=status_200')), isTrue);
+    });
+
+    test('validator changed (ETag mismatch) clears partial file and restarts from 0', () async {
+      final batch = createBatch(postId: 'etag-changed-test');
+      final job = batch.jobs.first;
+      job.progress = 0.5;
+      job.currentTaskId = job.key;
+
+      final task = DownloadTask(
+        taskId: job.key,
+        url: job.urls.first,
+        filename: job.filename,
+        group: batch.batchId,
+      );
+
+      mockResumeData[job.key] = ResumeData(task, '${tempDir.path}/part.tmp', 510306985, '"etag-old"');
+
+      final update = TaskStatusUpdate(
+        task,
+        TaskStatus.failed,
+        TaskException('Cannot resume: ETag is not identical'),
+      );
+
+      await DownloadManager.instance.taskFailureForTesting(batch, job, update);
+
+      expect(mockResumeData[job.key], isNull);
+      expect(job.progress, 0.0);
+      final recent = DevLog.recentLines(50);
+      expect(recent.any((l) => l.contains('[V16DL]') && l.contains('result=restart') && l.contains('reason=validator_changed')), isTrue);
+    });
+
+    test('signed URL expired 403: re-parse and resume when server accepts Range and size matches', () async {
+      final batch = createBatch(postId: 'expired-403-resume');
+      final job = batch.jobs.first;
+      job.progress = 0.5;
+      job.currentTaskId = job.key;
+
+      final task = DownloadTask(
+        taskId: job.key,
+        url: job.urls.first,
+        filename: job.filename,
+        group: batch.batchId,
+      );
+
+      mockResumeData[job.key] = ResumeData(task, '${tempDir.path}/part.tmp', 510306985, '"etag-fresh"');
+
+      DownloadManager.instance.reparseForTesting = (postUrl) async {
+        return ParseOutcome(
+          data: ParsedPost(
+            platform: 'x',
+            id: 'expired-403-resume',
+            url: postUrl,
+            author: PostAuthor(name: 'user'),
+            items: [MediaItem(type: 'video', url: 'https://video.twimg.com/fresh_url.mp4')],
+          ),
+          rawImages: [],
+        );
+      };
+
+      DownloadManager.instance.candidateRangeProbeForTesting = (j, u) async {
+        return (acceptsRange: true, contentLength: 1020613970);
+      };
+
+      bool resumeCalled = false;
+      DownloadManager.instance.resumeForTesting = (t) async {
+        resumeCalled = true;
+        expect(t.url, 'https://video.twimg.com/fresh_url.mp4');
+        return true;
+      };
+
+      final update = TaskStatusUpdate(
+        task,
+        TaskStatus.failed,
+        TaskHttpException('HTTP 403 Forbidden', 403),
+        null,
+        null,
+        403,
+      );
+
+      await DownloadManager.instance.taskFailureForTesting(batch, job, update);
+
+      expect(resumeCalled, isTrue);
+      expect(job.urls.first, 'https://video.twimg.com/fresh_url.mp4');
+      final recent = DevLog.recentLines(50);
+      expect(recent.any((l) => l.contains('[V16DL]') && l.contains('reason=expired')), isTrue);
+      expect(recent.any((l) => l.contains('[V16DL]') && l.contains('result=resumed') && l.contains('reason=range_accepted')), isTrue);
+    });
+
+    test('signed URL expired 403: re-parse and restart from 0 when server does NOT accept Range', () async {
+      final batch = createBatch(postId: 'expired-403-restart');
+      final job = batch.jobs.first;
+      job.progress = 0.5;
+      job.currentTaskId = job.key;
+
+      final task = DownloadTask(
+        taskId: job.key,
+        url: job.urls.first,
+        filename: job.filename,
+        group: batch.batchId,
+      );
+
+      mockResumeData[job.key] = ResumeData(task, '${tempDir.path}/part.tmp', 510306985, '"etag-fresh"');
+
+      DownloadManager.instance.reparseForTesting = (postUrl) async {
+        return ParseOutcome(
+          data: ParsedPost(
+            platform: 'x',
+            id: 'expired-403-restart',
+            url: postUrl,
+            author: PostAuthor(name: 'user'),
+            items: [MediaItem(type: 'video', url: 'https://video.twimg.com/fresh_url_no_range.mp4')],
+          ),
+          rawImages: [],
+        );
+      };
+
+      DownloadManager.instance.candidateRangeProbeForTesting = (j, u) async {
+        return (acceptsRange: false, contentLength: null);
+      };
+
+      final update = TaskStatusUpdate(
+        task,
+        TaskStatus.failed,
+        TaskHttpException('HTTP 403 Forbidden', 403),
+        null,
+        null,
+        403,
+      );
+
+      await DownloadManager.instance.taskFailureForTesting(batch, job, update);
+
+      expect(mockResumeData[job.key], isNull);
+      expect(job.progress, 0.0);
+      expect(job.urls.first, 'https://video.twimg.com/fresh_url_no_range.mp4');
+      final recent = DevLog.recentLines(50);
+      expect(recent.any((l) => l.contains('[V16DL]') && l.contains('reason=no_range')), isTrue);
+    });
+
+    test('files < 5MB maintain original behavior: no resume attempt and dynamic task ID', () async {
+      final batch = createBatch(postId: 'small-file-test', expectedBytes: 2000000); // 2 MB < 5 MB
+      final job = batch.jobs.first;
+
+      bool resumeCalled = false;
+      DownloadManager.instance.resumeForTesting = (t) async {
+        resumeCalled = true;
+        return true;
+      };
+
+      await DownloadManager.instance.enqueueAttemptForTesting(batch, job);
+
+      expect(resumeCalled, isFalse);
+      expect(job.currentTaskId, startsWith('${job.key}-try'));
+      final recent = DevLog.recentLines(50);
+      expect(recent.any((l) => l.contains('[V16DL]') && l.contains('result=resumed')), isFalse);
     });
   });
 }

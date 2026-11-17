@@ -543,6 +543,9 @@ class DownloadTaskRunner(context: TaskJobContext) : TaskRunner(context) {
                     task, tempFilePath, bytesTotal + startByte, eTagHeader
                 ), prefs
             )
+        } else if (responseStatusCode in listOf(403, 410) && (requiredStartByte > 0 || isResume)) {
+            // Signed URL expired during resume; keep temp file and resume data so App can reparse and resume
+            Log.i(TAG, "Signed URL expired (status $responseStatusCode) for taskId ${task.taskId}, keeping temp file for reparse")
         } else {
             // if it cannot be resumed, delete the temp file
             deleteTempFile()

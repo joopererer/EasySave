@@ -771,6 +771,18 @@ interface class FileDownloader {
   /// task from scratch, or fail.
   Future<bool> resume(DownloadTask task) => _downloader.resume(task);
 
+  /// Retrieve the resume data for this [taskId]
+  Future<ResumeData?> getResumeData(String taskId) =>
+      _downloader.getResumeData(taskId);
+
+  /// Stores the resume data
+  Future<void> setResumeData(ResumeData resumeData) =>
+      _downloader.setResumeData(resumeData);
+
+  /// Remove resumeData for this [taskId], or all if null
+  Future<void> removeResumeData([String? taskId]) =>
+      _downloader.removeResumeData(taskId);
+
   /// Resume all paused tasks, or those in [tasks], or paused tasks in
   /// group [group]
   ///

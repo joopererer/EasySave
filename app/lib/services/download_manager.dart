@@ -1498,7 +1498,7 @@ class DownloadManager extends ChangeNotifier {
     if (refundAttempt && job.attempts > 0) job.attempts--;
     job
       ..state = JobState.waitingNetwork
-      ..progress = 0
+      ..progress = (job.progress > 0) ? job.progress : 0
       ..error = null
       ..errorCode = null
       ..lastProgressAt = DateTime.now().millisecondsSinceEpoch;
@@ -1752,6 +1752,47 @@ class DownloadManager extends ChangeNotifier {
   Future<void> Function(DownloadBatch, DownloadJob)? enqueueForTesting;
   @visibleForTesting
   Future<ParseOutcome> Function(String)? reparseForTesting;
+  @visibleForTesting
+  Future<bool> Function(DownloadTask task)? resumeForTesting;
+  @visibleForTesting
+  Future<ResumeData?> Function(String taskId)? getResumeDataForTesting;
+  @visibleForTesting
+  Future<void> Function(String taskId)? removeResumeDataForTesting;
+  @visibleForTesting
+  Future<void> Function(ResumeData resumeData)? setResumeDataForTesting;
+  @visibleForTesting
+  Future<({bool acceptsRange, int? contentLength})> Function(DownloadJob job, String url)?
+      candidateRangeProbeForTesting;
+
+  Future<ResumeData?> _getResumeData(String taskId) async {
+    final hook = getResumeDataForTesting;
+    if (hook != null) return await hook(taskId);
+    return await FileDownloader().getResumeData(taskId);
+  }
+
+  Future<void> _setResumeData(ResumeData resumeData) async {
+    final hook = setResumeDataForTesting;
+    if (hook != null) {
+      await hook(resumeData);
+      return;
+    }
+    await FileDownloader().setResumeData(resumeData);
+  }
+
+  Future<void> _removeResumeData(String taskId) async {
+    final hook = removeResumeDataForTesting;
+    if (hook != null) {
+      await hook(taskId);
+      return;
+    }
+    await FileDownloader().removeResumeData(taskId);
+  }
+
+  Future<bool> _resumeTask(DownloadTask task) async {
+    final hook = resumeForTesting;
+    if (hook != null) return await hook(task);
+    return await FileDownloader().resume(task);
+  }
 
   /// Content-Length of a job URL (production: HEAD request).
   @visibleForTesting
@@ -2105,9 +2146,11 @@ class DownloadManager extends ChangeNotifier {
       await _startSessionDownload(batch, job);
       return;
     }
+    final isResumable = !job.isImage &&
+        (job.expectedBytes == null || job.expectedBytes! >= kResumableMinBytes);
     job.attempts++;
     final url = authorized.uri.toString();
-    final taskId = '${job.key}-try${job.attempts}';
+    final taskId = isResumable ? job.key : '${job.key}-try${job.attempts}';
     job.currentTaskId = taskId;
     job.state = job.attempts == 1 ? JobState.queued : JobState.active;
     job.error = null;
@@ -2130,8 +2173,6 @@ class DownloadManager extends ChangeNotifier {
       // Best effort - continue without assetId
     }
 
-    final isResumable = !job.isImage &&
-        (job.expectedBytes == null || job.expectedBytes! >= kResumableMinBytes);
     final task = DownloadTask(
       taskId: taskId,
       url: url,
@@ -2162,7 +2203,39 @@ class DownloadManager extends ChangeNotifier {
     );
     await _persist(batch);
     notifyListeners();
-    final accepted = await FileDownloader().enqueue(task);
+    bool accepted = false;
+    if (isResumable) {
+      final resumeData = await _getResumeData(taskId);
+      if (resumeData != null && resumeData.requiredStartByte >= kResumableMinBytes) {
+        final fromBytes = resumeData.requiredStartByte;
+        final total = job.expectedBytes ?? -1;
+        unawaited(DevLog.write(
+          'V16DL',
+          'resume index=${job.itemIndex} role=${roleOf(job)} from_bytes=$fromBytes '
+              'total=$total result=resumed reason=range_accepted',
+        ));
+        if (total > 0 && fromBytes < total) {
+          job.progress = (fromBytes / total).clamp(0.0, 1.0);
+        }
+        accepted = await _resumeTask(task);
+        if (!accepted) {
+          unawaited(DevLog.write(
+            'V16DL',
+            'resume index=${job.itemIndex} role=${roleOf(job)} from_bytes=$fromBytes '
+                'total=$total result=restart reason=resume_failed',
+          ));
+        }
+      } else if (job.attempts > 1) {
+        unawaited(DevLog.write(
+          'V16DL',
+          'resume index=${job.itemIndex} role=${roleOf(job)} from_bytes=0 '
+              'total=${job.expectedBytes ?? -1} result=restart reason=no_resume_data',
+        ));
+      }
+    }
+    if (!accepted) {
+      accepted = await FileDownloader().enqueue(task);
+    }
     if (!accepted) {
       throw StateError('enqueue rejected for ${job.key}');
     }
@@ -2586,6 +2659,13 @@ class DownloadManager extends ChangeNotifier {
     if (update is TaskProgressUpdate) {
       if (update.progress >= 0) {
         job.state = JobState.active;
+        if (job.progress > 0.1 && update.progress < 0.05) {
+          unawaited(DevLog.write(
+            'V16DL',
+            'resume index=${job.itemIndex} role=${roleOf(job)} from_bytes=0 '
+                'total=${job.expectedBytes ?? -1} result=restart reason=status_200',
+          ));
+        }
         job.progress = update.progress;
         notifyListeners();
         unawaited(_refreshNotification(batch));
@@ -3372,6 +3452,138 @@ class DownloadManager extends ChangeNotifier {
     return provenance.assetId;
   }
 
+  Future<({bool acceptsRange, int? contentLength})> _probeCandidateRangeAndSize(
+    DownloadBatch batch,
+    DownloadJob job,
+    String url,
+  ) async {
+    try {
+      final probeFn = candidateRangeProbeForTesting;
+      if (probeFn != null) {
+        return await probeFn(job, url);
+      }
+      final policy = _policyFor(batch.platform);
+      final resource = _jobResource(job, 0, policy);
+      final authorized = await policy.authorize(resource);
+      final client = HttpClient()..connectionTimeout = const Duration(seconds: 5);
+      final req = await client.openUrl('GET', authorized.uri);
+      req.headers.set(HttpHeaders.rangeHeader, 'bytes=0-0');
+      unifiedTransferHeaders(authorized.headers).forEach((k, v) {
+        req.headers.set(k, v);
+      });
+      final resp = await req.close();
+      final statusCode = resp.statusCode;
+      final acceptRanges = resp.headers.value(HttpHeaders.acceptRangesHeader);
+      final contentRange = resp.headers.value('content-range');
+      int? total;
+      if (contentRange != null) {
+        final match = RegExp(r'/(\d+)').firstMatch(contentRange);
+        if (match != null) {
+          total = int.tryParse(match.group(1)!);
+        }
+      }
+      total ??= resp.contentLength > 0 ? resp.contentLength : null;
+      await resp.drain();
+      client.close();
+      final acceptsRange = statusCode == 206 || acceptRanges == 'bytes';
+      return (acceptsRange: acceptsRange, contentLength: total);
+    } catch (_) {
+      return (acceptsRange: false, contentLength: null);
+    }
+  }
+
+  Future<bool> _handleExpiredUrlResume(
+    DownloadBatch batch,
+    DownloadJob job,
+    ResumeData resumeData,
+  ) async {
+    try {
+      final outcome = await (reparseForTesting?.call(batch.postUrl) ??
+          parsePostOutcome(batch.postUrl, source: 'download_retry', forceRefresh: true));
+      final postIdx = job.itemIndex > 0 ? job.itemIndex - 1 : job.itemIndex;
+      final planned = planFiles(
+        outcome.data,
+        [postIdx],
+        (_, _, _) => job.filename,
+        formatPref: (await AppSettings.load()).imageFormat,
+      ).where((file) => file.isImage == job.isImage &&
+          file.isLivePhoto == job.isLivePhoto).firstOrNull;
+      if (planned != null && planned.urls.isNotEmpty) {
+        final policy = _policyFor(batch.platform);
+        final declarations = policy.resourcesFor(outcome.data.items[postIdx]);
+        final freshResources = [
+          for (final u in planned.urls) resourceForCandidate(policy, declarations, u),
+        ];
+        job.urls = planned.urls;
+        job.resources = freshResources;
+
+        final freshUrl = planned.urls.first;
+        final probe = await _probeCandidateRangeAndSize(batch, job, freshUrl);
+        final total = job.expectedBytes ?? -1;
+        if (probe.acceptsRange && (total <= 0 || probe.contentLength == total)) {
+          final authorized = await policy.authorize(job.resources.first);
+          final updatedTask = DownloadTask(
+            taskId: job.currentTaskId ?? job.key,
+            url: freshUrl,
+            filename: job.filename,
+            headers: unifiedTransferHeaders(authorized.headers),
+            directory: downloadTempDirectory(batch.batchId, job.currentTaskId ?? job.key),
+            baseDirectory: BaseDirectory.temporary,
+            group: batch.batchId,
+            updates: Updates.statusAndProgress,
+            retries: 0,
+            allowPause: true,
+            metaData: jsonEncode({
+              'batchId': batch.batchId,
+              'album': batch.album,
+              'filename': job.filename,
+              'label': job.label,
+              'postUrl': batch.postUrl,
+              'platform': batch.platform,
+              'postId': batch.postId,
+              'author': batch.authorName,
+              'title': batch.title,
+              'caption': batch.caption,
+              'itemIndex': job.itemIndex,
+              'isImage': job.isImage,
+              'mediaPolicyHosts': (policy.site.data['download'] as Map)['mediaHosts'],
+            }),
+          );
+          await _setResumeData(ResumeData(
+            updatedTask,
+            resumeData.data,
+            resumeData.requiredStartByte,
+            resumeData.eTag,
+          ));
+          unawaited(DevLog.write(
+            'V16DL',
+            'resume index=${job.itemIndex} role=${roleOf(job)} from_bytes=${resumeData.requiredStartByte} '
+                'total=$total result=resumed reason=range_accepted',
+          ));
+          final resumed = await _resumeTask(updatedTask);
+          if (resumed) return true;
+        } else {
+          try {
+            final f = File(resumeData.data);
+            if (await f.exists()) await f.delete();
+          } catch (_) {}
+          await _removeResumeData(job.currentTaskId ?? job.key);
+          unawaited(DevLog.write(
+            'V16DL',
+            'resume index=${job.itemIndex} role=${roleOf(job)} from_bytes=0 '
+                'total=${probe.contentLength ?? total} result=restart reason=${!probe.acceptsRange ? 'no_range' : 'validator_changed'}',
+          ));
+          job.progress = 0;
+          await _enqueueAttempt(batch, job);
+          return true;
+        }
+      }
+    } catch (e) {
+      _log('reparse after expired URL failed index=${job.itemIndex}: $e');
+    }
+    return false;
+  }
+
   Future<void> _failAttempt(
     DownloadBatch batch,
     DownloadJob job,
@@ -3404,24 +3616,63 @@ class DownloadManager extends ChangeNotifier {
     // or its query.
     final cap = retryCapFor(batch, job);
     final cause = _failureCause(update);
+
+    final desc = update.exception?.description ?? '';
+    final isValidatorChanged = desc.contains('ETag is not identical') ||
+        desc.contains('validator_changed');
+    if (isValidatorChanged) {
+      final fromBytes = (job.expectedBytes != null && job.progress > 0)
+          ? (job.expectedBytes! * job.progress).round()
+          : 0;
+      unawaited(DevLog.write(
+        'V16DL',
+        'resume index=${job.itemIndex} role=${roleOf(job)} from_bytes=$fromBytes '
+            'total=${job.expectedBytes ?? -1} result=restart reason=validator_changed',
+      ));
+      await _removeResumeData(job.currentTaskId ?? job.key);
+      await ResumableDownloadStore.instance.cleanForJob(job.key);
+      job.progress = 0;
+      await _enqueueAttempt(batch, job);
+      return;
+    }
+
+    final isResumable = !job.isImage &&
+        (job.expectedBytes == null || job.expectedBytes! >= kResumableMinBytes);
+    if ((update.responseStatusCode == 403 || update.responseStatusCode == 410) && isResumable) {
+      final resumeData = await _getResumeData(job.currentTaskId ?? job.key);
+      if (resumeData != null && resumeData.requiredStartByte >= kResumableMinBytes) {
+        final fromBytes = resumeData.requiredStartByte;
+        final total = job.expectedBytes ?? -1;
+        unawaited(DevLog.write(
+          'V16DL',
+          'resume index=${job.itemIndex} role=${roleOf(job)} from_bytes=$fromBytes '
+              'total=$total result=restart reason=expired',
+        ));
+        final handled = await _handleExpiredUrlResume(batch, job, resumeData);
+        if (handled) return;
+      }
+    }
+
     // No connection means the transfer never had a chance: park the file until
     // the network is back instead of spending its attempts on a dead link
     // (v1.11 batch 3). The native queue is left alone on purpose — it already
     // waits by itself — this only makes the wait visible and refundable.
-    if (isNetworkCause(cause) && !NetworkStatus.instance.online) {
-      unawaited(DevLog.write(
-        'V16DL', // i18n:ignore 日志
-        'item waiting_network index=${job.itemIndex} role=${roleOf(job)} '
-            'cause=$cause attempts=${job.attempts}/$cap '
-            'candidate=${candidateProgressLabel(job)}',
-      ));
-      await _waitForNetwork(
-        batch,
-        job,
-        cause: cause,
-        refundAttempt: true,
-      );
-      return;
+    if (isNetworkCause(cause)) {
+      if (!NetworkStatus.instance.online || job.attempts < cap) {
+        unawaited(DevLog.write(
+          'V16DL', // i18n:ignore 日志
+          'item waiting_network index=${job.itemIndex} role=${roleOf(job)} '
+              'cause=$cause attempts=${job.attempts}/$cap '
+              'candidate=${candidateProgressLabel(job)}',
+        ));
+        await _waitForNetwork(
+          batch,
+          job,
+          cause: cause,
+          refundAttempt: true,
+        );
+        return;
+      }
     }
     // A dropped connection or a timeout is usually transient: the same
     // candidate is retried on an exponential ladder (0.6s, 1.2s, 2.4s) before
@@ -3482,6 +3733,9 @@ class DownloadManager extends ChangeNotifier {
   /// end to end: original candidates rotate first, preview candidates last,
   /// and the same candidate is never tried twice.
   @visibleForTesting
+  @visibleForTesting
+  void taskUpdateForTesting(TaskUpdate update) => _onUpdate(update);
+
   Future<void> taskFailureForTesting(
     DownloadBatch batch,
     DownloadJob job,
@@ -3544,6 +3798,9 @@ class DownloadManager extends ChangeNotifier {
     }
     if (has(r'econnreset|connection reset|epipe|eof|broken pipe|connection closed')) {
       return 'reset';
+    }
+    if (has(r'socketexception|connection abort|software caused connection abort')) {
+      return 'network';
     }
     // The plugin wraps a socket failure in its own connection exception; trust
     // the type even when the description carries no recognisable token.
@@ -3785,7 +4042,6 @@ class DownloadManager extends ChangeNotifier {
       _log('retry album lookup failed index=${job.itemIndex}: ${e.runtimeType}');
     }
     job.errorCode = null;
-    job.expectedBytes = null;
     job.notOriginal = false;
     try {
       final outcome = await (reparseForTesting?.call(batch.postUrl) ??
@@ -4274,6 +4530,12 @@ class DownloadManager extends ChangeNotifier {
     }
   }
 
+  @visibleForTesting
+  Future<bool> reconcileBatchForTesting(DownloadBatch batch) => _reconcileBatch(batch);
+
+  @visibleForTesting
+  Future<void> enqueueAttemptForTesting(DownloadBatch batch, DownloadJob job) => _enqueueAttempt(batch, job);
+
   /// Returns true when the batch snapshot changed.
   Future<bool> _reconcileBatch(DownloadBatch batch) async {
     var changed = false;
@@ -4315,7 +4577,10 @@ class DownloadManager extends ChangeNotifier {
         await _finishFile(batch, job, record.task);
         changed = true;
       } else if (record.status == TaskStatus.failed ||
-          record.status == TaskStatus.notFound) {
+          record.status == TaskStatus.notFound ||
+          record.status == TaskStatus.running ||
+          record.status == TaskStatus.enqueued ||
+          record.status == TaskStatus.paused) {
         // A policy rejection is final (see [policyRejectedCode]): re-enqueueing
         // it produced the 220 repeated `REQUEST_HEADER_REJECTED` lines of build
         // 46 and pushed the attempt counter past the displayed limit. A
