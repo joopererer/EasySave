@@ -1229,6 +1229,16 @@ class DownloadManager extends ChangeNotifier {
   StreamSubscription<TaskUpdate>? _updatesSub;
   Timer? _heartbeat;
   bool _ready = false;
+  Future<void>? _reconcileFuture;
+
+  @visibleForTesting
+  Future<void>? get reconcileFutureForTesting => _reconcileFuture;
+
+  @visibleForTesting
+  void resetInitForTesting() {
+    _ready = false;
+    _reconcileFuture = null;
+  }
 
   /// Notifier triggered whenever a batch completes with at least one succeeded item.
   final ValueNotifier<DownloadBatch?> onBatchSuccess =
@@ -1339,6 +1349,9 @@ class DownloadManager extends ChangeNotifier {
   }
 
   @visibleForTesting
+  DownloadBatch? getBatchForTesting(String batchId) => _batches[batchId];
+
+  @visibleForTesting
   void clearBatchesForTesting() {
     _batches.clear();
     notifyListeners();
@@ -1372,7 +1385,11 @@ class DownloadManager extends ChangeNotifier {
   Future<void> init() async {
     if (_ready) return;
     _ready = true;
-    await FileDownloader().start();
+    if (downloaderStartForTesting != null) {
+      await downloaderStartForTesting!();
+    } else {
+      await FileDownloader().start();
+    }
     try {
       await _notifications.initialize(
         settings: const InitializationSettings(
@@ -1393,7 +1410,7 @@ class DownloadManager extends ChangeNotifier {
     } catch (_) {
       // Notifications are best effort; downloads run regardless.
     }
-    _updatesSub = FileDownloader().updates.listen(_onUpdate);
+    _updatesSub ??= FileDownloader().updates.listen(_onUpdate);
     // Connectivity is display only (progress text, notification body). The
     // downloader's queueing/retry/resume logic never reads it.
     unawaited(NetworkStatus.instance.start());
@@ -1405,10 +1422,13 @@ class DownloadManager extends ChangeNotifier {
       const Duration(seconds: 15),
       (_) => _heartbeatTick(),
     );
-    await _loadAndReconcile();
-    // A file parked waiting for the connection in an earlier run continues as
-    // soon as there is one (v1.11 batch 3).
-    unawaited(_resumeWaitingJobs());
+    // Reconcile runs in the background so cold engine startup and new batch
+    // enqueuing are not blocked by historical snapshot recovery.
+    _reconcileFuture = _loadAndReconcile().then((_) {
+      // A file parked waiting for the connection in an earlier run continues as
+      // soon as there is one (v1.11 batch 3).
+      unawaited(_resumeWaitingJobs());
+    });
   }
 
   /// The system connection came back (or went away): the notification body
@@ -1617,13 +1637,16 @@ class DownloadManager extends ChangeNotifier {
   int _notificationId(DownloadBatch batch) =>
       batch.batchId.hashCode & 0x7fffffff;
   /// Single merged notification per batch with byte-level percent.
-  Future<void> _refreshNotification(DownloadBatch batch) async {
+  Future<void> _refreshNotification(
+    DownloadBatch batch, {
+    bool forceCancel = false,
+  }) async {
     final active = [
       for (final j in batch.jobs)
         if (j.state != JobState.canceled) j,
     ];
     if (active.isEmpty) {
-      await _cancelNotification(batch);
+      await _cancelNotification(batch, force: forceCancel);
       return;
     }
     final done = batch.itemDone;
@@ -1644,7 +1667,7 @@ class DownloadManager extends ChangeNotifier {
     _lastShownWaiting[batch.batchId] = waitingForNetwork;
     try {
       if (terminal) {
-        await _cancelNotification(batch);
+        await _cancelNotification(batch, force: forceCancel);
         return;
       }
       await _notifications.show(
@@ -1677,20 +1700,50 @@ class DownloadManager extends ChangeNotifier {
     }
   }
 
-  Future<void> _cancelNotification(DownloadBatch batch) async {
-    _lastShownPercent.remove(batch.batchId);
-    _lastShownWaiting.remove(batch.batchId);
+  /// Cancels notifications for [batches]. Only notifications that were shown
+  /// in the current session (or when [force] is true, e.g. for recovered batches
+  /// from a dead process) trigger a platform call.
+  Future<void> cancelNotifications(
+    Iterable<DownloadBatch> batches, {
+    bool force = false,
+  }) async {
+    final toCancel = <int>[];
+    for (final batch in batches) {
+      final had = _lastShownPercent.containsKey(batch.batchId) ||
+          _lastShownWaiting.containsKey(batch.batchId);
+      _lastShownPercent.remove(batch.batchId);
+      _lastShownWaiting.remove(batch.batchId);
+      if (had || force) {
+        toCancel.add(_notificationId(batch));
+      }
+    }
+    if (toCancel.isEmpty) return;
     try {
       await historyStep(
         'cancel-notification',
-        () => _notifications.cancel(id: _notificationId(batch)),
-        timeout: const Duration(seconds: 1),
+        () async {
+          for (final id in toCancel) {
+            await _notifications.cancel(id: id);
+          }
+        },
+        timeout: const Duration(milliseconds: 300),
       );
     } catch (_) {
       // Best effort.
     }
   }
 
+  Future<void> _cancelNotification(
+    DownloadBatch batch, {
+    bool force = false,
+  }) async {
+    await cancelNotifications([batch], force: force);
+  }
+
+  @visibleForTesting
+  Future<void> Function()? downloaderStartForTesting;
+  @visibleForTesting
+  Future<List<TaskRecord>> Function(String group)? allRecordsForTesting;
   @visibleForTesting
   Future<void> Function()? prepareStartForTesting;
   @visibleForTesting
@@ -3546,6 +3599,12 @@ class DownloadManager extends ChangeNotifier {
     required bool recovered,
   }) async {
     if (!batch.isTerminal) return;
+    // Settled terminal batches already wrote history and released claims; do not
+    // repeat work.
+    if (batch.historyWritten &&
+        (batch.source == DownloadManager.owner || batch.settledBy != null)) {
+      return;
+    }
     // v1.11 batch 1: a batch that ended with failures saves the log around it
     // to the app's private directory. This never affects the download itself.
     if (batch.failedCount > 0 && _failureSnapshotsTaken.add(batch.batchId)) {
@@ -3616,7 +3675,7 @@ class DownloadManager extends ChangeNotifier {
     }
     await _persist(batch);
     notifyListeners();
-    unawaited(_refreshNotification(batch));
+    unawaited(_refreshNotification(batch, forceCancel: recovered));
     await _forgetSupersededFailureBatches(batch);
   }
 
@@ -3664,14 +3723,19 @@ class DownloadManager extends ChangeNotifier {
     }
     if (ids.isEmpty) return;
     final prefs = await SharedPreferences.getInstance();
+    final removed = <DownloadBatch>[];
     for (final id in ids) {
       await prefs.setBool('$_dismissedPrefix$id', true);
       final local = _batches.remove(id);
       _lastShownPercent.remove(id);
+      _lastShownWaiting.remove(id);
       await _removeSnapshot(id);
-      if (local != null) await _cancelNotification(local);
+      if (local != null) removed.add(local);
       _log('drop superseded failure batch $id '
           '(post=${batch.postId} retried by ${batch.batchId})');
+    }
+    if (removed.isNotEmpty) {
+      await cancelNotifications(removed);
     }
     notifyListeners();
   }
@@ -4079,6 +4143,10 @@ class DownloadManager extends ChangeNotifier {
   Future<void> reconcile() async {
     if (!_ready) {
       await init();
+    }
+    if (_reconcileFuture != null) {
+      await _reconcileFuture;
+      _reconcileFuture = null;
       return;
     }
     await _loadAndReconcile();
@@ -4110,6 +4178,7 @@ class DownloadManager extends ChangeNotifier {
               'skip settled foreign batch ${batch.batchId} '
               '(settled by ${batch.settledBy})',
             );
+            _batches.putIfAbsent(batchId, () => batch);
             continue;
           }
           if (await _isStalledForeignBatch(batch)) {
@@ -4127,13 +4196,21 @@ class DownloadManager extends ChangeNotifier {
         }
         // Foreground resume must not replace objects still owned by live Dart
         // transfers with older persisted copies.
-        if (_batches[batchId]?.jobs.any(
+        final existing = _batches[batchId];
+        if (existing != null && !existing.isTerminal) {
+          continue;
+        }
+        if (existing?.jobs.any(
               (j) => _sessionTransfers.containsKey(j.key),
             ) ??
             false) {
           continue;
         }
         _batches[batchId] = batch;
+        if (batch.isTerminal && batch.historyWritten) {
+          // Settled terminal batches already wrote history: skip re-reconciling.
+          continue;
+        }
         if (await _reconcileBatch(batch)) changed = true;
       }
       // One line per start makes two launches directly comparable in the log.
@@ -4166,9 +4243,11 @@ class DownloadManager extends ChangeNotifier {
       return true;
     }
     try {
-      final records = await FileDownloader().database.allRecords(
-        group: batch.batchId,
-      );
+      final records = allRecordsForTesting != null
+          ? await allRecordsForTesting!(batch.batchId)
+          : await FileDownloader().database.allRecords(
+              group: batch.batchId,
+            );
       if (records.isEmpty) return false;
       for (final r in records) {
         final s = r.status;
@@ -4198,9 +4277,11 @@ class DownloadManager extends ChangeNotifier {
     if (changed) await _persist(batch);
     List<TaskRecord> tracked;
     try {
-      tracked = await FileDownloader().database.allRecords(
-        group: batch.batchId,
-      );
+      tracked = allRecordsForTesting != null
+          ? await allRecordsForTesting!(batch.batchId)
+          : await FileDownloader().database.allRecords(
+              group: batch.batchId,
+            );
     } catch (_) {
       return false;
     }
@@ -4241,8 +4322,11 @@ class DownloadManager extends ChangeNotifier {
       }
     }
     if (batch.isTerminal) {
-      await _afterTerminal(batch, recovered: true);
-      changed = true;
+      if (!batch.historyWritten ||
+          (batch.source != DownloadManager.owner && batch.settledBy == null)) {
+        await _afterTerminal(batch, recovered: true);
+        changed = true;
+      }
     }
     return changed;
   }
