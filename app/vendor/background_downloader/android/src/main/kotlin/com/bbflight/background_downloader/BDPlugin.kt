@@ -171,7 +171,8 @@ class BDPlugin : FlutterPlugin, MethodCallHandler, ActivityAware,
             ) // store host if we have a HoldingQueue
             canceledTaskIds.remove(task.taskId) // reset flag
             cancelUpdateSentForTaskId.remove(task.taskId) // reset flag
-            
+            pausedTaskIds.remove(task.taskId) // reset flag
+
             val prefs = PreferenceManager.getDefaultSharedPreferences(context)
             val runInForegroundFileSize = prefs.getInt(keyConfigForegroundFileSize, -1)
             // UIDT (JobScheduler) is used only if task priority is 0 (max priority)
@@ -716,6 +717,11 @@ class BDPlugin : FlutterPlugin, MethodCallHandler, ActivityAware,
                 Log.i(TAG, "Could not url-decode url for taskId ${task.taskId}")
                 return@withContext false
             }
+            // Reset cancel/pause flags on any enqueue attempt to prevent stale state
+            canceledTaskIds.remove(task.taskId)
+            cancelUpdateSentForTaskId.remove(task.taskId)
+            pausedTaskIds.remove(task.taskId)
+
             // enqueue or add to HoldingQueue
             if (holdingQueue == null) {
                 doEnqueue(

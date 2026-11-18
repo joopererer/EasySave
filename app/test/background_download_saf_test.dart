@@ -200,15 +200,22 @@ void main() {
         await checked.future.timeout(const Duration(seconds: 5));
       }
       await settle();
-      expect(written, isEmpty);
-      expect(operations.where((op) => op != 'checkDirectoryAccess'), isEmpty);
-      if (scenario == 'disabled' || scenario == 'no_folder') {
-        expect(operations, isEmpty);
-      } else {
-        expect(operations, ['checkDirectoryAccess']);
-      }
       if (scenario == 'empty_history') {
-        expect(await db.getAllActiveForBackup(), isEmpty);
+        // 1d: User-initiated downloads producing 0 files are preserved with failed status,
+        // so backup correctly archives the failed post record.
+        expect(written, hasLength(1));
+        final records = await db.getAllActiveForBackup();
+        expect(records, hasLength(1));
+        expect(records.first.savedFiles, isEmpty);
+        expect(records.first.downloadError, isNotNull);
+      } else {
+        expect(written, isEmpty);
+        expect(operations.where((op) => op != 'checkDirectoryAccess'), isEmpty);
+        if (scenario == 'disabled' || scenario == 'no_folder') {
+          expect(operations, isEmpty);
+        } else {
+          expect(operations, ['checkDirectoryAccess']);
+        }
       }
     });
   }

@@ -6,11 +6,13 @@ import 'package:easysave/core/dev_log.dart';
 import 'package:easysave/core/models.dart';
 import 'package:easysave/services/download_claims.dart';
 import 'package:easysave/services/download_manager.dart';
+import 'package:easysave/services/history_db.dart';
 import 'package:easysave/services/network_status.dart';
 import 'package:easysave/services/parse_service.dart';
 import 'package:easysave/services/resumable_download_store.dart';
 import 'package:easysave/services/session_media_download.dart';
 import 'package:easysave/services/site_registry.dart';
+import 'package:easysave/services/storage_guard.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -39,9 +41,11 @@ void main() {
   tearDown(() async {
     SiteRegistry.useBuiltin();
     store.overrideDirectory = null;
-    if (await tempDir.exists()) {
-      await tempDir.delete(recursive: true);
-    }
+    try {
+      if (await tempDir.exists()) {
+        await tempDir.delete(recursive: true);
+      }
+    } catch (_) {}
   });
 
   group('ResumableDownloadStore storage and retention', () {
@@ -549,7 +553,7 @@ void main() {
 
       expect(resumeCalled, isTrue);
       final recent = DevLog.recentLines(50);
-      expect(recent.any((l) => l.contains('[V16DL]') && l.contains('result=resumed') && l.contains('reason=range_accepted')), isTrue);
+      expect(recent.any((l) => l.contains('[V16DL]') && l.contains('result=requested') && l.contains('reason=range_requested')), isTrue);
     });
 
     test('manual retry resumes from existing progress and ResumeData', () async {
@@ -576,7 +580,7 @@ void main() {
 
       expect(resumeCalled, isTrue);
       final recent = DevLog.recentLines(50);
-      expect(recent.any((l) => l.contains('[V16DL]') && l.contains('result=resumed') && l.contains('reason=range_accepted')), isTrue);
+      expect(recent.any((l) => l.contains('[V16DL]') && l.contains('result=requested') && l.contains('reason=range_requested')), isTrue);
     });
 
     test('app killed restart resumes via reconcileBatch', () async {
@@ -609,7 +613,7 @@ void main() {
       expect(resumeCalled, isTrue);
 
       final recent = DevLog.recentLines(50);
-      expect(recent.any((l) => l.contains('[V16DL]') && l.contains('result=resumed')), isTrue);
+      expect(recent.any((l) => l.contains('[V16DL]') && l.contains('result=requested') && l.contains('reason=range_requested')), isTrue);
     });
 
     test('no resume data on retry triggers restart with reason=no_resume_data', () async {
@@ -977,8 +981,8 @@ void main() {
         expect(
           recent.any((l) =>
               l.contains('[V16DL]') &&
-              l.contains('result=resumed') &&
-              l.contains('reason=range_accepted') &&
+              l.contains('result=requested') &&
+              l.contains('reason=range_requested') &&
               l.contains('method=resume')),
           isTrue,
         );
@@ -1219,6 +1223,86 @@ void main() {
       expect(restored.resumeStartByte, 210140833);
       expect(restored.resumeTempPath, '/data/user/0/com.james.easysave/cache/part.tmp');
       expect(restored.resumeEtag, '"etag-video"');
+    });
+  });
+
+  group('Build 67: Resumable download, 0-file settlement, cleanup, storage, and stage locking', () {
+    test('StorageGuard accounts for partialBytes in free space check and uses 空间不足', () {
+      const total = 1000 * 1024 * 1024; // 1000MB
+      const partial = 400 * 1024 * 1024; // 400MB
+      // need = (1000 - 400) + 1000 + 256MB = 1856MB
+      final need = requiredBytesForDownload(total, partial);
+      expect(need, (600 + 1000 + 256) * 1024 * 1024);
+      expect(storageFullMessage(), '空间不足');
+    });
+
+    test('0-file settlement sets non-null downloadError and preserves placeholder in HistoryDb', () async {
+      final dbPath = '${tempDir.path}/p0_test.db';
+      HistoryDb.resetInstanceForTesting();
+      final testDb = await HistoryDb.instance(dbPath: dbPath);
+
+      final job = DownloadJob(
+        key: 'p0-job',
+        label: 'video',
+        filename: 'video.mp4',
+        urls: ['https://x.com/video.mp4'],
+        isImage: false,
+        itemIndex: 0,
+      );
+      job.state = JobState.canceled;
+      final batch = DownloadBatch(
+        batchId: 'p0-batch',
+        album: 'test',
+        postUrl: 'https://x.com/1',
+        platform: 'x',
+        postId: 'p0-post',
+        jobs: [job],
+      );
+
+      await writeBatchHistory(testDb, batch, recovered: false);
+      final record = await testDb.getByPostId('p0-post');
+      expect(record, isNotNull);
+      expect(record!.files, isEmpty);
+      // 1c: downloadError must NEVER be null when files is empty
+      expect(record.downloadError, isNotNull);
+      expect(record.downloadError, '已取消');
+
+      HistoryDb.resetInstanceForTesting();
+    });
+
+    test('isFinishing stage lock protects job from late cancellation during finishing', () {
+      final job = DownloadJob(
+        key: 'finish-lock-job',
+        label: 'video',
+        filename: 'video.mp4',
+        urls: ['https://x.com/video.mp4'],
+        isImage: false,
+        itemIndex: 0,
+      );
+      expect(job.isFinishing, isFalse);
+      job.isFinishing = true;
+      expect(job.isFinishing, isTrue);
+    });
+
+    test('tempSweep removes files older than 1 hour and unreferenced session dirs', () async {
+      DownloadManager.instance.tempRootForTesting = () async => tempDir;
+
+      final oldPluginFile = File('${tempDir.path}/com.bbflight.background_downloader.old.tmp');
+      await oldPluginFile.writeAsString('old temp');
+      await oldPluginFile.setLastModified(DateTime.now().subtract(const Duration(hours: 2)));
+
+      final freshPluginFile = File('${tempDir.path}/com.bbflight.background_downloader.fresh.tmp');
+      await freshPluginFile.writeAsString('fresh temp');
+
+      final sweepResult = await DownloadManager.instance.tempSweep();
+      expect(sweepResult.files, greaterThanOrEqualTo(1));
+      expect(await oldPluginFile.exists(), isFalse);
+      expect(await freshPluginFile.exists(), isTrue);
+
+      final recentLogs = DevLog.recentLines(20);
+      expect(recentLogs.any((l) => l.contains('[V16DL] temp_sweep')), isTrue);
+
+      DownloadManager.instance.tempRootForTesting = null;
     });
   });
 }

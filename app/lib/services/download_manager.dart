@@ -542,6 +542,11 @@ class DownloadJob {
   /// (snapshots written before this field existed).
   int lastProgressAt = 0;
 
+  /// 3a: True when the bytes are fully downloaded and the job is in the finishing
+  /// stage (embedding provenance, gallery import, history writing). During this
+  /// stage, cancellation or late network drops cannot abort the job.
+  bool isFinishing = false;
+
   bool get isTerminal =>
       state == JobState.done ||
       state == JobState.failed ||
@@ -1138,6 +1143,54 @@ Future<void> writeBatchHistory(
           pairId: job.isLivePhoto ? '${batch.postId}#${job.itemIndex}' : null,
         ),
   ];
+
+  // 3c: Fallback album check before finalizing history record:
+  // If no files are registered as saved, check whether the gallery already accepted them.
+  if (files.isEmpty) {
+    for (final job in batch.jobs) {
+      try {
+        final existing = await DownloadManager.instance._findExistingAlbumAsset(batch, job);
+        if (existing != null) {
+          job.mediaId = existing.id;
+          job.savedTitle = existing.title;
+          job.relativePath = existing.relativePath;
+          job.saved = true;
+          job.state = JobState.done;
+          files.add(HistoryFile(
+            filename: (existing.title?.isNotEmpty == true) ? existing.title! : job.filename,
+            savedAt: DateTime.now().millisecondsSinceEpoch,
+            mediaId: existing.id,
+            itemIndex: job.itemIndex,
+            isImage: job.isImage,
+            assetId: job.assetId,
+            relativePath: existing.relativePath,
+            itemCount: job.provenanceItemCount,
+            capturedBy: job.provenanceCapturedBy,
+            status: FileStatus.found,
+            size: job.fileBytes,
+            notOriginal: job.notOriginal,
+            pairId: job.isLivePhoto ? '${batch.postId}#${job.itemIndex}' : null,
+          ));
+        }
+      } catch (_) {}
+    }
+  }
+
+  // 1c: Settlement rule: batches producing 0 saved files can only be failed or canceled.
+  // downloadError MUST NEVER BE NULL when files.isEmpty!
+  final String? downloadError;
+  if (files.isEmpty) {
+    if (batch.cancelledByDeletion || batch.jobs.any((j) => j.state == JobState.canceled)) {
+      downloadError = '已取消';
+    } else {
+      downloadError = batch.failureReason ?? '下载失败';
+    }
+  } else if (batch.failedCount > 0) {
+    downloadError = batch.failureReason ?? '部分下载失败';
+  } else {
+    downloadError = null;
+  }
+
   DevLog.write(
     DownloadManager.logTag,
     'history write post=${batch.postId} recovered=$recovered '
@@ -1154,11 +1207,11 @@ Future<void> writeBatchHistory(
       aiLabelSource: batch.aiLabelSource,
       thumbnailUrl: thumb,
       postUrl: batch.postUrl,
-      fileCount: batch.succeeded,
+      fileCount: files.length,
       createdAt: DateTime.now(),
       itemsJson: batch.itemsJson,
       files: files,
-      downloadError: batch.failedCount > 0 ? batch.failureReason ?? '下载出错' : null,
+      downloadError: downloadError,
     ),
     // User-initiated downloads (live updates): restore deleted records.
     // Startup-resumed / interrupted batches: preserve deletion state.
@@ -1365,6 +1418,11 @@ class DownloadManager extends ChangeNotifier {
 
   @visibleForTesting
   void clearBatchesForTesting() {
+    for (final timer in _networkRetryTimers.values) {
+      timer.cancel();
+    }
+    _networkRetryTimers.clear();
+    _networkWaits.clear();
     _batches.clear();
     notifyListeners();
   }
@@ -1435,6 +1493,7 @@ class DownloadManager extends ChangeNotifier {
       (_) => _heartbeatTick(),
     );
     unawaited(ResumableDownloadStore.instance.purgeExpired());
+    unawaited(tempSweep());
     // Reconcile runs in the background so cold engine startup and new batch
     // enqueuing are not blocked by historical snapshot recovery.
     _reconcileFuture = _loadAndReconcile().then((_) {
@@ -1796,7 +1855,11 @@ class DownloadManager extends ChangeNotifier {
       await hook(taskId);
       return;
     }
-    await FileDownloader().removeResumeData(taskId);
+    try {
+      await FileDownloader()
+          .removeResumeData(taskId)
+          .timeout(const Duration(milliseconds: 500), onTimeout: () {});
+    } catch (_) {}
   }
 
   Future<bool> _resumeTask(DownloadTask task) async {
@@ -2291,7 +2354,7 @@ class DownloadManager extends ChangeNotifier {
             'V16DL',
             'resume taskId=$taskId index=${job.itemIndex} role=${roleOf(job)} '
                 'method=resume has_resume_data=true from_bytes=$fromBytes '
-                'total=$total result=resumed reason=range_accepted',
+                'total=$total result=requested reason=range_requested',
           ));
           if (total > 0 && fromBytes < total) {
             job.progress = (fromBytes / total).clamp(0.0, 1.0);
@@ -2437,12 +2500,24 @@ class DownloadManager extends ChangeNotifier {
       }
       if (size != null && size > 0) job.expectedBytes = size;
     }
+    int partialBytes = 0;
+    if (job.resumeStartByte != null && job.resumeStartByte! > 0) {
+      partialBytes = job.resumeStartByte!;
+    } else if (job.resumeTempPath != null) {
+      try {
+        final f = File(job.resumeTempPath!);
+        if (f.existsSync()) partialBytes = f.lengthSync();
+      } catch (_) {}
+    }
     final known = size != null && size > 0;
-    final required = await StorageGuard.shortfall(known ? size : null);
+    final free = await StorageGuard.freeBytes();
+    final need = known ? requiredBytesForDownload(size, partialBytes) : null;
+    final required = (known && free != null && free < need!) ? need : null;
     _log('preflight index=${job.itemIndex} role=${roleOf(job)} '
         'label=${candidateLabelOf(job.urls[index])} '
         'candidate_seq=${index + 1}/${job.urls.length} '
         'size=${known ? size : -1} '
+        'free_bytes=${free ?? -1} need_bytes=${need ?? -1} partial_bytes=$partialBytes '
         'result=${required != null ? storageFullCode : known ? 'ok' : 'unknown'}'
         '${required != null || known ? '' : ' reason=${reason ?? 'probe_failed'}'}');
     if (required == null) return false;
@@ -2522,16 +2597,12 @@ class DownloadManager extends ChangeNotifier {
     DownloadJob job,
     int? required,
   ) async {
-    job.state = JobState.failed;
+    // 2d: Storage shortage enters paused state; do NOT delete partial resume data or call terminal
+    job.state = JobState.paused;
     job.errorCode = storageFullCode;
-    job.error = storageFullMessage(required ??
-        (job.expectedBytes == null
-            ? null
-            : requiredBytesForDownload(job.expectedBytes!)));
-    await _cleanupJobTemp(batch, job);
+    job.error = '空间不足';
     await _persist(batch);
     notifyListeners();
-    await _afterTerminal(batch, recovered: false);
   }
 
   /// Delete every temp file of [job]'s attempts (and [path] when given).
@@ -2539,6 +2610,7 @@ class DownloadManager extends ChangeNotifier {
     DownloadBatch batch,
     DownloadJob job, {
     String? path,
+    String reason = 'cleanup',
   }) async {
     var bytes = 0;
     Future<void> remove(FileSystemEntity entity) async {
@@ -2563,11 +2635,31 @@ class DownloadManager extends ChangeNotifier {
       await remove(File(path));
       await remove(File('$path.xmp'));
     }
+    if (job.resumeTempPath != null) {
+      await remove(File(job.resumeTempPath!));
+      job.resumeTempPath = null;
+    }
     final kept = job.lowResPath;
     if (kept != null) {
       await remove(File(kept));
       job.lowResPath = null;
     }
+    // Clean ResumableDownloadStore
+    try {
+      final part = await ResumableDownloadStore.instance.partialFileFor(job.key);
+      await remove(part);
+      final meta = await ResumableDownloadStore.instance.metaFileFor(job.key);
+      await remove(meta);
+    } catch (_) {}
+
+    // Clean background_downloader plugin resumeData
+    if (!needsSessionDownload(batch, job)) {
+      try {
+        await _removeResumeData(job.currentTaskId ?? job.key);
+        await _removeResumeData(job.key);
+      } catch (_) {}
+    }
+
     try {
       final root = await (tempRootForTesting?.call() ?? getTemporaryDirectory());
       final batchDir = Directory(
@@ -2578,19 +2670,116 @@ class DownloadManager extends ChangeNotifier {
           final name = Uri.decodeComponent(entry.uri.pathSegments
               .where((segment) => segment.isNotEmpty)
               .last);
-          if (name.startsWith('${job.key}-try')) await remove(entry);
+          if (name.startsWith(job.key) ||
+              (job.currentTaskId != null && name.startsWith(job.currentTaskId!)) ||
+              name.startsWith('${job.key}-try')) {
+            await remove(entry);
+          }
         }
       }
-      if (tempRootForTesting == null) await remove(await _sessionFile(job));
+      try {
+        final sessionF = await _sessionFile(job);
+        await remove(sessionF);
+        if (await sessionF.parent.exists()) {
+          await remove(sessionF.parent);
+        }
+      } catch (_) {}
     } catch (_) {
       // Temp roots are unavailable in some engines/tests.
     }
+    job.resumeStartByte = null;
+    job.resumeEtag = null;
+    unawaited(DevLog.write(
+      'V16DL',
+      'temp_cleanup reason=$reason bytes=$bytes index=${job.itemIndex}',
+    ));
     _log('cleanup bytes=$bytes index=${job.itemIndex}');
     return bytes;
   }
 
+  /// Sweeps orphaned temporary files that have no active batch (2b).
+  Future<({int files, int bytes})> tempSweep() async {
+    var files = 0;
+    var bytes = 0;
+    try {
+      final activeJobKeys = <String>{};
+      final activeTempPaths = <String>{};
+      final activeBatchDirs = <String>{};
+      for (final batch in _batches.values) {
+        if (!batch.isTerminal) {
+          activeBatchDirs.add(downloadTempDirectory(batch.batchId, ''));
+          for (final job in batch.jobs) {
+            activeJobKeys.add(job.key);
+            if (job.resumeTempPath != null) activeTempPaths.add(job.resumeTempPath!);
+          }
+        }
+      }
+
+      final root = await (tempRootForTesting?.call() ?? getTemporaryDirectory());
+      final now = DateTime.now();
+
+      // 1. Sweep com.bbflight.background_downloader files in temp root
+      try {
+        await for (final entity in root.list()) {
+          if (entity is File) {
+            final name = entity.uri.pathSegments.lastWhere((s) => s.isNotEmpty, orElse: () => '');
+            if (name.startsWith('com.bbflight.background_downloader')) {
+              if (!activeTempPaths.contains(entity.path)) {
+                final stat = await entity.stat();
+                if (now.difference(stat.modified) > const Duration(hours: 1)) {
+                  bytes += stat.size;
+                  files++;
+                  try {
+                    await entity.delete();
+                  } catch (_) {}
+                }
+              }
+            }
+          }
+        }
+      } catch (_) {}
+
+      // 2. Sweep easysave_session orphaned folders
+      try {
+        final sessionRoot = Directory('${root.path}/easysave_session');
+        if (await sessionRoot.exists()) {
+          await for (final dir in sessionRoot.list()) {
+            if (dir is Directory) {
+              final encKey = dir.uri.pathSegments.lastWhere((s) => s.isNotEmpty, orElse: () => '');
+              final jobKey = Uri.decodeComponent(encKey);
+              if (!activeJobKeys.contains(jobKey)) {
+                await for (final child in dir.list(recursive: true)) {
+                  if (child is File) {
+                    bytes += await child.length();
+                    files++;
+                  }
+                }
+                try {
+                  await dir.delete(recursive: true);
+                } catch (_) {}
+              }
+            }
+          }
+        }
+      } catch (_) {}
+
+      // 3. Sweep easysave_resumes store files older than max age
+      try {
+        final purged = await ResumableDownloadStore.instance.purgeExpired();
+        files += purged;
+      } catch (_) {}
+    } catch (_) {}
+
+    unawaited(DevLog.write(
+      'V16DL',
+      'temp_sweep files=$files bytes=$bytes',
+    ));
+    _log('temp_sweep files=$files bytes=$bytes');
+    return (files: files, bytes: bytes);
+  }
+
   Future<File> _sessionFile(DownloadJob job) async {
-    final root = await getTemporaryDirectory();
+    final root = await (tempRootForTesting?.call() ?? getTemporaryDirectory());
     return File(
       '${root.path}/easysave_session/${Uri.encodeComponent(job.key)}/${job.filename}',
     );
@@ -2746,6 +2935,13 @@ class DownloadManager extends ChangeNotifier {
         job.state == JobState.canceled) {
       return;
     }
+    // 3a: A job in the finishing stage cannot be canceled or failed by late background events
+    if (job.isFinishing || _finishing.containsKey(job.key)) {
+      if (update is TaskStatusUpdate && update.status == TaskStatus.complete) {
+        unawaited(_finishFile(batch, job, task));
+      }
+      return;
+    }
     job.lastProgressAt = DateTime.now().millisecondsSinceEpoch;
     if (update is TaskProgressUpdate) {
       if (update.progress >= 0) {
@@ -2769,6 +2965,10 @@ class DownloadManager extends ChangeNotifier {
         job.lastStatusCode = update.responseStatusCode;
         unawaited(_failAttempt(batch, job, update));
       case TaskStatus.canceled:
+        // A stale cancellation update for an older task must not cancel a resuming/active/waiting job
+        if (job.isWaitingForNetwork || job.state == JobState.queued) {
+          return;
+        }
         // A storage failure cancels its task; keep the failure visible.
         if (job.state != JobState.done && job.errorCode != storageFullCode) {
           job.state = JobState.canceled;
@@ -2853,7 +3053,12 @@ class DownloadManager extends ChangeNotifier {
     Task task,
   ) async {
     if (job.isTerminal) return;
-    await _trackFinish(job.key, () => _finishFileOnce(batch, job, task));
+    job.isFinishing = true;
+    try {
+      await _trackFinish(job.key, () => _finishFileOnce(batch, job, task));
+    } finally {
+      job.isFinishing = false;
+    }
   }
 
   Future<void> _finishFileOnce(
@@ -3189,6 +3394,7 @@ class DownloadManager extends ChangeNotifier {
       ..state = JobState.failed
       ..errorCode = code
       ..error = error ?? (job.isImage ? failureTextFor(job) : '下载到的文件不是视频，已跳过');
+    await _cleanupJobTemp(batch, job, reason: 'final_fail');
     await _persist(batch);
     notifyListeners();
     await _afterTerminal(batch, recovered: false);
@@ -3806,9 +4012,10 @@ class DownloadManager extends ChangeNotifier {
     // waits by itself — this only makes the wait visible and refundable.
     final shouldWaitNetwork = isNetworkCause(cause) && (
       !NetworkStatus.instance.online ||
-      (isResumable && job.progress > 0)
+      (isResumable && (job.progress > 0 || (job.resumeStartByte != null && job.resumeStartByte! > 0)))
     );
     if (shouldWaitNetwork) {
+      if (job.attempts > 0) job.attempts--;
       unawaited(DevLog.write(
         'V16DL', // i18n:ignore 日志
         'item waiting_network index=${job.itemIndex} role=${roleOf(job)} '
@@ -3819,7 +4026,7 @@ class DownloadManager extends ChangeNotifier {
         batch,
         job,
         cause: cause,
-        refundAttempt: true,
+        refundAttempt: false,
       );
       return;
     }
@@ -4056,16 +4263,9 @@ class DownloadManager extends ChangeNotifier {
         _scheduleHistoryRetry(batch);
         return;
       }
-      if (batch.succeeded == 0 && batch.failedCount == 0) {
-        // Nothing was saved and nothing failed (everything was canceled): do
-        // not leave an empty placeholder behind. A failed post stays visible
-        // in history with its failure and a retry.
-        try {
-          await discardEmptyPlaceholder(await HistoryDb.instance(), batch);
-        } catch (e) {
-          _log('placeholder cleanup failed post=${batch.postId}: $e');
-        }
-      }
+      // 1d: Never permanently delete user-initiated downloads! Keep the record
+      // with status '已取消' or '下载失败' so user can retry or re-parse.
+      // (discardEmptyPlaceholder is not called on terminal batches).
       final db = await HistoryDb.instance();
       final locator = GalleryLocatorService.instance;
       if (locator.hasAccess) {
@@ -4251,6 +4451,17 @@ class DownloadManager extends ChangeNotifier {
   }
 
   Future<void> cancelBatch(DownloadBatch batch) async {
+    // 3a: Await any job currently in the finishing stage
+    for (final job in batch.jobs) {
+      if (job.isFinishing || _finishing.containsKey(job.key)) {
+        await _finishing[job.key];
+      }
+    }
+    // If every job is done or saved, the batch has completed; do not cancel it!
+    if (batch.jobs.every((j) => j.state == JobState.done || j.saved)) {
+      if (batch.isTerminal) await _afterTerminal(batch, recovered: false);
+      return;
+    }
     if (batch.source != owner &&
         batch.jobs.any((j) => needsSessionDownload(batch, j))) {
       for (final job in batch.jobs.where((j) => !j.isTerminal)) {
@@ -4260,8 +4471,10 @@ class DownloadManager extends ChangeNotifier {
     }
     for (final job in batch.jobs) {
       if (needsSessionDownload(batch, job) && !job.isTerminal) {
+        _networkRetryTimers.remove(job.key)?.cancel();
         job.state = JobState.canceled;
         await _sessionTransfers[job.key]?.cancel();
+        await _cleanupJobTemp(batch, job, reason: 'cancel');
       }
     }
     final ids = [
@@ -4284,6 +4497,7 @@ class DownloadManager extends ChangeNotifier {
           job.state == JobState.waitingNetwork) {
         _networkRetryTimers.remove(job.key)?.cancel();
         job.state = JobState.canceled;
+        await _cleanupJobTemp(batch, job, reason: 'cancel');
       }
     }
     await _persist(batch);
@@ -4447,7 +4661,9 @@ class DownloadManager extends ChangeNotifier {
 
   /// Cancel one file of a batch (queue page / preview page).
   Future<void> cancelJob(DownloadBatch batch, DownloadJob job) async {
-    await _finishing[job.key];
+    if (job.isFinishing || _finishing.containsKey(job.key)) {
+      await _finishing[job.key];
+    }
     if (batch.source != owner &&
         needsSessionDownload(batch, job) &&
         !batch.isStalledAt(DateTime.now().millisecondsSinceEpoch)) {
@@ -4457,7 +4673,7 @@ class DownloadManager extends ChangeNotifier {
     }
     batch = await _ownedOrAdopt(batch);
     job = batch.jobs.firstWhere((j) => j.key == job.key, orElse: () => job);
-    if (job.saved) return; // The album write won the race; keep it completed.
+    if (job.saved || job.state == JobState.done) return; // The album write won the race; keep it completed.
     if (job.isTerminal) return;
     _networkRetryTimers.remove(job.key)?.cancel();
     if (needsSessionDownload(batch, job)) {
@@ -4473,7 +4689,7 @@ class DownloadManager extends ChangeNotifier {
       }
     }
     job.state = JobState.canceled;
-    await ResumableDownloadStore.instance.cleanForJob(job.key);
+    await _cleanupJobTemp(batch, job, reason: 'cancel');
     await _persist(batch);
     notifyListeners();
     await _afterTerminal(batch, recovered: false);
@@ -4485,6 +4701,9 @@ class DownloadManager extends ChangeNotifier {
   Future<void> removeBatch(DownloadBatch batch) async {
     final owned = await _ownedOrAdopt(batch);
     if (!owned.isTerminal) await cancelBatch(owned);
+    for (final job in owned.jobs) {
+      await _cleanupJobTemp(owned, job, reason: 'delete');
+    }
     _batches.remove(owned.batchId);
     _lastShownPercent.remove(owned.batchId);
     await _removeSnapshot(owned.batchId);
@@ -4628,6 +4847,7 @@ class DownloadManager extends ChangeNotifier {
       }
       // One line per start makes two launches directly comparable in the log.
       _log('reconcile done batches=${index.length} adopted=$adopted');
+      unawaited(tempSweep());
       if (changed) notifyListeners();
     } catch (_) {
       // Recovery is best effort; live updates still drive the UI.

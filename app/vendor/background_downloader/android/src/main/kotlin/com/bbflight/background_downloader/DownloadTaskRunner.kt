@@ -107,11 +107,12 @@ class DownloadTaskRunner(context: TaskJobContext) : TaskRunner(context) {
             )
             val hasEtag = !eTagHeader.isNullOrEmpty()
             val hasLastModified = !connection.getHeaderField("Last-Modified").isNullOrEmpty()
+            val startByteInfo = if (isResume && connection.responseCode == 206) " content_range_start=$startByte" else ""
             Log.i(
                 TAG,
                 "[V16DL] response taskId=${task.taskId} status=${connection.responseCode} " +
                     "accept_ranges=${acceptRangesHeader ?: "none"} has_etag=$hasEtag " +
-                    "has_last_modified=$hasLastModified is_resume=$isResume"
+                    "has_last_modified=$hasLastModified is_resume=$isResume$startByteInfo"
             )
             if (task.allowPause && !usesUri) {
                 taskCanResume = serverAcceptsRanges
