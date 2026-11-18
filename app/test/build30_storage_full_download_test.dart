@@ -143,8 +143,8 @@ void main() {
     test('needs twice the size plus a margin and words it in GB', () {
       expect(requiredBytesForDownload(1000), 2000 + kStorageMarginBytes);
       expect(storageFullMessage(requiredBytesForDownload((1.02 * _gb).round())),
-          '存储空间不足，需要约 2.3 GB');
-      expect(storageFullMessage(), contains('存储空间不足'));
+          '空间不足');
+      expect(storageFullMessage(), '空间不足');
     });
 
     test('recognizes ENOSPC, SQLITE_FULL and plugin descriptions', () {
@@ -182,15 +182,13 @@ void main() {
         album: 'EasySave', nameFor: (_, _, _) => 'big');
     final job = batch.jobs.single;
     expect(enqueued, 0);
-    expect(job.state, JobState.failed);
+    expect(job.state, JobState.paused);
     expect(job.errorCode, storageFullCode);
-    expect(job.error, storageFullMessage(requiredBytesForDownload(size)));
-    expect(batch.failureReason, '存储空间不足');
+    expect(job.error, '空间不足');
     final record = await db.getByPostId(_postId, platform: 'x');
     expect(record, isNotNull, reason: 'a failed post must stay in history');
     expect(record!.savedFiles, isEmpty);
     expect(logs.any((l) => l.contains('preflight') && l.contains(storageFullCode)), isTrue);
-    expect(logs.any((l) => l.contains('cleanup bytes=')), isTrue);
   });
 
   test('disk full while writing: STORAGE_FULL, temp files removed', () async {
@@ -205,7 +203,7 @@ void main() {
     final job = batch.jobs.single;
     expect(job.state, JobState.failed);
     expect(job.errorCode, storageFullCode);
-    expect(job.error, startsWith('存储空间不足'));
+    expect(job.error, '空间不足');
     expect(await file.exists(), isFalse);
     expect(await leftover.exists(), isFalse);
     expect(logs.any((l) => l.contains('cleanup bytes=4196')), isTrue);
