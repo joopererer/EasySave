@@ -341,9 +341,12 @@ class DownloadingOverlay extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final pct = (progress.clamp(0.0, 1.0) * 100).round();
-    final size = compact ? 28.0 : 44.0;
     final reason = failureReason?.isNotEmpty == true ? '（$failureReason）' : '';
-    final label = failed ? (partial ? '部分保存成功$reason，点击重试' : '下载失败$reason，点击重试') : paused ? '已暂停 $pct%' : (stalled ? '已停滞 $pct%' : '下载中 $pct%');
+    final label = failed
+        ? (partial ? '部分保存成功$reason，点击重试' : '下载失败$reason，点击重试')
+        : paused
+            ? '已暂停 $pct%'
+            : (stalled ? '已停滞 $pct%' : '下载中 $pct%');
     final shownLabel = !failed && !paused && waitingForNetwork
         ? '等待网络…联网后自动继续'
         : label;
@@ -351,75 +354,80 @@ class DownloadingOverlay extends StatelessWidget {
         ? Icons.play_arrow_rounded
         : (stalled || failed ? Icons.refresh : Icons.pause_rounded);
     final toggleTip = failed ? '重试' : paused ? '继续下载' : (stalled ? '重试' : '暂停下载');
-    final actionSize = compact ? 18.0 : 22.0;
 
     Widget action(IconData icon, String tip, VoidCallback onTap) {
       return IconButton(
         tooltip: tip,
         onPressed: onTap,
-        icon: Icon(icon, color: Colors.white, size: actionSize),
+        icon: Icon(icon, color: Colors.white, size: 14),
         padding: EdgeInsets.zero,
         visualDensity: VisualDensity.compact,
-        constraints: BoxConstraints.tightFor(
-          width: compact ? 28 : 36,
-          height: compact ? 28 : 36,
+        constraints: const BoxConstraints.tightFor(width: 24, height: 24),
+        style: IconButton.styleFrom(
+          backgroundColor: Colors.white24,
+          minimumSize: Size.zero,
+          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
         ),
-        style: IconButton.styleFrom(backgroundColor: Colors.black38,
-          minimumSize: Size.zero, tapTargetSize: MaterialTapTargetSize.shrinkWrap),
       );
     }
 
-    return Semantics(
-      label: shownLabel,
-      child: ColoredBox(
-        color: Colors.black.withValues(alpha: 0.45),
-        child: Center(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              SizedBox(
-                width: size,
-                height: size,
-                child: failed ? const Icon(Icons.error_outline, color: Colors.white) : CircularProgressIndicator(
-                  // Indeterminate until the first bytes arrive.
-                  value: paused || progress > 0
-                      ? progress.clamp(0.0, 1.0)
-                      : null,
-                  strokeWidth: 3,
-                  color: paused ? Colors.white54 : Colors.white,
-                  backgroundColor: Colors.white24,
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final isNarrow = constraints.maxWidth < 130 || compact;
+        final barHeight = compact ? 26.0 : 34.0;
+        final circleSize = compact ? 14.0 : 18.0;
+
+        return Semantics(
+          label: shownLabel,
+          child: Container(
+            height: barHeight,
+            padding: EdgeInsets.symmetric(horizontal: compact ? 4 : 8),
+            decoration: BoxDecoration(
+              color: Colors.black.withValues(alpha: 0.7),
+            ),
+            child: Row(
+              children: [
+                SizedBox(
+                  width: circleSize,
+                  height: circleSize,
+                  child: failed
+                      ? Icon(Icons.error_outline, size: circleSize, color: Colors.white)
+                      : CircularProgressIndicator(
+                          value: paused || progress > 0
+                              ? progress.clamp(0.0, 1.0)
+                              : null,
+                          strokeWidth: 2,
+                          color: paused ? Colors.white54 : Colors.white,
+                          backgroundColor: Colors.white24,
+                        ),
                 ),
-              ),
-              if (!compact) ...[
-                const SizedBox(height: 6),
-                Text(
-                  shownLabel,
-                  textAlign: TextAlign.center,
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontSize: 12,
-                    fontWeight: FontWeight.w600,
+                const SizedBox(width: 6),
+                Expanded(
+                  child: Text(
+                    shownLabel,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontSize: compact ? 10 : 11,
+                      fontWeight: FontWeight.w600,
+                    ),
                   ),
                 ),
+                if (!isNarrow && (onTogglePause != null || onCancel != null)) ...[
+                  const SizedBox(width: 4),
+                  if (onTogglePause != null)
+                    action(toggleIcon, toggleTip, onTogglePause!),
+                  if (onTogglePause != null && onCancel != null)
+                    const SizedBox(width: 4),
+                  if (onCancel != null)
+                    action(Icons.close, '取消下载', onCancel!),
+                ],
               ],
-              if (onTogglePause != null || onCancel != null) ...[
-                SizedBox(height: compact ? 2 : 6),
-                Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    if (onTogglePause != null)
-                      action(toggleIcon, toggleTip, onTogglePause!),
-                    if (onTogglePause != null && onCancel != null)
-                      SizedBox(width: compact ? 4 : 8),
-                    if (onCancel != null)
-                      action(Icons.close, '取消下载', onCancel!),
-                  ],
-                ),
-              ],
-            ],
+            ),
           ),
-        ),
-      ),
+        );
+      },
     );
   }
 }
@@ -667,7 +675,7 @@ class WaterfallPostCard extends StatelessWidget {
                     Positioned(
                       left: 0,
                       right: 0,
-                      bottom: 0,
+                      bottom: downloadProgress != null ? 34 : 0,
                       child: Container(
                         padding: const EdgeInsets.fromLTRB(10, 22, 10, 10),
                         decoration: const BoxDecoration(
@@ -716,7 +724,10 @@ class WaterfallPostCard extends StatelessWidget {
                       notOriginal: record.savedFiles.any((f) => f.notOriginal),
                     ),
                     if (downloadProgress != null)
-                      Positioned.fill(
+                      Positioned(
+                        left: 0,
+                        right: 0,
+                        bottom: 0,
                         child: DownloadingOverlay(
                           progress: downloadProgress!,
                           paused: downloadPaused,
@@ -893,15 +904,18 @@ class ListPostRow extends StatelessWidget {
                     children: [
                       HistoryThumb(record: record, fit: BoxFit.cover),
                       if (downloadProgress != null)
-                        Positioned.fill(
+                        Positioned(
+                          left: 0,
+                          right: 0,
+                          bottom: 0,
                           child: DownloadingOverlay(
                             progress: downloadProgress!,
                             compact: true,
                             paused: downloadPaused,
                             stalled: downloadStalled,
-                          failed: downloadFailed,
-                          failureReason: downloadFailureReason,
-                          partial: record.savedFiles.isNotEmpty,
+                            failed: downloadFailed,
+                            failureReason: downloadFailureReason,
+                            partial: record.savedFiles.isNotEmpty,
                             onTogglePause: selectionMode
                                 ? null
                                 : onToggleDownload,

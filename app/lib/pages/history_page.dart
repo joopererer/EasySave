@@ -668,6 +668,56 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
     widget.onSelectionModeChanged?.call(true);
   }
 
+  void _handleCardLongPress(HistoryRecord record, String key) {
+    if (_selectionMode) {
+      _enterSelection(key);
+      return;
+    }
+    final batch = _downloadBatches[record.postId];
+    final isDownloading = batch != null && !batch.isTerminal;
+    if (!isDownloading) {
+      _enterSelection(key);
+      return;
+    }
+    final paused = _isPaused(record.postId);
+    final failed = _isFailed(record.postId) || _recordFailed(record);
+    final toggleLabel = failed ? '重试' : (paused ? '继续下载' : '暂停下载');
+    showModalBottomSheet(
+      context: context,
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: Icon(failed ? Icons.refresh : (paused ? Icons.play_arrow : Icons.pause)),
+              title: Text(toggleLabel),
+              onTap: () {
+                Navigator.pop(ctx);
+                _toggleDownload(record.postId);
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.close),
+              title: const Text('取消下载'),
+              onTap: () {
+                Navigator.pop(ctx);
+                _cancelDownload(record.postId);
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.checklist),
+              title: const Text('多选'),
+              onTap: () {
+                Navigator.pop(ctx);
+                _enterSelection(key);
+              },
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   void _exitSelection() {
     setState(() {
       _selectionMode = false;
@@ -2248,7 +2298,7 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
                   onToggleDownload: _recordFailed(record) ? () => _reparse(record) : _downloadBatches[record.postId]?.supportsPause == false && !_isFailed(record.postId) ? null : () => _toggleDownload(record.postId),
                   onCancelDownload: () => _cancelDownload(record.postId),
                   onTap: () => _openRecord(record),
-                  onLongPress: () => _enterSelection(key),
+                  onLongPress: () => _handleCardLongPress(record, key),
                   onToggleSelect: () => _toggleSelection(key),
                 ));
               },
@@ -2323,7 +2373,7 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
                         onCancelDownload: () =>
                             _cancelDownload(record.postId),
                         onTap: () => _openRecord(record),
-                        onLongPress: () => _enterSelection(key),
+                        onLongPress: () => _handleCardLongPress(record, key),
                         onToggleSelect: () => _toggleSelection(key),
                         onReparse: () => _reparse(record),
                         onOpenOriginal: () => _openOriginal(record.postUrl),
