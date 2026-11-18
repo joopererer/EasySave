@@ -83,7 +83,7 @@ void main() {
 
     expect(find.byType(WaterfallPostCard), findsOneWidget);
     expect(find.text('Large video'), findsOneWidget);
-    expect(find.text('下载失败（存储空间不足），点击重试'), findsOneWidget);
+    expect(find.text('空间不足'), findsOneWidget);
     final overlay = tester.widget<DownloadingOverlay>(find.byType(DownloadingOverlay));
     expect(overlay.failed, isTrue);
     expect(overlay.onTogglePause, isNotNull, reason: 'the failure offers a retry');

@@ -38,8 +38,8 @@ void main() {
   });
 
   for (final (reason, label) in [
-    (null, '下载失败，点击重试'),
-    ('HTTP 403', '下载失败（HTTP 403），点击重试'),
+    (null, '下载失败'),
+    ('HTTP 403', '下载失败（HTTP 403）'),
   ]) {
     testWidgets('a failed post restored from a v2 backup shows "$label"',
         (tester) async {

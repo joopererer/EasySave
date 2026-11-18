@@ -78,7 +78,6 @@ void main() {
 
   testWidgets('the card overlay explains the wait and keeps cancel',
       (tester) async {
-    var cancelled = false;
     await tester.pumpWidget(
       MaterialApp(
         home: Scaffold(
@@ -88,7 +87,6 @@ void main() {
             child: DownloadingOverlay(
               progress: 0,
               waitingForNetwork: true,
-              onCancel: () => cancelled = true,
             ),
           ),
         ),
@@ -96,8 +94,8 @@ void main() {
     );
     expect(find.text(_waiting), findsOneWidget);
     expect(find.text('下载中 0%'), findsNothing);
-    await tester.tap(find.byTooltip('取消下载'));
-    expect(cancelled, isTrue);
+    // 4c: Cancel button removed from card overlay
+    expect(find.byTooltip('取消下载'), findsNothing);
   });
 
   testWidgets('the download panel shows the wait, then resumes when the '

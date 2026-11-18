@@ -135,11 +135,11 @@ class _DownloadQueuePageState extends State<DownloadQueuePage> {
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('删除下载任务'),
+        title: Text(batch.isTerminal ? '删除下载任务' : '取消下载？'),
         content: Text(
           batch.isTerminal
               ? '从队列中移除这条记录？已保存的文件不会被删除。'
-              : '取消未完成的下载并移除任务？已保存的文件不会被删除。',
+              : '取消并删除已下载部分？',
         ),
         actions: [
           TextButton(
@@ -148,13 +148,59 @@ class _DownloadQueuePageState extends State<DownloadQueuePage> {
           ),
           TextButton(
             onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('删除'),
+            child: Text(batch.isTerminal ? '删除' : '取消并删除'),
           ),
         ],
       ),
     );
     if (ok == true) {
       await _run(() => DownloadManager.instance.removeBatch(batch));
+    }
+  }
+
+  Future<void> _cancelJobWithConfirm(DownloadBatch batch, DownloadJob job) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('取消下载？'),
+        content: const Text('取消并删除已下载部分？'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('保留'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('取消并删除'),
+          ),
+        ],
+      ),
+    );
+    if (ok == true) {
+      await _run(() => DownloadManager.instance.cancelJob(batch, job));
+    }
+  }
+
+  Future<void> _cancelAllWithConfirm() async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('全部取消？'),
+        content: const Text('取消并删除所有任务已下载部分？'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('保留'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('全部取消'),
+          ),
+        ],
+      ),
+    );
+    if (ok == true) {
+      await _run(DownloadManager.instance.cancelAll);
     }
   }
 
@@ -169,7 +215,7 @@ class _DownloadQueuePageState extends State<DownloadQueuePage> {
             TextButton(
               onPressed: _busy
                   ? null
-                  : () => _run(DownloadManager.instance.cancelAll),
+                  : _cancelAllWithConfirm,
               child: const Text('全部取消'),
             ),
         ],
@@ -191,9 +237,7 @@ class _DownloadQueuePageState extends State<DownloadQueuePage> {
                 batch: _batches[i],
                 stalled: _batches[i].isStalledAt(now),
                 busy: _busy,
-                onCancelJob: (j) => _run(
-                  () => DownloadManager.instance.cancelJob(_batches[i], j),
-                ),
+                onCancelJob: (j) => _cancelJobWithConfirm(_batches[i], j),
                 onRetryJob: (j) => _run(() async {
                   final owned = await DownloadManager.instance.forceAdopt(
                     _batches[i],

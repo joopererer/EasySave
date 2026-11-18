@@ -228,15 +228,15 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text('取消下载？'),
-        content: const Text('未下载完的图片将被丢弃，已保存的内容保留。'),
+        content: const Text('取消并删除已下载部分？'),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('继续下载'),
+            child: const Text('保留'),
           ),
           TextButton(
             onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('取消下载'),
+            child: const Text('取消并删除'),
           ),
         ],
       ),
@@ -894,6 +894,17 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
         SnackBar(content: Text('解析失败：$msg')),
       );
     }
+  }
+
+  void _openDownloadQueue() {
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(builder: (_) => const DownloadQueuePage()),
+    ).then((_) {
+      if (mounted) {
+        unawaited(_refreshDownloads());
+        unawaited(_reload());
+      }
+    });
   }
 
   /// Build the fullscreen browser items for a record and open it.
@@ -2296,6 +2307,7 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
                   downloadFailed: _isFailed(record.postId) || _recordFailed(record),
                   downloadFailureReason: _downloadBatches[record.postId]?.failureReason ?? record.downloadError,
                   onToggleDownload: _recordFailed(record) ? () => _reparse(record) : _downloadBatches[record.postId]?.supportsPause == false && !_isFailed(record.postId) ? null : () => _toggleDownload(record.postId),
+                  onTapQueue: _openDownloadQueue,
                   onCancelDownload: () => _cancelDownload(record.postId),
                   onTap: () => _openRecord(record),
                   onLongPress: () => _handleCardLongPress(record, key),
@@ -2370,6 +2382,7 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
                   downloadFailed: _isFailed(record.postId) || _recordFailed(record),
                   downloadFailureReason: _downloadBatches[record.postId]?.failureReason ?? record.downloadError,
                         onToggleDownload: _recordFailed(record) ? () => _reparse(record) : _downloadBatches[record.postId]?.supportsPause == false && !_isFailed(record.postId) ? null : () => _toggleDownload(record.postId),
+                        onTapQueue: _openDownloadQueue,
                         onCancelDownload: () =>
                             _cancelDownload(record.postId),
                         onTap: () => _openRecord(record),
