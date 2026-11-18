@@ -879,7 +879,9 @@ abstract base class BaseDownloader {
         setPausedTask(task);
       }
       if (update.status.isFinalState) {
-        _clearPauseResumeInfo(task);
+        if (!task.allowPause || update.status != TaskStatus.failed) {
+          _clearPauseResumeInfo(task);
+        }
       }
       if (update.status.isFinalState || update.status == TaskStatus.paused) {
         notifyTaskQueues(task);

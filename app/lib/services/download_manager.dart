@@ -526,6 +526,11 @@ class DownloadJob {
   String? metadataNotice;
   String? relativePath;
 
+  /// Resume state persisted across failures, network waiting, and app restarts
+  int? resumeStartByte;
+  String? resumeTempPath;
+  String? resumeEtag;
+
   /// prov:itemCount and prov:capturedBy of the provenance actually written into
   /// the file (or read back from the reused file). History stores these so the
   /// backup export can report what the file says instead of guessing.
@@ -579,6 +584,9 @@ class DownloadJob {
     'savedTitle': savedTitle,
     'metadataNotice': metadataNotice,
     'relativePath': relativePath,
+    if (resumeStartByte != null) 'resumeStartByte': resumeStartByte,
+    if (resumeTempPath != null) 'resumeTempPath': resumeTempPath,
+    if (resumeEtag != null) 'resumeEtag': resumeEtag,
     if (provenanceItemCount != null) 'provenanceItemCount': provenanceItemCount,
     if (provenanceCapturedBy != null)
       'provenanceCapturedBy': provenanceCapturedBy,
@@ -628,6 +636,9 @@ class DownloadJob {
     job.savedTitle = map['savedTitle'] as String?;
     job.metadataNotice = map['metadataNotice'] as String?;
     job.relativePath = map['relativePath'] as String?;
+    job.resumeStartByte = (map['resumeStartByte'] as num?)?.toInt();
+    job.resumeTempPath = map['resumeTempPath'] as String?;
+    job.resumeEtag = map['resumeEtag'] as String?;
     job.provenanceItemCount = (map['provenanceItemCount'] as num?)?.toInt();
     job.provenanceCapturedBy = map['provenanceCapturedBy'] as String?;
     job.lastProgressAt = (map['lastProgressAt'] as num?)?.toInt() ?? 0;
@@ -1794,6 +1805,37 @@ class DownloadManager extends ChangeNotifier {
     return await FileDownloader().resume(task);
   }
 
+  @visibleForTesting
+  Future<Task?> Function(String taskId)? taskForIdForTesting;
+  @visibleForTesting
+  Future<bool> Function(DownloadTask task)? pauseForTesting;
+
+  Future<Task?> _taskForId(String taskId) async {
+    final hook = taskForIdForTesting;
+    if (hook != null) return await hook(taskId);
+    try {
+      return await FileDownloader().taskForId(taskId).timeout(
+        const Duration(milliseconds: 300),
+        onTimeout: () => null,
+      );
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<bool> _pauseTask(DownloadTask task) async {
+    final hook = pauseForTesting;
+    if (hook != null) return await hook(task);
+    try {
+      return await FileDownloader().pause(task).timeout(
+        const Duration(milliseconds: 300),
+        onTimeout: () => false,
+      );
+    } catch (_) {
+      return false;
+    }
+  }
+
   /// Content-Length of a job URL (production: HEAD request).
   @visibleForTesting
   Future<int?> Function(DownloadJob job, String url)? contentLengthProbeForTesting;
@@ -2198,6 +2240,7 @@ class DownloadManager extends ChangeNotifier {
         'itemIndex': job.itemIndex,
         'isImage': job.isImage,
         'existingAssetId': existingAssetId,
+        'expectedBytes': job.expectedBytes,
         'mediaPolicyHosts': (policy.site.data['download'] as Map)['mediaHosts'],
       }),
     );
@@ -2212,6 +2255,14 @@ class DownloadManager extends ChangeNotifier {
           onTimeout: () => null,
         );
       } catch (_) {}
+      if (resumeData == null && job.resumeStartByte != null && job.resumeTempPath != null) {
+        final path = job.resumeTempPath!;
+        final f = File(path);
+        if (f.existsSync() && (f.lengthSync() >= job.resumeStartByte! || f.lengthSync() > 0)) {
+          resumeData = ResumeData(task, path, job.resumeStartByte!, job.resumeEtag);
+          await _setResumeData(resumeData);
+        }
+      }
       final hasResumeData = resumeData != null;
       final total = job.expectedBytes ?? -1;
       if (hasResumeData) {
@@ -3643,6 +3694,19 @@ class DownloadManager extends ChangeNotifier {
       if (tempExists) tempSize = tempFile.lengthSync();
     }
     final hasEtag = resumeData?.eTag != null && resumeData!.eTag!.isNotEmpty;
+    if (resumeData != null && resumeData.requiredStartByte > (job.resumeStartByte ?? 0)) {
+      job.resumeStartByte = resumeData.requiredStartByte;
+      job.resumeTempPath = resumeData.data;
+      job.resumeEtag = resumeData.eTag;
+      await ResumableDownloadStore.instance.writeMetadata(
+        job.key,
+        ResumeMetadata(
+          validator: resumeData.eTag ?? '',
+          totalBytes: job.expectedBytes ?? -1,
+          updatedAt: DateTime.now().millisecondsSinceEpoch,
+        ),
+      );
+    }
     unawaited(DevLog.write(
       'V16DL',
       'failure_callback taskId=$taskId status=${update.status.name} '
@@ -3680,6 +3744,26 @@ class DownloadManager extends ChangeNotifier {
     final cause = _failureCause(update);
 
     final desc = update.exception?.description ?? '';
+    final isSizeMismatch = desc.contains('size_mismatch');
+    if (isSizeMismatch) {
+      final fromBytes = (job.expectedBytes != null && job.progress > 0)
+          ? (job.expectedBytes! * job.progress).round()
+          : 0;
+      unawaited(DevLog.write(
+        'V16DL',
+        'resume taskId=$taskId index=${job.itemIndex} role=${roleOf(job)} from_bytes=$fromBytes '
+            'total=${job.expectedBytes ?? -1} result=restart reason=size_mismatch',
+      ));
+      await _removeResumeData(job.currentTaskId ?? job.key);
+      await ResumableDownloadStore.instance.cleanForJob(job.key);
+      job.resumeStartByte = null;
+      job.resumeTempPath = null;
+      job.resumeEtag = null;
+      job.progress = 0;
+      await _enqueueAttempt(batch, job);
+      return;
+    }
+
     final isValidatorChanged = desc.contains('ETag is not identical') ||
         desc.contains('validator_changed');
     if (isValidatorChanged) {
@@ -3693,6 +3777,9 @@ class DownloadManager extends ChangeNotifier {
       ));
       await _removeResumeData(job.currentTaskId ?? job.key);
       await ResumableDownloadStore.instance.cleanForJob(job.key);
+      job.resumeStartByte = null;
+      job.resumeTempPath = null;
+      job.resumeEtag = null;
       job.progress = 0;
       await _enqueueAttempt(batch, job);
       return;
@@ -4251,49 +4338,47 @@ class DownloadManager extends ChangeNotifier {
     }
   }
 
-  /// Pause a batch: running files are stopped (they restart from zero on
-  /// resume, the CDNs do not reliably support ranges) and the watchdog leaves
-  /// them alone until [resumeBatch].
+  /// Pause a batch: running files are paused (resumable files keep their partial
+  /// data and resume from the break point) and the watchdog leaves them alone
+  /// until [resumeBatch].
   Future<void> pauseBatch(DownloadBatch batch) async {
-    if (batch.jobs.any((j) => needsSessionDownload(batch, j))) {
-      await cancelBatch(batch);
-      return;
-    }
     batch = await _ownedOrAdopt(batch);
-    final ids = <String>[];
     for (final job in batch.jobs) {
       if (job.state != JobState.queued && job.state != JobState.active) {
         continue;
       }
       final id = job.currentTaskId;
-      if (id != null) ids.add(id);
-      // State first, so the late `canceled` update of the task is ignored.
       job.state = JobState.paused;
-      job.progress = 0;
+      // Preserve job.progress, do not reset to 0
       if (needsSessionDownload(batch, job)) {
         await _sessionTransfers[job.key]?.cancel();
+      } else if (id != null) {
+        try {
+          final task = await _taskForId(id);
+          if (task is DownloadTask && task.allowPause) {
+            final ok = await _pauseTask(task);
+            _log('pauseTask taskId=$id success=$ok');
+          } else {
+            await FileDownloader().cancelTaskWithId(id).timeout(
+              const Duration(milliseconds: 300),
+              onTimeout: () => false,
+            );
+          }
+        } catch (_) {}
       }
     }
     await _persist(batch);
     notifyListeners();
-    if (ids.isNotEmpty) {
-      try {
-        await FileDownloader().cancelTasksWithIds(ids);
-      } catch (_) {
-        // Best effort; the paused state already shields the job.
-      }
-    }
     unawaited(_refreshNotification(batch));
   }
 
-  /// Re-enqueue every paused file of a batch.
+  /// Re-enqueue / resume every paused file of a batch.
   Future<void> resumeBatch(DownloadBatch batch) async {
     batch = await _ownedOrAdopt(batch);
     final now = DateTime.now().millisecondsSinceEpoch;
     for (final job in batch.jobs.where((j) => j.state == JobState.paused)) {
-      job.attempts = 0;
-      job.progress = 0;
       job.lastProgressAt = now;
+      job.state = JobState.queued;
       try {
         await _enqueueAttempt(batch, job);
       } catch (e) {

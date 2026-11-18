@@ -25,6 +25,10 @@ import android.system.Os
 import android.system.ErrnoException
 import kotlin.math.absoluteValue
 import kotlin.random.Random
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.longOrNull
 
 class DownloadTaskRunner(context: TaskJobContext) : TaskRunner(context) {
 
@@ -135,9 +139,15 @@ class DownloadTaskRunner(context: TaskJobContext) : TaskRunner(context) {
             }
             if (isResume && !prepareResume(connection)) {
                 deleteTempFile()
+                val reason = if (taskException?.description?.contains("size_mismatch") == true) "size_mismatch" else "resume_failed"
+                Log.i(
+                    TAG,
+                    "[V16DL] resume_response taskId=${task.taskId} status=${connection.responseCode} " +
+                        "result=restart reason=$reason from_bytes=0"
+                )
                 return TaskStatus.failed
             }
-            if (isResume && (eTagHeader != eTag || eTag?.startsWith("W/") == true)) {
+            if (isResume && !eTag.isNullOrEmpty() && (eTagHeader != eTag || eTag?.startsWith("W/") == true)) {
                 deleteTempFile()
                 Log.i(TAG, "Cannot resume: ETag is not identical, or is weak")
                 taskException = TaskException(
@@ -530,6 +540,23 @@ class DownloadTaskRunner(context: TaskJobContext) : TaskRunner(context) {
             return false
         }
         val start = matchResult.groups[1]?.value?.toLong()!!
+        val serverTotal = matchResult.groups[3]?.value?.toLongOrNull()
+        val expectedTotal = try {
+            if (task.metaData.isNotEmpty()) {
+                val json = Json.parseToJsonElement(task.metaData).jsonObject
+                json["expectedBytes"]?.jsonPrimitive?.longOrNull
+            } else null
+        } catch (_: Exception) {
+            null
+        }
+        if (expectedTotal != null && expectedTotal > 0 && serverTotal != null && serverTotal != expectedTotal) {
+            Log.w(TAG, "Content-Range total $serverTotal does not match expected total $expectedTotal for taskId ${task.taskId}")
+            taskException = TaskException(
+                ExceptionType.resume,
+                description = "size_mismatch: server total $serverTotal != expected $expectedTotal"
+            )
+            return false
+        }
         val tempFile = File(tempFilePath)
         val tempFileLength = tempFile.length()
         startByte = start - taskRangeStartByte // relative to start of range

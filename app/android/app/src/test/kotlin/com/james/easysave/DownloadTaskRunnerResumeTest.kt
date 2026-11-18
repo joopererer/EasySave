@@ -53,5 +53,35 @@ class DownloadTaskRunnerResumeTest {
         assertFalse("Cannot resume if server rejects ranges", canResume(false, 2_000_000L, 0L, true, 2_000_000L))
         assertFalse("Cannot resume if no bytes downloaded", canResume(true, 0L, 0L, true, 0L))
     }
+
+    @Test
+    fun contentRangeTotalSizeMismatchValidation() {
+        fun validateTotalSize(expectedTotal: Long?, serverTotal: Long?): Boolean {
+            if (expectedTotal != null && expectedTotal > 0 && serverTotal != null && serverTotal != expectedTotal) {
+                return false
+            }
+            return true
+        }
+
+        assertTrue("Matching total size is valid", validateTotalSize(1020613970L, 1020613970L))
+        assertTrue("Unknown expected size is permitted", validateTotalSize(null, 1020613970L))
+        assertFalse("Mismatched total size must be rejected as size_mismatch", validateTotalSize(1020613970L, 500000000L))
+    }
+
+    @Test
+    fun noEtagAllowsResumeIfRangeAccepted() {
+        fun validateEtag(isResume: Boolean, eTag: String?, eTagHeader: String?): Boolean {
+            if (isResume && !eTag.isNullOrEmpty() && (eTagHeader != eTag || eTag.startsWith("W/"))) {
+                return false
+            }
+            return true
+        }
+
+        assertTrue("Empty ETag allows resume", validateEtag(true, null, null))
+        assertTrue("Empty saved ETag with response ETag allows resume", validateEtag(true, null, "\"new-etag\""))
+        assertTrue("Matching strong ETag allows resume", validateEtag(true, "\"strong-123\"", "\"strong-123\""))
+        assertFalse("Mismatched ETag rejected", validateEtag(true, "\"strong-123\"", "\"strong-456\""))
+        assertFalse("Weak ETag rejected", validateEtag(true, "W/\"weak-123\"", "W/\"weak-123\""))
+    }
 }
 

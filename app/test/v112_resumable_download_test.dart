@@ -23,13 +23,17 @@ void main() {
 
   late Directory tempDir;
   late ResumableDownloadStore store;
+  late File localPartFile;
 
   setUp(() async {
     HttpOverrides.global = null;
     SiteRegistry.useBuiltin();
+    DownloadClaims.resetForTesting();
     tempDir = await Directory.systemTemp.createTemp('v112_resumable_test_');
     store = ResumableDownloadStore.instance;
     store.overrideDirectory = tempDir;
+    localPartFile = File('${tempDir.path}/test_part.tmp');
+    await localPartFile.writeAsBytes(List.filled(1024, 0));
   });
 
   tearDown(() async {
@@ -981,6 +985,240 @@ void main() {
       } finally {
         await server.close(force: true);
       }
+    });
+
+    test('pauseBatch preserves progress and resumeBatch resumes from breakpoint', () async {
+      final job = DownloadJob(
+        key: 'pause-resume-job',
+        label: 'video',
+        filename: 'video.mp4',
+        urls: ['https://video.twimg.com/test_video.mp4'],
+        isImage: false,
+        itemIndex: 0,
+      );
+      job.expectedBytes = 100 * 1024 * 1024;
+      job.progress = 0.45; // 45% downloaded
+      job.state = JobState.active;
+      job.currentTaskId = job.key;
+      job.resumeStartByte = 45 * 1024 * 1024;
+      job.resumeTempPath = localPartFile.path;
+
+      final batch = DownloadBatch(
+        batchId: 'pause-resume-batch',
+        album: 'test',
+        postUrl: 'https://x.com/user/status/1234',
+        platform: 'x',
+        postId: 'pause-resume-post',
+        jobs: [job],
+      );
+
+      DownloadManager.instance.setBatchForTesting(batch);
+      DownloadManager.instance.taskForIdForTesting = (id) async =>
+          DownloadTask(taskId: id, url: job.urls.first, allowPause: true);
+      DownloadManager.instance.pauseForTesting = (t) async => true;
+
+      // 1. Pause batch
+      await DownloadManager.instance.pauseBatch(batch);
+      expect(job.state, JobState.paused);
+      expect(job.progress, 0.45, reason: 'Progress must not be wiped out on pause');
+
+      // 2. Resume batch
+      bool resumed = false;
+      DownloadManager.instance.resumeForTesting = (t) async {
+        resumed = true;
+        expect(t.taskId, job.key);
+        return true;
+      };
+
+      await DownloadManager.instance.resumeBatch(batch);
+      expect(resumed, isTrue, reason: 'resumeBatch must call _resumeTask');
+      expect(job.progress, 0.45);
+    });
+
+    test('App recovers and resumes when plugin ResumeData is wiped out on task failure', () async {
+      final job = DownloadJob(
+        key: 'loss-recovery-job',
+        label: 'video',
+        filename: 'video.mp4',
+        urls: ['https://video.twimg.com/test_video.mp4'],
+        isImage: false,
+        itemIndex: 0,
+      );
+      job.expectedBytes = 100 * 1024 * 1024;
+      job.state = JobState.active;
+      job.currentTaskId = job.key;
+      job.progress = 0.3;
+
+      final batch = DownloadBatch(
+        batchId: 'loss-recovery-batch',
+        album: 'test',
+        postUrl: 'https://x.com/user/status/1235',
+        platform: 'x',
+        postId: 'loss-recovery-post',
+        jobs: [job],
+      );
+
+      final failUpdate = TaskStatusUpdate(
+        DownloadTask(
+          taskId: job.key,
+          url: job.urls.first,
+          allowPause: true,
+          headers: {'accept-ranges': 'bytes'},
+        ),
+        TaskStatus.failed,
+        TaskConnectionException('SocketException: Software caused connection abort'),
+      );
+
+      // Plugin provides ResumeData at failure callback time
+      mockResumeData[job.key] = ResumeData(
+        failUpdate.task,
+        localPartFile.path,
+        30 * 1024 * 1024,
+        null,
+      );
+
+      await DownloadManager.instance.taskFailureForTesting(batch, job, failUpdate);
+      expect(job.state, JobState.waitingNetwork);
+      expect(job.resumeStartByte, 30 * 1024 * 1024);
+
+      // Now simulate plugin BaseDownloader deleting ResumeData from plugin storage
+      mockResumeData.remove(job.key);
+
+      bool resumed = false;
+      DownloadManager.instance.resumeForTesting = (t) async {
+        resumed = true;
+        return true;
+      };
+
+      // App re-enqueues: App must restore ResumeData from job.resumeStartByte and resume
+      await DownloadManager.instance.enqueueAttemptForTesting(batch, job);
+      expect(resumed, isTrue);
+      expect(mockResumeData[job.key]?.requiredStartByte, 30 * 1024 * 1024);
+    });
+
+    test('multiple network disconnects guarantee monotonic non-decreasing start byte', () async {
+      final job = DownloadJob(
+        key: 'multi-disconnect-job',
+        label: 'video',
+        filename: 'video.mp4',
+        urls: ['https://video.twimg.com/test_video.mp4'],
+        isImage: false,
+        itemIndex: 0,
+      );
+      job.expectedBytes = 500 * 1024 * 1024;
+      job.state = JobState.active;
+      job.currentTaskId = job.key;
+
+      final batch = DownloadBatch(
+        batchId: 'multi-disconnect-batch',
+        album: 'test',
+        postUrl: 'https://x.com/user/status/1236',
+        platform: 'x',
+        postId: 'multi-disconnect-post',
+        jobs: [job],
+      );
+
+      final task = DownloadTask(
+        taskId: job.key,
+        url: job.urls.first,
+        allowPause: true,
+      );
+
+      // Disconnect 1: 100MB
+      mockResumeData[job.key] = ResumeData(task, localPartFile.path, 100 * 1024 * 1024, null);
+      await DownloadManager.instance.taskFailureForTesting(
+        batch,
+        job,
+        TaskStatusUpdate(task, TaskStatus.failed, TaskConnectionException('abort')),
+      );
+      expect(job.resumeStartByte, 100 * 1024 * 1024);
+
+      // Disconnect 2: progressed to 250MB
+      mockResumeData[job.key] = ResumeData(task, localPartFile.path, 250 * 1024 * 1024, null);
+      await DownloadManager.instance.taskFailureForTesting(
+        batch,
+        job,
+        TaskStatusUpdate(task, TaskStatus.failed, TaskConnectionException('abort')),
+      );
+      expect(job.resumeStartByte, 250 * 1024 * 1024);
+
+      // Disconnect 3: handshake glitch reported 0 or smaller bytes
+      mockResumeData[job.key] = ResumeData(task, localPartFile.path, 10 * 1024 * 1024, null);
+      await DownloadManager.instance.taskFailureForTesting(
+        batch,
+        job,
+        TaskStatusUpdate(task, TaskStatus.failed, TaskConnectionException('abort')),
+      );
+      expect(job.resumeStartByte, 250 * 1024 * 1024, reason: 'Start byte must never regress');
+    });
+
+    test('size_mismatch discards resume data and restarts from zero', () async {
+      final job = DownloadJob(
+        key: 'mismatch-job',
+        label: 'video',
+        filename: 'video.mp4',
+        urls: ['https://video.twimg.com/test_video.mp4'],
+        isImage: false,
+        itemIndex: 0,
+      );
+      job.expectedBytes = 1020613970;
+      job.progress = 0.2;
+      job.resumeStartByte = 200000000;
+      job.resumeTempPath = localPartFile.path;
+
+      final batch = DownloadBatch(
+        batchId: 'mismatch-batch',
+        album: 'test',
+        postUrl: 'https://x.com/user/status/1237',
+        platform: 'x',
+        postId: 'mismatch-post',
+        jobs: [job],
+      );
+
+      final task = DownloadTask(taskId: job.key, url: job.urls.first, allowPause: true);
+      final mismatchUpdate = TaskStatusUpdate(
+        task,
+        TaskStatus.failed,
+        TaskResumeException('size_mismatch: server total 500000000 != expected 1020613970'),
+      );
+
+      bool reEnqueued = false;
+      DownloadManager.instance.enqueueForTesting = (b, j) async {
+        reEnqueued = true;
+      };
+
+      await DownloadManager.instance.taskFailureForTesting(batch, job, mismatchUpdate);
+
+      expect(reEnqueued, isTrue);
+      expect(job.resumeStartByte, isNull);
+      expect(job.progress, 0);
+
+      final recent = DevLog.recentLines(20);
+      expect(recent.any((l) => l.contains('reason=size_mismatch')), isTrue);
+    });
+
+    test('DownloadJob serializes and deserializes resumeStartByte and resumeTempPath for process kill recovery', () {
+      final job = DownloadJob(
+        key: 'kill-recovery-job',
+        label: 'video',
+        filename: 'video.mp4',
+        urls: ['https://video.twimg.com/123.mp4'],
+        isImage: false,
+        itemIndex: 0,
+      );
+      job.resumeStartByte = 210140833;
+      job.resumeTempPath = '/data/user/0/com.james.easysave/cache/part.tmp';
+      job.resumeEtag = '"etag-video"';
+
+      final json = job.toJson();
+      expect(json['resumeStartByte'], 210140833);
+      expect(json['resumeTempPath'], '/data/user/0/com.james.easysave/cache/part.tmp');
+      expect(json['resumeEtag'], '"etag-video"');
+
+      final restored = DownloadJob.fromJson(json);
+      expect(restored.resumeStartByte, 210140833);
+      expect(restored.resumeTempPath, '/data/user/0/com.james.easysave/cache/part.tmp');
+      expect(restored.resumeEtag, '"etag-video"');
     });
   });
 }
