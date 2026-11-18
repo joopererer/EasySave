@@ -440,6 +440,7 @@ void main() {
       NetworkStatus.instance.setOnlineForTesting(true);
       createdBatches.clear();
       mockResumeData.clear();
+      File('${tempDir.path}/part.tmp').writeAsBytesSync(List.filled(1024, 1));
     });
 
     tearDown(() async {
@@ -607,24 +608,30 @@ void main() {
       expect(recent.any((l) => l.contains('[V16DL]') && l.contains('result=resumed')), isTrue);
     });
 
-    test('server returns 200 OK without Range support emits status_200 restart log', () async {
-      final batch = createBatch(postId: 'status-200-test');
+    test('no resume data on retry triggers restart with reason=no_resume_data', () async {
+      final batch = createBatch(postId: 'no-resume-data-test');
       final job = batch.jobs.first;
       job.progress = 0.5; // Previously progressed
-      job.currentTaskId = job.key;
+      job.attempts = 1;
 
-      final task = DownloadTask(
-        taskId: job.key,
-        url: job.urls.first,
-        filename: job.filename,
-        group: batch.batchId,
-      );
+      bool resumeCalled = false;
+      DownloadManager.instance.resumeForTesting = (t) async {
+        resumeCalled = true;
+        return true;
+      };
 
-      // Server drops back to 0 progress (status 200 truncated download)
-      DownloadManager.instance.taskUpdateForTesting(TaskProgressUpdate(task, 0.01));
+      await DownloadManager.instance.enqueueAttemptForTesting(batch, job);
 
+      expect(resumeCalled, isFalse);
       final recent = DevLog.recentLines(50);
-      expect(recent.any((l) => l.contains('[V16DL]') && l.contains('result=restart') && l.contains('reason=status_200')), isTrue);
+      expect(
+        recent.any((l) =>
+            l.contains('[V16DL]') &&
+            l.contains('result=restart') &&
+            l.contains('reason=no_resume_data') &&
+            l.contains('method=enqueue')),
+        isTrue,
+      );
     });
 
     test('validator changed (ETag mismatch) clears partial file and restarts from 0', () async {
@@ -779,6 +786,201 @@ void main() {
       expect(job.currentTaskId, startsWith('${job.key}-try'));
       final recent = DevLog.recentLines(50);
       expect(recent.any((l) => l.contains('[V16DL]') && l.contains('result=resumed')), isFalse);
+    });
+
+    test('missing temp file triggers restart with reason=tempfile_missing', () async {
+      final batch = createBatch(postId: 'missing-temp-test');
+      final job = batch.jobs.first;
+      job.progress = 0.3;
+      job.attempts = 1;
+
+      mockResumeData[job.key] = ResumeData(
+        DownloadTask(taskId: job.key, url: job.urls.first, filename: job.filename, group: batch.batchId),
+        '${tempDir.path}/non_existent_file.tmp',
+        300000000,
+        '"etag"',
+      );
+
+      bool resumeCalled = false;
+      DownloadManager.instance.resumeForTesting = (t) async {
+        resumeCalled = true;
+        return true;
+      };
+
+      await DownloadManager.instance.enqueueAttemptForTesting(batch, job);
+
+      expect(resumeCalled, isFalse);
+      final recent = DevLog.recentLines(50);
+      expect(
+        recent.any((l) =>
+            l.contains('[V16DL]') &&
+            l.contains('result=restart') &&
+            l.contains('reason=tempfile_missing') &&
+            l.contains('method=enqueue')),
+        isTrue,
+      );
+    });
+
+    test('taskId mismatch triggers restart with reason=taskid_mismatch', () async {
+      final batch = createBatch(postId: 'mismatch-taskid-test');
+      final job = batch.jobs.first;
+      job.progress = 0.3;
+      job.attempts = 1;
+
+      mockResumeData[job.key] = ResumeData(
+        DownloadTask(taskId: 'different-task-id', url: job.urls.first, filename: job.filename, group: batch.batchId),
+        '${tempDir.path}/part.tmp',
+        300000000,
+        '"etag"',
+      );
+
+      bool resumeCalled = false;
+      DownloadManager.instance.resumeForTesting = (t) async {
+        resumeCalled = true;
+        return true;
+      };
+
+      await DownloadManager.instance.enqueueAttemptForTesting(batch, job);
+
+      expect(resumeCalled, isFalse);
+      final recent = DevLog.recentLines(50);
+      expect(
+        recent.any((l) =>
+            l.contains('[V16DL]') &&
+            l.contains('result=restart') &&
+            l.contains('reason=taskid_mismatch') &&
+            l.contains('method=enqueue')),
+        isTrue,
+      );
+    });
+
+    test('failure callback logs structured diagnostics', () async {
+      final batch = createBatch(postId: 'diag-callback-test');
+      final job = batch.jobs.first;
+
+      mockResumeData[job.key] = ResumeData(
+        DownloadTask(taskId: job.key, url: job.urls.first, filename: job.filename, group: batch.batchId),
+        '${tempDir.path}/part.tmp',
+        200000000,
+        '"etag-diag"',
+      );
+
+      final update = TaskStatusUpdate(
+        DownloadTask(taskId: job.key, url: job.urls.first, filename: job.filename, group: batch.batchId),
+        TaskStatus.failed,
+        TaskConnectionException('SocketException: Software caused connection abort'),
+      );
+
+      await DownloadManager.instance.taskFailureForTesting(batch, job, update);
+
+      final recent = DevLog.recentLines(50);
+      expect(
+        recent.any((l) =>
+            l.contains('[V16DL]') &&
+            l.contains('failure_callback') &&
+            l.contains('taskId=${job.key}') &&
+            l.contains('has_resume_data=true') &&
+            l.contains('temp_exists=true') &&
+            l.contains('has_etag=true')),
+        isTrue,
+      );
+    });
+
+    test('end-to-end integration: local HTTP server supporting Range disconnects mid-flight and resumes successfully', () async {
+      final serverData = List<int>.generate(6 * 1024 * 1024, (i) => i % 256);
+      final receivedRanges = <String?>[];
+
+      final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      server.listen((HttpRequest request) async {
+        final rangeHeader = request.headers.value('range');
+        receivedRanges.add(rangeHeader);
+
+        if (rangeHeader == null) {
+          request.response.statusCode = HttpStatus.ok;
+          request.response.headers.set('Accept-Ranges', 'bytes');
+          request.response.headers.set('ETag', '"v112-test-etag"');
+          request.response.headers.set('Content-Length', serverData.length.toString());
+          request.response.add(serverData.sublist(0, 2 * 1024 * 1024));
+          await request.response.flush();
+          final socket = await request.response.detachSocket();
+          socket.destroy();
+        } else {
+          final match = RegExp(r'bytes=(\d+)-').firstMatch(rangeHeader);
+          final start = match != null ? int.parse(match.group(1)!) : 0;
+          request.response.statusCode = HttpStatus.partialContent;
+          request.response.headers.set('Accept-Ranges', 'bytes');
+          request.response.headers.set('ETag', '"v112-test-etag"');
+          request.response.headers.set(
+            'Content-Range',
+            'bytes $start-${serverData.length - 1}/${serverData.length}',
+          );
+          request.response.headers.set(
+            'Content-Length',
+            (serverData.length - start).toString(),
+          );
+          request.response.add(serverData.sublist(start));
+          await request.response.close();
+        }
+      });
+
+      try {
+        final batch = createBatch(postId: 'e2e-range-test', expectedBytes: serverData.length);
+        final job = batch.jobs.first;
+
+        final localPartFile = File('${tempDir.path}/e2e_part.tmp');
+        await localPartFile.writeAsBytes(serverData.sublist(0, 2 * 1024 * 1024));
+        job.progress = 2 * 1024 * 1024 / serverData.length;
+
+        final failUpdate = TaskStatusUpdate(
+          DownloadTask(taskId: job.key, url: job.urls.first, filename: job.filename, group: batch.batchId),
+          TaskStatus.failed,
+          TaskConnectionException('java.net.SocketException: Software caused connection abort'),
+        );
+
+        mockResumeData[job.key] = ResumeData(
+          failUpdate.task,
+          localPartFile.path,
+          2 * 1024 * 1024,
+          '"v112-test-etag"',
+        );
+
+        await DownloadManager.instance.taskFailureForTesting(batch, job, failUpdate);
+        expect(job.state, JobState.waitingNetwork);
+
+        bool resumeSent = false;
+        DownloadManager.instance.resumeForTesting = (t) async {
+          resumeSent = true;
+          expect(t.taskId, job.key);
+          // Directly exercise the local Range HTTP server using the exact start byte
+          final client = HttpClient();
+          final req = await client.getUrl(Uri.parse('http://${server.address.host}:${server.port}/video.mp4'));
+          req.headers.set(HttpHeaders.rangeHeader, 'bytes=${2 * 1024 * 1024}-');
+          final resp = await req.close();
+          expect(resp.statusCode, HttpStatus.partialContent);
+          expect(resp.headers.value(HttpHeaders.acceptRangesHeader), 'bytes');
+          final remainingBytes = await resp.fold<List<int>>([], (p, e) => p..addAll(e));
+          expect(remainingBytes.length, serverData.length - 2 * 1024 * 1024);
+          client.close();
+          return true;
+        };
+
+        await DownloadManager.instance.enqueueAttemptForTesting(batch, job);
+
+        expect(resumeSent, isTrue);
+        expect(receivedRanges, contains('bytes=2097152-'));
+
+        final recent = DevLog.recentLines(50);
+        expect(
+          recent.any((l) =>
+              l.contains('[V16DL]') &&
+              l.contains('result=resumed') &&
+              l.contains('reason=range_accepted') &&
+              l.contains('method=resume')),
+          isTrue,
+        );
+      } finally {
+        await server.close(force: true);
+      }
     });
   });
 }

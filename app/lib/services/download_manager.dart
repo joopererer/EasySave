@@ -2205,31 +2205,62 @@ class DownloadManager extends ChangeNotifier {
     notifyListeners();
     bool accepted = false;
     if (isResumable) {
-      final resumeData = await _getResumeData(taskId);
-      if (resumeData != null && resumeData.requiredStartByte >= kResumableMinBytes) {
-        final fromBytes = resumeData.requiredStartByte;
-        final total = job.expectedBytes ?? -1;
-        unawaited(DevLog.write(
-          'V16DL',
-          'resume index=${job.itemIndex} role=${roleOf(job)} from_bytes=$fromBytes '
-              'total=$total result=resumed reason=range_accepted',
-        ));
-        if (total > 0 && fromBytes < total) {
-          job.progress = (fromBytes / total).clamp(0.0, 1.0);
-        }
-        accepted = await _resumeTask(task);
-        if (!accepted) {
+      ResumeData? resumeData;
+      try {
+        resumeData = await _getResumeData(taskId).timeout(
+          const Duration(milliseconds: 300),
+          onTimeout: () => null,
+        );
+      } catch (_) {}
+      final hasResumeData = resumeData != null;
+      final total = job.expectedBytes ?? -1;
+      if (hasResumeData) {
+        final tempFile = File(resumeData.data);
+        final tempExists = tempFile.existsSync();
+        final tempSize = tempExists ? tempFile.lengthSync() : 0;
+        final taskIdMatch = resumeData.task.taskId == taskId;
+
+        if (!taskIdMatch) {
           unawaited(DevLog.write(
             'V16DL',
-            'resume index=${job.itemIndex} role=${roleOf(job)} from_bytes=$fromBytes '
-                'total=$total result=restart reason=resume_failed',
+            'resume taskId=$taskId index=${job.itemIndex} role=${roleOf(job)} '
+                'method=enqueue has_resume_data=true from_bytes=0 '
+                'total=$total result=restart reason=taskid_mismatch',
           ));
+        } else if (!tempExists || tempSize == 0) {
+          unawaited(DevLog.write(
+            'V16DL',
+            'resume taskId=$taskId index=${job.itemIndex} role=${roleOf(job)} '
+                'method=enqueue has_resume_data=true from_bytes=0 '
+                'total=$total result=restart reason=tempfile_missing',
+          ));
+        } else {
+          final fromBytes = resumeData.requiredStartByte;
+          unawaited(DevLog.write(
+            'V16DL',
+            'resume taskId=$taskId index=${job.itemIndex} role=${roleOf(job)} '
+                'method=resume has_resume_data=true from_bytes=$fromBytes '
+                'total=$total result=resumed reason=range_accepted',
+          ));
+          if (total > 0 && fromBytes < total) {
+            job.progress = (fromBytes / total).clamp(0.0, 1.0);
+          }
+          accepted = await _resumeTask(task);
+          if (!accepted) {
+            unawaited(DevLog.write(
+              'V16DL',
+              'resume taskId=$taskId index=${job.itemIndex} role=${roleOf(job)} '
+                  'method=enqueue has_resume_data=true from_bytes=$fromBytes '
+                  'total=$total result=restart reason=resume_failed',
+            ));
+          }
         }
-      } else if (job.attempts > 1) {
+      } else if (job.attempts > 1 || job.progress > 0) {
         unawaited(DevLog.write(
           'V16DL',
-          'resume index=${job.itemIndex} role=${roleOf(job)} from_bytes=0 '
-              'total=${job.expectedBytes ?? -1} result=restart reason=no_resume_data',
+          'resume taskId=$taskId index=${job.itemIndex} role=${roleOf(job)} '
+              'method=enqueue has_resume_data=false from_bytes=0 '
+              'total=$total result=restart reason=no_resume_data',
         ));
       }
     }
@@ -2398,6 +2429,15 @@ class DownloadManager extends ChangeNotifier {
         );
       final response =
           await client.send(request).timeout(const Duration(seconds: 8));
+      final acceptRanges = response.headers['accept-ranges'];
+      final hasEtag = response.headers.containsKey('etag');
+      final hasLastModified = response.headers.containsKey('last-modified');
+      unawaited(DevLog.write(
+        'V16DL',
+        'response taskId=${job.currentTaskId ?? job.key} status=${response.statusCode} '
+        'accept_ranges=${acceptRanges ?? "none"} has_etag=$hasEtag '
+        'has_last_modified=$hasLastModified is_resume=false',
+      ));
       try {
         if (response.statusCode == 200) {
           final length = response.contentLength;
@@ -2659,13 +2699,6 @@ class DownloadManager extends ChangeNotifier {
     if (update is TaskProgressUpdate) {
       if (update.progress >= 0) {
         job.state = JobState.active;
-        if (job.progress > 0.1 && update.progress < 0.05) {
-          unawaited(DevLog.write(
-            'V16DL',
-            'resume index=${job.itemIndex} role=${roleOf(job)} from_bytes=0 '
-                'total=${job.expectedBytes ?? -1} result=restart reason=status_200',
-          ));
-        }
         job.progress = update.progress;
         notifyListeners();
         unawaited(_refreshNotification(batch));
@@ -3589,6 +3622,35 @@ class DownloadManager extends ChangeNotifier {
     DownloadJob job,
     TaskStatusUpdate update,
   ) async {
+    final isResumable = !job.isImage &&
+        (job.expectedBytes == null || job.expectedBytes! >= kResumableMinBytes);
+    final taskId = update.task.taskId;
+    ResumeData? resumeData;
+    if (isResumable) {
+      try {
+        resumeData = await _getResumeData(taskId).timeout(
+          const Duration(milliseconds: 300),
+          onTimeout: () => null,
+        );
+      } catch (_) {}
+    }
+    File? tempFile;
+    int tempSize = -1;
+    bool tempExists = false;
+    if (resumeData != null && resumeData.data.isNotEmpty) {
+      tempFile = File(resumeData.data);
+      tempExists = tempFile.existsSync();
+      if (tempExists) tempSize = tempFile.lengthSync();
+    }
+    final hasEtag = resumeData?.eTag != null && resumeData!.eTag!.isNotEmpty;
+    unawaited(DevLog.write(
+      'V16DL',
+      'failure_callback taskId=$taskId status=${update.status.name} '
+      'exception_type=${update.exception?.exceptionType ?? "none"} '
+      'has_resume_data=${resumeData != null} '
+      'required_start_byte=${resumeData?.requiredStartByte ?? 0} '
+      'temp_exists=$tempExists temp_size=$tempSize has_etag=$hasEtag',
+    ));
     final diagnostic = update.exception?.description ?? '';
     if (_diagnosticPolicyCode.hasMatch(diagnostic)) {
       unawaited(DevLog.write('RequestPolicy', diagnostic));
@@ -3636,8 +3698,6 @@ class DownloadManager extends ChangeNotifier {
       return;
     }
 
-    final isResumable = !job.isImage &&
-        (job.expectedBytes == null || job.expectedBytes! >= kResumableMinBytes);
     if ((update.responseStatusCode == 403 || update.responseStatusCode == 410) && isResumable) {
       final resumeData = await _getResumeData(job.currentTaskId ?? job.key);
       if (resumeData != null && resumeData.requiredStartByte >= kResumableMinBytes) {
@@ -3657,22 +3717,24 @@ class DownloadManager extends ChangeNotifier {
     // the network is back instead of spending its attempts on a dead link
     // (v1.11 batch 3). The native queue is left alone on purpose — it already
     // waits by itself — this only makes the wait visible and refundable.
-    if (isNetworkCause(cause)) {
-      if (!NetworkStatus.instance.online || job.attempts < cap) {
-        unawaited(DevLog.write(
-          'V16DL', // i18n:ignore 日志
-          'item waiting_network index=${job.itemIndex} role=${roleOf(job)} '
-              'cause=$cause attempts=${job.attempts}/$cap '
-              'candidate=${candidateProgressLabel(job)}',
-        ));
-        await _waitForNetwork(
-          batch,
-          job,
-          cause: cause,
-          refundAttempt: true,
-        );
-        return;
-      }
+    final shouldWaitNetwork = isNetworkCause(cause) && (
+      !NetworkStatus.instance.online ||
+      (isResumable && job.progress > 0)
+    );
+    if (shouldWaitNetwork) {
+      unawaited(DevLog.write(
+        'V16DL', // i18n:ignore 日志
+        'item waiting_network index=${job.itemIndex} role=${roleOf(job)} '
+            'cause=$cause attempts=${job.attempts}/$cap '
+            'candidate=${candidateProgressLabel(job)}',
+      ));
+      await _waitForNetwork(
+        batch,
+        job,
+        cause: cause,
+        refundAttempt: true,
+      );
+      return;
     }
     // A dropped connection or a timeout is usually transient: the same
     // candidate is retried on an exponential ladder (0.6s, 1.2s, 2.4s) before

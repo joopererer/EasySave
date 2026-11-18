@@ -93,10 +93,22 @@ class DownloadTaskRunner(context: TaskJobContext) : TaskRunner(context) {
             // determine if we are using Uri or not.  Uri means pause/resume not allowed
             val directoryUri = UriUtils.uriFromStringValue(task.directory)
             val usesUri = directoryUri != null
-            eTagHeader = connection.headerFields["ETag"]?.first()
-            val acceptRangesHeader = connection.headerFields["Accept-Ranges"]
-            serverAcceptsRanges =
-                acceptRangesHeader?.first() == "bytes" || connection.responseCode == 206
+            eTagHeader = connection.getHeaderField("ETag")
+            val acceptRangesHeader = connection.getHeaderField("Accept-Ranges")
+            val explicitlyNoRanges = acceptRangesHeader?.lowercase() == "none"
+            serverAcceptsRanges = !explicitlyNoRanges && (
+                acceptRangesHeader?.lowercase() == "bytes" ||
+                connection.responseCode == 206 ||
+                task.allowPause
+            )
+            val hasEtag = !eTagHeader.isNullOrEmpty()
+            val hasLastModified = !connection.getHeaderField("Last-Modified").isNullOrEmpty()
+            Log.i(
+                TAG,
+                "[V16DL] response taskId=${task.taskId} status=${connection.responseCode} " +
+                    "accept_ranges=${acceptRangesHeader ?: "none"} has_etag=$hasEtag " +
+                    "has_last_modified=$hasLastModified is_resume=$isResume"
+            )
             if (task.allowPause && !usesUri) {
                 taskCanResume = serverAcceptsRanges
                 processCanResume(
@@ -104,7 +116,23 @@ class DownloadTaskRunner(context: TaskJobContext) : TaskRunner(context) {
                     taskCanResume
                 )
             }
+            val wasResume = isResume
             isResume = isResume && connection.responseCode == 206  // confirm resume response
+            if (wasResume && !isResume) {
+                val cl = connection.getHeaderField("Content-Length")?.toLongOrNull() ?: -1L
+                Log.i(
+                    TAG,
+                    "[V16DL] resume_response taskId=${task.taskId} status=${connection.responseCode} " +
+                        "result=restart reason=status_200 from_bytes=0 total=$cl"
+                )
+            } else if (isResume) {
+                Log.i(
+                    TAG,
+                    "[V16DL] resume_response taskId=${task.taskId} status=206 " +
+                        "result=resumed reason=range_accepted from_bytes=$startByte " +
+                        "total=${connection.getHeaderField("Content-Length") ?: -1}"
+                )
+            }
             if (isResume && !prepareResume(connection)) {
                 deleteTempFile()
                 return TaskStatus.failed
@@ -483,15 +511,14 @@ class DownloadTaskRunner(context: TaskJobContext) : TaskRunner(context) {
         if (tempFilePath.isEmpty()) {
             return false
         }
-        val contentRanges = connection.headerFields["Content-Range"]
-        if (contentRanges == null || contentRanges.size > 1) {
+        val range = connection.getHeaderField("Content-Range")
+        if (range == null) {
             Log.i(
                 TAG, "Could not " +
-                        "process partial response Content-Range"
+                        "process partial response Content-Range: header missing"
             )
             return false
         }
-        val range = contentRanges.first()
         val contentRangeRegEx = Regex("(\\d+)-(\\d+)/(\\d+)")
         val matchResult = contentRangeRegEx.find(range)
         if (matchResult == null) {
@@ -536,7 +563,23 @@ class DownloadTaskRunner(context: TaskJobContext) : TaskRunner(context) {
      * If this is not possible, the temp file will be deleted
      */
     private suspend fun prepResumeAfterFailure() {
-        if (serverAcceptsRanges && bytesTotal + startByte > 1 shl 20) {
+        val tempFile = if (tempFilePath.isNotEmpty()) File(tempFilePath) else null
+        val tempExists = tempFile?.exists() ?: false
+        val tempSize = if (tempExists) tempFile?.length() ?: 0L else 0L
+        val hasEtag = !eTagHeader.isNullOrEmpty()
+
+        Log.i(
+            TAG,
+            "[V16DL] failure_callback taskId=${task.taskId} " +
+                "status=failed exception_type=${taskException?.type ?: "none"} " +
+                "server_accepts_ranges=$serverAcceptsRanges " +
+                "bytes_total=$bytesTotal start_byte=$startByte " +
+                "temp_exists=$tempExists temp_size=$tempSize " +
+                "has_etag=$hasEtag"
+        )
+
+        val canResume = serverAcceptsRanges && (bytesTotal + startByte > 1 shl 20 || (task.allowPause && tempSize > 0))
+        if (canResume) {
             // if failure can be resumed, post resume data
             processResumeData(
                 ResumeData(

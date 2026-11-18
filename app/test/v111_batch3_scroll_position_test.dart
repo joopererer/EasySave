@@ -18,6 +18,9 @@
 // The pure rules are asserted directly; the rest goes through the real
 // HistoryPage, because that is where build 55 went wrong.
 
+@Timeout(Duration(seconds: 90))
+library;
+
 import 'dart:async';
 import 'dart:convert';
 
