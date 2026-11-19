@@ -804,9 +804,10 @@ class _GalleryBrowserPageState extends State<GalleryBrowserPage> {
       for (final item in _targets)
         (item: item, at: _items.indexWhere((it) => it.index == item.index)),
     ];
+    final counts = deletionCountsForGalleryItems(items.map((e) => e.item));
     final title = items.length == 1
-        ? '第 ${_position.position} 项'
-        : '已选的 ${items.length} 项';
+        ? (counts.livePhotos > 0 ? '实况（共 2 个文件）' : '第 ${_position.position} 项')
+        : counts.format(nonLiveFallback: '已选的 ${items.length} 项');
     final withFile = await _askDeleteMode(title);
     if (withFile == null || !mounted) return;
     setState(() => _busy = true);
@@ -848,9 +849,11 @@ class _GalleryBrowserPageState extends State<GalleryBrowserPage> {
           if (result.failedCount > 0) {
             message = '已删除 ${result.succeededIndices.length} 项，${result.failedCount} 项失败';
           } else if (result.succeededIndices.length == 1) {
-            message = withFile ? '已删除这张，并删除相册文件' : '已删除这张';
+            final summary = counts.format(nonLiveFallback: '这张');
+            message = withFile ? '已删除 $summary，并删除相册文件' : '已删除 $summary';
           } else {
-            message = '已删除 ${result.succeededIndices.length} 项';
+            final summary = counts.format(nonLiveFallback: '${result.succeededIndices.length} 项');
+            message = withFile ? '已删除 $summary，并删除相册文件' : '已删除 $summary';
           }
           messenger.showSnackBar(
             SnackBar(

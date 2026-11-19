@@ -223,6 +223,98 @@ int deletableItemCountFor(
   return items;
 }
 
+/// Deletion item and file counts with unified format for Live and non-Live media.
+class DeletionCounts {
+  const DeletionCounts({
+    required this.images,
+    required this.videos,
+    required this.livePhotos,
+    this.other = 0,
+    int? totalFilesOverride,
+  }) : _totalFilesOverride = totalFilesOverride;
+
+  final int images;
+  final int videos;
+  final int livePhotos;
+  final int other;
+  final int? _totalFilesOverride;
+
+  int get totalItems => images + videos + livePhotos + other;
+  int get totalFiles =>
+      _totalFilesOverride ?? (images + videos + (livePhotos * 2) + other);
+
+  /// Format string:
+  /// - Live only: "3 个实况（共 6 个文件）"
+  /// - Mixed: "2 张图片、3 个实况（共 8 个文件）", "1 个视频、3 个实况（共 7 个文件）"
+  /// - Non-live: keep existing format (uses nonLiveFallback or default item/category count)
+  String format({String? nonLiveFallback}) {
+    if (livePhotos > 0) {
+      final parts = <String>[];
+      if (images > 0) parts.add('$images 张图片');
+      if (videos > 0) parts.add('$videos 个视频');
+      if (livePhotos > 0) parts.add('$livePhotos 个实况');
+      if (other > 0) parts.add('$other 项');
+      final desc = parts.join('、');
+      return '$desc（共 $totalFiles 个文件）';
+    }
+    if (nonLiveFallback != null) return nonLiveFallback;
+    final parts = <String>[];
+    if (images > 0) parts.add('$images 张图片');
+    if (videos > 0) parts.add('$videos 个视频');
+    if (other > 0) parts.add('$other 项');
+    return parts.isEmpty ? '$totalItems 项' : parts.join('、');
+  }
+}
+
+DeletionCounts deletionCountsForRecords(Iterable<HistoryRecord> records) {
+  var images = 0;
+  var videos = 0;
+  var livePhotos = 0;
+  for (final record in records) {
+    final entries = pairSavedMedia(record.savedFiles);
+    for (final entry in entries) {
+      if (entry.isLive) {
+        livePhotos++;
+      } else if (entry.image != null) {
+        images++;
+      } else if (entry.video != null) {
+        videos++;
+      }
+    }
+  }
+  return DeletionCounts(
+    images: images,
+    videos: videos,
+    livePhotos: livePhotos,
+  );
+}
+
+DeletionCounts deletionCountsForGalleryItems(Iterable<dynamic> items) {
+  var images = 0;
+  var videos = 0;
+  var livePhotos = 0;
+  var other = 0;
+  for (final item in items) {
+    final type = (item as dynamic).type as String?;
+    final hasLiveVideo = (item as dynamic).liveVideoAsset != null;
+    if (type == 'live' || hasLiveVideo) {
+      livePhotos++;
+    } else if (type == 'video') {
+      videos++;
+    } else if (type == 'image' || type == 'gif') {
+      images++;
+    } else {
+      other++;
+    }
+  }
+  return DeletionCounts(
+    images: images,
+    videos: videos,
+    livePhotos: livePhotos,
+    other: other,
+  );
+}
+
 /// The album files of [records] as they stand right now.
 ///
 /// A history row only carries a media id once it was synced against the album,
