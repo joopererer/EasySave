@@ -2371,6 +2371,14 @@ class DownloadManager extends ChangeNotifier {
           );
         } catch (_) {}
       }
+      if (resumeData == null && taskId != job.key && oldTaskId != job.key) {
+        try {
+          resumeData = await _getResumeData(job.key).timeout(
+            const Duration(milliseconds: 300),
+            onTimeout: () => null,
+          );
+        } catch (_) {}
+      }
       if (resumeData == null && job.resumeStartByte != null && job.resumeTempPath != null) {
         final path = job.resumeTempPath!;
         final f = File(path);
@@ -2378,26 +2386,35 @@ class DownloadManager extends ChangeNotifier {
           resumeData = ResumeData(task, path, job.resumeStartByte!, job.resumeEtag);
         }
       }
-      if (resumeData != null) {
-        resumeData = ResumeData(task, resumeData.data, resumeData.requiredStartByte, resumeData.eTag);
-        await _setResumeData(resumeData);
-      }
-      final hasResumeData = resumeData != null;
       final total = job.expectedBytes ?? -1;
-      if (hasResumeData) {
-        final tempFile = File(resumeData.data);
-        final tempExists = tempFile.existsSync();
-        final tempSize = tempExists ? tempFile.lengthSync() : 0;
-        final taskIdMatch = resumeData.task.taskId == taskId;
-
+      bool loggedRestart = false;
+      if (resumeData != null) {
+        final origTaskId = resumeData.task.taskId;
+        final taskIdMatch = origTaskId == taskId ||
+            origTaskId == oldTaskId ||
+            origTaskId == job.key ||
+            origTaskId.startsWith('${job.key}-r');
         if (!taskIdMatch) {
+          loggedRestart = true;
           unawaited(DevLog.write(
             'V16DL',
             'resume taskId=$taskId index=${job.itemIndex} role=${roleOf(job)} '
                 'method=enqueue has_resume_data=true from_bytes=0 '
                 'total=$total result=restart reason=taskid_mismatch',
           ));
-        } else if (!tempExists || tempSize == 0) {
+          resumeData = null;
+        } else {
+          resumeData = ResumeData(task, resumeData.data, resumeData.requiredStartByte, resumeData.eTag);
+          await _setResumeData(resumeData);
+        }
+      }
+      final hasResumeData = resumeData != null;
+      if (hasResumeData) {
+        final tempFile = File(resumeData.data);
+        final tempExists = tempFile.existsSync();
+        final tempSize = tempExists ? tempFile.lengthSync() : 0;
+
+        if (!tempExists || tempSize == 0) {
           unawaited(DevLog.write(
             'V16DL',
             'resume taskId=$taskId index=${job.itemIndex} role=${roleOf(job)} '
@@ -2425,7 +2442,7 @@ class DownloadManager extends ChangeNotifier {
             ));
           }
         }
-      } else if (job.attempts > 1 || job.progress > 0) {
+      } else if (!loggedRestart && (job.attempts > 1 || job.progress > 0)) {
         unawaited(DevLog.write(
           'V16DL',
           'resume taskId=$taskId index=${job.itemIndex} role=${roleOf(job)} '

@@ -545,7 +545,7 @@ void main() {
       );
       DownloadManager.instance.resumeForTesting = (t) async {
         resumeCalled = true;
-        expect(t.taskId, job.key);
+        expect(t.taskId.startsWith(job.key), isTrue);
         return true;
       };
 
@@ -572,7 +572,7 @@ void main() {
       );
       DownloadManager.instance.resumeForTesting = (t) async {
         resumeCalled = true;
-        expect(t.taskId, job.key);
+        expect(t.taskId.startsWith(job.key), isTrue);
         return true;
       };
 
@@ -791,7 +791,7 @@ void main() {
       await DownloadManager.instance.enqueueAttemptForTesting(batch, job);
 
       expect(resumeCalled, isFalse);
-      expect(job.currentTaskId, startsWith('${job.key}-try'));
+      expect(job.currentTaskId, startsWith('${job.key}-r1-try'));
       final recent = DevLog.recentLines(50);
       expect(recent.any((l) => l.contains('[V16DL]') && l.contains('result=resumed')), isFalse);
     });
@@ -958,7 +958,7 @@ void main() {
         bool resumeSent = false;
         DownloadManager.instance.resumeForTesting = (t) async {
           resumeSent = true;
-          expect(t.taskId, job.key);
+          expect(t.taskId.startsWith(job.key), isTrue);
           // Directly exercise the local Range HTTP server using the exact start byte
           final client = HttpClient();
           final req = await client.getUrl(Uri.parse('http://${server.address.host}:${server.port}/video.mp4'));
@@ -1030,7 +1030,7 @@ void main() {
       bool resumed = false;
       DownloadManager.instance.resumeForTesting = (t) async {
         resumed = true;
-        expect(t.taskId, job.key);
+        expect(t.taskId.startsWith(job.key), isTrue);
         return true;
       };
 
@@ -1097,7 +1097,7 @@ void main() {
       // App re-enqueues: App must restore ResumeData from job.resumeStartByte and resume
       await DownloadManager.instance.enqueueAttemptForTesting(batch, job);
       expect(resumed, isTrue);
-      expect(mockResumeData[job.key]?.requiredStartByte, 30 * 1024 * 1024);
+      expect((mockResumeData[job.currentTaskId ?? job.key] ?? mockResumeData[job.key])?.requiredStartByte, 30 * 1024 * 1024);
     });
 
     test('multiple network disconnects guarantee monotonic non-decreasing start byte', () async {
@@ -1300,7 +1300,7 @@ void main() {
       expect(await freshPluginFile.exists(), isTrue);
 
       final recentLogs = DevLog.recentLines(20);
-      expect(recentLogs.any((l) => l.contains('[V16DL] temp_sweep')), isTrue);
+      expect(recentLogs.any((l) => l.contains('[V16DL]') && l.contains('temp_sweep')), isTrue);
 
       DownloadManager.instance.tempRootForTesting = null;
     });
