@@ -5,6 +5,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math' as math;
 
 import 'package:background_downloader/background_downloader.dart';
 import 'package:flutter/foundation.dart';
@@ -328,9 +329,14 @@ bool canAdoptForeignBatch({
   required int now,
   required bool allTasksTerminal,
   String? settledBy,
+  bool historyWritten = false,
+  bool isTerminal = false,
+  int succeeded = 0,
 }) {
   if (batchSource == owner) return false;
   if (settledBy != null) return false;
+  if (historyWritten) return false;
+  if (isTerminal && succeeded > 0) return false;
   if (updatedAt <= 0) return false;
   if (now - updatedAt < kStalledBatchAgeMs) return false;
   return allTasksTerminal;
@@ -556,6 +562,9 @@ class DownloadJob {
   /// stage, cancellation or late network drops cannot abort the job.
   bool isFinishing = false;
 
+  /// Current saving sub-phase during finishing: '写入来源信息' or '复制到相册'.
+  String? savingPhase;
+
   bool get isTerminal =>
       state == JobState.done ||
       state == JobState.failed ||
@@ -602,6 +611,8 @@ class DownloadJob {
     if (resumeStartByte != null) 'resumeStartByte': resumeStartByte,
     if (resumeTempPath != null) 'resumeTempPath': resumeTempPath,
     if (resumeEtag != null) 'resumeEtag': resumeEtag,
+    if (isFinishing) 'isFinishing': true,
+    if (savingPhase != null) 'savingPhase': savingPhase,
     if (provenanceItemCount != null) 'provenanceItemCount': provenanceItemCount,
     if (provenanceCapturedBy != null)
       'provenanceCapturedBy': provenanceCapturedBy,
@@ -657,6 +668,8 @@ class DownloadJob {
     job.resumeEtag = map['resumeEtag'] as String?;
     job.provenanceItemCount = (map['provenanceItemCount'] as num?)?.toInt();
     job.provenanceCapturedBy = map['provenanceCapturedBy'] as String?;
+    job.isFinishing = map['isFinishing'] as bool? ?? false;
+    job.savingPhase = map['savingPhase'] as String?;
     job.lastProgressAt = (map['lastProgressAt'] as num?)?.toInt() ?? 0;
     return job;
   }
@@ -742,7 +755,7 @@ class DownloadBatch {
   }
 
   /// Owner engine: [sourceMain] or [sourceBackground].
-  final String source;
+  String source;
   final List<DownloadJob> jobs;
   bool historyWritten = false;
 
@@ -1439,6 +1452,34 @@ class DownloadManager extends ChangeNotifier {
   }
 
   static String _batchKey(String batchId) => 'easysave_batch_$batchId';
+  static String _ownerKey(String batchId) => 'batch_owner_$batchId';
+
+  Future<void> _setBatchOwner(
+    String batchId,
+    String newOwner, {
+    required String reason,
+  }) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final oldOwner = prefs.getString(_ownerKey(batchId)) ?? 'none';
+      if (oldOwner != newOwner) {
+        await prefs.setString(_ownerKey(batchId), newOwner);
+        unawaited(DevLog.write(
+          'V16DL',
+          'owner_change batch=$batchId from=$oldOwner to=$newOwner reason=$reason',
+        ));
+      }
+    } catch (_) {}
+  }
+
+  Future<String?> _getBatchOwner(String batchId) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      return prefs.getString(_ownerKey(batchId));
+    } catch (_) {
+      return null;
+    }
+  }
   static const _batchIndexKey = 'easysave_batches';
   static const _dismissedPrefix = 'easysave_dismissed_batch_';
 
@@ -1628,6 +1669,11 @@ class DownloadManager extends ChangeNotifier {
   Future<void> _heartbeatTick() async {
     for (final batch in _batches.values.toList()) {
       if (batch.isTerminal) continue;
+      final currentOwner = await _getBatchOwner(batch.batchId);
+      if (currentOwner != null && currentOwner != DownloadManager.owner) {
+        batch.source = currentOwner;
+        continue;
+      }
       // Only batches this engine owns are driven here; a foreign batch is
       // left to its owner until it is adopted or force-adopted.
       if (batch.source == DownloadManager.owner) {
@@ -2018,8 +2064,12 @@ class DownloadManager extends ChangeNotifier {
   }
 
   @visibleForTesting
-  Future<void> afterTerminalForTesting(DownloadBatch batch) =>
-      _afterTerminal(batch, recovered: false);
+  Future<void> afterTerminalForTesting(
+    DownloadBatch batch, {
+    bool recovered = false,
+    String? reason,
+  }) =>
+      _afterTerminal(batch, recovered: recovered, reason: reason);
 
   /// The drop step [_afterTerminal] performs once a batch finished without a
   /// failure. Exposed so the failure-state rule can be tested without the
@@ -2172,6 +2222,7 @@ class DownloadManager extends ChangeNotifier {
     // Remember where this batch starts in the log so a failed batch can save
     // the lines around it (v1.11 batch 1).
     _batchLogStarts[batchId] = DevLog.totalLines;
+    await _setBatchOwner(batchId, DownloadManager.owner, reason: 'start');
     _log('batch start id=$batchId source=${batch.source} post=${batch.postId}');
     if (_batchLogStarts.length > 64) {
       _batchLogStarts.remove(_batchLogStarts.keys.first);
@@ -2423,6 +2474,13 @@ class DownloadManager extends ChangeNotifier {
           ));
         } else {
           final fromBytes = resumeData.requiredStartByte;
+          if (fromBytes < (job.resumeStartByte ?? 0)) {
+            unawaited(DevLog.write(
+              'V16DL',
+              'resume_regress old=${job.resumeStartByte} new=$fromBytes reason=plugin_start_byte_regressed',
+            ));
+          }
+          job.resumeStartByte = math.max(job.resumeStartByte ?? 0, fromBytes);
           unawaited(DevLog.write(
             'V16DL',
             'resume taskId=$taskId index=${job.itemIndex} role=${roleOf(job)} '
@@ -2996,6 +3054,7 @@ class DownloadManager extends ChangeNotifier {
         if (isStorageFullError(e.message)) _markStorageFull(job);
       }
     } catch (e) {
+      job.savingPhase = null;
       job.state = JobState.failed;
       job.error = '下载失败，请重新解析';
       if (isStorageFullError(e)) _markStorageFull(job);
@@ -3637,6 +3696,9 @@ class DownloadManager extends ChangeNotifier {
               job.saved = true;
               return;
             }
+            job.savingPhase = '写入来源信息';
+            notifyListeners();
+            await _persist(batch);
             final provSw = Stopwatch()..start();
             final writtenAssetId = await _embedProvenance(
               filePath: path,
@@ -3658,6 +3720,9 @@ class DownloadManager extends ChangeNotifier {
               itemIndex ?? job.itemIndex,
             );
 
+            job.savingPhase = '复制到相册';
+            notifyListeners();
+            await _persist(batch);
             final copySw = Stopwatch()..start();
             final outcome = await saveWithConflictHandling(
               filename: finalName,
@@ -3693,6 +3758,9 @@ class DownloadManager extends ChangeNotifier {
             job.state = JobState.done;
             job.progress = 1;
             job.saved = true;
+            job.savingPhase = null;
+            batch.historyWritten = false;
+            batch.settledBy = null;
 
             // Store assetId for reuse
             job.assetId = outcome.reusedAssetId ?? writtenAssetId;
@@ -4365,17 +4433,57 @@ class DownloadManager extends ChangeNotifier {
   /// foreground reconcile ([reconcile]); live updates and user actions on a
   /// running batch pass false. It decides whether the history write may
   /// restore a soft-deleted record (see [writeBatchHistory]).
+  Future<int> _countActiveNativeTasks(String batchId) async {
+    try {
+      final records = allRecordsForTesting != null
+          ? await allRecordsForTesting!(batchId)
+          : await FileDownloader()
+              .database
+              .allRecords(group: batchId)
+              .timeout(const Duration(milliseconds: 500));
+      return records.where((r) =>
+          r.status == TaskStatus.enqueued ||
+          r.status == TaskStatus.running ||
+          r.status == TaskStatus.paused ||
+          r.status == TaskStatus.waitingToRetry).length;
+    } catch (_) {
+      return 0;
+    }
+  }
+
   Future<void> _afterTerminal(
     DownloadBatch batch, {
     required bool recovered,
+    String? reason,
   }) async {
     if (!batch.isTerminal) return;
+
+    final activeNative = await _countActiveNativeTasks(batch.batchId);
+    if (activeNative > 0) {
+      unawaited(DevLog.write(
+        'V16DL',
+        'batch_settle_blocked id=${batch.batchId} active_native=$activeNative',
+      ));
+      return;
+    }
+
     // Settled terminal batches already wrote history and released claims; do not
     // repeat work.
     if (batch.historyWritten &&
         (batch.source == DownloadManager.owner || batch.settledBy != null)) {
       return;
     }
+
+    final filesCount = batch.jobs.where((j) => j.saved).length;
+    final settleReason = reason ??
+        (recovered
+            ? 'reconcile_terminal'
+            : (batch.succeeded > 0 ? 'all_completed' : 'all_failed'));
+    unawaited(DevLog.write(
+      'V16DL',
+      'batch_settle id=${batch.batchId} by=${DownloadManager.owner} '
+      'reason=$settleReason files=$filesCount active_native=0',
+    ));
     // v1.11 batch 1: a batch that ended with failures saves the log around it
     // to the app's private directory. This never affects the download itself.
     if (batch.failedCount > 0 && _failureSnapshotsTaken.add(batch.batchId)) {
@@ -4445,13 +4553,11 @@ class DownloadManager extends ChangeNotifier {
     // Record who finished a batch it did not start. The snapshot keeps its
     // terminal jobs, so this flag is the only thing that stops the next start
     // from adopting the same completed batch again.
-    if (batch.source != DownloadManager.owner && batch.settledBy == null) {
-      batch.settledBy = DownloadManager.owner;
-      _log(
-        'settle foreign batch ${batch.batchId} '
-        '(source=${batch.source} by=${batch.settledBy} recovered=$recovered)',
-      );
-    }
+    batch.settledBy = DownloadManager.owner;
+    _log(
+      'settle batch ${batch.batchId} '
+      '(source=${batch.source} by=${batch.settledBy} recovered=$recovered)',
+    );
     await _persist(batch);
     notifyListeners();
     unawaited(_refreshNotification(batch, forceCancel: recovered));
@@ -4909,6 +5015,7 @@ class DownloadManager extends ChangeNotifier {
       return _batches[batch.batchId]!;
     }
     final mine = batch.copyOwnedBy(DownloadManager.owner);
+    await _setBatchOwner(batch.batchId, DownloadManager.owner, reason: 'force_adopt');
     // Give the watchdog a fresh window instead of judging old timestamps.
     final now = DateTime.now().millisecondsSinceEpoch;
     for (final j in mine.jobs) {
@@ -4929,6 +5036,22 @@ class DownloadManager extends ChangeNotifier {
       return batch;
     }
     return forceAdopt(batch);
+  }
+
+  Future<DownloadBatch?> reloadBatchSnapshot(String batchId) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.reload();
+      final raw = prefs.getString(_batchKey(batchId));
+      if (raw == null) return _batches[batchId];
+      final updated = DownloadBatch.fromJson(
+        (jsonDecode(raw) as Map).cast<String, Object?>(),
+      );
+      _batches[batchId] = updated;
+      return updated;
+    } catch (_) {
+      return _batches[batchId];
+    }
   }
 
   Future<void> _removeSnapshot(String batchId) async {
@@ -4994,6 +5117,8 @@ class DownloadManager extends ChangeNotifier {
             // history record still happen exactly once.
             _log('adopt stalled foreign batch ${batch.batchId}');
             adopted++;
+            await _setBatchOwner(batch.batchId, DownloadManager.owner, reason: 'adopt_stalled');
+            batch.source = DownloadManager.owner;
             _batches[batchId] = batch;
             if (await _reconcileBatch(batch)) changed = true;
           } else {
@@ -5041,6 +5166,9 @@ class DownloadManager extends ChangeNotifier {
       now: DateTime.now().millisecondsSinceEpoch,
       allTasksTerminal: allTerminal,
       settledBy: batch.settledBy,
+      historyWritten: batch.historyWritten,
+      isTerminal: batch.isTerminal,
+      succeeded: batch.succeeded,
     );
   }
 
@@ -5118,11 +5246,16 @@ class DownloadManager extends ChangeNotifier {
       if (record.status == TaskStatus.complete) {
         await _finishFile(batch, job, record.task);
         changed = true;
-      } else if (record.status == TaskStatus.failed ||
-          record.status == TaskStatus.notFound ||
-          record.status == TaskStatus.running ||
+      } else if (record.status == TaskStatus.running ||
           record.status == TaskStatus.enqueued ||
-          record.status == TaskStatus.paused) {
+          record.status == TaskStatus.waitingToRetry) {
+        job.state = JobState.active;
+        changed = true;
+      } else if (record.status == TaskStatus.paused) {
+        job.state = JobState.paused;
+        changed = true;
+      } else if (record.status == TaskStatus.failed ||
+          record.status == TaskStatus.notFound) {
         // A policy rejection is final (see [policyRejectedCode]): re-enqueueing
         // it produced the 220 repeated `REQUEST_HEADER_REJECTED` lines of build
         // 46 and pushed the attempt counter past the displayed limit. A
