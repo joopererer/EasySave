@@ -910,17 +910,6 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
   /// Build the fullscreen browser items for a record and open it.
   Future<void> _openRecord(HistoryRecord record, {int? highlightItemIndex}) async {
     if (_opening) return;
-    if (record.fileCount == 0 && record.savedFiles.isEmpty &&
-        _downloadBatches.containsKey(record.postId)) {
-      _opening = true;
-      try {
-        await Navigator.of(context).push(MaterialPageRoute<void>(
-            builder: (_) => const DownloadQueuePage()));
-      } finally {
-        _opening = false;
-      }
-      return;
-    }
     _opening = true;
 
     try {
@@ -2314,6 +2303,7 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
                       (_downloadBatches[record.postId]?.waitingForNetwork ??
                           false),
                   downloadFailed: _isFailed(record.postId) || _recordFailed(record),
+                  downloadIsFinishing: _downloadBatches[record.postId]?.jobs.any((j) => j.isFinishing) ?? false,
                   downloadFailureReason: _downloadBatches[record.postId]?.failureReason ?? record.downloadError,
                   onToggleDownload: _recordFailed(record) ? () => _reparse(record) : _downloadBatches[record.postId]?.supportsPause == false && !_isFailed(record.postId) ? null : () => _toggleDownload(record.postId),
                   onTapQueue: _openDownloadQueue,
@@ -2389,6 +2379,7 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
                         downloadPaused: _isPaused(record.postId),
                         downloadStalled: _isStalled(record.postId),
                   downloadFailed: _isFailed(record.postId) || _recordFailed(record),
+                  downloadIsFinishing: _downloadBatches[record.postId]?.jobs.any((j) => j.isFinishing) ?? false,
                   downloadFailureReason: _downloadBatches[record.postId]?.failureReason ?? record.downloadError,
                         onToggleDownload: _recordFailed(record) ? () => _reparse(record) : _downloadBatches[record.postId]?.supportsPause == false && !_isFailed(record.postId) ? null : () => _toggleDownload(record.postId),
                         onTapQueue: _openDownloadQueue,

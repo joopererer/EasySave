@@ -354,6 +354,17 @@ Future<({List<GalleryBrowserItem> items, int initial})> savedBrowserItems({
 }) async {
   final entries = pairSavedMedia(files);
   if (entries.isEmpty) {
+    if (post.items.isNotEmpty) {
+      final items = <GalleryBrowserItem>[
+        for (var i = 0; i < post.items.length; i++)
+          GalleryBrowserItem.fromMediaItem(
+            post.items[i],
+            index: i,
+            cachePostId: record.postId,
+          ),
+      ];
+      return (items: items, initial: 0);
+    }
     return (items: <GalleryBrowserItem>[], initial: 0);
   }
 

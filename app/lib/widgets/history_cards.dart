@@ -309,6 +309,7 @@ class DownloadingOverlay extends StatelessWidget {
     this.stalled = false,
     this.failed = false,
     this.waitingForNetwork = false,
+    this.isFinishing = false,
     this.partial = false,
     this.failureReason,
     this.onTogglePause,
@@ -330,6 +331,9 @@ class DownloadingOverlay extends StatelessWidget {
   /// resumes by itself, so the overlay explains the wait instead of spinning
   /// silently (v1.11 batch 2). Display only — nothing here pauses anything.
   final bool waitingForNetwork;
+
+  /// Finishing stage: fully downloaded, saving to album/embedding provenance.
+  final bool isFinishing;
 
   final bool partial;
 
@@ -363,6 +367,8 @@ class DownloadingOverlay extends StatelessWidget {
       label = '等待网络…联网后自动继续';
     } else if (stalled) {
       label = '已停滞 $pct%';
+    } else if (isFinishing) {
+      label = '正在保存到相册';
     } else {
       label = '下载中 $pct%';
     }
@@ -376,6 +382,8 @@ class DownloadingOverlay extends StatelessWidget {
       narrowLabel = '已暂停';
     } else if (waitingForNetwork) {
       narrowLabel = '等网络';
+    } else if (isFinishing) {
+      narrowLabel = '保存中';
     } else {
       narrowLabel = '$pct%';
     }
@@ -502,6 +510,7 @@ class _OverlayToggleButton extends StatefulWidget {
 }
 
 class _OverlayToggleButtonState extends State<_OverlayToggleButton> {
+  bool? _optimisticPaused;
   bool _busy = false;
   Timer? _fallbackTimer;
 
@@ -518,6 +527,7 @@ class _OverlayToggleButtonState extends State<_OverlayToggleButton> {
         widget.failed != oldWidget.failed ||
         widget.stalled != oldWidget.stalled ||
         widget.waitingForNetwork != oldWidget.waitingForNetwork) {
+      _optimisticPaused = null;
       _busy = false;
       _fallbackTimer?.cancel();
     }
@@ -525,22 +535,40 @@ class _OverlayToggleButtonState extends State<_OverlayToggleButton> {
 
   void _handleTap() {
     if (_busy) return;
-    setState(() => _busy = true);
+    final isToggle = !widget.failed && !widget.stalled && !widget.storageFull;
+    setState(() {
+      _busy = true;
+      if (isToggle) {
+        _optimisticPaused = !widget.paused;
+      }
+    });
     try {
       widget.onTap();
     } catch (_) {
-      setState(() => _busy = false);
+      if (mounted) {
+        setState(() {
+          _optimisticPaused = null;
+          _busy = false;
+        });
+      }
+      return;
     }
-    // Optimistic fallback timeout
+    // Optimistic fallback timeout: revert if neither widget updates nor success occurs
     _fallbackTimer?.cancel();
-    _fallbackTimer = Timer(const Duration(milliseconds: 1200), () {
-      if (mounted && _busy) setState(() => _busy = false);
+    _fallbackTimer = Timer(const Duration(milliseconds: 1500), () {
+      if (mounted && _busy) {
+        setState(() {
+          _optimisticPaused = null;
+          _busy = false;
+        });
+      }
     });
   }
 
   @override
   Widget build(BuildContext context) {
-    final showPlay = widget.paused;
+    final effectivePaused = _optimisticPaused ?? widget.paused;
+    final showPlay = effectivePaused;
     final showRefresh = widget.failed || widget.stalled || widget.storageFull;
     final icon = showPlay
         ? Icons.play_arrow_rounded
@@ -551,6 +579,7 @@ class _OverlayToggleButtonState extends State<_OverlayToggleButton> {
 
     final targetSize = widget.compact ? 24.0 : 44.0;
     final iconContainerSize = widget.compact ? 22.0 : 32.0;
+    final iconSize = widget.compact ? 14.0 : 20.0;
 
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
@@ -569,20 +598,29 @@ class _OverlayToggleButtonState extends State<_OverlayToggleButton> {
               shape: BoxShape.circle,
             ),
             alignment: Alignment.center,
-            child: _busy
-                ? SizedBox(
-                    width: widget.compact ? 10 : 14,
-                    height: widget.compact ? 10 : 14,
-                    child: const CircularProgressIndicator(
-                      strokeWidth: 2,
-                      color: Colors.white,
+            child: Stack(
+              alignment: Alignment.center,
+              children: [
+                Icon(
+                  icon,
+                  color: Colors.white,
+                  size: iconSize,
+                ),
+                if (_busy)
+                  Positioned(
+                    right: 0,
+                    bottom: 0,
+                    child: SizedBox(
+                      width: widget.compact ? 6 : 8,
+                      height: widget.compact ? 6 : 8,
+                      child: const CircularProgressIndicator(
+                        strokeWidth: 1.5,
+                        color: Colors.white,
+                      ),
                     ),
-                  )
-                : Icon(
-                    icon,
-                    color: Colors.white,
-                    size: widget.compact ? 14 : 20,
                   ),
+              ],
+            ),
           ),
         ),
       ),
@@ -678,52 +716,59 @@ List<Widget> coverBadges(
       widgets.add(
         const Positioned(top: 8, left: 8, child: WhiteBadge(label: 'GIF')),
       );
-    } else if (kind == '视频') {
-      final label = videoDurationLabel(cover);
-      widgets.add(
-        Positioned(
-          top: 8,
-          left: 8,
-          child: DarkBadge(
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                const Icon(Icons.play_arrow, color: Colors.white, size: 12),
-                if (label != null) ...[
-                  const SizedBox(width: 2),
-                  Text(
-                    label,
-                    style: const TextStyle(color: Colors.white, fontSize: 10),
-                  ),
-                ],
-              ],
-            ),
-          ),
-        ),
-      );
     }
   }
-  if (itemCount > 1) {
+
+  // Top-right badges: duration (for video) and item count (if > 1)
+  final isVideo = showInfo && cover != null && mediaKindLabel(cover) == '视频';
+  final videoLabel = isVideo ? videoDurationLabel(cover) : null;
+  final hasDuration = isVideo;
+  final hasCount = itemCount > 1;
+
+  if (hasDuration || hasCount) {
     widgets.add(
       Positioned(
         top: 8,
         right: 8,
-        child: DarkBadge(
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Icon(Icons.collections, color: Colors.white, size: 11),
-              const SizedBox(width: 3),
-              Text(
-                '$itemCount',
-                style: const TextStyle(
-                  color: Colors.white,
-                  fontSize: 10,
-                  fontWeight: FontWeight.w600,
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (hasDuration)
+              DarkBadge(
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Icon(Icons.play_arrow, color: Colors.white, size: 12),
+                    if (videoLabel != null) ...[
+                      const SizedBox(width: 2),
+                      Text(
+                        videoLabel,
+                        style: const TextStyle(color: Colors.white, fontSize: 10),
+                      ),
+                    ],
+                  ],
                 ),
               ),
-            ],
-          ),
+            if (hasDuration && hasCount) const SizedBox(width: 4),
+            if (hasCount)
+              DarkBadge(
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Icon(Icons.collections, color: Colors.white, size: 11),
+                    const SizedBox(width: 3),
+                    Text(
+                      '$itemCount',
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 10,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+          ],
         ),
       ),
     );
@@ -762,6 +807,7 @@ class WaterfallPostCard extends StatelessWidget {
     this.downloadStalled = false,
     this.downloadFailed = false,
     this.downloadWaitingForNetwork = false,
+    this.downloadIsFinishing = false,
     this.downloadFailureReason,
     this.onToggleDownload,
     this.onTapQueue,
@@ -783,6 +829,9 @@ class WaterfallPostCard extends StatelessWidget {
 
   /// No system connection: the overlay explains the wait (display only).
   final bool downloadWaitingForNetwork;
+
+  /// Saving to album / finishing stage.
+  final bool downloadIsFinishing;
 
   final String? downloadFailureReason;
 
@@ -894,6 +943,7 @@ class WaterfallPostCard extends StatelessWidget {
                           stalled: downloadStalled,
                           failed: downloadFailed,
                           waitingForNetwork: downloadWaitingForNetwork,
+                          isFinishing: downloadIsFinishing,
                           failureReason: downloadFailureReason,
                           partial: record.savedFiles.isNotEmpty,
                           // Hidden in multi-select so taps keep selecting.
@@ -1009,6 +1059,7 @@ class ListPostRow extends StatelessWidget {
     this.downloadPaused = false,
     this.downloadStalled = false,
     this.downloadFailed = false,
+    this.downloadIsFinishing = false,
     this.downloadFailureReason,
     this.onToggleDownload,
     this.onTapQueue,
@@ -1029,6 +1080,7 @@ class ListPostRow extends StatelessWidget {
   final bool downloadPaused;
   final bool downloadStalled;
   final bool downloadFailed;
+  final bool downloadIsFinishing;
   final String? downloadFailureReason;
   final VoidCallback? onToggleDownload;
   final VoidCallback? onTapQueue;
@@ -1077,6 +1129,7 @@ class ListPostRow extends StatelessWidget {
                             paused: downloadPaused,
                             stalled: downloadStalled,
                             failed: downloadFailed,
+                            isFinishing: downloadIsFinishing,
                             failureReason: downloadFailureReason,
                             partial: record.savedFiles.isNotEmpty,
                             onTogglePause: selectionMode
