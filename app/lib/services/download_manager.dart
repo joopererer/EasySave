@@ -249,6 +249,16 @@ bool recoverSessionJob(DownloadBatch batch, DownloadJob job) {
   return true;
 }
 
+/// Extracts the round number from a taskId formatted as `...-r<N>...`.
+/// Returns null if no round marker is found.
+int? parseTaskRound(String taskId) {
+  final match = RegExp(r'-r(\d+)').firstMatch(taskId);
+  if (match != null) {
+    return int.tryParse(match.group(1)!);
+  }
+  return null;
+}
+
 /// Whether a downloaded video at [path] lacks a sound track while a later
 /// candidate URL of [job] is still untried. Images, Live Photo motion clips,
 /// the last candidate and files that cannot be read as MP4 are kept.
@@ -1822,6 +1832,9 @@ class DownloadManager extends ChangeNotifier {
 
   final _networkRetryTimers = <String, Timer>{};
 
+  @visibleForTesting
+  Future<void> heartbeatTickForTesting() => _heartbeatTick();
+
   /// Persist the running batches so their `updatedAt` stays fresh while the
   /// owning engine is alive.
   Future<void> _heartbeatTick() async {
@@ -1854,6 +1867,16 @@ class DownloadManager extends ChangeNotifier {
   Future<void> _watchdog(DownloadBatch batch) async {
     final now = DateTime.now().millisecondsSinceEpoch;
     for (final job in batch.jobs.toList()) {
+      if (await _isAlreadySaved(batch, job)) {
+        job.saved = true;
+        job.state = JobState.done;
+        job.error = null;
+        unawaited(DevLog.write(
+          'V16DL',
+          'finish_skipped taskId=${job.currentTaskId ?? job.key} index=${job.itemIndex} reason=already_saved',
+        ));
+        continue;
+      }
       if (job.isTerminal || job.state == JobState.paused) continue;
       // A parked file is waiting on the connection, not stuck: the network
       // listener (or its own timer) owns it.
@@ -1892,10 +1915,20 @@ class DownloadManager extends ChangeNotifier {
             // Native side still works on it: give it another window.
             job.lastProgressAt = now;
           case StalledAction.finishFile:
+            int? nativeFinishedAt = job.downloadCompleteAt;
+            if (nativeFinishedAt == null && record != null) {
+              try {
+                final path = await record.task.filePath();
+                final file = File(path);
+                if (file.existsSync()) {
+                  nativeFinishedAt = file.lastModifiedSync().millisecondsSinceEpoch;
+                }
+              } catch (_) {}
+            }
+            final delayMs = nativeFinishedAt != null
+                ? (now - nativeFinishedAt)
+                : (job.lastProgressAt > 0 ? (now - job.lastProgressAt) : kStalledBatchAgeMs);
             job.lastProgressAt = now;
-            final delayMs = job.downloadCompleteAt != null
-                ? (now - job.downloadCompleteAt!)
-                : (job.lastProgressAt > 0 ? (now - job.lastProgressAt) : 0);
             DevLog.write('V16DL', 'watchdog native=TaskStatus.complete -> StalledAction.finishFile watchdog_delay_ms=$delayMs');
             await _finishFile(batch, job, record!.task);
           case StalledAction.retry:
@@ -2441,7 +2474,10 @@ class DownloadManager extends ChangeNotifier {
       ));
       return;
     }
-    if (job.saved || job.state == JobState.done) {
+    if (job.saved || job.state == JobState.done || await _isAlreadySaved(batch, job)) {
+      job.saved = true;
+      job.state = JobState.done;
+      job.error = null;
       unawaited(DevLog.write(
         'V16DL',
         'enqueue_blocked taskId=${job.currentTaskId ?? job.key} index=${job.itemIndex} role=${roleOf(job)} reason=completed source=$source',
@@ -2464,7 +2500,10 @@ class DownloadManager extends ChangeNotifier {
       ));
       return;
     }
-    if (job.saved || job.state == JobState.done) {
+    if (job.saved || job.state == JobState.done || await _isAlreadySaved(batch, job)) {
+      job.saved = true;
+      job.state = JobState.done;
+      job.error = null;
       unawaited(DevLog.write(
         'V16DL',
         'enqueue_blocked taskId=${job.currentTaskId ?? job.key} index=${job.itemIndex} role=${roleOf(job)} reason=completed source=$source',
@@ -3270,7 +3309,23 @@ class DownloadManager extends ChangeNotifier {
       }
     }
     if (job == null) return;
-    if (task.taskId != job.currentTaskId) {
+    final taskRound = parseTaskRound(task.taskId);
+    bool isStale = false;
+    if (taskRound != null) {
+      if (job.round > 0 && taskRound < job.round) {
+        isStale = true;
+      } else {
+        // A1: Only compare round number (-rN), -tryN does not participate in comparison.
+        job.currentTaskId = task.taskId;
+        if (taskRound > job.round) {
+          job.round = taskRound;
+        }
+      }
+    } else if (job.currentTaskId != null && task.taskId != job.currentTaskId) {
+      isStale = true;
+    }
+
+    if (isStale) {
       final statusName = update is TaskStatusUpdate
           ? update.status.name
           : (update is TaskProgressUpdate ? 'progress' : 'unknown');
@@ -3402,11 +3457,49 @@ class DownloadManager extends ChangeNotifier {
     Future<void> Function() action,
   ) => _trackFinish(key, action);
 
+  Future<bool> _isAlreadySaved(DownloadBatch batch, DownloadJob job) async {
+    if (job.saved ||
+        job.state == JobState.done ||
+        job.mediaId != null ||
+        job.assetId != null) {
+      return true;
+    }
+    try {
+      final db = await HistoryDb.instance();
+      final rec = await db.getByPostId(batch.postId);
+      if (rec != null) {
+        final savedFile = rec.files
+            .where((f) => f.itemIndex == job.itemIndex && f.isImage == job.isImage)
+            .firstOrNull;
+        if (savedFile != null &&
+            (savedFile.assetId != null || savedFile.mediaId != null)) {
+          job.assetId ??= savedFile.assetId;
+          job.mediaId ??= savedFile.mediaId;
+          return true;
+        }
+      }
+    } catch (_) {}
+    return false;
+  }
+
   Future<void> _finishFile(
     DownloadBatch batch,
     DownloadJob job,
     Task task,
   ) async {
+    if (await _isAlreadySaved(batch, job)) {
+      job.saved = true;
+      job.state = JobState.done;
+      job.error = null;
+      unawaited(DevLog.write(
+        'V16DL',
+        'finish_skipped taskId=${task.taskId} index=${job.itemIndex} reason=already_saved',
+      ));
+      if (batch.isTerminal) {
+        await _afterTerminal(batch, recovered: false);
+      }
+      return;
+    }
     if (job.isTerminal) return;
     job.isFinishing = true;
     try {
@@ -3425,10 +3518,59 @@ class DownloadManager extends ChangeNotifier {
         await DownloadClaims.isCancelled(batch.batchId)) {
       return;
     }
+    if (await _isAlreadySaved(batch, job)) {
+      job.saved = true;
+      job.state = JobState.done;
+      job.error = null;
+      unawaited(DevLog.write(
+        'V16DL',
+        'finish_skipped taskId=${task.taskId} index=${job.itemIndex} reason=already_saved',
+      ));
+      return;
+    }
     String path;
     try {
       path = await task.filePath();
     } catch (_) {
+      if (await _isAlreadySaved(batch, job)) {
+        job.saved = true;
+        job.state = JobState.done;
+        job.error = null;
+        unawaited(DevLog.write(
+          'V16DL',
+          'finish_skipped taskId=${task.taskId} index=${job.itemIndex} reason=already_saved',
+        ));
+        await _persist(batch);
+        notifyListeners();
+        if (batch.isTerminal) {
+          await _afterTerminal(batch, recovered: false);
+        }
+        return;
+      }
+      job.error = '文件丢失，请重试';
+      job.state = JobState.failed;
+      await _persist(batch);
+      notifyListeners();
+      await _afterTerminal(batch, recovered: false);
+      return;
+    }
+
+    if (!File(path).existsSync()) {
+      if (await _isAlreadySaved(batch, job)) {
+        job.saved = true;
+        job.state = JobState.done;
+        job.error = null;
+        unawaited(DevLog.write(
+          'V16DL',
+          'finish_skipped taskId=${task.taskId} index=${job.itemIndex} reason=already_saved',
+        ));
+        await _persist(batch);
+        notifyListeners();
+        if (batch.isTerminal) {
+          await _afterTerminal(batch, recovered: false);
+        }
+        return;
+      }
       job.error = '文件丢失，请重试';
       job.state = JobState.failed;
       await _persist(batch);
@@ -4717,40 +4859,13 @@ class DownloadManager extends ChangeNotifier {
   /// running batch pass false. It decides whether the history write may
   /// restore a soft-deleted record (see [writeBatchHistory]).
   Future<int> _countActiveNativeTasks(String batchId) async {
-    if (allRecordsForTesting != null) {
-      try {
-        final records = await allRecordsForTesting!(batchId);
-        return records.where((r) =>
-            r.status == TaskStatus.enqueued ||
-            r.status == TaskStatus.running ||
-            r.status == TaskStatus.paused ||
-            r.status == TaskStatus.waitingToRetry).length;
-      } on TimeoutException {
-        unawaited(DevLog.write('V16DL', 'active_count_timeout id=$batchId'));
-        return 1;
-      } catch (_) {
-        unawaited(DevLog.write('V16DL', 'active_count_timeout id=$batchId'));
-        return 1;
-      }
-    }
-    if (Platform.environment.containsKey('FLUTTER_TEST') ||
-        enqueueForTesting != null ||
-        downloaderStartForTesting != null ||
-        prepareStartForTesting != null ||
-        tempRootForTesting != null) {
-      return 0;
-    }
-    final batch = _batches[batchId];
-    if (batch != null &&
-        batch.jobs.isNotEmpty &&
-        batch.jobs.every((j) => j.currentTaskId == null)) {
-      return 0;
-    }
     try {
-      final records = await FileDownloader()
-          .database
-          .allRecords(group: batchId)
-          .timeout(const Duration(milliseconds: 500));
+      final records = allRecordsForTesting != null
+          ? await allRecordsForTesting!(batchId)
+          : await FileDownloader()
+              .database
+              .allRecords(group: batchId)
+              .timeout(const Duration(milliseconds: 500));
       return records.where((r) =>
           r.status == TaskStatus.enqueued ||
           r.status == TaskStatus.running ||
@@ -4945,6 +5060,20 @@ class DownloadManager extends ChangeNotifier {
     await _finishing[job.key];
     // A timed-out import may still finish its album copy: its outcome decides.
     await _lateImports[job.key];
+    if (await _isAlreadySaved(batch, job)) {
+      job.saved = true;
+      job.state = JobState.done;
+      job.error = null;
+      job.errorCode = null;
+      unawaited(DevLog.write(
+        'V16DL',
+        'finish_skipped taskId=${job.currentTaskId ?? job.key} index=${job.itemIndex} reason=already_saved',
+      ));
+      await _persist(batch);
+      notifyListeners();
+      await _afterTerminal(batch, recovered: false);
+      return;
+    }
     if (job.state != JobState.failed && job.state != JobState.canceled) return;
     // Claim the retry synchronously, before parsing or any plugin await.
     job.state = JobState.queued;
@@ -5357,6 +5486,12 @@ class DownloadManager extends ChangeNotifier {
 
   Future<DownloadBatch?> reloadBatchSnapshot(String batchId) async {
     try {
+      final existing = _batches[batchId];
+      // If this batch is owned by this engine and is actively running, do not
+      // overwrite live memory with a potentially stale disk snapshot.
+      if (existing != null && existing.source == DownloadManager.owner && !existing.isTerminal) {
+        return existing;
+      }
       final prefs = await SharedPreferences.getInstance();
       await prefs.reload();
       final raw = prefs.getString(_batchKey(batchId));
@@ -5364,6 +5499,9 @@ class DownloadManager extends ChangeNotifier {
       final updated = DownloadBatch.fromJson(
         (jsonDecode(raw) as Map).cast<String, Object?>(),
       );
+      if (existing != null && existing.source == DownloadManager.owner && !existing.isTerminal) {
+        return existing;
+      }
       _batches[batchId] = updated;
       return updated;
     } catch (_) {
@@ -5547,6 +5685,17 @@ class DownloadManager extends ChangeNotifier {
     final byId = {for (final r in tracked) r.taskId: r};
     for (final job in batch.jobs) {
       if (job.saved) continue;
+      if (await _isAlreadySaved(batch, job)) {
+        job.saved = true;
+        job.state = JobState.done;
+        job.error = null;
+        unawaited(DevLog.write(
+          'V16DL',
+          'finish_skipped taskId=${job.currentTaskId ?? job.key} index=${job.itemIndex} reason=already_saved',
+        ));
+        changed = true;
+        continue;
+      }
       final taskId = job.currentTaskId;
       if (taskId == null) continue;
       final record = byId[taskId];
