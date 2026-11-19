@@ -1469,6 +1469,11 @@ class DownloadManager extends ChangeNotifier {
     }
     _autoResumeTimers.clear();
     _autoResumeRetries.clear();
+    for (final timer in _activeQueryRetries.values) {
+      timer.cancel();
+    }
+    _activeQueryRetries.clear();
+    _activeQueryTimeouts.clear();
     _networkSwitchedMidDownload.clear();
     _networkStabilityTimer?.cancel();
     _networkStabilityTimer = null;
@@ -2068,6 +2073,8 @@ class DownloadManager extends ChangeNotifier {
   Future<void> Function()? downloaderStartForTesting;
   @visibleForTesting
   Future<List<TaskRecord>> Function(String group)? allRecordsForTesting;
+  @visibleForTesting
+  Future<TaskRecord?> Function(String taskId)? recordForIdForTesting;
   @visibleForTesting
   Future<void> Function()? prepareStartForTesting;
   @visibleForTesting
@@ -4839,6 +4846,15 @@ class DownloadManager extends ChangeNotifier {
   }
 
   final _historyRetries = <String, Timer>{};
+  final _activeQueryTimeouts = <String, int>{};
+  final _activeQueryRetries = <String, Timer>{};
+  Duration activeQueryRetryDelay = const Duration(seconds: 30);
+
+  @visibleForTesting
+  Map<String, int> get activeQueryTimeoutsForTesting => _activeQueryTimeouts;
+
+  @visibleForTesting
+  Map<String, Timer> get activeQueryRetriesForTesting => _activeQueryRetries;
 
   /// Log line index per batch, taken when the batch started.
   final _batchLogStarts = <String, int>{};
@@ -4854,29 +4870,69 @@ class DownloadManager extends ChangeNotifier {
     });
   }
 
-  /// [recovered] is true only when the batch is finished by the startup /
-  /// foreground reconcile ([reconcile]); live updates and user actions on a
-  /// running batch pass false. It decides whether the history write may
-  /// restore a soft-deleted record (see [writeBatchHistory]).
-  Future<int> _countActiveNativeTasks(String batchId) async {
+  void _scheduleActiveQueryRetry(
+    DownloadBatch batch, {
+    required bool recovered,
+    String? reason,
+  }) {
+    _activeQueryRetries[batch.batchId]?.cancel();
+    _activeQueryRetries[batch.batchId] = Timer(activeQueryRetryDelay, () {
+      _activeQueryRetries.remove(batch.batchId);
+      unawaited(_afterTerminal(batch, recovered: recovered, reason: reason));
+    });
+  }
+
+  Future<int?> _queryActiveNativeCountForTaskIds(
+    String batchId,
+    List<String> taskIds,
+  ) async {
+    final sw = Stopwatch()..start();
+    var activeCount = 0;
     try {
-      final records = allRecordsForTesting != null
-          ? await allRecordsForTesting!(batchId)
-          : await FileDownloader()
-              .database
-              .allRecords(group: batchId)
-              .timeout(const Duration(milliseconds: 500));
-      return records.where((r) =>
-          r.status == TaskStatus.enqueued ||
-          r.status == TaskStatus.running ||
-          r.status == TaskStatus.paused ||
-          r.status == TaskStatus.waitingToRetry).length;
+      for (final taskId in taskIds) {
+        final record = recordForIdForTesting != null
+            ? await recordForIdForTesting!(taskId)
+                .timeout(const Duration(seconds: 3))
+            : allRecordsForTesting != null
+                ? (await allRecordsForTesting!(batchId))
+                    .where((r) => r.taskId == taskId)
+                    .firstOrNull
+                : await FileDownloader()
+                    .database
+                    .recordForId(taskId)
+                    .timeout(const Duration(seconds: 3));
+        if (record != null) {
+          final s = record.status;
+          if (s == TaskStatus.enqueued ||
+              s == TaskStatus.running ||
+              s == TaskStatus.paused ||
+              s == TaskStatus.waitingToRetry) {
+            activeCount++;
+          }
+        }
+      }
+      sw.stop();
+      unawaited(DevLog.write(
+        'V16DL',
+        'active_query taskIds=${taskIds.length} ms=${sw.elapsedMilliseconds} result=$activeCount',
+      ));
+      return activeCount;
     } on TimeoutException {
+      sw.stop();
+      unawaited(DevLog.write(
+        'V16DL',
+        'active_query taskIds=${taskIds.length} ms=${sw.elapsedMilliseconds} result=timeout',
+      ));
       unawaited(DevLog.write('V16DL', 'active_count_timeout id=$batchId'));
-      return 1;
+      return null;
     } catch (_) {
+      sw.stop();
+      unawaited(DevLog.write(
+        'V16DL',
+        'active_query taskIds=${taskIds.length} ms=${sw.elapsedMilliseconds} result=error',
+      ));
       unawaited(DevLog.write('V16DL', 'active_count_timeout id=$batchId'));
-      return 1;
+      return null;
     }
   }
 
@@ -4887,13 +4943,55 @@ class DownloadManager extends ChangeNotifier {
   }) async {
     if (!batch.isTerminal) return;
 
-    final activeNative = await _countActiveNativeTasks(batch.batchId);
-    if (activeNative > 0) {
-      unawaited(DevLog.write(
-        'V16DL',
-        'batch_settle_blocked id=${batch.batchId} active_native=$activeNative',
-      ));
-      return;
+    final unconfirmedJobs = batch.jobs.where(
+      (j) => !j.saved && j.state != JobState.done && j.state != JobState.canceled,
+    ).toList();
+
+    var settleReason = reason;
+
+    if (unconfirmedJobs.isNotEmpty) {
+      final taskIds = unconfirmedJobs
+          .map((j) => j.currentTaskId ?? j.key)
+          .where((id) => id.isNotEmpty)
+          .toSet()
+          .toList();
+
+      if (taskIds.isNotEmpty) {
+        final activeNative = await _queryActiveNativeCountForTaskIds(
+          batch.batchId,
+          taskIds,
+        );
+
+        if (activeNative == null) {
+          final timeouts = (_activeQueryTimeouts[batch.batchId] ?? 0) + 1;
+          _activeQueryTimeouts[batch.batchId] = timeouts;
+          if (timeouts < 3) {
+            unawaited(DevLog.write(
+              'V16DL',
+              'batch_settle_blocked id=${batch.batchId} active_native=1',
+            ));
+            _scheduleActiveQueryRetry(batch, recovered: recovered, reason: reason);
+            return;
+          }
+          _activeQueryTimeouts.remove(batch.batchId);
+          _activeQueryRetries.remove(batch.batchId)?.cancel();
+          settleReason = 'native_query_unavailable';
+        } else if (activeNative > 0) {
+          _activeQueryTimeouts.remove(batch.batchId);
+          _activeQueryRetries.remove(batch.batchId)?.cancel();
+          unawaited(DevLog.write(
+            'V16DL',
+            'batch_settle_blocked id=${batch.batchId} active_native=$activeNative',
+          ));
+          return;
+        } else {
+          _activeQueryTimeouts.remove(batch.batchId);
+          _activeQueryRetries.remove(batch.batchId)?.cancel();
+        }
+      }
+    } else {
+      _activeQueryTimeouts.remove(batch.batchId);
+      _activeQueryRetries.remove(batch.batchId)?.cancel();
     }
 
     // Settled terminal batches already wrote history and released claims; do not
@@ -4904,14 +5002,14 @@ class DownloadManager extends ChangeNotifier {
     }
 
     final filesCount = batch.jobs.where((j) => j.saved).length;
-    final settleReason = reason ??
+    final finalReason = settleReason ??
         (recovered
             ? 'reconcile_terminal'
             : (batch.succeeded > 0 ? 'all_completed' : 'all_failed'));
     unawaited(DevLog.write(
       'V16DL',
       'batch_settle id=${batch.batchId} by=${DownloadManager.owner} '
-      'reason=$settleReason files=$filesCount active_native=0',
+      'reason=$finalReason files=$filesCount active_native=0',
     ));
     // v1.11 batch 1: a batch that ended with failures saves the log around it
     // to the app's private directory. This never affects the download itself.
@@ -5522,6 +5620,82 @@ class DownloadManager extends ChangeNotifier {
     }
   }
 
+  @visibleForTesting
+  Future<bool> repairUnsettledSavedBatchesForTesting() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.reload();
+    final index = prefs.getStringList(_batchIndexKey) ?? [];
+    return _repairUnsettledSavedBatches(prefs, index);
+  }
+
+  Future<bool> _repairUnsettledSavedBatches(
+    SharedPreferences prefs,
+    List<String> index,
+  ) async {
+    var repaired = false;
+    final batchesToCheck = <String, DownloadBatch>{};
+
+    for (final batchId in index) {
+      if (prefs.getBool('$_dismissedPrefix$batchId') == true) continue;
+      final raw = prefs.getString(_batchKey(batchId));
+      if (raw == null) continue;
+      try {
+        final b = DownloadBatch.fromJson(
+          (jsonDecode(raw) as Map).cast<String, Object?>(),
+        );
+        batchesToCheck[b.batchId] = b;
+      } catch (_) {}
+    }
+    for (final b in _batches.values) {
+      batchesToCheck.putIfAbsent(b.batchId, () => b);
+    }
+
+    for (final batch in batchesToCheck.values) {
+      final allSaved = batch.jobs.isNotEmpty &&
+          batch.jobs.every((j) =>
+              j.saved ||
+              j.state == JobState.done ||
+              (j.mediaId != null && j.mediaId!.isNotEmpty));
+      if (!allSaved) continue;
+
+      final isSettled = batch.historyWritten &&
+          (batch.source == DownloadManager.owner || batch.settledBy != null);
+      bool needsRepair = !isSettled;
+      if (isSettled) {
+        // If already marked settled, only repair if HistoryDb actually has an empty placeholder (files=0)
+        try {
+          final db = await HistoryDb.instance();
+          final record = await db.getByPostId(batch.postId);
+          if (record != null && (record.files.isEmpty || record.fileCount == 0)) {
+            needsRepair = true;
+          }
+        } catch (_) {}
+      }
+
+      if (needsRepair) {
+        for (final j in batch.jobs) {
+          if (j.mediaId != null && j.mediaId!.isNotEmpty) {
+            j.saved = true;
+            j.state = JobState.done;
+            j.error = null;
+          }
+        }
+        final filesCount = batch.jobs.where((j) => j.saved).length;
+        unawaited(DevLog.write(
+          'V16DL',
+          'settle_repair batch=${batch.batchId} files=$filesCount',
+        ));
+        batch.source = DownloadManager.owner;
+        batch.historyWritten = false;
+        batch.settledBy = null;
+        _batches[batch.batchId] = batch;
+        await _afterTerminal(batch, recovered: true, reason: 'settle_repair');
+        repaired = true;
+      }
+    }
+    return repaired;
+  }
+
   /// Kill-recovery: finish gallery imports for tasks that completed while
   /// the app was dead, then write pending history records. Called on
   /// startup and when returning to the foreground.
@@ -5542,7 +5716,7 @@ class DownloadManager extends ChangeNotifier {
       final prefs = await SharedPreferences.getInstance();
       await prefs.reload();
       final index = prefs.getStringList(_batchIndexKey) ?? [];
-      var changed = false;
+      var changed = await _repairUnsettledSavedBatches(prefs, index);
       var adopted = 0;
       for (final batchId in index) {
         if (prefs.getBool('$_dismissedPrefix$batchId') == true) continue;
