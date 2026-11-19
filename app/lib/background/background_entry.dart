@@ -795,15 +795,29 @@ Future<void> _awaitBatchAndNotify(
   var failed = 0;
   try {
     while (!batch.isTerminal) {
+      final updated = await DownloadManager.instance.reloadBatchSnapshot(batch.batchId);
+      if (updated != null) {
+        batch = updated;
+      }
       // Every number reported here counts items, not files: a Live photo's
       // still and clip are one item and the batch only counts it once
       // (v1.11 build 58).
       final done = batch.itemDone;
-      if (done != lastDone) {
+      final finishingJob = batch.jobs.cast<DownloadJob?>().firstWhere(
+        (j) => j?.isFinishing == true,
+        orElse: () => null,
+      );
+      final bubbleLabel = finishingJob != null
+          ? (finishingJob.savingPhase != null
+              ? '正在保存到相册（${finishingJob.savingPhase}）'
+              : '正在保存到相册')
+          : null;
+      if (done != lastDone || finishingJob != null) {
         lastDone = done;
         await _tile(channel, true, '$done/$total');
-        await _bubble(channel, true, done, total, null, false);
+        await _bubble(channel, true, done, total, bubbleLabel, false);
       }
+      if (batch.isTerminal) break;
       await Future<void>.delayed(const Duration(milliseconds: 500));
     }
     // Give _afterTerminal() (gallery link + history write) time to run.

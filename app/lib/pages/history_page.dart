@@ -1088,16 +1088,19 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
     // not been synced yet. It counts items (v1.11 build 59): a Live photo's
     // still and clip are one item, and the album delete still removes both.
     final savedItemCount = savedItemCountFor(records);
+    final counts = deletionCountsForRecords(records);
+    final itemSummary = counts.format(nonLiveFallback: '$savedItemCount 项');
     DevLog.write(
       'HIST',
       'delete sheet records=${records.length} files=${savedFileCountFor(records)} '
-          'items=$savedItemCount',
+          'items=$savedItemCount summary=$itemSummary',
     );
     if (!mounted) return;
     final result = await showDeleteRecordsSheet(
       context,
       recordCount: records.length,
       itemCount: savedItemCount,
+      itemSummary: itemSummary,
       cancelDownloads: true,
     );
     if (result == null || !mounted) return;
@@ -1158,8 +1161,7 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
       SnackBar(
         content: Text(
           problem == null
-              ? '已删除 ${records.length} 条记录，并从相册删除 '
-                  '${deletableItemCountFor(records, media)} 项'
+              ? '已删除 ${records.length} 条记录，并从相册删除 ${counts.format(nonLiveFallback: '${deletableItemCountFor(records, media)} 项')}'
               : '$problem，仅删除了 ${records.length} 条记录',
         ),
       ),
@@ -2304,6 +2306,7 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
                           false),
                   downloadFailed: _isFailed(record.postId) || _recordFailed(record),
                   downloadIsFinishing: _downloadBatches[record.postId]?.jobs.any((j) => j.isFinishing) ?? false,
+                  downloadSavingPhase: _downloadBatches[record.postId]?.jobs.cast<DownloadJob?>().firstWhere((j) => j?.isFinishing == true, orElse: () => null)?.savingPhase,
                   downloadFailureReason: _downloadBatches[record.postId]?.failureReason ?? record.downloadError,
                   onToggleDownload: _recordFailed(record) ? () => _reparse(record) : _downloadBatches[record.postId]?.supportsPause == false && !_isFailed(record.postId) ? null : () => _toggleDownload(record.postId),
                   onTapQueue: _openDownloadQueue,
@@ -2380,6 +2383,7 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
                         downloadStalled: _isStalled(record.postId),
                   downloadFailed: _isFailed(record.postId) || _recordFailed(record),
                   downloadIsFinishing: _downloadBatches[record.postId]?.jobs.any((j) => j.isFinishing) ?? false,
+                  downloadSavingPhase: _downloadBatches[record.postId]?.jobs.cast<DownloadJob?>().firstWhere((j) => j?.isFinishing == true, orElse: () => null)?.savingPhase,
                   downloadFailureReason: _downloadBatches[record.postId]?.failureReason ?? record.downloadError,
                         onToggleDownload: _recordFailed(record) ? () => _reparse(record) : _downloadBatches[record.postId]?.supportsPause == false && !_isFailed(record.postId) ? null : () => _toggleDownload(record.postId),
                         onTapQueue: _openDownloadQueue,

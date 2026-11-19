@@ -296,7 +296,15 @@ class _BatchCard extends StatelessWidget {
   String get _status {
     if (batch.isTerminal && batch.failedCount > 0) return '下载失败，点击重试';
     if (batch.isPaused) return '已暂停';
-    if (batch.jobs.any((j) => j.isFinishing)) return '正在保存到相册';
+    final finishing = batch.jobs.cast<DownloadJob?>().firstWhere(
+      (j) => j?.isFinishing == true,
+      orElse: () => null,
+    );
+    if (finishing != null) {
+      return finishing.savingPhase != null
+          ? '正在保存到相册（${finishing.savingPhase}）'
+          : '正在保存到相册';
+    }
     return stalled ? '已停滞' : '下载中';
   }
 
@@ -412,7 +420,11 @@ class _JobTile extends StatelessWidget {
   final VoidCallback onRetry;
 
   String get _label {
-    if (job.isFinishing) return '正在保存到相册';
+    if (job.isFinishing) {
+      return job.savingPhase != null
+          ? '正在保存到相册（${job.savingPhase}）'
+          : '正在保存到相册';
+    }
     return switch (job.state) {
       JobState.queued => '排队中',
       JobState.active => '下载中 ${(job.progress.clamp(0.0, 1.0) * 100).round()}%',

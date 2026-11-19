@@ -310,6 +310,7 @@ class DownloadingOverlay extends StatelessWidget {
     this.failed = false,
     this.waitingForNetwork = false,
     this.isFinishing = false,
+    this.savingPhase,
     this.partial = false,
     this.failureReason,
     this.onTogglePause,
@@ -334,6 +335,9 @@ class DownloadingOverlay extends StatelessWidget {
 
   /// Finishing stage: fully downloaded, saving to album/embedding provenance.
   final bool isFinishing;
+
+  /// Sub-phase during finishing (e.g. '写入来源信息' or '复制到相册').
+  final String? savingPhase;
 
   final bool partial;
 
@@ -368,7 +372,7 @@ class DownloadingOverlay extends StatelessWidget {
     } else if (stalled) {
       label = '已停滞 $pct%';
     } else if (isFinishing) {
-      label = '正在保存到相册';
+      label = savingPhase != null ? '正在保存到相册（$savingPhase）' : '正在保存到相册';
     } else {
       label = '下载中 $pct%';
     }
@@ -808,6 +812,7 @@ class WaterfallPostCard extends StatelessWidget {
     this.downloadFailed = false,
     this.downloadWaitingForNetwork = false,
     this.downloadIsFinishing = false,
+    this.downloadSavingPhase,
     this.downloadFailureReason,
     this.onToggleDownload,
     this.onTapQueue,
@@ -832,6 +837,7 @@ class WaterfallPostCard extends StatelessWidget {
 
   /// Saving to album / finishing stage.
   final bool downloadIsFinishing;
+  final String? downloadSavingPhase;
 
   final String? downloadFailureReason;
 
@@ -944,6 +950,7 @@ class WaterfallPostCard extends StatelessWidget {
                           failed: downloadFailed,
                           waitingForNetwork: downloadWaitingForNetwork,
                           isFinishing: downloadIsFinishing,
+                          savingPhase: downloadSavingPhase,
                           failureReason: downloadFailureReason,
                           partial: record.savedFiles.isNotEmpty,
                           // Hidden in multi-select so taps keep selecting.
@@ -1060,6 +1067,7 @@ class ListPostRow extends StatelessWidget {
     this.downloadStalled = false,
     this.downloadFailed = false,
     this.downloadIsFinishing = false,
+    this.downloadSavingPhase,
     this.downloadFailureReason,
     this.onToggleDownload,
     this.onTapQueue,
@@ -1081,6 +1089,7 @@ class ListPostRow extends StatelessWidget {
   final bool downloadStalled;
   final bool downloadFailed;
   final bool downloadIsFinishing;
+  final String? downloadSavingPhase;
   final String? downloadFailureReason;
   final VoidCallback? onToggleDownload;
   final VoidCallback? onTapQueue;
@@ -1130,6 +1139,7 @@ class ListPostRow extends StatelessWidget {
                             stalled: downloadStalled,
                             failed: downloadFailed,
                             isFinishing: downloadIsFinishing,
+                            savingPhase: downloadSavingPhase,
                             failureReason: downloadFailureReason,
                             partial: record.savedFiles.isNotEmpty,
                             onTogglePause: selectionMode
