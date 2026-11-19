@@ -12,6 +12,7 @@ import '../pages/preview_page.dart';
 import '../services/history_db.dart';
 import '../services/history_deletion.dart';
 import '../services/history_item_delete.dart';
+import '../services/media_delete_service.dart';
 import '../services/parse_service.dart';
 import 'gallery_browser.dart';
 
