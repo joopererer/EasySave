@@ -13,6 +13,7 @@ import java.util.concurrent.Executors
 internal object NativeLog {
     private val disk = Executors.newSingleThreadExecutor()
     @Volatile private var appContext: Context? = null
+    private val startTimeMs = System.currentTimeMillis()
     private const val fileName = "v16dl.log"
     private val url = Regex("""https?://[^\s"'<>]+""")
     private val secret = Regex(
@@ -63,11 +64,14 @@ internal object NativeLog {
         write(Log.ERROR, tag, message, error)
 
     private fun write(priority: Int, tag: String, message: String, error: Throwable? = null) {
-        val safe = url.replace(secret.replace(message) { "${it.value.substringBefore('=')}=<redacted>" }) {
+        var safe = url.replace(secret.replace(message) { "${it.value.substringBefore('=')}=<redacted>" }) {
             runCatching {
                 val uri = java.net.URI(it.value)
                 "${uri.host}${uri.path ?: ""}"
             }.getOrDefault("<url>")
+        }
+        if (tag == "V16DL" && !safe.startsWith("t=")) {
+            safe = "t=${System.currentTimeMillis() - startTimeMs} $safe"
         }
         Log.println(priority, tag, safe)
         val context = appContext ?: return

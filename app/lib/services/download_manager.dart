@@ -483,6 +483,7 @@ class DownloadJob {
   /// reset or a timeout (0..[kCandidateRetryLimit]). Cleared whenever
   /// [candidateIndex] advances.
   int candidateRetryCount = 0;
+  int round = 0;
   String? currentTaskId;
   bool saved = false;
   String? error;
@@ -542,6 +543,14 @@ class DownloadJob {
   /// (snapshots written before this field existed).
   int lastProgressAt = 0;
 
+  /// Epoch ms when download reached 100% or complete status was received.
+  int? downloadCompleteAt;
+  int? waitCompleteMs;
+  int? provenanceMs;
+  int? provenanceBytesWritten;
+  int? importCopyMs;
+  int? importBytes;
+
   /// 3a: True when the bytes are fully downloaded and the job is in the finishing
   /// stage (embedding provenance, gallery import, history writing). During this
   /// stage, cancellation or late network drops cannot abort the job.
@@ -569,6 +578,7 @@ class DownloadJob {
     'isLivePhoto': isLivePhoto,
     'state': state.index,
     'attempts': attempts,
+    if (round > 0) 'round': round,
     if (candidateIndex > 0) 'candidateIndex': candidateIndex,
     if (candidateRetryCount > 0) 'candidateRetryCount': candidateRetryCount,
     'currentTaskId': currentTaskId,
@@ -613,6 +623,7 @@ class DownloadJob {
     );
     job.state = JobState.values[(map['state'] as num).toInt()];
     job.attempts = (map['attempts'] as num).toInt();
+    job.round = (map['round'] as num?)?.toInt() ?? 0;
     final storedCandidate = (map['candidateIndex'] as num?)?.toInt() ?? 0;
     final lastCandidate = job.urls.isEmpty ? 0 : job.urls.length - 1;
     job.candidateIndex =
@@ -1536,7 +1547,7 @@ class DownloadManager extends ChangeNotifier {
         job.state = JobState.queued;
         changed = true;
         try {
-          await _enqueueAttempt(batch, job);
+          await _enqueueAttempt(batch, job, source: 'network_restored');
         } catch (e) {
           _log('resume after network failure failed ${job.key}: $e');
           job.state = JobState.failed;
@@ -1606,7 +1617,7 @@ class DownloadManager extends ChangeNotifier {
       if (!job.isWaitingForNetwork) return;
       if (!NetworkStatus.instance.online) return;
       job.state = JobState.queued;
-      unawaited(_enqueueAttempt(batch, job));
+      unawaited(_enqueueAttempt(batch, job, source: 'network_retry'));
     });
   }
 
@@ -1678,6 +1689,10 @@ class DownloadManager extends ChangeNotifier {
             job.lastProgressAt = now;
           case StalledAction.finishFile:
             job.lastProgressAt = now;
+            final delayMs = job.downloadCompleteAt != null
+                ? (now - job.downloadCompleteAt!)
+                : (job.lastProgressAt > 0 ? (now - job.lastProgressAt) : 0);
+            DevLog.write('V16DL', 'watchdog native=TaskStatus.complete -> StalledAction.finishFile watchdog_delay_ms=$delayMs');
             await _finishFile(batch, job, record!.task);
           case StalledAction.retry:
             if (taskId != null) {
@@ -1686,7 +1701,7 @@ class DownloadManager extends ChangeNotifier {
               } catch (_) {}
             }
             try {
-              await _enqueueAttempt(batch, job);
+              await _enqueueAttempt(batch, job, source: 'watchdog');
             } catch (e) {
               job.state = JobState.failed;
               job.error = '加入下载队列失败';
@@ -2173,7 +2188,7 @@ class DownloadManager extends ChangeNotifier {
       // One failing enqueue must not strand the remaining jobs in `queued`
       // (that kept the batch non-terminal forever, e.g. stuck at ~50%).
       try {
-        await _enqueueAttempt(batch, job);
+        await _enqueueAttempt(batch, job, source: 'start');
       } catch (e) {
         _log('enqueue failed ${job.key}: $e');
         job.state = JobState.failed;
@@ -2209,16 +2224,44 @@ class DownloadManager extends ChangeNotifier {
   }
 
   final _enqueuePending = <String>{};
-  Future<void> _enqueueAttempt(DownloadBatch batch, DownloadJob job) async {
+  Future<void> _enqueueAttempt(DownloadBatch batch, DownloadJob job, {String source = 'unknown'}) async {
+    if (job.isFinishing || _finishing.containsKey(job.key)) {
+      unawaited(DevLog.write(
+        'V16DL',
+        'enqueue_blocked taskId=${job.currentTaskId ?? job.key} index=${job.itemIndex} role=${roleOf(job)} reason=finishing source=$source',
+      ));
+      return;
+    }
+    if (job.saved || job.state == JobState.done) {
+      unawaited(DevLog.write(
+        'V16DL',
+        'enqueue_blocked taskId=${job.currentTaskId ?? job.key} index=${job.itemIndex} role=${roleOf(job)} reason=completed source=$source',
+      ));
+      return;
+    }
     if (!_enqueuePending.add(job.key)) return;
     try {
-      await _enqueueAttemptOnce(batch, job);
+      await _enqueueAttemptOnce(batch, job, source: source);
     } finally {
       _enqueuePending.remove(job.key);
     }
   }
 
-  Future<void> _enqueueAttemptOnce(DownloadBatch batch, DownloadJob job) async {
+  Future<void> _enqueueAttemptOnce(DownloadBatch batch, DownloadJob job, {String source = 'unknown'}) async {
+    if (job.isFinishing || _finishing.containsKey(job.key)) {
+      unawaited(DevLog.write(
+        'V16DL',
+        'enqueue_blocked taskId=${job.currentTaskId ?? job.key} index=${job.itemIndex} role=${roleOf(job)} reason=finishing source=$source',
+      ));
+      return;
+    }
+    if (job.saved || job.state == JobState.done) {
+      unawaited(DevLog.write(
+        'V16DL',
+        'enqueue_blocked taskId=${job.currentTaskId ?? job.key} index=${job.itemIndex} role=${roleOf(job)} reason=completed source=$source',
+      ));
+      return;
+    }
     if (isFinalFailure(job)) {
       // A refused URL or a simulated failure is decided: nothing may put the
       // file back in the queue behind the user's back. A manual retry clears
@@ -2254,8 +2297,10 @@ class DownloadManager extends ChangeNotifier {
     final isResumable = !job.isImage &&
         (job.expectedBytes == null || job.expectedBytes! >= kResumableMinBytes);
     job.attempts++;
+    job.round++;
     final url = authorized.uri.toString();
-    final taskId = isResumable ? job.key : '${job.key}-try${job.attempts}';
+    final oldTaskId = job.currentTaskId;
+    final taskId = isResumable ? '${job.key}-r${job.round}' : '${job.key}-r${job.round}-try${job.attempts}';
     job.currentTaskId = taskId;
     job.state = job.attempts == 1 ? JobState.queued : JobState.active;
     job.error = null;
@@ -2283,7 +2328,7 @@ class DownloadManager extends ChangeNotifier {
       url: url,
       filename: job.filename,
       headers: unifiedTransferHeaders(authorized.headers),
-      directory: downloadTempDirectory(batch.batchId, taskId),
+      directory: downloadTempDirectory(batch.batchId, job.key),
       baseDirectory: BaseDirectory.temporary,
       group: batch.batchId,
       updates: Updates.statusAndProgress,
@@ -2318,13 +2363,24 @@ class DownloadManager extends ChangeNotifier {
           onTimeout: () => null,
         );
       } catch (_) {}
+      if (resumeData == null && oldTaskId != null) {
+        try {
+          resumeData = await _getResumeData(oldTaskId).timeout(
+            const Duration(milliseconds: 300),
+            onTimeout: () => null,
+          );
+        } catch (_) {}
+      }
       if (resumeData == null && job.resumeStartByte != null && job.resumeTempPath != null) {
         final path = job.resumeTempPath!;
         final f = File(path);
         if (f.existsSync() && (f.lengthSync() >= job.resumeStartByte! || f.lengthSync() > 0)) {
           resumeData = ResumeData(task, path, job.resumeStartByte!, job.resumeEtag);
-          await _setResumeData(resumeData);
         }
+      }
+      if (resumeData != null) {
+        resumeData = ResumeData(task, resumeData.data, resumeData.requiredStartByte, resumeData.eTag);
+        await _setResumeData(resumeData);
       }
       final hasResumeData = resumeData != null;
       final total = job.expectedBytes ?? -1;
@@ -2456,7 +2512,7 @@ class DownloadManager extends ChangeNotifier {
     }
     if (job.attempts < job.urls.length) {
       await _persist(batch);
-      await _enqueueAttempt(batch, job);
+      await _enqueueAttempt(batch, job, source: 'low_resolution');
       return (retry: true, path: '');
     }
     final kept = job.lowResPath!;
@@ -2503,11 +2559,48 @@ class DownloadManager extends ChangeNotifier {
     int partialBytes = 0;
     if (job.resumeStartByte != null && job.resumeStartByte! > 0) {
       partialBytes = job.resumeStartByte!;
-    } else if (job.resumeTempPath != null) {
+    }
+    if (partialBytes == 0 && job.currentTaskId != null) {
       try {
-        final f = File(job.resumeTempPath!);
-        if (f.existsSync()) partialBytes = f.lengthSync();
+        final rd = await _getResumeData(job.currentTaskId!).timeout(
+          const Duration(milliseconds: 300),
+          onTimeout: () => null,
+        );
+        if (rd != null && rd.requiredStartByte > 0) {
+          partialBytes = rd.requiredStartByte;
+          job.resumeStartByte = rd.requiredStartByte;
+          job.resumeTempPath = rd.data;
+          job.resumeEtag = rd.eTag;
+        }
       } catch (_) {}
+    }
+    if (partialBytes == 0) {
+      final candidates = <String>[];
+      if (job.resumeTempPath != null) candidates.add(job.resumeTempPath!);
+      try {
+        final tempDir = await (tempRootForTesting?.call() ?? getTemporaryDirectory());
+        final taskDir = downloadTempDirectory(batch.batchId, job.key);
+        candidates.add('${tempDir.path}/$taskDir/${job.filename}');
+        if (job.currentTaskId != null) {
+          candidates.add('${tempDir.path}/${downloadTempDirectory(batch.batchId, job.currentTaskId!)}/${job.filename}');
+        }
+      } catch (_) {}
+      for (final p in candidates) {
+        try {
+          final f = File(p);
+          if (f.existsSync()) {
+            final len = f.lengthSync();
+            if (len > partialBytes) {
+              partialBytes = len;
+              job.resumeTempPath = p;
+              job.resumeStartByte = len;
+            }
+          }
+        } catch (_) {}
+      }
+    }
+    if (partialBytes == 0 && job.progress > 0 && size != null && size > 0) {
+      partialBytes = (job.progress * size).floor();
     }
     final known = size != null && size > 0;
     final free = await StorageGuard.freeBytes();
@@ -2922,12 +3015,22 @@ class DownloadManager extends ChangeNotifier {
     }
     DownloadJob? job;
     for (final j in batch.jobs) {
-      if (j.currentTaskId == task.taskId) {
+      if (j.currentTaskId == task.taskId ||
+          task.taskId.startsWith('${j.key}-r') ||
+          task.taskId.startsWith('${j.key}-try') ||
+          task.taskId == j.key) {
         job = j;
         break;
       }
     }
     if (job == null) return;
+    if (task.taskId != job.currentTaskId) {
+      final statusName = update is TaskStatusUpdate
+          ? update.status.name
+          : (update is TaskProgressUpdate ? 'progress' : 'unknown');
+      DevLog.write('V16DL', 'stale_update taskId=${task.taskId} status=$statusName');
+      return;
+    }
     // A paused job has no live task; a late update of the cancelled one must
     // not flip it back to active/canceled/failed.
     if (job.state == JobState.paused ||
@@ -2947,6 +3050,9 @@ class DownloadManager extends ChangeNotifier {
       if (update.progress >= 0) {
         job.state = JobState.active;
         job.progress = update.progress;
+        if (update.progress >= 1.0) {
+          job.downloadCompleteAt ??= DateTime.now().millisecondsSinceEpoch;
+        }
         notifyListeners();
         unawaited(_refreshNotification(batch));
       }
@@ -2959,6 +3065,7 @@ class DownloadManager extends ChangeNotifier {
         notifyListeners();
         unawaited(_refreshNotification(batch));
       case TaskStatus.complete:
+        job.downloadCompleteAt ??= DateTime.now().millisecondsSinceEpoch;
         unawaited(_finishFile(batch, job, task));
       case TaskStatus.failed:
       case TaskStatus.notFound:
@@ -3097,6 +3204,11 @@ class DownloadManager extends ChangeNotifier {
     if (resolution.retry) return;
     path = resolution.path;
 
+    final waitMs = job.downloadCompleteAt != null
+        ? (DateTime.now().millisecondsSinceEpoch - job.downloadCompleteAt!)
+        : 0;
+    job.waitCompleteMs = waitMs;
+
     // The plan trusts URL kinds; the bytes decide. A CDN may answer an image
     // URL with an ISO-BMFF HEIC (saved as an unplayable .mp4 before this
     // check), or with the post's own motion clip (a parent video URL).
@@ -3130,7 +3242,7 @@ class DownloadManager extends ChangeNotifier {
       try {
         await File(path).delete();
       } catch (_) {}
-      await _enqueueAttempt(batch, job);
+      await _enqueueAttempt(batch, job, source: 'missing_audio');
       return;
     }
 
@@ -3355,7 +3467,7 @@ class DownloadManager extends ChangeNotifier {
     } catch (_) {}
     if (job.attempts < candidateCapFor(job)) {
       await _persist(batch);
-      await _enqueueAttempt(batch, job);
+      await _enqueueAttempt(batch, job, source: 'wrong_content');
       return;
     }
     if (await _importBestSetAside(batch, job, reason: 'content_rejected')) return;
@@ -3508,6 +3620,7 @@ class DownloadManager extends ChangeNotifier {
               job.saved = true;
               return;
             }
+            final provSw = Stopwatch()..start();
             final writtenAssetId = await _embedProvenance(
               filePath: path,
               batch: batch,
@@ -3516,8 +3629,11 @@ class DownloadManager extends ChangeNotifier {
               itemIndex: itemIndex ?? job.itemIndex,
               content: content,
             );
+            provSw.stop();
+            job.provenanceMs = provSw.elapsedMilliseconds;
             try {
               job.fileBytes = await File(path).length();
+              job.provenanceBytesWritten = job.fileBytes;
             } catch (_) {}
             final finalName = await exportNameFor(
               path,
@@ -3525,6 +3641,7 @@ class DownloadManager extends ChangeNotifier {
               itemIndex ?? job.itemIndex,
             );
 
+            final copySw = Stopwatch()..start();
             final outcome = await saveWithConflictHandling(
               filename: finalName,
               tempPath: path,
@@ -3548,6 +3665,9 @@ class DownloadManager extends ChangeNotifier {
                     )
                   : saveToGallery(path, isImage, batch.album, finalName: name),
             );
+            copySw.stop();
+            job.importCopyMs = copySw.elapsedMilliseconds;
+            job.importBytes = job.fileBytes ?? 0;
             final saved = outcome.saved;
             _log('gallery import done: ${saved.title ?? job.filename} mime=${content?.mime ?? '-'} -> ${saved.mediaId}');
             job.mediaId = saved.mediaId;
@@ -3787,6 +3907,20 @@ class DownloadManager extends ChangeNotifier {
     DownloadJob job,
     ResumeData resumeData,
   ) async {
+    if (job.isFinishing || _finishing.containsKey(job.key)) {
+      unawaited(DevLog.write(
+        'V16DL',
+        'enqueue_blocked taskId=${job.currentTaskId ?? job.key} index=${job.itemIndex} role=${roleOf(job)} reason=finishing source=expired_url',
+      ));
+      return false;
+    }
+    if (job.saved || job.state == JobState.done) {
+      unawaited(DevLog.write(
+        'V16DL',
+        'enqueue_blocked taskId=${job.currentTaskId ?? job.key} index=${job.itemIndex} role=${roleOf(job)} reason=completed source=expired_url',
+      ));
+      return false;
+    }
     try {
       final outcome = await (reparseForTesting?.call(batch.postUrl) ??
           parsePostOutcome(batch.postUrl, source: 'download_retry', forceRefresh: true));
@@ -3864,7 +3998,7 @@ class DownloadManager extends ChangeNotifier {
                 'total=${probe.contentLength ?? total} result=restart reason=${!probe.acceptsRange ? 'no_range' : 'validator_changed'}',
           ));
           job.progress = 0;
-          await _enqueueAttempt(batch, job);
+          await _enqueueAttempt(batch, job, source: 'expired_url');
           return true;
         }
       }
@@ -3966,7 +4100,7 @@ class DownloadManager extends ChangeNotifier {
       job.resumeTempPath = null;
       job.resumeEtag = null;
       job.progress = 0;
-      await _enqueueAttempt(batch, job);
+      await _enqueueAttempt(batch, job, source: 'size_mismatch');
       return;
     }
 
@@ -3987,7 +4121,7 @@ class DownloadManager extends ChangeNotifier {
       job.resumeTempPath = null;
       job.resumeEtag = null;
       job.progress = 0;
-      await _enqueueAttempt(batch, job);
+      await _enqueueAttempt(batch, job, source: 'validator_changed');
       return;
     }
 
@@ -4053,7 +4187,7 @@ class DownloadManager extends ChangeNotifier {
     if (backoffRetry) {
       job.candidateRetryCount = nextRetry;
       await Future<void>.delayed(backoff);
-      await _enqueueAttempt(batch, job);
+      await _enqueueAttempt(batch, job, source: 'backoff_retry');
       return;
     }
     job.candidateRetryCount = 0;
@@ -4062,7 +4196,7 @@ class DownloadManager extends ChangeNotifier {
     // gives up (or imports its best small copy) instead of re-requesting it.
     if (nextCandidate < job.urls.length && job.attempts < cap) {
       job.candidateIndex = nextCandidate;
-      await _enqueueAttempt(batch, job);
+      await _enqueueAttempt(batch, job, source: 'next_candidate');
       return;
     }
     if (await _importBestSetAside(batch, job, reason: 'transfer_failed')) return;
@@ -4245,6 +4379,7 @@ class DownloadManager extends ChangeNotifier {
     }
     if (!batch.historyWritten) {
       batch.historyWritten = true;
+      final histSw = Stopwatch()..start();
       final written = await _writeHistoryWithRetry(
         batch,
         (db) => (historyWriterForTesting ??
@@ -4256,12 +4391,25 @@ class DownloadManager extends ChangeNotifier {
         ),
         stage: 'terminal',
       );
+      histSw.stop();
+      final histMs = histSw.elapsedMilliseconds;
       if (!written) {
         // Keep the batch owing its history row; try again later.
         batch.historyWritten = false;
         await _persist(batch);
         _scheduleHistoryRetry(batch);
         return;
+      }
+      for (final j in batch.jobs.where((j) => j.saved)) {
+        unawaited(DevLog.write(
+          'V16DL',
+          'finish_timing wait_complete_ms=${j.waitCompleteMs ?? 0} '
+          'provenance_ms=${j.provenanceMs ?? 0} '
+          'provenance_bytes_written=${j.provenanceBytesWritten ?? 0} '
+          'import_copy_ms=${j.importCopyMs ?? 0} '
+          'import_bytes=${j.importBytes ?? 0} '
+          'history_ms=$histMs',
+        ));
       }
       // 1d: Never permanently delete user-initiated downloads! Keep the record
       // with status '已取消' or '下载失败' so user can retry or re-parse.
@@ -4433,7 +4581,7 @@ class DownloadManager extends ChangeNotifier {
     job.candidateRetryCount = 0;
     job.lastStatusCode = null;
     try {
-      await _enqueueAttempt(batch, job);
+      await _enqueueAttempt(batch, job, source: 'manual_retry');
     } catch (_) {
       job.state = JobState.failed;
       job.error = '加入下载队列失败，请重试';
@@ -4572,6 +4720,16 @@ class DownloadManager extends ChangeNotifier {
           if (task is DownloadTask && task.allowPause) {
             final ok = await _pauseTask(task);
             _log('pauseTask taskId=$id success=$ok');
+            if (ok) {
+              try {
+                final resumeData = await _getResumeData(id);
+                if (resumeData != null) {
+                  job.resumeStartByte = resumeData.requiredStartByte;
+                  job.resumeTempPath = resumeData.data;
+                  job.resumeEtag = resumeData.eTag;
+                }
+              } catch (_) {}
+            }
           } else {
             await FileDownloader().cancelTaskWithId(id).timeout(
               const Duration(milliseconds: 300),
@@ -4594,7 +4752,7 @@ class DownloadManager extends ChangeNotifier {
       job.lastProgressAt = now;
       job.state = JobState.queued;
       try {
-        await _enqueueAttempt(batch, job);
+        await _enqueueAttempt(batch, job, source: 'resume_batch');
       } catch (e) {
         _log('resume enqueue failed ${job.key}: $e');
         job.state = JobState.failed;
@@ -4643,7 +4801,7 @@ class DownloadManager extends ChangeNotifier {
           job.progress = 0;
           job.lastProgressAt = now;
           try {
-            await _enqueueAttempt(batch, job);
+            await _enqueueAttempt(batch, job, source: 'restart_batch');
           } catch (e) {
             _log('restart enqueue failed ${job.key}: $e');
             job.state = JobState.failed;
@@ -4901,7 +5059,7 @@ class DownloadManager extends ChangeNotifier {
   Future<bool> reconcileBatchForTesting(DownloadBatch batch) => _reconcileBatch(batch);
 
   @visibleForTesting
-  Future<void> enqueueAttemptForTesting(DownloadBatch batch, DownloadJob job) => _enqueueAttempt(batch, job);
+  Future<void> enqueueAttemptForTesting(DownloadBatch batch, DownloadJob job, {String source = 'testing'}) => _enqueueAttempt(batch, job, source: source);
 
   /// Returns true when the batch snapshot changed.
   Future<bool> _reconcileBatch(DownloadBatch batch) async {
@@ -4935,7 +5093,7 @@ class DownloadManager extends ChangeNotifier {
         // kill): leave active jobs to resume via native updates, mark
         // stale queued jobs for a fresh attempt below.
         if (job.state == JobState.queued) {
-          await _enqueueAttempt(batch, job);
+          await _enqueueAttempt(batch, job, source: 'reconcile_queued');
           changed = true;
         }
         continue;
@@ -4953,7 +5111,7 @@ class DownloadManager extends ChangeNotifier {
         // 46 and pushed the attempt counter past the displayed limit. A
         // simulated failure is final for the same reason (v1.11 batch 3).
         if (!isFinalFailure(job) && job.attempts < retryCapFor(batch, job)) {
-          await _enqueueAttempt(batch, job);
+          await _enqueueAttempt(batch, job, source: 'reconcile_retry');
         } else {
           job.state = JobState.failed;
           job.error ??= job.isImage

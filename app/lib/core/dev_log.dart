@@ -99,6 +99,9 @@ abstract final class DevLog {
   /// Any http(s) URL inside a message.
   static final RegExp _urlPattern = RegExp(r'''https?://[^\s"'<>]+''');
 
+  static final int _startTimeMs = DateTime.now().millisecondsSinceEpoch;
+  static int get elapsedMs => DateTime.now().millisecondsSinceEpoch - _startTimeMs;
+
   /// Write a line to the log file (and to logcat for live debugging).
   ///
   /// [level] defaults to [DevLogLevel.info]; debug lines are dropped in
@@ -109,8 +112,13 @@ abstract final class DevLog {
     DevLogLevel level = DevLogLevel.info,
   }) async {
     if (level == DevLogLevel.debug && kReleaseMode) return;
+    final cleanTag = scrub(tag);
+    var cleanMessage = scrub(message);
+    if (cleanTag == 'V16DL' && !cleanMessage.startsWith('t=')) {
+      cleanMessage = 't=$elapsedMs $cleanMessage';
+    }
     final line =
-        '[${level.name.toUpperCase()}] [${scrub(tag)}] ${scrub(message)}'
+        '[${level.name.toUpperCase()}] [$cleanTag] $cleanMessage'
             .replaceAll('\r', r'\r')
             .replaceAll('\n', r'\n');
     _remember(line);

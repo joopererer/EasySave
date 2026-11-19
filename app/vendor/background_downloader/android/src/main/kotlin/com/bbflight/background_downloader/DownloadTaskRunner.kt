@@ -32,6 +32,22 @@ import kotlinx.serialization.json.longOrNull
 
 class DownloadTaskRunner(context: TaskJobContext) : TaskRunner(context) {
 
+    private fun logV16dl(line: String) {
+        Log.i(TAG, "[V16DL] $line")
+        try {
+            val clazz = Class.forName("com.james.easysave.NativeLog")
+            val field = clazz.getDeclaredField("INSTANCE")
+            val instance = field.get(null)
+            val method = clazz.getDeclaredMethod("i", String::class.java, String::class.java)
+            method.invoke(instance, "V16DL", line)
+        } catch (_: Throwable) {
+            try {
+                val logFile = File(context.appContext.filesDir, "v16dl.log")
+                logFile.appendText("[INFO] [V16DL] $line\n")
+            } catch (_: Throwable) {}
+        }
+    }
+
     private var eTagHeader: String? = null
     private var serverAcceptsRanges = false // if true, send resume data on fail
     private var tempFilePath = ""
@@ -108,9 +124,8 @@ class DownloadTaskRunner(context: TaskJobContext) : TaskRunner(context) {
             val hasEtag = !eTagHeader.isNullOrEmpty()
             val hasLastModified = !connection.getHeaderField("Last-Modified").isNullOrEmpty()
             val startByteInfo = if (isResume && connection.responseCode == 206) " content_range_start=$startByte" else ""
-            Log.i(
-                TAG,
-                "[V16DL] response taskId=${task.taskId} status=${connection.responseCode} " +
+            logV16dl(
+                "response taskId=${task.taskId} status=${connection.responseCode} " +
                     "accept_ranges=${acceptRangesHeader ?: "none"} has_etag=$hasEtag " +
                     "has_last_modified=$hasLastModified is_resume=$isResume$startByteInfo"
             )
@@ -123,28 +138,37 @@ class DownloadTaskRunner(context: TaskJobContext) : TaskRunner(context) {
             }
             val wasResume = isResume
             isResume = isResume && connection.responseCode == 206  // confirm resume response
+            val contentRangeHeader = connection.getHeaderField("Content-Range")
+            var crStart = startByte
+            var crTotal = connection.getHeaderField("Content-Length")?.toLongOrNull() ?: -1L
+            if (!contentRangeHeader.isNullOrEmpty()) {
+                val match = Regex("""bytes\s+(\d+)-(\d+)/(\d+|\*)""").find(contentRangeHeader)
+                if (match != null) {
+                    crStart = match.groupValues[1].toLongOrNull() ?: startByte
+                    val t = match.groupValues[3].toLongOrNull()
+                    if (t != null) crTotal = t
+                }
+            }
             if (wasResume && !isResume) {
-                val cl = connection.getHeaderField("Content-Length")?.toLongOrNull() ?: -1L
-                Log.i(
-                    TAG,
-                    "[V16DL] resume_response taskId=${task.taskId} status=${connection.responseCode} " +
-                        "result=restart reason=status_200 from_bytes=0 total=$cl"
+                logV16dl(
+                    "resume_response taskId=${task.taskId} status=${connection.responseCode} " +
+                        "content_range_start=0 content_range_total=$crTotal " +
+                        "result=restart reason=status_${connection.responseCode}"
                 )
             } else if (isResume) {
-                Log.i(
-                    TAG,
-                    "[V16DL] resume_response taskId=${task.taskId} status=206 " +
-                        "result=resumed reason=range_accepted from_bytes=$startByte " +
-                        "total=${connection.getHeaderField("Content-Length") ?: -1}"
+                logV16dl(
+                    "resume_response taskId=${task.taskId} status=206 " +
+                        "content_range_start=$crStart content_range_total=$crTotal " +
+                        "result=resumed reason=range_accepted"
                 )
             }
             if (isResume && !prepareResume(connection)) {
                 deleteTempFile()
                 val reason = if (taskException?.description?.contains("size_mismatch") == true) "size_mismatch" else "resume_failed"
-                Log.i(
-                    TAG,
-                    "[V16DL] resume_response taskId=${task.taskId} status=${connection.responseCode} " +
-                        "result=restart reason=$reason from_bytes=0"
+                logV16dl(
+                    "resume_response taskId=${task.taskId} status=${connection.responseCode} " +
+                        "content_range_start=0 content_range_total=$crTotal " +
+                        "result=restart reason=$reason"
                 )
                 return TaskStatus.failed
             }
