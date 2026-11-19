@@ -1091,11 +1091,13 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
     // still and clip are one item, and the album delete still removes both.
     final savedItemCount = savedItemCountFor(records);
     final counts = deletionCountsForRecords(records);
-    final itemSummary = counts.format(nonLiveFallback: '$savedItemCount 项');
+    final itemSummary = savedItemCount > 0
+        ? counts.format(nonLiveFallback: '$savedItemCount 项')
+        : null;
     DevLog.write(
       'HIST',
       'delete sheet records=${records.length} files=${savedFileCountFor(records)} '
-          'items=$savedItemCount summary=$itemSummary',
+          'items=$savedItemCount${itemSummary != null ? ' summary=$itemSummary' : ''}',
     );
     if (!mounted) return;
     final result = await showDeleteRecordsSheet(
@@ -1140,7 +1142,9 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(
-            '未能在相册中找到这 $savedItemCount 项，仅删除了历史记录',
+            savedItemCount > 0
+                ? '未能在相册中找到这 $savedItemCount 项，仅删除了历史记录'
+                : '已删除 ${records.length} 条记录',
           ),
         ),
       );
@@ -1159,11 +1163,14 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
     if (!await _deleteDatabaseRecords(db, records)) return;
     if (!mounted) return;
     final problem = outcome.problem;
+    final deletedItems = deletableItemCountFor(records, media);
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text(
           problem == null
-              ? '已删除 ${records.length} 条记录，并从相册删除 ${counts.format(nonLiveFallback: '${deletableItemCountFor(records, media)} 项')}'
+              ? (deletedItems > 0
+                  ? '已删除 ${records.length} 条记录，并从相册删除 ${counts.format(nonLiveFallback: '$deletedItems 项')}'
+                  : '已删除 ${records.length} 条记录')
               : '$problem，仅删除了 ${records.length} 条记录',
         ),
       ),

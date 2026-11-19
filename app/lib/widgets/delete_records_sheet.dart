@@ -63,7 +63,7 @@ class _DeleteSheetState extends State<_DeleteSheet> {
 
   @override
   Widget build(BuildContext context) {
-    final canDeleteFiles = widget.itemCount > 0;
+    final canDeleteFiles = widget.itemCount > 0 && widget.itemSummary != '0 项';
     return SafeArea(
       child: Padding(
         padding: const EdgeInsets.fromLTRB(20, 20, 20, 20),
