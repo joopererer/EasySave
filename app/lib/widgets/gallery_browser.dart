@@ -806,7 +806,7 @@ class _GalleryBrowserPageState extends State<GalleryBrowserPage> {
     ];
     final title = items.length == 1
         ? '第 ${_position.position} 项'
-        : '${items.length} 项';
+        : '已选的 ${items.length} 项';
     final withFile = await _askDeleteMode(title);
     if (withFile == null || !mounted) return;
     setState(() => _busy = true);
