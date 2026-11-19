@@ -351,10 +351,11 @@ Future<({List<GalleryBrowserItem> items, int initial})> savedBrowserItems({
   int? highlightItemIndex,
   HistoryAssetLocator? locate,
   bool? albumScanned,
+  bool allowRemoteFallback = false,
 }) async {
   final entries = pairSavedMedia(files);
   if (entries.isEmpty) {
-    if (post.items.isNotEmpty) {
+    if (allowRemoteFallback && post.items.isNotEmpty) {
       final items = <GalleryBrowserItem>[
         for (var i = 0; i < post.items.length; i++)
           GalleryBrowserItem.fromMediaItem(

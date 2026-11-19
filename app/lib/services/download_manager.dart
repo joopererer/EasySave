@@ -374,15 +374,21 @@ StalledAction decideStalledAction({
   }
 }
 
-/// Own live batches win over their (older) snapshot copies; newest first.
+/// Own live batches win over their (older) snapshot copies; foreign batches
+/// prefer the newest snapshot from the owning engine; newest first.
 List<DownloadBatch> mergeBatchViews(
   Iterable<DownloadBatch> own,
   Iterable<DownloadBatch> snapshots,
 ) {
-  final byId = <String, DownloadBatch>{
-    for (final b in snapshots) b.batchId: b,
-    for (final b in own) b.batchId: b,
-  };
+  final byId = <String, DownloadBatch>{};
+  for (final b in snapshots) {
+    byId[b.batchId] = b;
+  }
+  for (final b in own) {
+    if (b.source == DownloadManager.owner || !byId.containsKey(b.batchId)) {
+      byId[b.batchId] = b;
+    }
+  }
   final list = byId.values.toList()
     ..sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
   return list;
@@ -576,6 +582,7 @@ class DownloadJob {
 
   Map<String, Object?> toJson() => {
     'lastProgressAt': lastProgressAt,
+    'progress': progress,
     'key': key,
     'label': label,
     'filename': filename,
@@ -633,6 +640,7 @@ class DownloadJob {
       isLivePhoto: map['isLivePhoto'] as bool? ?? false,
     );
     job.state = JobState.values[(map['state'] as num).toInt()];
+    job.progress = (map['progress'] as num?)?.toDouble() ?? 0.0;
     job.attempts = (map['attempts'] as num).toInt();
     job.round = (map['round'] as num?)?.toInt() ?? 0;
     final storedCandidate = (map['candidateIndex'] as num?)?.toInt() ?? 0;
@@ -1446,6 +1454,17 @@ class DownloadManager extends ChangeNotifier {
       timer.cancel();
     }
     _networkRetryTimers.clear();
+    for (final timer in _autoResumeTimers.values) {
+      timer.cancel();
+    }
+    _autoResumeTimers.clear();
+    _autoResumeRetries.clear();
+    _networkSwitchedMidDownload.clear();
+    _networkStabilityTimer?.cancel();
+    _networkStabilityTimer = null;
+    _lastNetworkType = NetworkStatus.instance.online
+        ? NetworkStatus.instance.networkType
+        : 'none';
     _networkWaits.clear();
     _batches.clear();
     notifyListeners();
@@ -1555,16 +1574,155 @@ class DownloadManager extends ChangeNotifier {
     });
   }
 
+  static const List<Duration> kAutoResumeBackoff = [
+    Duration(seconds: 5),
+    Duration(seconds: 15),
+    Duration(seconds: 30),
+    Duration(seconds: 60),
+    Duration(seconds: 120),
+  ];
+
+  final Map<String, int> _autoResumeRetries = {};
+  final Map<String, Timer> _autoResumeTimers = {};
+  final Set<String> _networkSwitchedMidDownload = {};
+  String _lastNetworkType = 'unknown';
+  String _networkStabilityFromType = 'none';
+  Timer? _networkStabilityTimer;
+
+  @visibleForTesting
+  Map<String, int> get autoResumeRetriesForTesting => _autoResumeRetries;
+
+  @visibleForTesting
+  Map<String, Timer> get autoResumeTimersForTesting => _autoResumeTimers;
+
+  @visibleForTesting
+  Timer? get networkStabilityTimerForTesting => _networkStabilityTimer;
+
+  @visibleForTesting
+  void fireNetworkStabilityTimerForTesting() {
+    if (_networkStabilityTimer != null) {
+      _networkStabilityTimer?.cancel();
+      _networkStabilityTimer = null;
+      final stableType = NetworkStatus.instance.networkType;
+      unawaited(DevLog.write(
+        'V16DL',
+        'network_change from=$_networkStabilityFromType to=$stableType action=resume',
+      ));
+      _triggerNetworkRecoveryResume();
+    }
+  }
+
   /// The system connection came back (or went away): the notification body
   /// follows it. A connection that comes back also restarts every file parked
-  /// in [JobState.waitingNetwork] (v1.11 batch 3).
+  /// in [JobState.waitingNetwork] (v1.11 batch 3) or interrupted with partial bytes.
   void _onNetworkChanged() {
     for (final batch in _batches.values.toList()) {
       if (batch.isTerminal) continue;
       unawaited(_refreshNotification(batch));
     }
     notifyListeners();
-    if (NetworkStatus.instance.online) unawaited(_resumeWaitingJobs());
+
+    final isOnline = NetworkStatus.instance.online;
+    final newType = isOnline ? NetworkStatus.instance.networkType : 'none';
+    final oldType = _lastNetworkType;
+    if (oldType == newType) return;
+    _lastNetworkType = newType;
+
+    if (!isOnline || newType == 'none') {
+      _networkStabilityTimer?.cancel();
+      _networkStabilityTimer = null;
+      return;
+    }
+
+    // 2h: When network recovers from offline or switches type, wait ~3s for stability
+    if (oldType == 'none') {
+      unawaited(_resumeWaitingJobs());
+      _networkStabilityFromType = oldType;
+      unawaited(DevLog.write(
+        'V16DL',
+        'network_change from=$oldType to=$newType action=wait_stable',
+      ));
+      _networkStabilityTimer?.cancel();
+      _networkStabilityTimer = Timer(const Duration(seconds: 3), () {
+        _networkStabilityTimer = null;
+        if (!NetworkStatus.instance.online) return;
+        final stableType = NetworkStatus.instance.networkType;
+        unawaited(DevLog.write(
+          'V16DL',
+          'network_change from=$_networkStabilityFromType to=$stableType action=resume',
+        ));
+        _triggerNetworkRecoveryResume();
+      });
+      return;
+    }
+
+    // If stability timer is already running and network type jumped again (e.g. 4G -> Wi-Fi after 2s)
+    if (_networkStabilityTimer != null) {
+      _networkStabilityFromType = oldType;
+      unawaited(DevLog.write(
+        'V16DL',
+        'network_change from=$oldType to=$newType action=wait_stable',
+      ));
+      _networkStabilityTimer?.cancel();
+      _networkStabilityTimer = Timer(const Duration(seconds: 3), () {
+        _networkStabilityTimer = null;
+        if (!NetworkStatus.instance.online) return;
+        final stableType = NetworkStatus.instance.networkType;
+        unawaited(DevLog.write(
+          'V16DL',
+          'network_change from=$_networkStabilityFromType to=$stableType action=resume',
+        ));
+        _triggerNetworkRecoveryResume();
+      });
+      return;
+    }
+
+    // Mid-download network switch (e.g. cellular -> wifi while already downloading):
+    // allow current connection to abort and immediately auto-resume from breakpoint (does not count towards 5-retry limit)
+    if (oldType != 'none' && newType != 'none' && oldType != newType) {
+      unawaited(DevLog.write(
+        'V16DL',
+        'network_change from=$oldType to=$newType action=resume',
+      ));
+      for (final batch in _batches.values) {
+        if (batch.source != DownloadManager.owner) continue;
+        for (final job in batch.jobs) {
+          if (job.state == JobState.active) {
+            _networkSwitchedMidDownload.add(job.key);
+          }
+        }
+      }
+    }
+  }
+
+  void _triggerNetworkRecoveryResume() {
+    for (final batch in _batches.values.toList()) {
+      if (batch.source != DownloadManager.owner) continue;
+      for (final job in batch.jobs.toList()) {
+        if (job.state == JobState.paused && (job.resumeStartByte ?? 0) > 0) {
+          final retries = _autoResumeRetries[job.key] ?? 0;
+          if (retries < 5) {
+            final nextRetry = retries + 1;
+            _autoResumeRetries[job.key] = nextRetry;
+            int actualStartByte = job.resumeStartByte ?? 0;
+            if (job.resumeTempPath != null) {
+              try {
+                final f = File(job.resumeTempPath!);
+                if (f.existsSync()) actualStartByte = f.lengthSync();
+              } catch (_) {}
+            }
+            job.resumeStartByte = actualStartByte;
+            unawaited(DevLog.write(
+              'V16DL',
+              'auto_resume n=$nextRetry/5 from_bytes=$actualStartByte reason=network_recovered',
+            ));
+            job.state = JobState.queued;
+            job.error = null;
+            unawaited(_enqueueAttempt(batch, job, source: 'network_recovered'));
+          }
+        }
+      }
+    }
   }
 
   /// Attaches the system-connection listener exactly as [init] does, so a test
@@ -2780,6 +2938,14 @@ class DownloadManager extends ChangeNotifier {
     String? path,
     String reason = 'cleanup',
   }) async {
+    final isAllowedDiscard = reason == 'cancel' ||
+        reason == 'delete' ||
+        reason == 'size_mismatch' ||
+        reason == 'status_200' ||
+        reason == 'import_done';
+    if ((job.resumeStartByte ?? 0) > 0 && !isAllowedDiscard && job.state != JobState.done) {
+      return 0;
+    }
     var bytes = 0;
     Future<void> remove(FileSystemEntity entity) async {
       try {
@@ -2857,6 +3023,9 @@ class DownloadManager extends ChangeNotifier {
     }
     job.resumeStartByte = null;
     job.resumeEtag = null;
+    if (bytes > 0 && (reason == 'cancel' || reason == 'delete' || reason == 'size_mismatch' || reason == 'status_200')) {
+      unawaited(DevLog.write('V16DL', 'temp_discard reason=$reason'));
+    }
     unawaited(DevLog.write(
       'V16DL',
       'temp_cleanup reason=$reason bytes=$bytes index=${job.itemIndex}',
@@ -3018,6 +3187,7 @@ class DownloadManager extends ChangeNotifier {
           job.lastProgressAt = DateTime.now().millisecondsSinceEpoch;
           notifyListeners();
           unawaited(_refreshNotification(batch));
+          _throttlePersistProgress(batch, batch.progress);
         },
         jobKey: job.key,
         itemIndex: job.itemIndex,
@@ -3131,6 +3301,7 @@ class DownloadManager extends ChangeNotifier {
         }
         notifyListeners();
         unawaited(_refreshNotification(batch));
+        _throttlePersistProgress(batch, batch.progress);
       }
       return;
     }
@@ -3140,6 +3311,7 @@ class DownloadManager extends ChangeNotifier {
         job.state = JobState.active;
         notifyListeners();
         unawaited(_refreshNotification(batch));
+        _throttlePersistProgress(batch, batch.progress);
       case TaskStatus.complete:
         job.downloadCompleteAt ??= DateTime.now().millisecondsSinceEpoch;
         unawaited(_finishFile(batch, job, task));
@@ -4179,6 +4351,7 @@ class DownloadManager extends ChangeNotifier {
         'resume taskId=$taskId index=${job.itemIndex} role=${roleOf(job)} from_bytes=$fromBytes '
             'total=${job.expectedBytes ?? -1} result=restart reason=size_mismatch',
       ));
+      unawaited(DevLog.write('V16DL', 'temp_discard reason=size_mismatch'));
       await _removeResumeData(job.currentTaskId ?? job.key);
       await ResumableDownloadStore.instance.cleanForJob(job.key);
       job.resumeStartByte = null;
@@ -4223,6 +4396,116 @@ class DownloadManager extends ChangeNotifier {
         final handled = await _handleExpiredUrlResume(batch, job, resumeData);
         if (handled) return;
       }
+    }
+
+    int partialBytes = 0;
+    String? tempPath = resumeData?.data ?? job.resumeTempPath;
+    if (tempPath != null && tempPath.isNotEmpty) {
+      try {
+        final f = File(tempPath);
+        if (f.existsSync()) {
+          partialBytes = f.lengthSync();
+        }
+      } catch (_) {}
+    }
+    if (resumeData != null && resumeData.requiredStartByte > partialBytes) {
+      partialBytes = resumeData.requiredStartByte;
+    }
+    if (job.resumeStartByte != null && job.resumeStartByte! > partialBytes) {
+      partialBytes = job.resumeStartByte!;
+    }
+    if (partialBytes <= 0 && job.progress > 0 && job.expectedBytes != null && job.expectedBytes! > 0) {
+      partialBytes = (job.expectedBytes! * job.progress).round();
+    }
+
+    // Rule 2a: If temp file has bytes (> 0), ANY failure (resume_failed, connection abort,
+    // timeout, unknown) must NEVER mark final failure or delete temp file. Enter "下载中断"
+    // (JobState.paused).
+    if (partialBytes > 0 && isResumable) {
+      job.resumeStartByte = partialBytes;
+      if (tempPath != null && tempPath.isNotEmpty) job.resumeTempPath = tempPath;
+      if (resumeData?.eTag != null && resumeData!.eTag!.isNotEmpty) {
+        job.resumeEtag = resumeData.eTag;
+      }
+      job.state = JobState.paused;
+      job.lastProgressAt = DateTime.now().millisecondsSinceEpoch;
+
+      final lastFailReason = cause.isNotEmpty
+          ? cause
+          : (_transferReason(update).isNotEmpty ? _transferReason(update) : update.status.name);
+
+      // Check 2h: Network type change during download allows immediate auto-retry from breakpoint
+      // (does not count towards 5-retry limit)
+      final midDownloadSwitch = _networkSwitchedMidDownload.remove(job.key) == true;
+      if (midDownloadSwitch) {
+        unawaited(DevLog.write(
+          'V16DL',
+          'auto_resume n=0/5 from_bytes=$partialBytes reason=network_switch',
+        ));
+        job.state = JobState.queued;
+        job.error = null;
+        await _persist(batch);
+        notifyListeners();
+        await _enqueueAttempt(batch, job, source: 'network_switch');
+        return;
+      }
+
+      // If offline, wait for network recovery (stability timer will trigger auto-resume)
+      if (!NetworkStatus.instance.online) {
+        job.error = '等待网络恢复';
+        await _persist(batch);
+        notifyListeners();
+        unawaited(_refreshNotification(batch));
+        return;
+      }
+
+      // 2b. Auto-resume: max 5 retries with exponential backoff (5s, 15s, 30s, 60s, 120s)
+      final retries = _autoResumeRetries[job.key] ?? 0;
+      if (retries < 5) {
+        final nextRetry = retries + 1;
+        final backoff = kAutoResumeBackoff[retries];
+        job.error = '下载已中断，${backoff.inSeconds}秒后重试';
+        await _persist(batch);
+        notifyListeners();
+        unawaited(_refreshNotification(batch));
+
+        _autoResumeTimers[job.key]?.cancel();
+        _autoResumeTimers[job.key] = Timer(backoff, () async {
+          _autoResumeTimers.remove(job.key);
+          if (job.state != JobState.paused) return;
+          if (!NetworkStatus.instance.online) {
+            job.error = '等待网络恢复';
+            await _persist(batch);
+            notifyListeners();
+            return;
+          }
+          _autoResumeRetries[job.key] = nextRetry;
+          int actualStartByte = partialBytes;
+          if (job.resumeTempPath != null) {
+            try {
+              final f = File(job.resumeTempPath!);
+              if (f.existsSync()) actualStartByte = f.lengthSync();
+            } catch (_) {}
+          }
+          job.resumeStartByte = actualStartByte;
+          unawaited(DevLog.write(
+            'V16DL',
+            'auto_resume n=$nextRetry/5 from_bytes=$actualStartByte reason=$lastFailReason',
+          ));
+          job.state = JobState.queued;
+          job.error = null;
+          await _persist(batch);
+          notifyListeners();
+          await _enqueueAttempt(batch, job, source: 'auto_resume');
+        });
+      } else {
+        // 2c. 5 retries exhausted: enter "已中断，点继续" (keeps JobState.paused)
+        job.error = '已中断，点继续';
+        await _persist(batch);
+        notifyListeners();
+        unawaited(_refreshNotification(batch));
+      }
+      return;
     }
 
     // No connection means the transfer never had a chance: park the file until
@@ -4434,20 +4717,51 @@ class DownloadManager extends ChangeNotifier {
   /// running batch pass false. It decides whether the history write may
   /// restore a soft-deleted record (see [writeBatchHistory]).
   Future<int> _countActiveNativeTasks(String batchId) async {
+    if (allRecordsForTesting != null) {
+      try {
+        final records = await allRecordsForTesting!(batchId);
+        return records.where((r) =>
+            r.status == TaskStatus.enqueued ||
+            r.status == TaskStatus.running ||
+            r.status == TaskStatus.paused ||
+            r.status == TaskStatus.waitingToRetry).length;
+      } on TimeoutException {
+        unawaited(DevLog.write('V16DL', 'active_count_timeout id=$batchId'));
+        return 1;
+      } catch (_) {
+        unawaited(DevLog.write('V16DL', 'active_count_timeout id=$batchId'));
+        return 1;
+      }
+    }
+    if (Platform.environment.containsKey('FLUTTER_TEST') ||
+        enqueueForTesting != null ||
+        downloaderStartForTesting != null ||
+        prepareStartForTesting != null ||
+        tempRootForTesting != null) {
+      return 0;
+    }
+    final batch = _batches[batchId];
+    if (batch != null &&
+        batch.jobs.isNotEmpty &&
+        batch.jobs.every((j) => j.currentTaskId == null)) {
+      return 0;
+    }
     try {
-      final records = allRecordsForTesting != null
-          ? await allRecordsForTesting!(batchId)
-          : await FileDownloader()
-              .database
-              .allRecords(group: batchId)
-              .timeout(const Duration(milliseconds: 500));
+      final records = await FileDownloader()
+          .database
+          .allRecords(group: batchId)
+          .timeout(const Duration(milliseconds: 500));
       return records.where((r) =>
           r.status == TaskStatus.enqueued ||
           r.status == TaskStatus.running ||
           r.status == TaskStatus.paused ||
           r.status == TaskStatus.waitingToRetry).length;
+    } on TimeoutException {
+      unawaited(DevLog.write('V16DL', 'active_count_timeout id=$batchId'));
+      return 1;
     } catch (_) {
-      return 0;
+      unawaited(DevLog.write('V16DL', 'active_count_timeout id=$batchId'));
+      return 1;
     }
   }
 
@@ -4872,6 +5186,9 @@ class DownloadManager extends ChangeNotifier {
     batch = await _ownedOrAdopt(batch);
     final now = DateTime.now().millisecondsSinceEpoch;
     for (final job in batch.jobs.where((j) => j.state == JobState.paused)) {
+      _autoResumeTimers.remove(job.key)?.cancel();
+      _autoResumeRetries.remove(job.key);
+      job.error = null;
       job.lastProgressAt = now;
       job.state = JobState.queued;
       try {
@@ -5292,6 +5609,25 @@ class DownloadManager extends ChangeNotifier {
       unawaited(DevLog.write('V16DL', failedJobLogLine(batch, job))); // i18n:ignore 日志
     }
   }
+
+  final Map<String, int> _lastProgressPersistMs = {};
+  final Map<String, double> _lastProgressPersistValue = {};
+
+  void _throttlePersistProgress(DownloadBatch batch, double currentProgress) {
+    if (batch.source != DownloadManager.owner) return;
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final lastMs = _lastProgressPersistMs[batch.batchId] ?? 0;
+    final lastVal = _lastProgressPersistValue[batch.batchId] ?? -1.0;
+    if ((now - lastMs >= 1000) || ((currentProgress - lastVal).abs() >= 0.01)) {
+      _lastProgressPersistMs[batch.batchId] = now;
+      _lastProgressPersistValue[batch.batchId] = currentProgress;
+      unawaited(_persist(batch));
+    }
+  }
+
+  @visibleForTesting
+  void throttlePersistProgressForTesting(DownloadBatch batch, double progress) =>
+      _throttlePersistProgress(batch, progress);
 
   Future<void> _persist(DownloadBatch batch) async {
     _logFailedJobs(batch);

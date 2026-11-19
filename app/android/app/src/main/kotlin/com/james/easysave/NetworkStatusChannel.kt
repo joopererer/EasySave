@@ -43,6 +43,7 @@ internal object NetworkStatusChannel {
         ch.setMethodCallHandler { call, result ->
             when (call.method) {
                 "isOnline" -> result.success(isOnline(cm))
+                "networkType" -> result.success(getNetworkType(cm))
                 else -> result.notImplemented()
             }
         }
@@ -88,7 +89,31 @@ internal object NetworkStatusChannel {
 
     private fun push(cm: ConnectivityManager) {
         val online = isOnline(cm)
-        main.post { channel?.invokeMethod("online", online) }
+        val type = getNetworkType(cm)
+        main.post {
+            channel?.invokeMethod("online", online)
+            channel?.invokeMethod("networkType", type)
+        }
+    }
+
+    private fun getNetworkType(cm: ConnectivityManager?): String {
+        if (cm == null) return "none"
+        return try {
+            val network = cm.activeNetwork ?: return "none"
+            val caps = cm.getNetworkCapabilities(network) ?: return "none"
+            if (!caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) ||
+                !caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)) {
+                return "none"
+            }
+            when {
+                caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) -> "wifi"
+                caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) -> "cellular"
+                caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) -> "ethernet"
+                else -> "other"
+            }
+        } catch (_: Exception) {
+            "none"
+        }
     }
 
     private fun isOnline(cm: ConnectivityManager?): Boolean {

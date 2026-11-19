@@ -919,11 +919,13 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
       // album confirmed as gone. A post whose files all left the device still
       // opens, with a placeholder per item, instead of silently doing nothing
       // (v1.11 batch 4).
+      final isDownloading = _downloadBatches.containsKey(record0.postId);
       final built = await savedBrowserItems(
         record: record0,
         files: record0.visibleFiles,
         post: post,
         highlightItemIndex: highlightItemIndex,
+        allowRemoteFallback: isDownloading,
       );
       final items = built.items;
       final initial = built.initial;
