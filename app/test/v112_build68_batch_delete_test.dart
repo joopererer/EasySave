@@ -3,7 +3,6 @@
 
 import 'dart:convert';
 
-import 'package:easysave/core/models.dart';
 import 'package:easysave/services/history_db.dart';
 import 'package:easysave/services/history_item_delete.dart';
 import 'package:easysave/services/live_pairs.dart';

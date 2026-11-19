@@ -1,13 +1,9 @@
-import 'dart:async';
 import 'dart:io';
 
 import 'package:background_downloader/background_downloader.dart' hide Database;
 import 'package:easysave/core/dev_log.dart';
-import 'package:easysave/core/models.dart';
 import 'package:easysave/services/download_claims.dart';
 import 'package:easysave/services/download_manager.dart';
-import 'package:easysave/services/history_db.dart';
-import 'package:easysave/services/network_status.dart';
 import 'package:easysave/services/resumable_download_store.dart';
 import 'package:easysave/services/site_registry.dart';
 import 'package:flutter/services.dart';
