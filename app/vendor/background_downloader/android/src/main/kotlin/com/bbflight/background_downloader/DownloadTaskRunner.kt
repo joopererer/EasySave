@@ -123,7 +123,18 @@ class DownloadTaskRunner(context: TaskJobContext) : TaskRunner(context) {
             )
             val hasEtag = !eTagHeader.isNullOrEmpty()
             val hasLastModified = !connection.getHeaderField("Last-Modified").isNullOrEmpty()
-            val startByteInfo = if (isResume && connection.responseCode == 206) " content_range_start=$startByte" else ""
+            val contentRangeHeader = connection.getHeaderField("Content-Range")
+            var crStart = startByte
+            var crTotal = connection.getHeaderField("Content-Length")?.toLongOrNull() ?: -1L
+            if (!contentRangeHeader.isNullOrEmpty()) {
+                val match = Regex("""bytes\s+(\d+)-(\d+)/(\d+|\*)""").find(contentRangeHeader)
+                if (match != null) {
+                    crStart = match.groupValues[1].toLongOrNull() ?: startByte
+                    val t = match.groupValues[3].toLongOrNull()
+                    if (t != null) crTotal = t
+                }
+            }
+            val startByteInfo = if (isResume && connection.responseCode == 206) " content_range_start=$crStart" else ""
             logV16dl(
                 "response taskId=${task.taskId} status=${connection.responseCode} " +
                     "accept_ranges=${acceptRangesHeader ?: "none"} has_etag=$hasEtag " +
@@ -138,17 +149,6 @@ class DownloadTaskRunner(context: TaskJobContext) : TaskRunner(context) {
             }
             val wasResume = isResume
             isResume = isResume && connection.responseCode == 206  // confirm resume response
-            val contentRangeHeader = connection.getHeaderField("Content-Range")
-            var crStart = startByte
-            var crTotal = connection.getHeaderField("Content-Length")?.toLongOrNull() ?: -1L
-            if (!contentRangeHeader.isNullOrEmpty()) {
-                val match = Regex("""bytes\s+(\d+)-(\d+)/(\d+|\*)""").find(contentRangeHeader)
-                if (match != null) {
-                    crStart = match.groupValues[1].toLongOrNull() ?: startByte
-                    val t = match.groupValues[3].toLongOrNull()
-                    if (t != null) crTotal = t
-                }
-            }
             if (wasResume && !isResume) {
                 logV16dl(
                     "resume_response taskId=${task.taskId} status=${connection.responseCode} " +
@@ -258,7 +258,13 @@ class DownloadTaskRunner(context: TaskJobContext) : TaskRunner(context) {
                     )
                     return TaskStatus.failed
                 }
-                File(tempFilePath)
+                val f = File(tempFilePath)
+                if (f.exists() && f.length() > 0L && !isResume) {
+                    val reason = if (connection.responseCode == 200) "status_200" else "no_range"
+                    logV16dl("restart_detected taskId=${task.taskId} reason=$reason")
+                    f.delete()
+                }
+                f
             } else {
                 null
             }
@@ -404,44 +410,19 @@ class DownloadTaskRunner(context: TaskJobContext) : TaskRunner(context) {
                 }
 
                 TaskStatus.enqueued -> {
-                    // Special status, in this context means that the task timed out
-                    // so if allowed, pause it and schedule the resume task immediately
-                    if (!task.allowPause) {
-                        Log.i(TAG, "Task ${task.taskId} timed out")
-                        taskException =
-                            TaskException(
-                                ExceptionType.connection,
-                                description = "Task timed out"
-                            )
-                        return TaskStatus.failed
-                    }
+                    // Special status: task timed out.
+                    // For resumable tasks, post resume data so App initiates the new round with Range.
                     if (taskCanResume) {
-                        Log.i(
-                            TAG,
-                            "Task ${task.taskId} paused due to timeout, will resume in 1 second"
-                        )
                         val start = bytesTotal + startByte
-                        val success = BDPlugin.doEnqueue(
-                            context.appContext,
-                            task,
-                            notificationConfigJsonString,
+                        processResumeData(
                             ResumeData(task, tempFilePath, start, eTagHeader),
-                            1000
+                            prefs
                         )
-                        if (!success) {
-                            Log.w(TAG, "Task ${task.taskId} timed out and could not re-enqueue to resume")
-                            taskException = TaskException(
-                                ExceptionType.general,
-                                description = "Task timed out and could not re-enqueue to resume"
-                            )
-                            cleanup(usesUri, destUri)
-                            return TaskStatus.failed
-                        }
-                        return TaskStatus.paused
                     }
-                    Log.i(TAG, "Task ${task.taskId} timed out and cannot pause/resume")
-                    taskException =
-                        TaskException(ExceptionType.connection, description = "Task timed out")
+                    taskException = TaskException(
+                        ExceptionType.connection,
+                        description = "Task timed out"
+                    )
                     cleanup(usesUri, destUri)
                     return TaskStatus.failed
                 }
@@ -528,6 +509,11 @@ class DownloadTaskRunner(context: TaskJobContext) : TaskRunner(context) {
                     } catch (e: IOException) {
                         e.printStackTrace()
                     }
+                }
+                else if (tempFileLength in 1 until requiredStartByte) {
+                    Log.i(TAG, "Adjusting requiredStartByte from $requiredStartByte to on-disk length $tempFileLength")
+                    requiredStartByte = tempFileLength
+                    return true
                 }
                 Log.i(TAG, "Partially downloaded file is corrupted, resume not possible")
             }

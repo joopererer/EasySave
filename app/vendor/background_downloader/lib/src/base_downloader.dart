@@ -837,7 +837,7 @@ abstract base class BaseDownloader {
     // has retriesRemaining > 0: those are always sent here, and are
     // intercepted to hold the task and reschedule in the near future
     final task = update.task;
-    if (update.status == TaskStatus.failed && task.retriesRemaining > 0) {
+    if (update.status == TaskStatus.failed && task.retriesRemaining > 0 && !task.allowPause) {
       _emitStatusUpdate(TaskStatusUpdate(task, TaskStatus.waitingToRetry));
       _emitProgressUpdate(TaskProgressUpdate(task, progressWaitingToRetry));
       task.decreaseRetriesRemaining();
