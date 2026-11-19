@@ -317,6 +317,25 @@ class GalleryBrowserItemDeletion {
   final Future<void> Function()? undo;
 }
 
+/// What deleting multiple items of a post did in a single batch.
+class BatchGalleryBrowserItemDeletion {
+  const BatchGalleryBrowserItemDeletion({
+    required this.ok,
+    this.cancelled = false,
+    this.succeededIndices = const {},
+    this.failedCount = 0,
+    this.message,
+    this.undo,
+  });
+
+  final bool ok;
+  final bool cancelled;
+  final Set<int> succeededIndices;
+  final int failedCount;
+  final String? message;
+  final Future<void> Function()? undo;
+}
+
 /// Locates the album asset behind one stored history row.
 typedef HistoryAssetLocator = Future<AssetEntity?> Function(HistoryFile file);
 
@@ -569,6 +588,7 @@ class GalleryBrowserPage extends StatefulWidget {
     this.onRedownload,
     this.onRedownloadItems,
     this.onDeleteItem,
+    this.onDeleteItems,
     this.onDeletePost,
     this.onReparse,
     this.showSave = false,
@@ -611,6 +631,12 @@ class GalleryBrowserPage extends StatefulWidget {
     GalleryBrowserItem item, {
     required bool deleteAlbumFiles,
   })? onDeleteItem;
+
+  /// Deletes multiple items of the post in a single batch.
+  final Future<BatchGalleryBrowserItemDeletion> Function(
+    List<GalleryBrowserItem> items, {
+    required bool deleteAlbumFiles,
+  })? onDeleteItems;
 
   /// Called when every remaining item of the post has been deleted and the user
   /// agrees to drop the post record as well.
@@ -759,7 +785,8 @@ class _GalleryBrowserPageState extends State<GalleryBrowserPage> {
   /// stays undoable and the system dialog for the album files is the same one.
   Future<void> _deleteTargets() async {
     final remove = widget.onDeleteItem;
-    if (_targets.isEmpty || remove == null || _busy) return;
+    final removeBatch = widget.onDeleteItems;
+    if (_targets.isEmpty || (remove == null && removeBatch == null) || _busy) return;
     // Remember where every item sits before the first one leaves, so an undo
     // can put each of them back exactly where it was.
     final items = [
@@ -768,84 +795,144 @@ class _GalleryBrowserPageState extends State<GalleryBrowserPage> {
     ];
     final title = items.length == 1
         ? '第 ${_position.position} 项'
-        : '已选的 ${items.length} 项';
+        : '${items.length} 项';
     final withFile = await _askDeleteMode(title);
     if (withFile == null || !mounted) return;
     setState(() => _busy = true);
-    final removed =
-        <({GalleryBrowserItem item, int at, GalleryBrowserItemDeletion result})>[];
-    var failed = 0;
+    final messenger = ScaffoldMessenger.of(context);
+
     try {
-      for (final entry in items) {
-        if (!mounted) break;
-        GalleryBrowserItemDeletion? result;
-        try {
-          result = await remove(
-            entry.item,
-            deleteAlbumFiles: withFile,
+      if (removeBatch != null) {
+        final result = await removeBatch(
+          items.map((e) => e.item).toList(),
+          deleteAlbumFiles: withFile,
+        );
+        if (result.cancelled) {
+          if (mounted) {
+            messenger.hideCurrentSnackBar();
+            messenger.showSnackBar(const SnackBar(content: Text('已取消删除')));
+          }
+          return;
+        }
+        if (!result.ok || result.succeededIndices.isEmpty) {
+          if (mounted) {
+            messenger.hideCurrentSnackBar();
+            messenger.showSnackBar(const SnackBar(content: Text('删除失败，请重试')));
+          }
+          return;
+        }
+
+        for (final index in result.succeededIndices) {
+          _removeItem(index);
+        }
+
+        if (mounted) {
+          setState(() {
+            _selected.removeWhere((idx) => result.succeededIndices.contains(idx));
+          });
+          widget.onSelectionChanged?.call(_selected);
+
+          messenger.hideCurrentSnackBar();
+          final String message;
+          if (result.failedCount > 0) {
+            message = '已删除 ${result.succeededIndices.length} 项，${result.failedCount} 项失败';
+          } else if (result.succeededIndices.length == 1) {
+            message = withFile ? '已删除这张，并删除相册文件' : '已删除这张';
+          } else {
+            message = '已删除 ${result.succeededIndices.length} 项';
+          }
+          messenger.showSnackBar(
+            SnackBar(
+              content: Text(message),
+              duration: const Duration(seconds: 4),
+              action: result.undo == null
+                  ? null
+                  : SnackBarAction(
+                      label: '撤销',
+                      onPressed: () async {
+                        await result.undo!();
+                      },
+                    ),
+            ),
           );
-        } catch (_) {
-          result = null;
         }
-        if (result == null || !result.ok) {
-          failed++;
-          continue;
+      } else if (remove != null) {
+        final removed =
+            <({GalleryBrowserItem item, int at, GalleryBrowserItemDeletion result})>[];
+        var failed = 0;
+        for (final entry in items) {
+          if (!mounted) break;
+          GalleryBrowserItemDeletion? result;
+          try {
+            result = await remove(
+              entry.item,
+              deleteAlbumFiles: withFile,
+            );
+          } catch (_) {
+            result = null;
+          }
+          if (result == null || !result.ok) {
+            failed++;
+            continue;
+          }
+          _removeItem(entry.item.index);
+          removed.add((item: entry.item, at: entry.at, result: result));
         }
-        _removeItem(entry.item.index);
-        removed.add((item: entry.item, at: entry.at, result: result));
+
+        if (!mounted) return;
+        setState(
+          () => _selected.removeWhere(
+            (index) => !_items.any((item) => item.index == index),
+          ),
+        );
+        widget.onSelectionChanged?.call(_selected);
+
+        messenger.hideCurrentSnackBar();
+        if (removed.isEmpty) {
+          messenger.showSnackBar(const SnackBar(content: Text('删除失败，请重试')));
+          return;
+        }
+        final undos = [
+          for (final entry in removed)
+            if (entry.result.undo != null) entry.result.undo!,
+        ];
+        final undoAll = undos.length == removed.length && undos.isNotEmpty
+            ? () async {
+                for (final undo in undos) {
+                  await undo();
+                }
+              }
+            : null;
+        final message = removed.length == 1
+            ? (removed.single.result.message ?? '已删除这张')
+            : (failed > 0 ? '已删除 ${removed.length} 项，$failed 项删除失败' : '已删除 ${removed.length} 项');
+        messenger.showSnackBar(
+          SnackBar(
+            content: Text(message),
+            duration: const Duration(seconds: 4),
+            action: undoAll == null
+                ? null
+                : SnackBarAction(
+                    label: '撤销',
+                    onPressed: () async {
+                      await undoAll();
+                      if (!mounted) return;
+                      for (final entry in removed) {
+                        _insertItem(entry.item, entry.at);
+                      }
+                    },
+                  ),
+          ),
+        );
       }
     } finally {
       if (mounted) setState(() => _busy = false);
     }
+
     if (!mounted) return;
-
-    // Whatever left the viewer cannot stay selected.
-    setState(
-      () => _selected.removeWhere(
-        (index) => !_items.any((item) => item.index == index),
-      ),
-    );
-    widget.onSelectionChanged?.call(_selected);
-
-    final messenger = ScaffoldMessenger.of(context);
-    messenger.hideCurrentSnackBar();
-    if (removed.isEmpty) {
-      messenger.showSnackBar(const SnackBar(content: Text('删除失败，请重试')));
-      return;
+    if (_items.isEmpty) {
+      Navigator.of(context).pop();
     }
-    final undos = [
-      for (final entry in removed)
-        if (entry.result.undo != null) entry.result.undo!,
-    ];
-    final undoAll = undos.length == removed.length && undos.isNotEmpty
-        ? () async {
-            for (final undo in undos) {
-              await undo();
-            }
-          }
-        : null;
-    final message = removed.length == 1
-        ? (removed.single.result.message ?? '已删除这张')
-        : (failed > 0 ? '已删除 ${removed.length} 项，$failed 项删除失败' : '已删除 ${removed.length} 项');
-    messenger.showSnackBar(
-      SnackBar(
-        content: Text(message),
-        duration: const Duration(seconds: 6),
-        action: undoAll == null
-            ? null
-            : SnackBarAction(
-                label: '撤销',
-                onPressed: () async {
-                  await undoAll();
-                  if (!mounted) return;
-                  for (final entry in removed) {
-                    _insertItem(entry.item, entry.at);
-                  }
-                },
-              ),
-      ),
-    );
-    if (_items.isEmpty) await _askDeletePost();
   }
 
   void _removeItem(int index) {
@@ -1520,7 +1607,8 @@ class _GalleryBrowserPageState extends State<GalleryBrowserPage> {
                               ? _redownloadFromBar
                               : null,
                           onDelete:
-                              widget.onDeleteItem != null &&
+                              (widget.onDeleteItem != null ||
+                                      widget.onDeleteItems != null) &&
                                   currentItem != null
                               ? _deleteTargets
                               : null,

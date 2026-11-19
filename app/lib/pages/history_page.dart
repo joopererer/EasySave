@@ -980,6 +980,15 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
                   item,
                   deleteAlbumFiles: deleteAlbumFiles,
                 ),
+            onDeleteItems: (items, {required bool deleteAlbumFiles}) =>
+                deleteBrowserItemsForRecord(
+                  record0,
+                  items,
+                  deleteAlbumFiles: deleteAlbumFiles,
+                  onChanged: () {
+                    if (mounted) unawaited(_reload());
+                  },
+                ),
             onDeletePost: () => _deleteWholeRecord(record0),
             onReparse: () {
               Navigator.of(context).pop();

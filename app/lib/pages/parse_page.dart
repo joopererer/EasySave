@@ -1289,6 +1289,13 @@ class ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
                   deleteAlbumFiles: deleteAlbumFiles,
                   onChanged: _reloadRecent,
                 ),
+            onDeleteItems: (items, {required bool deleteAlbumFiles}) =>
+                deleteBrowserItemsForRecord(
+                  record,
+                  items,
+                  deleteAlbumFiles: deleteAlbumFiles,
+                  onChanged: _reloadRecent,
+                ),
             onDeletePost: () => deleteRecordForGood(
               record,
               delete: (fresh) async {

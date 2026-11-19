@@ -190,6 +190,45 @@ Future<GalleryBrowserItemDeletion?> deleteBrowserItemForRecord(
   );
 }
 
+/// Delete multiple items from the open viewer in a single batch.
+Future<BatchGalleryBrowserItemDeletion> deleteBrowserItemsForRecord(
+  HistoryRecord record,
+  List<GalleryBrowserItem> items, {
+  required bool deleteAlbumFiles,
+  void Function()? onChanged,
+  Future<MediaDeleteOutcome> Function(List<MediaRef> media)? deleteMedia,
+}) async {
+  final fresh = await reloadRecord(record);
+  final indices = items.map((i) => i.index).toSet();
+  final outcome = await deleteHistoryItems(
+    fresh,
+    itemIndices: indices,
+    deleteAlbumFiles: deleteAlbumFiles,
+    deleteMedia: deleteMedia,
+  );
+  if (outcome.cancelled) {
+    return const BatchGalleryBrowserItemDeletion(ok: false, cancelled: true);
+  }
+  if (!outcome.ok) {
+    return const BatchGalleryBrowserItemDeletion(ok: false);
+  }
+  onChanged?.call();
+  final id = fresh.id;
+  return BatchGalleryBrowserItemDeletion(
+    ok: true,
+    succeededIndices: outcome.succeededIndices,
+    failedCount: outcome.failedIndices.length,
+    message: outcome.problem,
+    undo: deleteAlbumFiles || id == null
+        ? null
+        : () async {
+            final db = await HistoryDb.instance();
+            await undoHistoryItemDelete(db, id, outcome.before);
+            onChanged?.call();
+          },
+  );
+}
+
 /// Drop the whole record of a post whose every item was deleted in the viewer.
 Future<void> deleteRecordForGood(
   HistoryRecord record, {
