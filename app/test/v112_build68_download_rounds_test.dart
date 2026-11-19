@@ -41,6 +41,7 @@ void main() {
     DownloadManager.instance.historyWriterForTesting = (db, batch, rec) async {};
     DownloadManager.instance.tempRootForTesting = () async => tempDir;
     DownloadManager.instance.contentLengthProbeForTesting = (j, u) async => 100000000;
+    DownloadManager.instance.allRecordsForTesting = (_) async => [];
     DownloadManager.instance.resetInitForTesting();
     DownloadManager.instance.clearBatchesForTesting();
   });

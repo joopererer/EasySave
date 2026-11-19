@@ -87,6 +87,7 @@ void main() {
     manager.clearBatchesForTesting();
     DownloadManager.owner = DownloadBatch.sourceBackground;
     manager.prepareStartForTesting = () async {};
+    manager.allRecordsForTesting = (_) async => [];
     saveSucceeds = true;
     manager.enqueueForTesting = (_, job) async {
       // Since build 30 a failed post stays in history; only a canceled
@@ -139,6 +140,7 @@ void main() {
     manager.clearBatchesForTesting();
     manager.prepareStartForTesting = null;
     manager.enqueueForTesting = null;
+    manager.allRecordsForTesting = null;
     DownloadManager.owner = originalOwner;
     messenger.setMockMethodCallHandler(safChannel, null);
     HistoryDb.resetInstanceForTesting();

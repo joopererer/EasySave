@@ -95,6 +95,7 @@ void main() {
     manager.tempRootForTesting = () async => temp;
     LocalAutoBackup.resetThrottleForTest();
     manager.prepareStartForTesting = () async {};
+    manager.allRecordsForTesting = (_) async => [];
     logs.clear();
     debugPrint = (message, {wrapWidth}) => logs.add(message ?? '');
   });
@@ -114,6 +115,7 @@ void main() {
       ..finishTimeoutForTesting = null
       ..historyRetryDelay = const Duration(seconds: 30)
       ..tempRootForTesting = null
+      ..allRecordsForTesting = null
       ..reparseForTesting = null
       ..prepareStartForTesting = null;
     StorageGuard.freeBytesReaderForTesting = null;
