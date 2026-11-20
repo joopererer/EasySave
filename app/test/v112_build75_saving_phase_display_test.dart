@@ -112,5 +112,22 @@ void main() {
       expect(restored.isFinishing, isTrue);
       expect(restored.savingPhase, '写入来源信息');
     });
+
+    testWidgets('DownloadingOverlay displays percentage inside progress ring', (tester) async {
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: DownloadingOverlay(
+              progress: 0.65,
+            ),
+          ),
+        ),
+      );
+
+      // Percentage is rendered in the ring Stack
+      expect(find.text('65%'), findsOneWidget); // in progress ring
+      expect(find.text('下载中 65%'), findsOneWidget); // in label
+      expect(find.textContaining('65%'), findsNWidgets(2));
+    });
   });
 }

@@ -430,7 +430,9 @@ class DownloadingOverlay extends StatelessWidget {
       builder: (context, constraints) {
         final isNarrow = constraints.maxWidth < 130 || compact;
         final barHeight = compact ? 28.0 : 44.0;
-        final circleSize = compact ? 16.0 : 24.0;
+        final circleSize = compact ? 18.0 : 26.0;
+        final showPercent = !isStorageFull && !failed && !waitingForNetwork && !paused;
+        final percentText = '$pct%';
 
         Widget progressWidget;
         if (isStorageFull) {
@@ -442,11 +444,32 @@ class DownloadingOverlay extends StatelessWidget {
         } else if (paused) {
           progressWidget = Icon(Icons.pause_circle_outline, size: circleSize, color: Colors.white70);
         } else {
-          progressWidget = CircularProgressIndicator(
-            value: progress > 0 ? progress.clamp(0.0, 1.0) : null,
-            strokeWidth: compact ? 2.0 : 2.5,
-            color: Colors.white,
-            backgroundColor: Colors.white24,
+          progressWidget = Stack(
+            alignment: Alignment.center,
+            children: [
+              CircularProgressIndicator(
+                value: progress > 0 ? progress.clamp(0.0, 1.0) : null,
+                strokeWidth: compact ? 1.5 : 2.0,
+                color: Colors.white,
+                backgroundColor: Colors.white24,
+              ),
+              if (showPercent && progress > 0)
+                FittedBox(
+                  fit: BoxFit.scaleDown,
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 1.5),
+                    child: Text(
+                      percentText,
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontSize: compact ? 7.0 : 8.5,
+                        fontWeight: FontWeight.bold,
+                        height: 1.0,
+                      ),
+                    ),
+                  ),
+                ),
+            ],
           );
         }
 
@@ -491,14 +514,15 @@ class DownloadingOverlay extends StatelessWidget {
                             overflow: TextOverflow.ellipsis,
                             style: TextStyle(
                               color: Colors.white,
-                              fontSize: compact ? 10 : 12,
+                              fontSize: compact ? 9.0 : 10.5,
                               fontWeight: FontWeight.w600,
+                              letterSpacing: -0.3,
                             ),
                           ),
                         ),
                         if (!isNarrow) ...[
                           const SizedBox(width: 2),
-                          const Icon(Icons.chevron_right, size: 18, color: Colors.white54),
+                          const Icon(Icons.chevron_right, size: 14, color: Colors.white54),
                         ],
                       ],
                     ),
@@ -615,9 +639,9 @@ class _OverlayToggleButtonState extends State<_OverlayToggleButton> {
         ? '清理后继续'
         : (showPlay ? '继续下载' : (showRefresh ? '重试' : '暂停下载'));
 
-    final targetSize = widget.compact ? 24.0 : 44.0;
-    final iconContainerSize = widget.compact ? 22.0 : 32.0;
-    final iconSize = widget.compact ? 14.0 : 20.0;
+    final targetSize = widget.compact ? 24.0 : 38.0;
+    final iconContainerSize = widget.compact ? 22.0 : 30.0;
+    final iconSize = widget.compact ? 14.0 : 18.0;
 
     return GestureDetector(
       behavior: HitTestBehavior.opaque,

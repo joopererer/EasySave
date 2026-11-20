@@ -364,50 +364,55 @@ class _MediaDetailsSheet extends StatelessWidget {
         : '';
 
     return SafeArea(
+      top: false,
       child: Padding(
-        padding: const EdgeInsets.fromLTRB(20, 16, 20, 24),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                const Text(
-                  '媒体详情',
-                  style: TextStyle(
-                    color: Colors.white,
-                    fontSize: 18,
-                    fontWeight: FontWeight.bold,
+        padding: const EdgeInsets.fromLTRB(20, 16, 20, 32),
+        child: SingleChildScrollView(
+          physics: const BouncingScrollPhysics(),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  const Text(
+                    '媒体详情',
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 18,
+                      fontWeight: FontWeight.bold,
+                    ),
                   ),
-                ),
-                IconButton(
-                  icon: const Icon(Icons.close, color: Colors.white70),
-                  onPressed: () => Navigator.of(context).pop(),
-                ),
-              ],
-            ),
-            const Divider(color: Colors.white24, height: 16),
-            if (info.title != null && info.title!.isNotEmpty)
-              _buildRow(context, '标题', info.title!),
-            if (info.author != null && info.author!.isNotEmpty)
-              _buildRow(context, '作者', info.author!),
-            _buildRow(context, '类型', typeText),
-            if (resText.isNotEmpty)
-              _buildRow(context, '分辨率', resText),
-            if (info.format != null && info.format!.isNotEmpty)
-              _buildRow(context, '格式', info.format!.toUpperCase()),
-            if (sizeText.isNotEmpty)
-              _buildRow(context, '大小', sizeText),
-            if (durText.isNotEmpty)
-              _buildRow(context, '时长', durText),
-            if (info.filename != null && info.filename!.isNotEmpty)
-              _buildRow(context, '文件名', info.filename!),
-            if (info.path != null && info.path!.isNotEmpty)
-              _buildRow(context, '存储路径', info.path!),
-            if (info.url != null && info.url!.isNotEmpty)
-              _buildRow(context, '来源链接', info.url!),
-          ],
+                  IconButton(
+                    icon: const Icon(Icons.close, color: Colors.white70),
+                    onPressed: () => Navigator.of(context).pop(),
+                  ),
+                ],
+              ),
+              const Divider(color: Colors.white24, height: 16),
+              if (info.title != null && info.title!.isNotEmpty)
+                _buildRow(context, '标题', info.title!),
+              if (info.author != null && info.author!.isNotEmpty)
+                _buildRow(context, '作者', info.author!),
+              _buildRow(context, '类型', typeText),
+              if (resText.isNotEmpty)
+                _buildRow(context, '分辨率', resText),
+              if (info.format != null && info.format!.isNotEmpty)
+                _buildRow(context, '格式', info.format!.toUpperCase()),
+              if (sizeText.isNotEmpty)
+                _buildRow(context, '大小', sizeText),
+              if (durText.isNotEmpty)
+                _buildRow(context, '时长', durText),
+              if (info.filename != null && info.filename!.isNotEmpty)
+                _buildRow(context, '文件名', info.filename!),
+              if (info.path != null && info.path!.isNotEmpty)
+                _buildRow(context, '存储路径', info.path!),
+              if (info.url != null && info.url!.isNotEmpty)
+                _buildRow(context, '来源链接', info.url!),
+              const SizedBox(height: 12),
+            ],
+          ),
         ),
       ),
     );
@@ -1003,11 +1008,17 @@ class _GalleryBrowserPageState extends State<GalleryBrowserPage> {
   void _showMediaDetailsSheet(BuildContext context, MediaInfoData info) {
     showModalBottomSheet<void>(
       context: context,
+      isScrollControlled: true,
       backgroundColor: const Color(0xFF1E1E1E),
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
       ),
-      builder: (ctx) => _MediaDetailsSheet(info: info),
+      builder: (ctx) => ConstrainedBox(
+        constraints: BoxConstraints(
+          maxHeight: MediaQuery.of(ctx).size.height * 0.85,
+        ),
+        child: _MediaDetailsSheet(info: info),
+      ),
     );
   }
 
@@ -1946,8 +1957,9 @@ class _GalleryBrowserPageState extends State<GalleryBrowserPage> {
                             final summary = info.summaryText();
                             if (summary.isEmpty) return const SizedBox.shrink();
                             return Padding(
-                              padding: const EdgeInsets.only(bottom: 6),
-                              child: Center(
+                              padding: const EdgeInsets.only(left: 15, right: 15, bottom: 6),
+                              child: Align(
+                                alignment: Alignment.centerRight,
                                 child: FittedBox(
                                   fit: BoxFit.scaleDown,
                                   child: _infoCollapsed
