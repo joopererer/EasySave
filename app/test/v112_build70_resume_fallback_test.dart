@@ -200,8 +200,8 @@ void main() {
     });
   });
 
-  group('build 70: Rule 2h & 2i - Network switching & 3s stability timer', () {
-    test('network recovery waits 3s; network switch within 2s resets timer; resumes only after 3s stable', () async {
+  group('build 70 / 74: Rule 2h - Network switching observe (Build 74 A1)', () {
+    test('network recovery from offline triggers observe and recovery resume', () async {
       final dm = DownloadManager.instance;
       dm.attachNetworkListenerForTesting();
 
@@ -218,33 +218,17 @@ void main() {
       await Future<void>.delayed(const Duration(milliseconds: 50));
 
       var logs = DevLog.recentLines(100);
-      expect(logs.any((l) => l.contains('network_change from=none to=cellular action=wait_stable')), isTrue);
-      // Stability timer must be active
-      expect(dm.networkStabilityTimerForTesting, isNotNull);
+      expect(logs.any((l) => l.contains('network_change from=none to=cellular action=observe')), isTrue);
 
-      // 2 seconds later (within 3s), switches to Wi-Fi
+      // Switches to Wi-Fi while online: logs observe without interruption
       NetworkStatus.instance.setNetworkTypeForTesting('wifi');
       await Future<void>.delayed(const Duration(milliseconds: 50));
 
       logs = DevLog.recentLines(100);
-      expect(logs.any((l) => l.contains('network_change from=cellular to=wifi action=wait_stable')), isTrue);
-      expect(dm.networkStabilityTimerForTesting, isNotNull);
-
-      // Simulate stability timer firing
-      int enqueued = 0;
-      dm.enqueueForTesting = (b, j) async {
-        enqueued++;
-      };
-
-      dm.fireNetworkStabilityTimerForTesting();
-      await Future<void>.delayed(const Duration(milliseconds: 50));
-
-      logs = DevLog.recentLines(100);
-      expect(logs.any((l) => l.contains('network_change from=cellular to=wifi action=resume')), isTrue);
-      expect(enqueued, equals(1));
+      expect(logs.any((l) => l.contains('network_change from=cellular to=wifi action=observe')), isTrue);
     });
 
-    test('mid-download network switch triggers immediate auto-resume from breakpoint without consuming 5-retry limit', () async {
+    test('mid-download network switch observes without interrupting; failure triggers standard auto-resume', () async {
       final dm = DownloadManager.instance;
       dm.attachNetworkListenerForTesting();
 
@@ -252,22 +236,24 @@ void main() {
       batch.jobs[0].state = JobState.active;
       dm.setBatchForTesting(batch);
 
-      // First establish cellular connection as stable
-      NetworkStatus.instance.setOnlineForTesting(true);
-      NetworkStatus.instance.setNetworkTypeForTesting('cellular');
-      dm.fireNetworkStabilityTimerForTesting();
+      // First establish cellular connection
+      NetworkStatus.instance.setStatusForTesting(online: true, type: 'cellular');
       await Future<void>.delayed(const Duration(milliseconds: 20));
 
-      // Mid-download switch from cellular to wifi
+      // Mid-download switch from cellular to wifi: observe without interrupt
       NetworkStatus.instance.setNetworkTypeForTesting('wifi');
       await Future<void>.delayed(const Duration(milliseconds: 20));
+
+      var logs = DevLog.recentLines(100);
+      expect(logs.any((l) => l.contains('network_change from=cellular to=wifi action=observe')), isTrue);
+      expect(batch.jobs[0].state, equals(JobState.active));
 
       int enqueued = 0;
       dm.enqueueForTesting = (b, j) async {
         enqueued++;
       };
 
-      // Connection drops as result of network change
+      // Connection drops later: triggers standard auto-resume
       final update = TaskStatusUpdate(
         DownloadTask(
           taskId: batch.jobs[0].currentTaskId!,
@@ -281,11 +267,9 @@ void main() {
 
       await dm.taskFailureForTesting(batch, batch.jobs[0], update);
 
-      final logs = DevLog.recentLines(100);
-      expect(logs.any((l) => l.contains('auto_resume n=0/5 from_bytes=25000000 reason=network_switch')), isTrue);
-      expect(enqueued, equals(1));
-      // Does not consume the 5-retry limit
-      expect(dm.autoResumeRetriesForTesting[batch.jobs[0].key] ?? 0, equals(0));
+      expect(batch.jobs[0].state, equals(JobState.paused));
+      expect(batch.jobs[0].error, equals('自动重试 1/5'));
+      expect(dm.autoResumeTimersForTesting.containsKey(batch.jobs[0].key), isTrue);
     });
   });
 }

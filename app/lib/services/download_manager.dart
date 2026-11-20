@@ -415,11 +415,12 @@ Duration finishTimeoutFor(int? bytes) =>
 
 /// Short reason shown in history next to "下载失败".
 String? shortFailureReason(DownloadJob job) {
-  if (job.state != JobState.failed) return null;
+  if (job.state != JobState.failed && job.state != JobState.paused) return null;
   final error = job.error ?? '';
   if (job.errorCode == storageFullCode || isStorageFullError(error)) {
     return '存储空间不足';
   }
+  if (job.state != JobState.failed) return null;
   if (job.errorCode == simulatedFailureCode) return '模拟失败';
   if (job.errorCode == networkFailureCode) return '网络不可用';
   final status = job.lastStatusCode ??
@@ -592,6 +593,10 @@ class DownloadJob {
   /// Number of auto-resume retries attempted so far (0..5).
   int autoResumeRetry = 0;
 
+  /// Task IDs of previous rounds for this job (v1.12 build 74).
+  /// Used to ensure only one native task is active at any time.
+  List<String> previousTaskIds = <String>[];
+
   bool get isTerminal =>
       state == JobState.done ||
       state == JobState.failed ||
@@ -644,6 +649,7 @@ class DownloadJob {
     if (userCancelRequested) 'userCancelRequested': true,
     if (userPaused) 'userPaused': true,
     if (autoResumeRetry > 0) 'autoResumeRetry': autoResumeRetry,
+    if (previousTaskIds.isNotEmpty) 'previousTaskIds': previousTaskIds,
     if (provenanceItemCount != null) 'provenanceItemCount': provenanceItemCount,
     if (provenanceCapturedBy != null)
       'provenanceCapturedBy': provenanceCapturedBy,
@@ -705,6 +711,7 @@ class DownloadJob {
     job.userCancelRequested = map['userCancelRequested'] as bool? ?? false;
     job.userPaused = map['userPaused'] as bool? ?? false;
     job.autoResumeRetry = (map['autoResumeRetry'] as num?)?.toInt() ?? 0;
+    job.previousTaskIds = (map['previousTaskIds'] as List?)?.cast<String>().toList() ?? <String>[];
     job.lastProgressAt = (map['lastProgressAt'] as num?)?.toInt() ?? 0;
     return job;
   }
@@ -841,10 +848,15 @@ class DownloadBatch {
     return open.isNotEmpty && open.every((j) => j.userPaused);
   }
 
-  /// Readable status text for interrupted/auto-retrying batches.
+  /// Readable status text for interrupted/auto-retrying/storage-full batches.
   String? get statusText {
     final open = jobs.where((j) => !j.isTerminal).toList();
     if (open.isEmpty) return null;
+    for (final j in open) {
+      if (j.errorCode == storageFullCode || (j.error != null && j.error!.contains('空间不足'))) {
+        return j.error;
+      }
+    }
     for (final j in open) {
       if (j.userPaused) return '已暂停';
       if (j.error != null && j.error!.isNotEmpty) return j.error;
@@ -1509,7 +1521,6 @@ class DownloadManager extends ChangeNotifier {
     }
     _activeQueryRetries.clear();
     _activeQueryTimeouts.clear();
-    _networkSwitchedMidDownload.clear();
     _networkStabilityTimer?.cancel();
     _networkStabilityTimer = null;
     _lastNetworkType = NetworkStatus.instance.online
@@ -1635,7 +1646,6 @@ class DownloadManager extends ChangeNotifier {
 
   final Map<String, int> _autoResumeRetries = {};
   final Map<String, Timer> _autoResumeTimers = {};
-  final Set<String> _networkSwitchedMidDownload = {};
   String _lastNetworkType = 'unknown';
   String _networkStabilityFromType = 'none';
   Timer? _networkStabilityTimer;
@@ -1679,19 +1689,22 @@ class DownloadManager extends ChangeNotifier {
     if (oldType == newType) return;
     _lastNetworkType = newType;
 
+    unawaited(DevLog.write(
+      'V16DL',
+      'network_change from=$oldType to=$newType action=observe',
+    ));
+
+    // A1: Running tasks must NOT be interrupted when network changes.
+    // Tasks will fail naturally if connection is broken.
     if (!isOnline || newType == 'none') {
       _networkStabilityTimer?.cancel();
       _networkStabilityTimer = null;
-      unawaited(DevLog.write(
-        'V16DL',
-        'network_change from=$oldType to=$newType action=disconnect',
-      ));
       for (final batch in _batches.values) {
         if (batch.source != DownloadManager.owner) continue;
         for (final job in batch.jobs) {
           if (!job.isTerminal && !job.userPaused) {
-            job.error = '下载中断 · 等待网络';
-            if (job.state == JobState.active || job.state == JobState.queued) {
+            if (job.state == JobState.queued) {
+              job.error = '下载中断 · 等待网络';
               job.state = JobState.paused;
             }
           }
@@ -1701,64 +1714,17 @@ class DownloadManager extends ChangeNotifier {
       return;
     }
 
-    // 2h: When network recovers from offline or switches type, wait ~3s for stability
+    // 2h: When network recovers from offline, wait ~3s for stability then resume paused jobs
     if (oldType == 'none') {
       unawaited(_resumeWaitingJobs());
       _networkStabilityFromType = oldType;
-      unawaited(DevLog.write(
-        'V16DL',
-        'network_change from=$oldType to=$newType action=wait_stable',
-      ));
       _networkStabilityTimer?.cancel();
       _networkStabilityTimer = Timer(const Duration(seconds: 3), () {
         _networkStabilityTimer = null;
         if (!NetworkStatus.instance.online) return;
-        final stableType = NetworkStatus.instance.networkType;
-        unawaited(DevLog.write(
-          'V16DL',
-          'network_change from=$_networkStabilityFromType to=$stableType action=resume',
-        ));
         _triggerNetworkRecoveryResume();
       });
       return;
-    }
-
-    // If stability timer is already running and network type jumped again (e.g. 4G -> Wi-Fi after 2s)
-    if (_networkStabilityTimer != null) {
-      _networkStabilityFromType = oldType;
-      unawaited(DevLog.write(
-        'V16DL',
-        'network_change from=$oldType to=$newType action=wait_stable',
-      ));
-      _networkStabilityTimer?.cancel();
-      _networkStabilityTimer = Timer(const Duration(seconds: 3), () {
-        _networkStabilityTimer = null;
-        if (!NetworkStatus.instance.online) return;
-        final stableType = NetworkStatus.instance.networkType;
-        unawaited(DevLog.write(
-          'V16DL',
-          'network_change from=$_networkStabilityFromType to=$stableType action=resume',
-        ));
-        _triggerNetworkRecoveryResume();
-      });
-      return;
-    }
-
-    // Mid-download network switch (e.g. cellular -> wifi while already downloading):
-    // allow current connection to abort and immediately auto-resume from breakpoint (does not count towards 5-retry limit)
-    if (oldType != 'none' && newType != 'none' && oldType != newType) {
-      unawaited(DevLog.write(
-        'V16DL',
-        'network_change from=$oldType to=$newType action=resume',
-      ));
-      for (final batch in _batches.values) {
-        if (batch.source != DownloadManager.owner) continue;
-        for (final job in batch.jobs) {
-          if (job.state == JobState.active) {
-            _networkSwitchedMidDownload.add(job.key);
-          }
-        }
-      }
     }
   }
 
@@ -2586,6 +2552,74 @@ class DownloadManager extends ChangeNotifier {
     return MediaRequestPolicy(site);
   }
 
+  @visibleForTesting
+  static Duration roundWaitTimeout = const Duration(seconds: 10);
+  @visibleForTesting
+  static Duration roundWaitPollInterval = const Duration(milliseconds: 100);
+
+  bool _isTerminalStatus(TaskStatus status) {
+    return status == TaskStatus.complete ||
+        status == TaskStatus.failed ||
+        status == TaskStatus.canceled ||
+        status == TaskStatus.notFound;
+  }
+
+  Future<TaskStatus> _queryTaskStatus(String taskId) async {
+    try {
+      if (recordForIdForTesting != null) {
+        final r = await recordForIdForTesting!(taskId);
+        return r?.status ?? TaskStatus.notFound;
+      }
+      final record = await FileDownloader().database.recordForId(taskId).timeout(
+        const Duration(milliseconds: 500),
+        onTimeout: () => null,
+      );
+      return record?.status ?? TaskStatus.notFound;
+    } catch (_) {
+      return TaskStatus.notFound;
+    }
+  }
+
+  Future<bool> _ensureOldRoundsTerminal(DownloadBatch batch, DownloadJob job) async {
+    final oldTaskIds = <String>{...job.previousTaskIds};
+    if (job.currentTaskId != null) {
+      oldTaskIds.add(job.currentTaskId!);
+    }
+    if (oldTaskIds.isEmpty) return true;
+
+    for (final oldId in oldTaskIds) {
+      final status = await _queryTaskStatus(oldId);
+      if (!_isTerminalStatus(status)) {
+        unawaited(DevLog.write('V16DL', 'round_wait old=$oldId state=${status.name}'));
+        await _cancelTaskWithId(oldId, source: 'round_preempt');
+
+        final stopwatch = Stopwatch()..start();
+        bool reachedTerminal = false;
+        while (stopwatch.elapsed < roundWaitTimeout) {
+          if (job.saved || job.state == JobState.done) {
+            return false;
+          }
+          await Future<void>.delayed(roundWaitPollInterval);
+          final s = await _queryTaskStatus(oldId);
+          if (_isTerminalStatus(s)) {
+            reachedTerminal = true;
+            break;
+          }
+        }
+        if (!reachedTerminal) {
+          unawaited(DevLog.write('V16DL', 'round_blocked old=$oldId'));
+          job.state = JobState.paused;
+          job.userPaused = false;
+          job.error = '已中断，点继续';
+          await _persist(batch);
+          notifyListeners();
+          return false;
+        }
+      }
+    }
+    return true;
+  }
+
   final _enqueuePending = <String>{};
   Future<void> _enqueueAttempt(DownloadBatch batch, DownloadJob job, {String source = 'unknown'}) async {
     if (job.isFinishing || _finishing.containsKey(job.key)) {
@@ -2660,6 +2694,11 @@ class DownloadManager extends ChangeNotifier {
     }
     if ((await _reserve(batch, [job])).isEmpty) throw AlreadyDownloading();
     if (await _storageBlocked(batch, job)) return;
+    if (!await _ensureOldRoundsTerminal(batch, job)) return;
+    final oldTaskId = job.currentTaskId;
+    if (oldTaskId != null && !job.previousTaskIds.contains(oldTaskId)) {
+      job.previousTaskIds.add(oldTaskId);
+    }
     if (enqueueForTesting != null) {
       await enqueueForTesting!(batch, job);
       return;
@@ -2682,7 +2721,6 @@ class DownloadManager extends ChangeNotifier {
     job.attempts++;
     job.round++;
     final url = authorized.uri.toString();
-    final oldTaskId = job.currentTaskId;
     final taskId = isResumable ? '${job.key}-r${job.round}' : '${job.key}-r${job.round}-try${job.attempts}';
     job.currentTaskId = taskId;
     job.state = job.attempts == 1 ? JobState.queued : JobState.active;
@@ -3030,7 +3068,7 @@ class DownloadManager extends ChangeNotifier {
         'result=${required != null ? storageFullCode : known ? 'ok' : 'unknown'}'
         '${required != null || known ? '' : ' reason=${reason ?? 'probe_failed'}'}');
     if (required == null) return false;
-    await _failForStorage(batch, job, required);
+    await _failForStorage(batch, job, required, free: free);
     return true;
   }
 
@@ -3104,12 +3142,25 @@ class DownloadManager extends ChangeNotifier {
   Future<void> _failForStorage(
     DownloadBatch batch,
     DownloadJob job,
-    int? required,
-  ) async {
+    int? required, {
+    int? free,
+  }) async {
     // 2d: Storage shortage enters paused state; do NOT delete partial resume data or call terminal
     job.state = JobState.paused;
+    job.userPaused = false;
     job.errorCode = storageFullCode;
-    job.error = '空间不足';
+    final freeBytes = free ?? await StorageGuard.freeBytes();
+    final needBytes = required ??
+        (job.expectedBytes != null
+            ? requiredBytesForDownload(job.expectedBytes!, job.resumeStartByte ?? 0)
+            : null);
+    if (needBytes != null && freeBytes != null) {
+      final reqStr = (needBytes / (1024 * 1024 * 1024)).toStringAsFixed(2);
+      final freeStr = (freeBytes / (1024 * 1024 * 1024)).toStringAsFixed(2);
+      job.error = '空间不足 · 需 ${reqStr}GB，可用 ${freeStr}GB';
+    } else {
+      job.error = '空间不足';
+    }
     await _persist(batch);
     notifyListeners();
   }
@@ -3221,14 +3272,22 @@ class DownloadManager extends ChangeNotifier {
     var files = 0;
     var bytes = 0;
     try {
+      final activeBatchIds = <String>{};
       final activeJobKeys = <String>{};
       final activeTempPaths = <String>{};
-      final activeBatchDirs = <String>{};
+      final activeJobSubdirs = <String>{};
       for (final batch in _batches.values) {
         if (!batch.isTerminal) {
-          activeBatchDirs.add(downloadTempDirectory(batch.batchId, ''));
+          activeBatchIds.add(batch.batchId);
+          activeBatchIds.add(Uri.encodeComponent(batch.batchId));
           for (final job in batch.jobs) {
             activeJobKeys.add(job.key);
+            activeJobSubdirs.add(job.key);
+            activeJobSubdirs.add(Uri.encodeComponent(job.key));
+            if (job.currentTaskId != null) {
+              activeJobSubdirs.add(job.currentTaskId!);
+              activeJobSubdirs.add(Uri.encodeComponent(job.currentTaskId!));
+            }
             if (job.resumeTempPath != null) activeTempPaths.add(job.resumeTempPath!);
           }
         }
@@ -3253,6 +3312,68 @@ class DownloadManager extends ChangeNotifier {
                   } catch (_) {}
                 }
               }
+            }
+          }
+        }
+      } catch (_) {}
+
+      // 2. Sweep easysave/<batchId>/<jobKey> unclaimed directories and files
+      try {
+        final easysaveDir = Directory('${root.path}/easysave');
+        if (await easysaveDir.exists()) {
+          await for (final batchEntity in easysaveDir.list()) {
+            if (batchEntity is Directory) {
+              final encBatchId = batchEntity.uri.pathSegments.lastWhere((s) => s.isNotEmpty, orElse: () => '');
+              final batchId = Uri.decodeComponent(encBatchId);
+              if (!activeBatchIds.contains(encBatchId) && !activeBatchIds.contains(batchId)) {
+                await for (final child in batchEntity.list(recursive: true)) {
+                  if (child is File) {
+                    bytes += await child.length();
+                    files++;
+                  }
+                }
+                try {
+                  await batchEntity.delete(recursive: true);
+                } catch (_) {}
+              } else {
+                await for (final jobEntity in batchEntity.list()) {
+                  if (jobEntity is Directory) {
+                    final encJobKey = jobEntity.uri.pathSegments.lastWhere((s) => s.isNotEmpty, orElse: () => '');
+                    final jobKey = Uri.decodeComponent(encJobKey);
+                    if (!activeJobSubdirs.contains(encJobKey) && !activeJobSubdirs.contains(jobKey)) {
+                      await for (final child in jobEntity.list(recursive: true)) {
+                        if (child is File) {
+                          bytes += await child.length();
+                          files++;
+                        }
+                      }
+                      try {
+                        await jobEntity.delete(recursive: true);
+                      } catch (_) {}
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      } catch (_) {}
+
+      // 3. Sweep orphaned easysave_dl_* directories
+      try {
+        await for (final entity in root.list()) {
+          if (entity is Directory) {
+            final dirName = entity.uri.pathSegments.lastWhere((s) => s.isNotEmpty, orElse: () => '');
+            if (dirName.startsWith('easysave_dl_')) {
+              await for (final child in entity.list(recursive: true)) {
+                if (child is File) {
+                  bytes += await child.length();
+                  files++;
+                }
+              }
+              try {
+                await entity.delete(recursive: true);
+              } catch (_) {}
             }
           }
         }
@@ -3427,6 +3548,64 @@ class DownloadManager extends ChangeNotifier {
         : requiredBytesForDownload(job.expectedBytes!));
   }
 
+  Future<void> _handleStaleComplete(
+    DownloadBatch batch,
+    DownloadJob job,
+    Task task,
+  ) async {
+    if (job.saved || job.state == JobState.done) {
+      String? filePath;
+      try {
+        filePath = await task.filePath();
+      } catch (_) {}
+      final file = filePath != null ? File(filePath) : null;
+      try {
+        if (file != null && file.existsSync()) file.deleteSync();
+      } catch (_) {}
+      unawaited(DevLog.write('V16DL', 'stale_complete_discarded taskId=${task.taskId}'));
+      return;
+    }
+
+    String? filePath;
+    try {
+      filePath = await task.filePath();
+    } catch (_) {}
+    final file = filePath != null ? File(filePath) : null;
+    bool valid = false;
+    if (file != null && file.existsSync()) {
+      final len = file.lengthSync();
+      final expected = job.expectedBytes;
+      final sizeMatch = (expected != null && expected > 0) ? (len == expected) : (len > 0);
+      if (sizeMatch) {
+        final content = await _contentOf(filePath!);
+        final verdict = contentVerdictFor(
+          isImage: job.isImage,
+          attempts: job.attempts,
+          candidateCount: job.urls.length,
+          content: content,
+        );
+        if (verdict == ContentVerdict.accept) {
+          valid = true;
+        }
+      }
+    }
+    if (valid) {
+      unawaited(DevLog.write('V16DL', 'adopt_stale_complete taskId=${task.taskId}'));
+      if (job.currentTaskId != null && job.currentTaskId != task.taskId) {
+        unawaited(_cancelTaskWithId(job.currentTaskId!, source: 'adopt_stale_complete'));
+      }
+      job.currentTaskId = task.taskId;
+      _inFlightResumes.remove(job.key);
+      job.downloadCompleteAt ??= DateTime.now().millisecondsSinceEpoch;
+      unawaited(_finishFile(batch, job, task));
+    } else {
+      try {
+        if (file != null && file.existsSync()) file.deleteSync();
+      } catch (_) {}
+      unawaited(DevLog.write('V16DL', 'stale_complete_discarded taskId=${task.taskId}'));
+    }
+  }
+
   void _onUpdate(TaskUpdate update) {
     final task = update.task;
     final batch = _batches[task.group];
@@ -3454,7 +3633,9 @@ class DownloadManager extends ChangeNotifier {
     if (job == null) return;
     final taskRound = parseTaskRound(task.taskId);
     bool isStale = false;
-    if (taskRound != null) {
+    if (job.previousTaskIds.contains(task.taskId) && task.taskId != job.currentTaskId) {
+      isStale = true;
+    } else if (taskRound != null) {
       if (job.round > 0 && taskRound < job.round) {
         isStale = true;
       } else {
@@ -3473,6 +3654,21 @@ class DownloadManager extends ChangeNotifier {
           ? update.status.name
           : (update is TaskProgressUpdate ? 'progress' : 'unknown');
       DevLog.write('V16DL', 'stale_update taskId=${task.taskId} status=$statusName');
+
+      if (update is TaskProgressUpdate ||
+          (update is TaskStatusUpdate &&
+              (update.status == TaskStatus.running ||
+                  update.status == TaskStatus.enqueued))) {
+        unawaited(DevLog.write('V16DL', 'zombie_task taskId=${task.taskId}'));
+        unawaited(_cancelTaskWithId(task.taskId, source: 'zombie_cancel'));
+        return;
+      }
+
+      if (update is TaskStatusUpdate && update.status == TaskStatus.complete) {
+        unawaited(_handleStaleComplete(batch, job, task));
+        return;
+      }
+
       return;
     }
     // A paused job has no live task; a late update of the cancelled one must
@@ -4743,22 +4939,6 @@ class DownloadManager extends ChangeNotifier {
       final lastFailReason = cause.isNotEmpty
           ? cause
           : (_transferReason(update).isNotEmpty ? _transferReason(update) : update.status.name);
-
-      // Check 2h: Network type change during download allows immediate auto-retry from breakpoint
-      // (does not count towards 5-retry limit)
-      final midDownloadSwitch = _networkSwitchedMidDownload.remove(job.key) == true;
-      if (midDownloadSwitch) {
-        unawaited(DevLog.write(
-          'V16DL',
-          'auto_resume n=0/5 from_bytes=$partialBytes reason=network_switch',
-        ));
-        job.state = JobState.queued;
-        job.error = null;
-        await _persist(batch);
-        notifyListeners();
-        await _enqueueAttempt(batch, job, source: 'network_switch');
-        return;
-      }
 
       final settings = await AppSettings.load();
       if (settings.manualResumeOnlyOnDisconnect) {
@@ -6037,6 +6217,9 @@ class DownloadManager extends ChangeNotifier {
 
   @visibleForTesting
   Future<void> enqueueAttemptForTesting(DownloadBatch batch, DownloadJob job, {String source = 'testing'}) => _enqueueAttempt(batch, job, source: source);
+
+  @visibleForTesting
+  void onNetworkChangedForTesting() => _onNetworkChanged();
 
   /// Returns true when the batch snapshot changed.
   Future<bool> _reconcileBatch(DownloadBatch batch) async {
