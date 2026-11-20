@@ -363,8 +363,10 @@ class HostService : Service() {
         unmountSelectPanel()
         try {
             channel?.setMethodCallHandler(null)
-            engine?.let { SharedPreviewBridge.detach(it.dartExecutor.binaryMessenger) }
-            NetworkStatusChannel.detach()
+            engine?.let {
+                SharedPreviewBridge.detach(it.dartExecutor.binaryMessenger)
+                NetworkStatusChannel.detach(it.dartExecutor.binaryMessenger)
+            } ?: NetworkStatusChannel.detach()
             engine?.destroy()
         } catch (_: Exception) {
         }

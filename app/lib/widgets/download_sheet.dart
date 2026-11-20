@@ -200,7 +200,7 @@ class _DownloadSheetState extends State<DownloadSheet> {
                       Expanded(
                         child: OutlinedButton(
                           onPressed: () {
-                            DownloadManager.instance.cancelBatch(batch);
+                            DownloadManager.instance.cancelBatch(batch, source: 'sheet');
                             Navigator.of(context).pop();
                           },
                           child: const Text('取消'),

@@ -581,6 +581,17 @@ class DownloadJob {
   /// Current saving sub-phase during finishing: '写入来源信息' or '复制到相册'.
   String? savingPhase;
 
+  /// Whether user explicitly requested cancellation (v1.12 build 73).
+  /// Internal cancellation (native reset, watchdog, duplicate enqueue) leaves
+  /// this false so temporary files and resume data are never deleted.
+  bool userCancelRequested = false;
+
+  /// Whether user manually paused the download (v1.12 build 73).
+  bool userPaused = false;
+
+  /// Number of auto-resume retries attempted so far (0..5).
+  int autoResumeRetry = 0;
+
   bool get isTerminal =>
       state == JobState.done ||
       state == JobState.failed ||
@@ -630,6 +641,9 @@ class DownloadJob {
     if (resumeEtag != null) 'resumeEtag': resumeEtag,
     if (isFinishing) 'isFinishing': true,
     if (savingPhase != null) 'savingPhase': savingPhase,
+    if (userCancelRequested) 'userCancelRequested': true,
+    if (userPaused) 'userPaused': true,
+    if (autoResumeRetry > 0) 'autoResumeRetry': autoResumeRetry,
     if (provenanceItemCount != null) 'provenanceItemCount': provenanceItemCount,
     if (provenanceCapturedBy != null)
       'provenanceCapturedBy': provenanceCapturedBy,
@@ -688,6 +702,9 @@ class DownloadJob {
     job.provenanceCapturedBy = map['provenanceCapturedBy'] as String?;
     job.isFinishing = map['isFinishing'] as bool? ?? false;
     job.savingPhase = map['savingPhase'] as String?;
+    job.userCancelRequested = map['userCancelRequested'] as bool? ?? false;
+    job.userPaused = map['userPaused'] as bool? ?? false;
+    job.autoResumeRetry = (map['autoResumeRetry'] as num?)?.toInt() ?? 0;
     job.lastProgressAt = (map['lastProgressAt'] as num?)?.toInt() ?? 0;
     return job;
   }
@@ -816,6 +833,23 @@ class DownloadBatch {
   bool get isPaused {
     final open = jobs.where((j) => !j.isTerminal);
     return open.isNotEmpty && open.every((j) => j.state == JobState.paused);
+  }
+
+  /// Whether the batch is paused by user action (vs internal network interrupt).
+  bool get isUserPaused {
+    final open = jobs.where((j) => !j.isTerminal);
+    return open.isNotEmpty && open.every((j) => j.userPaused);
+  }
+
+  /// Readable status text for interrupted/auto-retrying batches.
+  String? get statusText {
+    final open = jobs.where((j) => !j.isTerminal).toList();
+    if (open.isEmpty) return null;
+    for (final j in open) {
+      if (j.userPaused) return '已暂停';
+      if (j.error != null && j.error!.isNotEmpty) return j.error;
+    }
+    return null;
   }
 
   int get doneCount => jobs.where((j) => j.state == JobState.done).length;
@@ -1345,6 +1379,7 @@ class DownloadManager extends ChangeNotifier {
   void resetInitForTesting() {
     _ready = false;
     _reconcileFuture = null;
+    _inFlightResumes.clear();
   }
 
   /// Notifier triggered whenever a batch completes with at least one succeeded item.
@@ -1481,6 +1516,7 @@ class DownloadManager extends ChangeNotifier {
         ? NetworkStatus.instance.networkType
         : 'none';
     _networkWaits.clear();
+    _inFlightResumes.clear();
     _batches.clear();
     notifyListeners();
   }
@@ -1646,6 +1682,22 @@ class DownloadManager extends ChangeNotifier {
     if (!isOnline || newType == 'none') {
       _networkStabilityTimer?.cancel();
       _networkStabilityTimer = null;
+      unawaited(DevLog.write(
+        'V16DL',
+        'network_change from=$oldType to=$newType action=disconnect',
+      ));
+      for (final batch in _batches.values) {
+        if (batch.source != DownloadManager.owner) continue;
+        for (final job in batch.jobs) {
+          if (!job.isTerminal && !job.userPaused) {
+            job.error = '下载中断 · 等待网络';
+            if (job.state == JobState.active || job.state == JobState.queued) {
+              job.state = JobState.paused;
+            }
+          }
+        }
+      }
+      notifyListeners();
       return;
     }
 
@@ -1710,15 +1762,28 @@ class DownloadManager extends ChangeNotifier {
     }
   }
 
-  void _triggerNetworkRecoveryResume() {
+  void _triggerNetworkRecoveryResume() async {
+    final settings = await AppSettings.load();
+    if (settings.manualResumeOnlyOnDisconnect) return;
     for (final batch in _batches.values.toList()) {
       if (batch.source != DownloadManager.owner) continue;
       for (final job in batch.jobs.toList()) {
         if (job.state == JobState.paused && (job.resumeStartByte ?? 0) > 0) {
+          if (job.userPaused) continue;
+          if (_isResumeInFlight(job)) {
+            unawaited(DevLog.write(
+              'V16DL',
+              'resume_skipped reason=in_flight source=network_recovery',
+            ));
+            continue;
+          }
           final retries = _autoResumeRetries[job.key] ?? 0;
           if (retries < 5) {
+            _autoResumeTimers[job.key]?.cancel();
+            _autoResumeTimers.remove(job.key);
             final nextRetry = retries + 1;
             _autoResumeRetries[job.key] = nextRetry;
+            job.autoResumeRetry = nextRetry;
             int actualStartByte = job.resumeStartByte ?? 0;
             if (job.resumeTempPath != null) {
               try {
@@ -1732,8 +1797,10 @@ class DownloadManager extends ChangeNotifier {
               'auto_resume n=$nextRetry/5 from_bytes=$actualStartByte reason=network_recovered',
             ));
             job.state = JobState.queued;
-            job.error = null;
+            job.error = '自动重试 $nextRetry/5';
             unawaited(_enqueueAttempt(batch, job, source: 'network_recovered'));
+          } else {
+            job.error = '已中断，点继续';
           }
         }
       }
@@ -1937,10 +2004,15 @@ class DownloadManager extends ChangeNotifier {
             DevLog.write('V16DL', 'watchdog native=TaskStatus.complete -> StalledAction.finishFile watchdog_delay_ms=$delayMs');
             await _finishFile(batch, job, record!.task);
           case StalledAction.retry:
+            if (_isResumeInFlight(job)) {
+              unawaited(DevLog.write(
+                'V16DL',
+                'resume_skipped reason=in_flight source=watchdog',
+              ));
+              break;
+            }
             if (taskId != null) {
-              try {
-                await FileDownloader().cancelTaskWithId(taskId);
-              } catch (_) {}
+              await _cancelTaskWithId(taskId, source: 'watchdog');
             }
             try {
               await _enqueueAttempt(batch, job, source: 'watchdog');
@@ -2105,7 +2177,11 @@ class DownloadManager extends ChangeNotifier {
       await hook(resumeData);
       return;
     }
-    await FileDownloader().setResumeData(resumeData);
+    try {
+      await FileDownloader()
+          .setResumeData(resumeData)
+          .timeout(const Duration(milliseconds: 500), onTimeout: () {});
+    } catch (_) {}
   }
 
   Future<void> _removeResumeData(String taskId) async {
@@ -2131,6 +2207,8 @@ class DownloadManager extends ChangeNotifier {
   Future<Task?> Function(String taskId)? taskForIdForTesting;
   @visibleForTesting
   Future<bool> Function(DownloadTask task)? pauseForTesting;
+  @visibleForTesting
+  Future<void> Function(String taskId)? cancelTaskForTesting;
 
   Future<Task?> _taskForId(String taskId) async {
     final hook = taskForIdForTesting;
@@ -2145,7 +2223,8 @@ class DownloadManager extends ChangeNotifier {
     }
   }
 
-  Future<bool> _pauseTask(DownloadTask task) async {
+  Future<bool> _pauseTask(DownloadTask task, {String source = 'pause'}) async {
+    unawaited(DevLog.write('V16DL', 'cancel_call taskId=${task.taskId} source=$source'));
     final hook = pauseForTesting;
     if (hook != null) return await hook(task);
     try {
@@ -2156,6 +2235,41 @@ class DownloadManager extends ChangeNotifier {
     } catch (_) {
       return false;
     }
+  }
+
+  Future<void> _cancelTaskWithId(String taskId, {required String source}) async {
+    unawaited(DevLog.write('V16DL', 'cancel_call taskId=$taskId source=$source'));
+    final hook = cancelTaskForTesting;
+    if (hook != null) {
+      await hook(taskId);
+      return;
+    }
+    try {
+      await FileDownloader().cancelTaskWithId(taskId);
+    } catch (_) {}
+  }
+
+  Future<void> _cancelTasksWithIds(List<String> taskIds, {required String source}) async {
+    for (final id in taskIds) {
+      unawaited(DevLog.write('V16DL', 'cancel_call taskId=$id source=$source'));
+    }
+    final hook = cancelTaskForTesting;
+    if (hook != null) {
+      for (final id in taskIds) {
+        await hook(id);
+      }
+      return;
+    }
+    try {
+      await FileDownloader().cancelTasksWithIds(taskIds);
+    } catch (_) {}
+  }
+
+  /// Active resume/download requests currently in-flight by job key (v1.12 build 73).
+  final Set<String> _inFlightResumes = <String>{};
+
+  bool _isResumeInFlight(DownloadJob job) {
+    return _inFlightResumes.contains(job.key);
   }
 
   /// Content-Length of a job URL (production: HEAD request).
@@ -2491,11 +2605,25 @@ class DownloadManager extends ChangeNotifier {
       ));
       return;
     }
-    if (!_enqueuePending.add(job.key)) return;
+    if (_isResumeInFlight(job)) {
+      unawaited(DevLog.write(
+        'V16DL',
+        'resume_skipped reason=in_flight source=$source',
+      ));
+      return;
+    }
+    _inFlightResumes.add(job.key);
     try {
-      await _enqueueAttemptOnce(batch, job, source: source);
+      if (!_enqueuePending.add(job.key)) {
+        return;
+      }
+      try {
+        await _enqueueAttemptOnce(batch, job, source: source);
+      } finally {
+        _enqueuePending.remove(job.key);
+      }
     } finally {
-      _enqueuePending.remove(job.key);
+      _inFlightResumes.remove(job.key);
     }
   }
 
@@ -2659,8 +2787,17 @@ class DownloadManager extends ChangeNotifier {
           ));
           resumeData = null;
         } else {
-          resumeData = ResumeData(task, resumeData.data, resumeData.requiredStartByte, resumeData.eTag);
+          final tempFile = File(resumeData.data);
+          final tempExists = tempFile.existsSync();
+          final tempSize = tempExists ? tempFile.lengthSync() : 0;
+          final effectiveStartByte = math.max(
+            resumeData.requiredStartByte,
+            math.max(tempSize, job.resumeStartByte ?? 0),
+          );
+          resumeData = ResumeData(task, resumeData.data, effectiveStartByte, resumeData.eTag);
           await _setResumeData(resumeData);
+          job.resumeStartByte = effectiveStartByte;
+          job.resumeTempPath = resumeData.data;
         }
       }
       final hasResumeData = resumeData != null;
@@ -2984,8 +3121,7 @@ class DownloadManager extends ChangeNotifier {
     String? path,
     String reason = 'cleanup',
   }) async {
-    final isAllowedDiscard = reason == 'cancel' ||
-        reason == 'delete' ||
+    final isAllowedDiscard = ((reason == 'cancel' || reason == 'delete') && job.userCancelRequested) ||
         reason == 'size_mismatch' ||
         reason == 'status_200' ||
         reason == 'import_done';
@@ -3375,6 +3511,7 @@ class DownloadManager extends ChangeNotifier {
         unawaited(_refreshNotification(batch));
         _throttlePersistProgress(batch, batch.progress);
       case TaskStatus.complete:
+        _inFlightResumes.remove(job.key);
         job.downloadCompleteAt ??= DateTime.now().millisecondsSinceEpoch;
         unawaited(_finishFile(batch, job, task));
       case TaskStatus.failed:
@@ -3386,6 +3523,17 @@ class DownloadManager extends ChangeNotifier {
         if (job.isWaitingForNetwork || job.state == JobState.queued) {
           return;
         }
+        if (!job.userCancelRequested) {
+          // Internal interruption: preserve temp file and resume data, enter "下载中断"
+          // (JobState.paused), do NOT settle as failed!
+          unawaited(DevLog.write(
+            'V16DL',
+            'cancel_call taskId=${update.task.taskId} source=internal_interrupt',
+          ));
+          unawaited(_failAttempt(batch, job, update));
+          return;
+        }
+        _inFlightResumes.remove(job.key);
         // A storage failure cancels its task; keep the failure visible.
         if (job.state != JobState.done && job.errorCode != storageFullCode) {
           job.state = JobState.canceled;
@@ -4419,6 +4567,7 @@ class DownloadManager extends ChangeNotifier {
     DownloadJob job,
     TaskStatusUpdate update,
   ) async {
+    _inFlightResumes.remove(job.key);
     final isResumable = !job.isImage &&
         (job.expectedBytes == null || job.expectedBytes! >= kResumableMinBytes);
     final taskId = update.task.taskId;
@@ -4571,13 +4720,25 @@ class DownloadManager extends ChangeNotifier {
     // timeout, unknown) must NEVER mark final failure or delete temp file. Enter "下载中断"
     // (JobState.paused).
     if (partialBytes > 0 && isResumable) {
+      _inFlightResumes.remove(job.key);
+      job.state = JobState.paused;
+      job.lastProgressAt = DateTime.now().millisecondsSinceEpoch;
       job.resumeStartByte = partialBytes;
-      if (tempPath != null && tempPath.isNotEmpty) job.resumeTempPath = tempPath;
+      if (tempPath != null && tempPath.isNotEmpty) {
+        job.resumeTempPath = tempPath;
+        final updatedResumeData = ResumeData(
+          update.task,
+          tempPath,
+          partialBytes,
+          resumeData?.eTag ?? job.resumeEtag,
+        );
+        try {
+          await _setResumeData(updatedResumeData);
+        } catch (_) {}
+      }
       if (resumeData?.eTag != null && resumeData!.eTag!.isNotEmpty) {
         job.resumeEtag = resumeData.eTag;
       }
-      job.state = JobState.paused;
-      job.lastProgressAt = DateTime.now().millisecondsSinceEpoch;
 
       final lastFailReason = cause.isNotEmpty
           ? cause
@@ -4599,9 +4760,18 @@ class DownloadManager extends ChangeNotifier {
         return;
       }
 
+      final settings = await AppSettings.load();
+      if (settings.manualResumeOnlyOnDisconnect) {
+        job.error = '已中断，点继续';
+        await _persist(batch);
+        notifyListeners();
+        unawaited(_refreshNotification(batch));
+        return;
+      }
+
       // If offline, wait for network recovery (stability timer will trigger auto-resume)
       if (!NetworkStatus.instance.online) {
-        job.error = '等待网络恢复';
+        job.error = '下载中断 · 等待网络';
         await _persist(batch);
         notifyListeners();
         unawaited(_refreshNotification(batch));
@@ -4613,7 +4783,7 @@ class DownloadManager extends ChangeNotifier {
       if (retries < 5) {
         final nextRetry = retries + 1;
         final backoff = kAutoResumeBackoff[retries];
-        job.error = '下载已中断，${backoff.inSeconds}秒后重试';
+        job.error = '自动重试 $nextRetry/5';
         await _persist(batch);
         notifyListeners();
         unawaited(_refreshNotification(batch));
@@ -4622,13 +4792,21 @@ class DownloadManager extends ChangeNotifier {
         _autoResumeTimers[job.key] = Timer(backoff, () async {
           _autoResumeTimers.remove(job.key);
           if (job.state != JobState.paused) return;
+          if (_isResumeInFlight(job)) {
+            unawaited(DevLog.write(
+              'V16DL',
+              'resume_skipped reason=in_flight source=auto_resume',
+            ));
+            return;
+          }
           if (!NetworkStatus.instance.online) {
-            job.error = '等待网络恢复';
+            job.error = '下载中断 · 等待网络';
             await _persist(batch);
             notifyListeners();
             return;
           }
           _autoResumeRetries[job.key] = nextRetry;
+          job.autoResumeRetry = nextRetry;
           int actualStartByte = partialBytes;
           if (job.resumeTempPath != null) {
             try {
@@ -4642,7 +4820,7 @@ class DownloadManager extends ChangeNotifier {
             'auto_resume n=$nextRetry/5 from_bytes=$actualStartByte reason=$lastFailReason',
           ));
           job.state = JobState.queued;
-          job.error = null;
+          job.error = '自动重试 $nextRetry/5';
           await _persist(batch);
           notifyListeners();
           await _enqueueAttempt(batch, job, source: 'auto_resume');
@@ -5244,6 +5422,9 @@ class DownloadManager extends ChangeNotifier {
     job.candidateIndex = 0;
     job.candidateRetryCount = 0;
     job.lastStatusCode = null;
+    job.userCancelRequested = false;
+    job.userPaused = false;
+    _inFlightResumes.remove(job.key);
     try {
       await _enqueueAttempt(batch, job, source: 'manual_retry');
     } catch (_) {
@@ -5262,7 +5443,7 @@ class DownloadManager extends ChangeNotifier {
     }
   }
 
-  Future<void> cancelBatch(DownloadBatch batch) async {
+  Future<void> cancelBatch(DownloadBatch batch, {String source = 'cancel_batch'}) async {
     // 3a: Await any job currently in the finishing stage
     for (final job in batch.jobs) {
       if (job.isFinishing || _finishing.containsKey(job.key)) {
@@ -5274,10 +5455,18 @@ class DownloadManager extends ChangeNotifier {
       if (batch.isTerminal) await _afterTerminal(batch, recovered: false);
       return;
     }
+    for (final job in batch.jobs) {
+      if (!job.isTerminal) {
+        job.userCancelRequested = true;
+        _inFlightResumes.remove(job.key);
+        _autoResumeTimers.remove(job.key)?.cancel();
+        unawaited(DevLog.write('V16DL', 'temp_discard reason=user_canceled source=$source'));
+      }
+    }
     if (batch.source != owner &&
         batch.jobs.any((j) => needsSessionDownload(batch, j))) {
       for (final job in batch.jobs.where((j) => !j.isTerminal)) {
-        await cancelJob(batch, job);
+        await cancelJob(batch, job, source: source);
       }
       return;
     }
@@ -5286,7 +5475,9 @@ class DownloadManager extends ChangeNotifier {
         _networkRetryTimers.remove(job.key)?.cancel();
         job.state = JobState.canceled;
         await _sessionTransfers[job.key]?.cancel();
-        await _cleanupJobTemp(batch, job, reason: 'cancel');
+        unawaited(_cleanupJobTemp(batch, job, reason: 'cancel'));
+        unawaited(_removeResumeData(job.currentTaskId ?? job.key));
+        await ResumableDownloadStore.instance.cleanForJob(job.key);
       }
     }
     final ids = [
@@ -5296,11 +5487,7 @@ class DownloadManager extends ChangeNotifier {
           job.currentTaskId!,
     ];
     if (ids.isNotEmpty) {
-      try {
-        await FileDownloader().cancelTasksWithIds(ids);
-      } catch (_) {
-        // Best effort; terminal states arrive via updates anyway.
-      }
+      await _cancelTasksWithIds(ids, source: source);
     }
     for (final job in batch.jobs) {
       if (job.state == JobState.queued ||
@@ -5309,7 +5496,9 @@ class DownloadManager extends ChangeNotifier {
           job.state == JobState.waitingNetwork) {
         _networkRetryTimers.remove(job.key)?.cancel();
         job.state = JobState.canceled;
-        await _cleanupJobTemp(batch, job, reason: 'cancel');
+        unawaited(_cleanupJobTemp(batch, job, reason: 'cancel'));
+        unawaited(_removeResumeData(job.currentTaskId ?? job.key));
+        await ResumableDownloadStore.instance.cleanForJob(job.key);
       }
     }
     await _persist(batch);
@@ -5319,7 +5508,7 @@ class DownloadManager extends ChangeNotifier {
 
   /// User-confirmed history deletion also cancels foreign engine work. Native
   /// controls stop pending starts; the database barrier rejects late writes.
-  Future<void> cancelPostDownloads(String platform, String postId) async {
+  Future<void> cancelPostDownloads(String platform, String postId, {String source = 'history_delete'}) async {
     await DownloadClaims.cancelPost(platform, postId);
     final ids = <String>[];
     for (final batch in await liveBatches()) {
@@ -5331,6 +5520,10 @@ class DownloadManager extends ChangeNotifier {
       batch.cancelledByDeletion = true;
       batch.historyWritten = true;
       for (final job in batch.jobs.where((job) => !job.isTerminal)) {
+        job.userCancelRequested = true;
+        _inFlightResumes.remove(job.key);
+        _autoResumeTimers.remove(job.key)?.cancel();
+        unawaited(DevLog.write('V16DL', 'temp_discard reason=user_canceled source=$source'));
         job.state = JobState.canceled;
         if (job.currentTaskId != null) ids.add(job.currentTaskId!);
         final transfer = _sessionTransfers[job.key];
@@ -5339,6 +5532,8 @@ class DownloadManager extends ChangeNotifier {
           final prefs = await SharedPreferences.getInstance();
           await prefs.setBool('session_cancel_${job.key}', true);
         }
+        unawaited(_cleanupJobTemp(batch, job, reason: 'cancel'));
+        unawaited(_removeResumeData(job.currentTaskId ?? job.key));
       }
       _batches[batch.batchId] = batch;
       await _persist(batch);
@@ -5347,9 +5542,7 @@ class DownloadManager extends ChangeNotifier {
     }
     notifyListeners();
     if (ids.isNotEmpty) {
-      await FileDownloader()
-          .cancelTasksWithIds(ids)
-          .timeout(const Duration(seconds: 2));
+      await _cancelTasksWithIds(ids, source: source);
     }
   }
 
@@ -5375,6 +5568,10 @@ class DownloadManager extends ChangeNotifier {
       }
       final id = job.currentTaskId;
       job.state = JobState.paused;
+      job.userPaused = true;
+      job.error = null;
+      _inFlightResumes.remove(job.key);
+      _autoResumeTimers.remove(job.key)?.cancel();
       // Preserve job.progress, do not reset to 0
       if (needsSessionDownload(batch, job)) {
         await _sessionTransfers[job.key]?.cancel();
@@ -5382,7 +5579,7 @@ class DownloadManager extends ChangeNotifier {
         try {
           final task = await _taskForId(id);
           if (task is DownloadTask && task.allowPause) {
-            final ok = await _pauseTask(task);
+            final ok = await _pauseTask(task, source: 'pause_batch');
             _log('pauseTask taskId=$id success=$ok');
             if (ok) {
               try {
@@ -5395,10 +5592,7 @@ class DownloadManager extends ChangeNotifier {
               } catch (_) {}
             }
           } else {
-            await FileDownloader().cancelTaskWithId(id).timeout(
-              const Duration(milliseconds: 300),
-              onTimeout: () => false,
-            );
+            await _cancelTaskWithId(id, source: 'pause_batch_fallback');
           }
         } catch (_) {}
       }
@@ -5413,6 +5607,9 @@ class DownloadManager extends ChangeNotifier {
     batch = await _ownedOrAdopt(batch);
     final now = DateTime.now().millisecondsSinceEpoch;
     for (final job in batch.jobs.where((j) => j.state == JobState.paused)) {
+      job.userPaused = false;
+      job.userCancelRequested = false;
+      _inFlightResumes.remove(job.key);
       _autoResumeTimers.remove(job.key)?.cancel();
       _autoResumeRetries.remove(job.key);
       job.error = null;
@@ -5446,7 +5643,7 @@ class DownloadManager extends ChangeNotifier {
     for (final job in batch.jobs.toList()) {
       if (needsSessionDownload(batch, job) && !job.saved) {
         if (job.state == JobState.active || job.state == JobState.queued) {
-          await cancelJob(batch, job);
+          await cancelJob(batch, job, source: 'restart_batch');
         }
         await retryJob(batch, job);
         continue;
@@ -5460,9 +5657,7 @@ class DownloadManager extends ChangeNotifier {
         case JobState.waitingNetwork:
           final id = job.currentTaskId;
           if (id != null && job.state != JobState.paused) {
-            try {
-              await FileDownloader().cancelTaskWithId(id);
-            } catch (_) {}
+            await _cancelTaskWithId(id, source: 'restart_batch');
           }
           job.attempts = 0;
           job.progress = 0;
@@ -5485,7 +5680,7 @@ class DownloadManager extends ChangeNotifier {
   }
 
   /// Cancel one file of a batch (queue page / preview page).
-  Future<void> cancelJob(DownloadBatch batch, DownloadJob job) async {
+  Future<void> cancelJob(DownloadBatch batch, DownloadJob job, {String source = 'cancel_job'}) async {
     if (job.isFinishing || _finishing.containsKey(job.key)) {
       await _finishing[job.key];
     }
@@ -5500,6 +5695,10 @@ class DownloadManager extends ChangeNotifier {
     job = batch.jobs.firstWhere((j) => j.key == job.key, orElse: () => job);
     if (job.saved || job.state == JobState.done) return; // The album write won the race; keep it completed.
     if (job.isTerminal) return;
+    job.userCancelRequested = true;
+    _inFlightResumes.remove(job.key);
+    _autoResumeTimers.remove(job.key)?.cancel();
+    unawaited(DevLog.write('V16DL', 'temp_discard reason=user_canceled source=$source'));
     _networkRetryTimers.remove(job.key)?.cancel();
     if (needsSessionDownload(batch, job)) {
       job.state = JobState.canceled;
@@ -5507,14 +5706,12 @@ class DownloadManager extends ChangeNotifier {
     }
     final id = job.currentTaskId;
     if (id != null) {
-      try {
-        await FileDownloader().cancelTaskWithId(id);
-      } catch (_) {
-        // Best effort; the state change below is what matters.
-      }
+      await _cancelTaskWithId(id, source: source);
     }
     job.state = JobState.canceled;
     await _cleanupJobTemp(batch, job, reason: 'cancel');
+    await _removeResumeData(job.currentTaskId ?? job.key);
+    await ResumableDownloadStore.instance.cleanForJob(job.key);
     await _persist(batch);
     notifyListeners();
     await _afterTerminal(batch, recovered: false);
@@ -5523,11 +5720,17 @@ class DownloadManager extends ChangeNotifier {
   /// Cancel a batch and drop it from the queue, including its snapshot. An
   /// empty placeholder history record is removed by [_afterTerminal]; a post
   /// that already has saved files stays in the history.
-  Future<void> removeBatch(DownloadBatch batch) async {
+  Future<void> removeBatch(DownloadBatch batch, {String source = 'remove_batch'}) async {
     final owned = await _ownedOrAdopt(batch);
-    if (!owned.isTerminal) await cancelBatch(owned);
+    if (!owned.isTerminal) await cancelBatch(owned, source: source);
     for (final job in owned.jobs) {
+      job.userCancelRequested = true;
+      _inFlightResumes.remove(job.key);
+      _autoResumeTimers.remove(job.key)?.cancel();
+      unawaited(DevLog.write('V16DL', 'temp_discard reason=user_canceled source=$source'));
       await _cleanupJobTemp(owned, job, reason: 'delete');
+      await _removeResumeData(job.currentTaskId ?? job.key);
+      await ResumableDownloadStore.instance.cleanForJob(job.key);
     }
     _batches.remove(owned.batchId);
     _lastShownPercent.remove(owned.batchId);
@@ -5537,10 +5740,10 @@ class DownloadManager extends ChangeNotifier {
   }
 
   /// Cancel every unfinished batch, then drop them (restore-anyway path).
-  Future<void> cancelAll() async {
+  Future<void> cancelAll({String source = 'cancel_all'}) async {
     for (final b in await liveBatches()) {
       if (b.isTerminal) continue;
-      await removeBatch(b);
+      await removeBatch(b, source: source);
     }
   }
 

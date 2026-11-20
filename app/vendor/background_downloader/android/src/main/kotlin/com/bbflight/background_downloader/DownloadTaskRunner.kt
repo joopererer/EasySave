@@ -71,8 +71,7 @@ class DownloadTaskRunner(context: TaskJobContext) : TaskRunner(context) {
         }
         val result = super.connectAndProcess(connection)
         if (result == TaskStatus.canceled) {
-            logV16dl("temp_discard reason=user_canceled")
-            deleteTempFile()
+            logV16dl("native_task_canceled taskId=${task.taskId}")
         }
         if (result == TaskStatus.failed) {
             prepResumeAfterFailure()
@@ -497,29 +496,12 @@ class DownloadTaskRunner(context: TaskJobContext) : TaskRunner(context) {
             val tempFileLength = tempFile.length()
             if (tempFileLength == requiredStartByte) {
                 return true
+            } else if (tempFileLength > 0) {
+                val effectiveStart = maxOf(requiredStartByte, tempFileLength)
+                Log.i(TAG, "Adjusting requiredStartByte from $requiredStartByte to on-disk length $effectiveStart (tempFileLength=$tempFileLength)")
+                requiredStartByte = effectiveStart
+                return true
             } else {
-                // attempt to truncate the file to the expected size
-                Log.d(
-                    TAG,
-                    "File length = ${tempFile.length()} vs requiredStartByte = $requiredStartByte"
-                )
-                if (tempFileLength > requiredStartByte && Build.VERSION.SDK_INT >= 26) {
-                    try {
-                        val fileChannel =
-                            FileChannel.open(tempFile.toPath(), StandardOpenOption.WRITE)
-                        fileChannel.truncate(requiredStartByte)
-                        fileChannel.close()
-                        Log.d(TAG, "Truncated temp file to desired length")
-                        return true
-                    } catch (e: IOException) {
-                        e.printStackTrace()
-                    }
-                }
-                else if (tempFileLength in 1 until requiredStartByte) {
-                    Log.i(TAG, "Adjusting requiredStartByte from $requiredStartByte to on-disk length $tempFileLength")
-                    requiredStartByte = tempFileLength
-                    return true
-                }
                 Log.i(TAG, "Partially downloaded file is corrupted, resume not possible")
             }
         } else {
