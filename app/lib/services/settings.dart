@@ -5,6 +5,11 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'creator_sort.dart';
 import 'image_format_preference.dart';
 
+/// Compile-time default for manual resume fallback (v1.12 build 74).
+/// When true, defaults to manual resume on network disconnect.
+/// Set to false in build 74; if real-device test fails, flip this single constant to true in the next build.
+const bool kDefaultManualResumeOnlyOnDisconnect = false;
+
 /// History page view modes (ui-spec §2.4.1).
 enum HistoryView { posts, all, creators }
 
@@ -110,7 +115,7 @@ class AppSettings {
 
   /// Fallback option in developer options (v1.12 build 73): when true, large files
   /// do not auto-resume on disconnect, but stop at "已中断，点继续" for manual resume.
-  bool manualResumeOnlyOnDisconnect = false;
+  bool manualResumeOnlyOnDisconnect = kDefaultManualResumeOnlyOnDisconnect;
 
   /// Set only by [clearBackupFolder]: a regular [save] must keep the folder.
   bool _forgetBackupFolder = false;
@@ -167,7 +172,7 @@ class AppSettings {
       ..skipRestoreHint = prefs.getBool('skipRestoreHint') ?? false
       ..backupFolderHintDismissed = prefs.getBool('backupFolderHintDismissed') ?? false
       ..developerOptionsVisible = prefs.getBool('developerOptionsVisible') ?? false
-      ..manualResumeOnlyOnDisconnect = prefs.getBool('manualResumeOnlyOnDisconnect') ?? false
+      ..manualResumeOnlyOnDisconnect = prefs.getBool('manualResumeOnlyOnDisconnect') ?? kDefaultManualResumeOnlyOnDisconnect
       ..videoBackfillHintDismissed = prefs.getBool('videoBackfillHintDismissed') ?? false;
   }
 
