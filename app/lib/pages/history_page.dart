@@ -7,6 +7,7 @@
 
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
@@ -177,6 +178,8 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
 
   /// postId -> unfinished batch, for the pause / cancel controls on a card.
   Map<String, DownloadBatch> _downloadBatches = const {};
+  Set<String> _lastFinishing = const {};
+  Map<String, String?> _lastStatus = const {};
 
   bool _isPaused(String postId) => _downloadBatches[postId]?.isPaused ?? false;
   bool _isFailed(String postId) => _downloadBatches[postId]?.isTerminal == true &&
@@ -267,19 +270,31 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
         for (final b in unfinished)
           if (b.isPaused) b.postId,
       };
+      final finishingNow = {
+        for (final b in unfinished)
+          for (final j in b.jobs)
+            if (j.isFinishing) '${b.postId}:${j.savingPhase}',
+      };
+      final statusNow = {
+        for (final b in unfinished) b.postId: b.statusText,
+      };
       final changed = progress.length != _downloadProgress.length ||
           unfinished.length != _unfinished.length ||
           pausedNow.length !=
               _downloadBatches.values.where((b) => b.isPaused).length ||
           progress.entries.any(
             (e) => (_downloadProgress[e.key] ?? -1) != e.value,
-          );
+          ) ||
+          !setEquals(finishingNow, _lastFinishing) ||
+          !mapEquals(statusNow, _lastStatus);
       if (changed) {
         setState(() {
           _markHiddenModesPending();
           _unfinished = unfinished;
           _downloadProgress = progress;
           _downloadBatches = {for (final b in unfinished) b.postId: b};
+          _lastFinishing = finishingNow;
+          _lastStatus = statusNow;
         });
       } else {
         // Same numbers, but keep the batch objects fresh for the actions.

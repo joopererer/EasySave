@@ -3853,10 +3853,14 @@ class DownloadManager extends ChangeNotifier {
     }
     if (job.isTerminal) return;
     job.isFinishing = true;
+    notifyListeners();
+    unawaited(_persist(batch));
     try {
       await _trackFinish(job.key, () => _finishFileOnce(batch, job, task));
     } finally {
       job.isFinishing = false;
+      notifyListeners();
+      unawaited(_persist(batch));
     }
   }
 

@@ -372,13 +372,6 @@ class DownloadingOverlay extends StatelessWidget {
     final String label;
     if (isStorageFull) {
       label = statusText ?? '空间不足';
-    } else if (failed) {
-      final reason = failureReason?.isNotEmpty == true ? '（$failureReason）' : '';
-      label = partial ? '部分保存成功$reason' : '下载失败$reason';
-    } else if (statusText != null && statusText!.isNotEmpty) {
-      label = statusText!;
-    } else if (waitingForNetwork) {
-      label = '等待网络…联网后自动继续';
     } else if (paused) {
       if (userPaused ?? true) {
         label = '已暂停 $pct%';
@@ -387,10 +380,17 @@ class DownloadingOverlay extends StatelessWidget {
       } else {
         label = '已中断，点继续';
       }
-    } else if (stalled) {
-      label = '已停滞 $pct%';
     } else if (isFinishing) {
       label = savingPhase != null ? '正在保存到相册（$savingPhase）' : '正在保存到相册';
+    } else if (failed) {
+      final reason = failureReason?.isNotEmpty == true ? '（$failureReason）' : '';
+      label = partial ? '部分保存成功$reason' : '下载失败$reason';
+    } else if (statusText != null && statusText!.isNotEmpty) {
+      label = statusText!;
+    } else if (waitingForNetwork) {
+      label = '等待网络…联网后自动继续';
+    } else if (stalled) {
+      label = '已停滞 $pct%';
     } else {
       label = '下载中 $pct%';
     }
@@ -398,6 +398,16 @@ class DownloadingOverlay extends StatelessWidget {
     final String narrowLabel;
     if (isStorageFull) {
       narrowLabel = '空间不足';
+    } else if (paused) {
+      if (userPaused ?? true) {
+        narrowLabel = '已暂停';
+      } else if (!NetworkStatus.instance.online) {
+        narrowLabel = '等网络';
+      } else {
+        narrowLabel = '已中断';
+      }
+    } else if (isFinishing) {
+      narrowLabel = '保存中';
     } else if (failed) {
       narrowLabel = '失败';
     } else if (statusText != null && statusText!.isNotEmpty) {
@@ -412,16 +422,6 @@ class DownloadingOverlay extends StatelessWidget {
       }
     } else if (waitingForNetwork) {
       narrowLabel = '等网络';
-    } else if (paused) {
-      if (userPaused ?? true) {
-        narrowLabel = '已暂停';
-      } else if (!NetworkStatus.instance.online) {
-        narrowLabel = '等网络';
-      } else {
-        narrowLabel = '已中断';
-      }
-    } else if (isFinishing) {
-      narrowLabel = '保存中';
     } else {
       narrowLabel = '$pct%';
     }
