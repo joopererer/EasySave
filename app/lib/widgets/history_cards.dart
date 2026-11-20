@@ -366,11 +366,12 @@ class DownloadingOverlay extends StatelessWidget {
   Widget build(BuildContext context) {
     final pct = (progress.clamp(0.0, 1.0) * 100).round();
     final isStorageFull = failureReason?.contains('空间不足') == true ||
-        failureReason?.contains('STORAGE_FULL') == true;
+        failureReason?.contains('STORAGE_FULL') == true ||
+        statusText?.contains('空间不足') == true;
 
     final String label;
     if (isStorageFull) {
-      label = '空间不足';
+      label = statusText ?? '空间不足';
     } else if (failed) {
       final reason = failureReason?.isNotEmpty == true ? '（$failureReason）' : '';
       label = partial ? '部分保存成功$reason' : '下载失败$reason';
@@ -610,9 +611,9 @@ class _OverlayToggleButtonState extends State<_OverlayToggleButton> {
     final icon = showPlay
         ? Icons.play_arrow_rounded
         : (showRefresh ? Icons.refresh_rounded : Icons.pause_rounded);
-    final tip = showPlay
-        ? '继续下载'
-        : (showRefresh ? '重试' : '暂停下载');
+    final tip = widget.storageFull
+        ? '清理后继续'
+        : (showPlay ? '继续下载' : (showRefresh ? '重试' : '暂停下载'));
 
     final targetSize = widget.compact ? 24.0 : 44.0;
     final iconContainerSize = widget.compact ? 22.0 : 32.0;

@@ -186,7 +186,7 @@ void main() {
     expect(enqueued, 0);
     expect(job.state, JobState.paused);
     expect(job.errorCode, storageFullCode);
-    expect(job.error, '空间不足');
+    expect(job.error, startsWith('空间不足'));
     final record = await db.getByPostId(_postId, platform: 'x');
     expect(record, isNotNull, reason: 'a failed post must stay in history');
     expect(record!.savedFiles, isEmpty);
@@ -205,7 +205,7 @@ void main() {
     final job = batch.jobs.single;
     expect(job.state, JobState.failed);
     expect(job.errorCode, storageFullCode);
-    expect(job.error, '空间不足');
+    expect(job.error, startsWith('空间不足'));
     expect(await file.exists(), isFalse);
     expect(await leftover.exists(), isFalse);
     expect(logs.any((l) => l.contains('cleanup bytes=4196')), isTrue);

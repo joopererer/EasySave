@@ -10,6 +10,7 @@ import 'package:flutter/material.dart';
 import '../core/models.dart';
 import '../services/download_manager.dart';
 import '../services/network_status.dart';
+import '../services/storage_guard.dart';
 import '../theme/app_theme.dart';
 import '../widgets/shared.dart';
 
@@ -296,6 +297,11 @@ class _BatchCard extends StatelessWidget {
 
   String get _status {
     if (batch.isTerminal && batch.failedCount > 0) return '下载失败，点击重试';
+    final isStorageFull = batch.statusText?.contains('空间不足') == true ||
+        batch.jobs.any((j) => j.errorCode == storageFullCode || j.error?.contains('空间不足') == true);
+    if (isStorageFull) {
+      return batch.statusText ?? '空间不足';
+    }
     if (batch.isPaused) {
       if (batch.isUserPaused) return '已暂停';
       if (!NetworkStatus.instance.online) return '下载中断 · 等待网络';
@@ -324,10 +330,14 @@ class _BatchCard extends StatelessWidget {
     final items = batchItems(batch);
     final paused = batch.isPaused;
     final failed = batch.isTerminal && batch.failedCount > 0;
-    final toggleTip = failed ? '重试' : paused ? '继续下载' : (stalled ? '重试' : '暂停下载');
-    final toggleIcon = paused
-        ? Icons.play_arrow_rounded
-        : (stalled || failed ? Icons.refresh : Icons.pause_rounded);
+    final isStorageFull = batch.statusText?.contains('空间不足') == true ||
+        batch.jobs.any((j) => j.errorCode == storageFullCode || j.error?.contains('空间不足') == true);
+    final toggleTip = isStorageFull
+        ? '清理后继续'
+        : (failed ? '重试' : paused ? '继续下载' : (stalled ? '重试' : '暂停下载'));
+    final toggleIcon = isStorageFull
+        ? Icons.refresh_rounded
+        : (paused ? Icons.play_arrow_rounded : (stalled || failed ? Icons.refresh : Icons.pause_rounded));
     return Card(
       margin: EdgeInsets.zero,
       child: ExpansionTile(
@@ -368,7 +378,12 @@ class _BatchCard extends StatelessWidget {
         trailing: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            if (batch.supportsPause)
+            if (isStorageFull)
+              TextButton(
+                onPressed: busy ? null : onToggle,
+                child: const Text('清理后继续'),
+              )
+            else if (batch.supportsPause)
               IconButton(
                 tooltip: toggleTip,
                 icon: Icon(toggleIcon),
