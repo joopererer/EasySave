@@ -108,6 +108,10 @@ class AppSettings {
   /// (v1.11 batch 4); the state is persisted so it stays revealed.
   bool developerOptionsVisible = false;
 
+  /// Fallback option in developer options (v1.12 build 73): when true, large files
+  /// do not auto-resume on disconnect, but stop at "已中断，点继续" for manual resume.
+  bool manualResumeOnlyOnDisconnect = false;
+
   /// Set only by [clearBackupFolder]: a regular [save] must keep the folder.
   bool _forgetBackupFolder = false;
 
@@ -163,6 +167,7 @@ class AppSettings {
       ..skipRestoreHint = prefs.getBool('skipRestoreHint') ?? false
       ..backupFolderHintDismissed = prefs.getBool('backupFolderHintDismissed') ?? false
       ..developerOptionsVisible = prefs.getBool('developerOptionsVisible') ?? false
+      ..manualResumeOnlyOnDisconnect = prefs.getBool('manualResumeOnlyOnDisconnect') ?? false
       ..videoBackfillHintDismissed = prefs.getBool('videoBackfillHintDismissed') ?? false;
   }
 
@@ -211,6 +216,7 @@ class AppSettings {
     await prefs.setBool('skipRestoreHint', skipRestoreHint);
     await prefs.setBool('backupFolderHintDismissed', backupFolderHintDismissed);
     await prefs.setBool('developerOptionsVisible', developerOptionsVisible);
+    await prefs.setBool('manualResumeOnlyOnDisconnect', manualResumeOnlyOnDisconnect);
     await prefs.setBool('videoBackfillHintDismissed', videoBackfillHintDismissed);
   }
 
