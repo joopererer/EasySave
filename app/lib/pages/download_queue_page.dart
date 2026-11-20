@@ -9,6 +9,7 @@ import 'package:flutter/material.dart';
 
 import '../core/models.dart';
 import '../services/download_manager.dart';
+import '../services/network_status.dart';
 import '../theme/app_theme.dart';
 import '../widgets/shared.dart';
 
@@ -154,7 +155,7 @@ class _DownloadQueuePageState extends State<DownloadQueuePage> {
       ),
     );
     if (ok == true) {
-      await _run(() => DownloadManager.instance.removeBatch(batch));
+      await _run(() => DownloadManager.instance.removeBatch(batch, source: 'queue_remove'));
     }
   }
 
@@ -177,7 +178,7 @@ class _DownloadQueuePageState extends State<DownloadQueuePage> {
       ),
     );
     if (ok == true) {
-      await _run(() => DownloadManager.instance.cancelJob(batch, job));
+      await _run(() => DownloadManager.instance.cancelJob(batch, job, source: 'queue_job'));
     }
   }
 
@@ -200,7 +201,7 @@ class _DownloadQueuePageState extends State<DownloadQueuePage> {
       ),
     );
     if (ok == true) {
-      await _run(DownloadManager.instance.cancelAll);
+      await _run(() => DownloadManager.instance.cancelAll(source: 'queue_all'));
     }
   }
 
@@ -295,7 +296,11 @@ class _BatchCard extends StatelessWidget {
 
   String get _status {
     if (batch.isTerminal && batch.failedCount > 0) return '下载失败，点击重试';
-    if (batch.isPaused) return '已暂停';
+    if (batch.isPaused) {
+      if (batch.isUserPaused) return '已暂停';
+      if (!NetworkStatus.instance.online) return '下载中断 · 等待网络';
+      return batch.statusText ?? '已中断，点继续';
+    }
     final finishing = batch.jobs.cast<DownloadJob?>().firstWhere(
       (j) => j?.isFinishing == true,
       orElse: () => null,
@@ -304,6 +309,10 @@ class _BatchCard extends StatelessWidget {
       return finishing.savingPhase != null
           ? '正在保存到相册（${finishing.savingPhase}）'
           : '正在保存到相册';
+    }
+    if (!NetworkStatus.instance.online) return '下载中断 · 等待网络';
+    if (batch.statusText != null && batch.statusText!.isNotEmpty) {
+      return batch.statusText!;
     }
     return stalled ? '已停滞' : '下载中';
   }
@@ -426,13 +435,19 @@ class _JobTile extends StatelessWidget {
           : '正在保存到相册';
     }
     return switch (job.state) {
-      JobState.queued => '排队中',
+      JobState.queued => job.error?.isNotEmpty == true
+          ? job.error!
+          : (!NetworkStatus.instance.online ? '下载中断 · 等待网络' : '排队中'),
       JobState.active => '下载中 ${(job.progress.clamp(0.0, 1.0) * 100).round()}%',
       JobState.done => '已保存',
       JobState.failed => job.error ?? '失败',
       JobState.canceled => '已取消',
-      JobState.paused => '已暂停',
-      JobState.waitingNetwork => '等待网络…联网后自动继续',
+      JobState.paused => job.userPaused
+          ? '已暂停'
+          : (job.error?.isNotEmpty == true
+              ? job.error!
+              : (!NetworkStatus.instance.online ? '下载中断 · 等待网络' : '已中断，点继续')),
+      JobState.waitingNetwork => '下载中断 · 等待网络',
     };
   }
 

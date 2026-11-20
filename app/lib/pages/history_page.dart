@@ -244,7 +244,7 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
     if (ok != true || !mounted) return;
     try {
       final dm = DownloadManager.instance;
-      await dm.cancelBatch(await dm.forceAdopt(batch));
+      await dm.cancelBatch(await dm.forceAdopt(batch), source: 'history_card');
     } catch (_) {
       // The next refresh shows the real state.
     }
@@ -2308,6 +2308,8 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
                   selected: _selected.contains(key),
                   downloadProgress: _downloadProgress[record.postId] ?? (_recordFailed(record) ? 0 : null),
                   downloadPaused: _isPaused(record.postId),
+                  downloadUserPaused: _downloadBatches[record.postId]?.isUserPaused ?? false,
+                  downloadStatusText: _downloadBatches[record.postId]?.statusText,
                   downloadStalled: _isStalled(record.postId),
                   downloadWaitingForNetwork:
                       !NetworkStatus.instance.online ||
@@ -2389,6 +2391,8 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
                         selected: _selected.contains(key),
                         downloadProgress: _downloadProgress[record.postId] ?? (_recordFailed(record) ? 0 : null),
                         downloadPaused: _isPaused(record.postId),
+                        downloadUserPaused: _downloadBatches[record.postId]?.isUserPaused ?? false,
+                        downloadStatusText: _downloadBatches[record.postId]?.statusText,
                         downloadStalled: _isStalled(record.postId),
                   downloadFailed: _isFailed(record.postId) || _recordFailed(record),
                   downloadIsFinishing: _downloadBatches[record.postId]?.jobs.any((j) => j.isFinishing) ?? false,

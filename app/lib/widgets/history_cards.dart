@@ -14,6 +14,7 @@ import '../services/gallery_locator_service.dart';
 import '../services/history_db.dart';
 import '../services/live_pairs.dart';
 import '../services/local_thumbnail_tiers.dart';
+import '../services/network_status.dart';
 import '../theme/app_theme.dart';
 import 'shared.dart';
 import 'verified_asset_image.dart';
@@ -306,6 +307,8 @@ class DownloadingOverlay extends StatelessWidget {
     required this.progress,
     this.compact = false,
     this.paused = false,
+    this.userPaused,
+    this.statusText,
     this.stalled = false,
     this.failed = false,
     this.waitingForNetwork = false,
@@ -323,6 +326,12 @@ class DownloadingOverlay extends StatelessWidget {
 
   /// The user paused the download: shows a play icon and "已暂停".
   final bool paused;
+
+  /// Whether pause was initiated by user (vs network/internal interrupt).
+  final bool? userPaused;
+
+  /// Explicit status message (e.g. "下载中断 · 等待网络", "自动重试 1/5", "已中断，点继续").
+  final String? statusText;
 
   /// No sign of life for a while: the toggle becomes "retry".
   final bool stalled;
@@ -365,10 +374,18 @@ class DownloadingOverlay extends StatelessWidget {
     } else if (failed) {
       final reason = failureReason?.isNotEmpty == true ? '（$failureReason）' : '';
       label = partial ? '部分保存成功$reason' : '下载失败$reason';
-    } else if (paused) {
-      label = '已暂停 $pct%';
+    } else if (statusText != null && statusText!.isNotEmpty) {
+      label = statusText!;
     } else if (waitingForNetwork) {
       label = '等待网络…联网后自动继续';
+    } else if (paused) {
+      if (userPaused ?? true) {
+        label = '已暂停 $pct%';
+      } else if (!NetworkStatus.instance.online) {
+        label = '下载中断 · 等待网络';
+      } else {
+        label = '已中断，点继续';
+      }
     } else if (stalled) {
       label = '已停滞 $pct%';
     } else if (isFinishing) {
@@ -382,10 +399,26 @@ class DownloadingOverlay extends StatelessWidget {
       narrowLabel = '空间不足';
     } else if (failed) {
       narrowLabel = '失败';
-    } else if (paused) {
-      narrowLabel = '已暂停';
+    } else if (statusText != null && statusText!.isNotEmpty) {
+      if (statusText == '下载中断 · 等待网络') {
+        narrowLabel = '等网络';
+      } else if (statusText!.startsWith('自动重试')) {
+        narrowLabel = statusText!.replaceFirst('自动重试', '重试');
+      } else if (statusText == '已中断，点继续') {
+        narrowLabel = '已中断';
+      } else {
+        narrowLabel = statusText!;
+      }
     } else if (waitingForNetwork) {
       narrowLabel = '等网络';
+    } else if (paused) {
+      if (userPaused ?? true) {
+        narrowLabel = '已暂停';
+      } else if (!NetworkStatus.instance.online) {
+        narrowLabel = '等网络';
+      } else {
+        narrowLabel = '已中断';
+      }
     } else if (isFinishing) {
       narrowLabel = '保存中';
     } else {
@@ -808,6 +841,8 @@ class WaterfallPostCard extends StatelessWidget {
     this.onToggleSelect,
     this.downloadProgress,
     this.downloadPaused = false,
+    this.downloadUserPaused = false,
+    this.downloadStatusText,
     this.downloadStalled = false,
     this.downloadFailed = false,
     this.downloadWaitingForNetwork = false,
@@ -829,6 +864,8 @@ class WaterfallPostCard extends StatelessWidget {
   /// 0..1 while a download of this post is running, null otherwise.
   final double? downloadProgress;
   final bool downloadPaused;
+  final bool downloadUserPaused;
+  final String? downloadStatusText;
   final bool downloadStalled;
   final bool downloadFailed;
 
@@ -946,6 +983,8 @@ class WaterfallPostCard extends StatelessWidget {
                         child: DownloadingOverlay(
                           progress: downloadProgress!,
                           paused: downloadPaused,
+                          userPaused: downloadUserPaused,
+                          statusText: downloadStatusText,
                           stalled: downloadStalled,
                           failed: downloadFailed,
                           waitingForNetwork: downloadWaitingForNetwork,
@@ -1064,6 +1103,8 @@ class ListPostRow extends StatelessWidget {
     this.onToggleSelect,
     this.downloadProgress,
     this.downloadPaused = false,
+    this.downloadUserPaused = false,
+    this.downloadStatusText,
     this.downloadStalled = false,
     this.downloadFailed = false,
     this.downloadIsFinishing = false,
@@ -1086,6 +1127,8 @@ class ListPostRow extends StatelessWidget {
   /// 0..1 while a download of this post is running, null otherwise.
   final double? downloadProgress;
   final bool downloadPaused;
+  final bool downloadUserPaused;
+  final String? downloadStatusText;
   final bool downloadStalled;
   final bool downloadFailed;
   final bool downloadIsFinishing;
@@ -1136,6 +1179,8 @@ class ListPostRow extends StatelessWidget {
                             progress: downloadProgress!,
                             compact: true,
                             paused: downloadPaused,
+                            userPaused: downloadUserPaused,
+                            statusText: downloadStatusText,
                             stalled: downloadStalled,
                             failed: downloadFailed,
                             isFinishing: downloadIsFinishing,
