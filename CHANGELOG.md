@@ -9,6 +9,15 @@ This file documents notable user-facing changes following [Keep a Changelog](htt
 
 ### 客户端 / App
 
+- 网络切换中断保护与失败原因准确映射（build 78）：
+  - 彻底修复首轮下载开始后网络切换（4G <-> Wi-Fi）导致任务被判失败并误记为 `CONTENT` 的问题：删除 `TaskStatus.canceled` 状态回调中误导性的 `cancel_call source=internal_interrupt` 日志，严格保持网络切换仅观察不打断（`network_change action=observe`）；
+  - 确立 App 自身或原生层发起的非用户取消（`!userCancelRequested`）永远不能导致最终失败的规则：无已下载数据时自动从头重新入队并计入普通重试次数，有已下载数据时按插件 ResumeData 或物理临时文件断点续传，重试耗尽时转为「已中断，点继续」安全挂起，绝不执行 `temp_cleanup reason=final_fail`；
+  - 纠正失败原因映射：未指定用户取消的 canceled 状态准确映射为 `reason=interrupted` 与 `cause=interrupted`；移除将「下载失败」误归类为内容错误的旧逻辑，`CONTENT` 分类严格限制为媒体容器与类型校验失败（如嗅探类型不符），普通下载失败如实记录为 `TRANSFER`。
+  Network switch interrupt protection and accurate failure cause mapping (build 78):
+  - Completely fixes an issue where network handover (4G <-> Wi-Fi) shortly after download start caused batch failure mistakenly classified as `CONTENT`: removes misleading `cancel_call source=internal_interrupt` log in the `TaskStatus.canceled` callback, strictly maintaining observation without interruption on network change (`network_change action=observe`);
+  - Establishes the rule that internal or OS-initiated cancellations without user cancel request (`!userCancelRequested`) must never cause final failure: automatically re-enqueues from scratch when no data is downloaded counting towards regular retries, resumes from breakpoints using plugin ResumeData or physical temp file when partial data exists, and safely parks at "已中断，点继续" when retry caps are exhausted, never executing `temp_cleanup reason=final_fail`;
+  - Accurately maps failure reasons: non-user cancellations are mapped to `reason=interrupted` and `cause=interrupted`; removes legacy mapping of generic download failures to content errors, strictly reserving `CONTENT` for actual media container and sniffing validation mismatches, while regular transport drops map to `TRANSFER`.
+
 - 首轮任务暂停后继续恢复同一任务（build 77）：
   - 彻底修复从头开始下载的任务（首轮任务）暂停后点击继续从 0 重新开始的问题：首轮任务启动时，临时文件由插件自行命名和存放，插件暂停时生成并持久化包含临时文件实际路径的 ResumeData；App 在暂停回调中异步获取 ResumeData 并保存 `job.resumeTempPath` 与 `job.resumeStartByte`；
   - 用户点击继续时，若该 job 存在处于 paused 状态的插件任务，直接调用插件 resume 恢复同一个 taskId，跳过 preflight 检查，不开新一轮（保持单轮次任务不变）；
