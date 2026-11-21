@@ -5,7 +5,6 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
-import 'dart:math' as math;
 
 import 'package:background_downloader/background_downloader.dart';
 import 'package:flutter/foundation.dart';
@@ -555,6 +554,10 @@ class DownloadJob {
   String? resumeTempPath;
   String? resumeEtag;
 
+  /// Track consecutive failure reason to prevent infinite loops (Build 76 B5).
+  String? lastFailReason;
+  int consecutiveFailCount = 0;
+
   /// prov:itemCount and prov:capturedBy of the provenance actually written into
   /// the file (or read back from the reused file). History stores these so the
   /// backup export can report what the file says instead of guessing.
@@ -644,6 +647,8 @@ class DownloadJob {
     if (resumeStartByte != null) 'resumeStartByte': resumeStartByte,
     if (resumeTempPath != null) 'resumeTempPath': resumeTempPath,
     if (resumeEtag != null) 'resumeEtag': resumeEtag,
+    if (lastFailReason != null) 'lastFailReason': lastFailReason,
+    if (consecutiveFailCount > 0) 'consecutiveFailCount': consecutiveFailCount,
     if (isFinishing) 'isFinishing': true,
     if (savingPhase != null) 'savingPhase': savingPhase,
     if (userCancelRequested) 'userCancelRequested': true,
@@ -704,6 +709,8 @@ class DownloadJob {
     job.resumeStartByte = (map['resumeStartByte'] as num?)?.toInt();
     job.resumeTempPath = map['resumeTempPath'] as String?;
     job.resumeEtag = map['resumeEtag'] as String?;
+    job.lastFailReason = map['lastFailReason'] as String?;
+    job.consecutiveFailCount = (map['consecutiveFailCount'] as num?)?.toInt() ?? 0;
     job.provenanceItemCount = (map['provenanceItemCount'] as num?)?.toInt();
     job.provenanceCapturedBy = map['provenanceCapturedBy'] as String?;
     job.isFinishing = map['isFinishing'] as bool? ?? false;
@@ -1750,12 +1757,15 @@ class DownloadManager extends ChangeNotifier {
             final nextRetry = retries + 1;
             _autoResumeRetries[job.key] = nextRetry;
             job.autoResumeRetry = nextRetry;
-            int actualStartByte = job.resumeStartByte ?? 0;
-            if (job.resumeTempPath != null) {
-              try {
-                final f = File(job.resumeTempPath!);
-                if (f.existsSync()) actualStartByte = f.lengthSync();
-              } catch (_) {}
+            int actualStartByte = await _calculateResumeStartByte(
+              job,
+              batchId: batch.batchId,
+            );
+            if (actualStartByte <= 0 && (job.resumeStartByte == null || job.resumeStartByte == 0)) {
+              continue;
+            }
+            if (actualStartByte == 0) {
+              await _clearResumeState(job);
             }
             job.resumeStartByte = actualStartByte;
             unawaited(DevLog.write(
@@ -2580,6 +2590,112 @@ class DownloadManager extends ChangeNotifier {
     }
   }
 
+  /// B1: 续传起点只能等于临时文件的实际长度：
+  /// - 记录大于文件长度：按文件长度续传，写日志 resume_data_ahead record=… file=…；
+  /// - 记录小于文件长度：同样按文件长度续传；
+  /// - 文件不存在或长度为 0：从 0 下载，并清空续传记录。
+  Future<int> _calculateResumeStartByte(
+    DownloadJob job, {
+    ResumeData? resumeData,
+    String? tempPathOverride,
+    String? taskId,
+    String? filename,
+    String? batchId,
+  }) async {
+    String? tempPath = tempPathOverride ?? resumeData?.data ?? job.resumeTempPath;
+    if (tempPath == null || tempPath.isEmpty) {
+      final tId = taskId ?? job.currentTaskId ?? job.key;
+      final fName = filename ?? job.filename;
+      final bId = batchId ?? '';
+      try {
+        final root = await (tempRootForTesting?.call() ?? getTemporaryDirectory());
+        final subDir = downloadTempDirectory(bId, job.key);
+        final cand = File('${root.path}/$subDir/$fName');
+        if (cand.existsSync()) {
+          tempPath = cand.path;
+        } else {
+          final cand2 = File('${root.path}/${downloadTempDirectory(bId, tId)}/$fName');
+          if (cand2.existsSync()) tempPath = cand2.path;
+        }
+      } catch (_) {}
+    }
+
+    int fileSize = 0;
+    if (tempPath != null && tempPath.isNotEmpty) {
+      try {
+        final f = File(tempPath);
+        if (f.existsSync()) {
+          fileSize = f.lengthSync();
+        }
+      } catch (_) {}
+    }
+
+    if (fileSize == 0) {
+      await _clearResumeState(job, taskId: taskId);
+      return 0;
+    }
+
+    final recorded = resumeData?.requiredStartByte ?? job.resumeStartByte ?? 0;
+    if (recorded > fileSize) {
+      unawaited(DevLog.write('V16DL', 'resume_data_ahead record=$recorded file=$fileSize'));
+    }
+
+    job.resumeStartByte = fileSize;
+    job.resumeTempPath = tempPath;
+    if (resumeData?.eTag != null && resumeData!.eTag!.isNotEmpty) {
+      job.resumeEtag = resumeData.eTag;
+    }
+    return fileSize;
+  }
+
+  /// B3: 任何从 0 重新下载（无论原因）都必须同时清空 App 保存的续传记录和插件 ResumeData。
+  Future<void> _clearResumeState(DownloadJob job, {String? taskId}) async {
+    job.resumeStartByte = null;
+    job.resumeTempPath = null;
+    job.resumeEtag = null;
+    job.progress = 0;
+    final id = taskId ?? job.currentTaskId;
+    if (id != null) {
+      await _removeResumeData(id);
+    }
+    await _removeResumeData(job.key);
+    await ResumableDownloadStore.instance.cleanForJob(job.key);
+  }
+
+  void _trackFailureReason(DownloadJob job, String reason) {
+    if (job.lastFailReason == reason) {
+      job.consecutiveFailCount++;
+    } else {
+      job.lastFailReason = reason;
+      job.consecutiveFailCount = 1;
+    }
+  }
+
+  Future<void> _safeCancelPreservingTemp(String taskId, DownloadJob job) async {
+    File? preserved;
+    final tempPath = job.resumeTempPath;
+    if (tempPath != null && tempPath.isNotEmpty) {
+      try {
+        final f = File(tempPath);
+        if (f.existsSync() && f.lengthSync() > 0) {
+          final backup = File('$tempPath.preserved_${DateTime.now().microsecondsSinceEpoch}');
+          f.copySync(backup.path);
+          preserved = backup;
+        }
+      } catch (_) {}
+    }
+    await _cancelTaskWithId(taskId, source: 'round_preempt');
+    if (preserved != null && tempPath != null) {
+      try {
+        final orig = File(tempPath);
+        if (!orig.existsSync() || orig.lengthSync() == 0) {
+          preserved.copySync(tempPath);
+        }
+        if (preserved.existsSync()) preserved.deleteSync();
+      } catch (_) {}
+    }
+  }
+
   Future<bool> _ensureOldRoundsTerminal(DownloadBatch batch, DownloadJob job) async {
     final oldTaskIds = <String>{...job.previousTaskIds};
     if (job.currentTaskId != null) {
@@ -2590,8 +2706,12 @@ class DownloadManager extends ChangeNotifier {
     for (final oldId in oldTaskIds) {
       final status = await _queryTaskStatus(oldId);
       if (!_isTerminalStatus(status)) {
+        // A2: 「只能有一个原生任务」的检查中，paused 视为不在运行：不取消、不发起新一轮。
+        if (status == TaskStatus.paused) {
+          continue;
+        }
         unawaited(DevLog.write('V16DL', 'round_wait old=$oldId state=${status.name}'));
-        await _cancelTaskWithId(oldId, source: 'round_preempt');
+        await _safeCancelPreservingTemp(oldId, job);
 
         final stopwatch = Stopwatch()..start();
         bool reachedTerminal = false;
@@ -2823,63 +2943,59 @@ class DownloadManager extends ChangeNotifier {
                 'method=enqueue has_resume_data=true from_bytes=0 '
                 'total=$total result=restart reason=taskid_mismatch',
           ));
+          await _clearResumeState(job, taskId: taskId);
           resumeData = null;
         } else {
-          final tempFile = File(resumeData.data);
-          final tempExists = tempFile.existsSync();
-          final tempSize = tempExists ? tempFile.lengthSync() : 0;
-          final effectiveStartByte = math.max(
-            resumeData.requiredStartByte,
-            math.max(tempSize, job.resumeStartByte ?? 0),
+          // B1 & B4: 续传起点只能等于临时文件的实际长度
+          final startByte = await _calculateResumeStartByte(
+            job,
+            resumeData: resumeData,
+            taskId: taskId,
+            filename: job.filename,
+            batchId: batch.batchId,
           );
-          resumeData = ResumeData(task, resumeData.data, effectiveStartByte, resumeData.eTag);
-          await _setResumeData(resumeData);
-          job.resumeStartByte = effectiveStartByte;
-          job.resumeTempPath = resumeData.data;
+          if (startByte == 0) {
+            unawaited(DevLog.write(
+              'V16DL',
+              'resume taskId=$taskId index=${job.itemIndex} role=${roleOf(job)} '
+                  'method=enqueue has_resume_data=true from_bytes=0 '
+                  'total=$total result=restart reason=tempfile_missing',
+            ));
+            await _clearResumeState(job, taskId: taskId);
+            resumeData = null;
+          } else {
+            resumeData = ResumeData(task, job.resumeTempPath!, startByte, resumeData.eTag);
+            await _setResumeData(resumeData);
+          }
         }
       }
       final hasResumeData = resumeData != null;
       if (hasResumeData) {
-        final tempFile = File(resumeData.data);
-        final tempExists = tempFile.existsSync();
-        final tempSize = tempExists ? tempFile.lengthSync() : 0;
-
-        if (!tempExists || tempSize == 0) {
+        final fromBytes = resumeData.requiredStartByte;
+        unawaited(DevLog.write(
+          'V16DL',
+          'resume taskId=$taskId index=${job.itemIndex} role=${roleOf(job)} '
+              'method=resume has_resume_data=true from_bytes=$fromBytes '
+              'total=$total result=requested reason=range_requested',
+        ));
+        if (total > 0 && fromBytes < total) {
+          job.progress = (fromBytes / total).clamp(0.0, 1.0);
+        }
+        accepted = await _resumeTask(task);
+        if (!accepted) {
           unawaited(DevLog.write(
             'V16DL',
             'resume taskId=$taskId index=${job.itemIndex} role=${roleOf(job)} '
-                'method=enqueue has_resume_data=true from_bytes=0 '
-                'total=$total result=restart reason=tempfile_missing',
+                'method=enqueue has_resume_data=true from_bytes=$fromBytes '
+                'total=$total result=restart reason=resume_failed',
           ));
+          _trackFailureReason(job, 'resume_failed');
         } else {
-          final fromBytes = resumeData.requiredStartByte;
-          if (fromBytes < (job.resumeStartByte ?? 0)) {
-            unawaited(DevLog.write(
-              'V16DL',
-              'resume_regress old=${job.resumeStartByte} new=$fromBytes reason=plugin_start_byte_regressed',
-            ));
-          }
-          job.resumeStartByte = math.max(job.resumeStartByte ?? 0, fromBytes);
-          unawaited(DevLog.write(
-            'V16DL',
-            'resume taskId=$taskId index=${job.itemIndex} role=${roleOf(job)} '
-                'method=resume has_resume_data=true from_bytes=$fromBytes '
-                'total=$total result=requested reason=range_requested',
-          ));
-          if (total > 0 && fromBytes < total) {
-            job.progress = (fromBytes / total).clamp(0.0, 1.0);
-          }
-          accepted = await _resumeTask(task);
-          if (!accepted) {
-            unawaited(DevLog.write(
-              'V16DL',
-              'resume taskId=$taskId index=${job.itemIndex} role=${roleOf(job)} '
-                  'method=enqueue has_resume_data=true from_bytes=$fromBytes '
-                  'total=$total result=restart reason=resume_failed',
-            ));
-          }
+          job.consecutiveFailCount = 0;
+          job.lastFailReason = null;
         }
       } else if (!loggedRestart && (job.attempts > 1 || job.progress > 0)) {
+        await _clearResumeState(job, taskId: taskId);
         unawaited(DevLog.write(
           'V16DL',
           'resume taskId=$taskId index=${job.itemIndex} role=${roleOf(job)} '
@@ -4789,10 +4905,11 @@ class DownloadManager extends ChangeNotifier {
       if (tempExists) tempSize = tempFile.lengthSync();
     }
     final hasEtag = resumeData?.eTag != null && resumeData!.eTag!.isNotEmpty;
-    if (resumeData != null && resumeData.requiredStartByte > (job.resumeStartByte ?? 0)) {
-      job.resumeStartByte = resumeData.requiredStartByte;
+    if (resumeData != null && resumeData.data.isNotEmpty) {
       job.resumeTempPath = resumeData.data;
-      job.resumeEtag = resumeData.eTag;
+      if (resumeData.eTag != null && resumeData.eTag!.isNotEmpty) {
+        job.resumeEtag = resumeData.eTag;
+      }
       await ResumableDownloadStore.instance.writeMetadata(
         job.key,
         ResumeMetadata(
@@ -4896,24 +5013,32 @@ class DownloadManager extends ChangeNotifier {
       }
     }
 
-    int partialBytes = 0;
-    String? tempPath = resumeData?.data ?? job.resumeTempPath;
-    if (tempPath != null && tempPath.isNotEmpty) {
-      try {
-        final f = File(tempPath);
-        if (f.existsSync()) {
-          partialBytes = f.lengthSync();
-        }
-      } catch (_) {}
-    }
-    if (resumeData != null && resumeData.requiredStartByte > partialBytes) {
-      partialBytes = resumeData.requiredStartByte;
-    }
-    if (job.resumeStartByte != null && job.resumeStartByte! > partialBytes) {
-      partialBytes = job.resumeStartByte!;
-    }
-    if (partialBytes <= 0 && job.progress > 0 && job.expectedBytes != null && job.expectedBytes! > 0) {
-      partialBytes = (job.expectedBytes! * job.progress).round();
+    final partialBytes = await _calculateResumeStartByte(
+      job,
+      resumeData: resumeData,
+      taskId: taskId,
+      filename: job.filename,
+      batchId: batch.batchId,
+    );
+
+    final isResumeFail = desc.contains('resume_failed') || update.exception is TaskResumeException;
+    final failReason = isResumeFail
+        ? 'resume_failed'
+        : (cause.isNotEmpty ? cause : (_transferReason(update).isNotEmpty ? _transferReason(update) : update.status.name));
+    _trackFailureReason(job, failReason);
+
+    // B5: 同一原因连续失败 2 次（例如两次都是 resume_failed）时，不再用同样的参数重试：按 B1 重新计算起点；仍然失败就转为「已中断，点继续」，不得无限循环。
+    if (job.consecutiveFailCount >= 2 && isResumable) {
+      if (job.consecutiveFailCount > 2) {
+        job.state = JobState.paused;
+        job.userPaused = false;
+        job.error = '已中断，点继续';
+        _autoResumeTimers.remove(job.key)?.cancel();
+        await _persist(batch);
+        notifyListeners();
+        unawaited(_refreshNotification(batch));
+        return;
+      }
     }
 
     // Rule 2a: If temp file has bytes (> 0), ANY failure (resume_failed, connection abort,
@@ -4924,11 +5049,10 @@ class DownloadManager extends ChangeNotifier {
       job.state = JobState.paused;
       job.lastProgressAt = DateTime.now().millisecondsSinceEpoch;
       job.resumeStartByte = partialBytes;
-      if (tempPath != null && tempPath.isNotEmpty) {
-        job.resumeTempPath = tempPath;
+      if (job.resumeTempPath != null && job.resumeTempPath!.isNotEmpty) {
         final updatedResumeData = ResumeData(
           update.task,
-          tempPath,
+          job.resumeTempPath!,
           partialBytes,
           resumeData?.eTag ?? job.resumeEtag,
         );
@@ -4940,9 +5064,7 @@ class DownloadManager extends ChangeNotifier {
         job.resumeEtag = resumeData.eTag;
       }
 
-      final lastFailReason = cause.isNotEmpty
-          ? cause
-          : (_transferReason(update).isNotEmpty ? _transferReason(update) : update.status.name);
+      final lastFailReason = failReason;
 
       final settings = await AppSettings.load();
       if (settings.manualResumeOnlyOnDisconnect) {
@@ -4991,14 +5113,15 @@ class DownloadManager extends ChangeNotifier {
           }
           _autoResumeRetries[job.key] = nextRetry;
           job.autoResumeRetry = nextRetry;
-          int actualStartByte = partialBytes;
-          if (job.resumeTempPath != null) {
-            try {
-              final f = File(job.resumeTempPath!);
-              if (f.existsSync()) actualStartByte = f.lengthSync();
-            } catch (_) {}
+          int actualStartByte = await _calculateResumeStartByte(
+            job,
+            taskId: taskId,
+            filename: job.filename,
+            batchId: batch.batchId,
+          );
+          if (actualStartByte == 0) {
+            await _clearResumeState(job, taskId: taskId);
           }
-          job.resumeStartByte = actualStartByte;
           unawaited(DevLog.write(
             'V16DL',
             'auto_resume n=$nextRetry/5 from_bytes=$actualStartByte reason=$lastFailReason',
@@ -5017,6 +5140,8 @@ class DownloadManager extends ChangeNotifier {
         unawaited(_refreshNotification(batch));
       }
       return;
+    } else if (isResumable) {
+      await _clearResumeState(job, taskId: taskId);
     }
 
     // No connection means the transfer never had a chance: park the file until
@@ -5796,15 +5921,57 @@ class DownloadManager extends ChangeNotifier {
       _inFlightResumes.remove(job.key);
       _autoResumeTimers.remove(job.key)?.cancel();
       _autoResumeRetries.remove(job.key);
+      job.consecutiveFailCount = 0;
+      job.lastFailReason = null;
       job.error = null;
       job.lastProgressAt = now;
-      job.state = JobState.queued;
-      try {
-        await _enqueueAttempt(batch, job, source: 'resume_batch');
-      } catch (e) {
-        _log('resume enqueue failed ${job.key}: $e');
-        job.state = JobState.failed;
-        job.error = '加入下载队列失败';
+
+      // A1: 用户暂停后点继续：对同一个已暂停的任务调用插件 resume（同一个 taskId，不开新一轮）
+      bool resumedSameTask = false;
+      final id = job.currentTaskId;
+      if (id != null && !needsSessionDownload(batch, job)) {
+        try {
+          final task = await _taskForId(id);
+          if (task is DownloadTask && task.allowPause) {
+            final startByte = await _calculateResumeStartByte(
+              job,
+              taskId: id,
+              filename: job.filename,
+              batchId: batch.batchId,
+            );
+            if (startByte > 0) {
+              final rData = await _getResumeData(id);
+              final path = rData?.data ?? job.resumeTempPath;
+              if (path != null && path.isNotEmpty) {
+                await _setResumeData(ResumeData(
+                  task,
+                  path,
+                  startByte,
+                  rData?.eTag ?? job.resumeEtag,
+                ));
+              }
+            }
+            final ok = await _resumeTask(task);
+            if (ok) {
+              resumedSameTask = true;
+              job.state = JobState.active;
+              _log('resumeTask taskId=$id success=true');
+            }
+          }
+        } catch (e) {
+          _log('resume same task failed $id: $e');
+        }
+      }
+
+      if (!resumedSameTask) {
+        job.state = JobState.queued;
+        try {
+          await _enqueueAttempt(batch, job, source: 'resume_batch');
+        } catch (e) {
+          _log('resume enqueue failed ${job.key}: $e');
+          job.state = JobState.failed;
+          job.error = '加入下载队列失败';
+        }
       }
     }
     await _persist(batch);

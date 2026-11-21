@@ -517,6 +517,11 @@ void main() {
       final batch = createBatch(postId: 'disconnect-test');
       final job = batch.jobs.first;
       job.progress = 0.35;
+      final partFile = File('${tempDir.path}/part.tmp');
+      final raf0 = await partFile.open(mode: FileMode.write);
+      await raf0.truncate(357214889);
+      await raf0.close();
+      job.resumeTempPath = partFile.path;
 
       final update = TaskStatusUpdate(
         DownloadTask(
@@ -1074,6 +1079,9 @@ void main() {
       );
 
       // Plugin provides ResumeData at failure callback time
+      final rafL = await localPartFile.open(mode: FileMode.write);
+      await rafL.truncate(30 * 1024 * 1024);
+      await rafL.close();
       mockResumeData[job.key] = ResumeData(
         failUpdate.task,
         localPartFile.path,
@@ -1129,6 +1137,9 @@ void main() {
       );
 
       // Disconnect 1: 100MB
+      final rafD1 = await localPartFile.open(mode: FileMode.write);
+      await rafD1.truncate(100 * 1024 * 1024);
+      await rafD1.close();
       mockResumeData[job.key] = ResumeData(task, localPartFile.path, 100 * 1024 * 1024, null);
       await DownloadManager.instance.taskFailureForTesting(
         batch,
@@ -1138,6 +1149,9 @@ void main() {
       expect(job.resumeStartByte, 100 * 1024 * 1024);
 
       // Disconnect 2: progressed to 250MB
+      final rafD2 = await localPartFile.open(mode: FileMode.write);
+      await rafD2.truncate(250 * 1024 * 1024);
+      await rafD2.close();
       mockResumeData[job.key] = ResumeData(task, localPartFile.path, 250 * 1024 * 1024, null);
       await DownloadManager.instance.taskFailureForTesting(
         batch,
@@ -1153,7 +1167,7 @@ void main() {
         job,
         TaskStatusUpdate(task, TaskStatus.failed, TaskConnectionException('abort')),
       );
-      expect(job.resumeStartByte, 250 * 1024 * 1024, reason: 'Start byte must never regress');
+      expect(job.resumeStartByte, 250 * 1024 * 1024, reason: 'Start byte must reflect actual disk file length');
     });
 
     test('size_mismatch discards resume data and restarts from zero', () async {
