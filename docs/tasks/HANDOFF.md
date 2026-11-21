@@ -3,20 +3,16 @@
 > 给接手的 agent 会话：先读这一页，再读 `docs/roadmap.md` 与对应版本的
 > `docs/tasks/*-evidence.md`。这里的约定与约束优先级高于任何“看起来更快”的做法。
 
-## 1. 当前状态（截至 parser 1.4.17 发布）
+## 1. 当前状态（截至 v1.12.0 发布准备）
 
-- **App**：仓库内 `pubspec.yaml` 为 `1.11.0+59`（v1.11.0，versionCode 59）。
-- **用户设备**：装的是验证包 **versionCode 61**（`versionName=1.11.0`，
-  内置 parser 1.4.17 / manifestVersion 14），已通过真机验证。
+- **App**：仓库内 `pubspec.yaml` 为 `1.12.0+79`（v1.12.0，versionCode 79）。
 - **内置 parser**：仓库 `app/assets/parser/` 为 **1.4.17 / manifestVersion 14**，
   bundle sha256 `f49a8928542842b2f6c1d1730c61815500d8c4ce790e50f4dc8be1bbd207eca1`。
 - **parser 发布状态**：已发布。`master` 上的 merge commit
   `fdc9386` 打了 annotated tag `parser-v1.4.17`，Release 资产与
   `spec/v2/manifest.json` 已由 CI 更新，`tools/verify_v2_channel.mjs` 校验通过。
-- **versionCode 规则**：验证包占用了 **60、61**，**正式 App 的下一个版本
-  versionCode 必须 ≥ 62**（已写在 `docs/roadmap.md` 顶部）。
-- **App 发布状态**：v1.11.0 之后没有再发正式版本；下一次发版就是 v1.12（或
-  v1.11.1 修订），versionCode ≥ 62。
+- **versionCode 规则**：v1.12.0 正式包使用 **versionCode 79**。**下一个正式 versionCode 必须 ≥ 80**。
+- **App 发布状态**：v1.12.0 发布准备完成（versionCode 79）。
 
 ## 2. 分支与发布流程
 
@@ -101,25 +97,18 @@
 - 清单位于 **`docs/tasks/v1.11.md`**；每个验证包都按它走一遍，额外项目写进
   当次的 evidence 文档。
 
-## 6. 待办
+## 6. 经验教训与下一步
 
-### 6.1 下一版 App（必须在 App 侧修，parser 兜不住）
+### 6.1 v1.12 教训（简要）
 
-- **XhsDomain 反复切换**：日志里 `xiaohongshu.com` 与 `rednote.com` 在
-  `event=choose … reason=alias_valid` 之间来回切换 15–17 次（ParseWebView
-  导航 15–17 次、8.4–8.8s）。要设切换上限，并在检测到未登录重定向
-  （`/explore`、`/login`）时立即停止导航。
-- **不显示原始异常文案**：界面曾出现 `FormatException: Invalid parser hook
-  result`。所有未识别异常都要折成可读文案；已知站点可能需要登录时提供
-  「去登录」，不要只给「重试」。
-- **TikTok `REGION_RESTRICTED`**：文案要说明是地区限制，登录无法解决。
-- 细节见 `docs/tasks/parser-1.4.17-evidence.md` §12 与 `docs/roadmap.md`
-  「v1.11 之后的待办」。
+1. **保护性阻塞条件必须有真机耗时数据**：不能凭主观假设在关键路径设置过紧的超时或阻塞限制，保护性逻辑必须结合真机真实网络与不同机型实测耗时。
+2. **续传起点只能取磁盘上临时文件的实际长度**：续传起点与已下载字节严格以磁盘上实际落盘的物理临时文件长度为准，彻底废除「只增不减」与「取较大者」的假设。
+3. **暂停后继续必须恢复同一个任务**：用户暂停后点击继续，必须直接恢复原已暂停的原生任务（保持同一 taskId），绝不能开启新轮次取消旧任务，避免误删 ResumeData 与临时文件。
+4. **续传测试必须包含首轮任务**：断点续传测试必须覆盖从头开始下载的首轮任务在暂停与断网时的断点保留与恢复，不能只测试断网重入队后的后续轮次。
+5. **不要在插件之上叠加自己的状态机**：充分复用原生与成熟插件（如 `background_downloader`）自身的状态管理机制，避免在其之上重复构建容易产生并发竞态的外部状态机。
 
-### 6.2 后续版本
+### 6.2 下一步
 
-- **v1.12**：本地缩略图原生按缩小比例解码（独立线程池、可取消）、断点续传
-  （`Range` + `If-Range`，ETag / Last-Modified 校验）、后台
-  `downloads-init` 4–8 秒的缩短（见 `docs/tasks/v1.12.md`）、缩略图内存与落盘缓存。
-- **v1.13**：实况合成为系统动态照片（先小米 MicroVideo）。
+- **v2.0**：统一后台传输服务（下载与 Drive 上传共用）。
+- **v1.13**（排在 v2.0 之后）：实况合成为系统动态照片（先小米 MicroVideo）。
 - 完整列表见 `docs/roadmap.md`。

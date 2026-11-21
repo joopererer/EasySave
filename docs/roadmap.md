@@ -5,11 +5,9 @@
 
 ## 当前版本
 
-- App：**v1.11.0**（versionCode 59）。下一版 **v1.12**。
-- 内置 parser：**1.4.16**（manifestVersion 12）。
-- 验证包（**仅供真机验证，未发布、未打 tag**）：versionCode 60 内置 parser 1.4.17/13、
-  versionCode 61 内置 parser 1.4.17/14（已通过真机验证并发布 1.4.17）。
-  因此 **正式 App 的下一个 versionCode 须 ≥ 62**（60 与 61 已被验证包占用，不能复用）。
+- App：**v1.12.0**（versionCode 79）。下一版 **v2.0**。
+- 内置 parser：**1.4.17**（manifestVersion 14）。
+- versionCode 规则：正式 App 的下一个 versionCode 须 ≥ 80。
 
 ## v1.11
 
@@ -61,24 +59,25 @@
 
 ## v1.12
 
-- [ ] 后台引擎 `downloads-init` 4–8 秒的缩短（依据
+- [x] 后台引擎 `downloads-init` 4–8 秒的缩短（依据
       [`docs/tasks/build57-download-start-evidence.md`](tasks/build57-download-start-evidence.md) §6，
       任务拆分见 [`docs/tasks/v1.12.md`](tasks/v1.12.md)）：已结算的终态批次跳过
       `_afterTerminal`；`cancel-notification` 只在本次会话显示过通知时调用；
       `reconcile` 不阻塞入队。
-- [ ] 本地缩略图原生按缩小比例解码：独立线程池、可取消，替代 photo_manager 缩略图。
-- [ ] 缩略图超时回退网络封面并延迟重试（v1.11 第一批只加诊断日志，不改行为）。
-- [ ] 断点续传：`Range` + `If-Range`，用 ETag / Last-Modified 校验。
-- [ ] 内存缓存上限与落盘缩略图缓存。
-
-## v1.13
-
-- [ ] 实况合成为系统动态照片（可选，先小米 MicroVideo），依据公开格式规范独立实现。
+- [x] 本地缩略图原生按缩小比例解码：独立线程池、可取消，替代 photo_manager 缩略图。
+- [x] 缩略图超时回退网络封面并延迟重试（v1.11 第一批只加诊断日志，不改行为）。
+- [x] 断点续传：`Range` + `If-Range`，用 ETag / Last-Modified 校验。
+- [x] 内存缓存上限与落盘缩略图缓存。
 
 ## v2.0
 
+- [ ] 第一阶段：统一后台传输服务（下载与 Drive 上传共用）。
 - [ ] 云同步：Google Drive 为主，后续支持自托管。
 - [ ] 标签（在云同步之后）。
+
+## v1.13（排在 v2.0 之后）
+
+- [ ] 实况合成为系统动态照片（可选，先小米 MicroVideo），依据公开格式规范独立实现。
 
 ## v1.11 之后的待办
 
