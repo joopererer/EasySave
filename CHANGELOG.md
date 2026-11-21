@@ -9,6 +9,17 @@ This file documents notable user-facing changes following [Keep a Changelog](htt
 
 ### 客户端 / App
 
+- 首轮任务暂停后继续恢复同一任务（build 77）：
+  - 彻底修复从头开始下载的任务（首轮任务）暂停后点击继续从 0 重新开始的问题：首轮任务启动时，临时文件由插件自行命名和存放，插件暂停时生成并持久化包含临时文件实际路径的 ResumeData；App 在暂停回调中异步获取 ResumeData 并保存 `job.resumeTempPath` 与 `job.resumeStartByte`；
+  - 用户点击继续时，若该 job 存在处于 paused 状态的插件任务，直接调用插件 resume 恢复同一个 taskId，跳过 preflight 检查，不开新一轮（保持单轮次任务不变）；
+  - 断点续传起点与 preflight partial_bytes 计算均优先读取插件 ResumeData 中的物理临时文件大小作为唯一准则，消除因 App 无法获知插件内部临时文件路径而误判 partial_bytes=0 并误删 ResumeData 的问题；
+  - 插件暂停时补充记录结构化诊断日志 `pause_resume_data taskId=... present=yes|no required_start_byte=... temp_exists=... temp_size=...`；App 重启或进程重建后根据持久化状态安全重建任务并恢复。
+  First-round task pause and resume restoration (build 77):
+  - Completely fixes an issue where tasks started from scratch (first-round tasks) restarted from 0 upon continue after user pause: for first-round tasks, temporary files are allocated and managed by the plugin; upon pause, the plugin generates and saves ResumeData with the actual temp file path; the App asynchronously fetches ResumeData and persists `job.resumeTempPath` and `job.resumeStartByte`;
+  - When the user taps continue, if the job has a paused plugin task, directly invokes plugin resume for the exact same taskId, skipping preflight and avoiding initiating a new round;
+  - Resumption start byte and preflight partial_bytes calculations prioritize reading the physical temp file size recorded in plugin ResumeData as the single source of truth, eliminating the issue where the App could not locate the plugin-managed temp file, mistakenly assumed partial_bytes=0, and cleared ResumeData;
+  - Native plugin emits structured diagnostic log `pause_resume_data taskId=... present=yes|no required_start_byte=... temp_exists=... temp_size=...` upon pause; safely reconstructs and resumes paused tasks after app restart or process death.
+
 - 断点以磁盘临时文件为准与暂停恢复修复（build 76）：
   - 修复暂停后点击继续从 0 重新下载的问题：用户主动暂停后点击继续，直接针对原已暂停的原生任务恢复下载（保持同一 taskId，不发起新一轮），消除因新轮次取消旧任务而误删 ResumeData 的问题；「只能有一个原生任务」检查中将 paused 视为不在运行，取消旧任务前强制备份保护已有临时文件；
   - 续传起点严格以磁盘上实际落盘的物理临时文件长度为准，彻底废除「只增不减」与「取较大者」逻辑；记录大于文件物理长度时按文件实际长度续传并记录日志（`resume_data_ahead`）；从 0 重新下载时彻底清空 App 与插件续传记录；同一原因连续失败超过 2 次（如 `resume_failed`）后转入「已中断，点继续」，避免死循环；
