@@ -157,10 +157,10 @@ void main() {
       expect(job.state, equals(JobState.paused));
       expect(batch.isTerminal, isFalse);
 
-      // Verify no user_canceled temp_discard was logged
+      // Verify no user_canceled temp_discard was logged, and no bogus cancel_call source=internal_interrupt was logged
       final logs = DevLog.recentLines(500);
       expect(logs.any((m) => m.contains('temp_discard reason=user_canceled')), isFalse);
-      expect(logs.any((m) => m.contains('cancel_call') && m.contains('source=internal_interrupt')), isTrue);
+      expect(logs.any((m) => m.contains('cancel_call') && m.contains('source=internal_interrupt')), isFalse);
     });
 
     test('A6.2: User cancellation sets userCancelRequested, deletes temp file and logs source', () async {

@@ -3897,10 +3897,6 @@ class DownloadManager extends ChangeNotifier {
         if (!job.userCancelRequested) {
           // Internal interruption: preserve temp file and resume data, enter "下载中断"
           // (JobState.paused), do NOT settle as failed!
-          unawaited(DevLog.write(
-            'V16DL',
-            'cancel_call taskId=${update.task.taskId} source=internal_interrupt',
-          ));
           unawaited(_failAttempt(batch, job, update));
           return;
         }
@@ -5026,7 +5022,7 @@ class DownloadManager extends ChangeNotifier {
     // host class and the cause are fixed tokens — never the URL, the host name
     // or its query.
     final cap = retryCapFor(batch, job);
-    final cause = _failureCause(update);
+    final cause = _failureCause(update, userCancelRequested: job.userCancelRequested);
 
     final desc = update.exception?.description ?? '';
     final isSizeMismatch = desc.contains('size_mismatch');
@@ -5097,8 +5093,47 @@ class DownloadManager extends ChangeNotifier {
     final isResumeFail = desc.contains('resume_failed') || update.exception is TaskResumeException;
     final failReason = isResumeFail
         ? 'resume_failed'
-        : (cause.isNotEmpty ? cause : (_transferReason(update).isNotEmpty ? _transferReason(update) : update.status.name));
+        : (update.status == TaskStatus.canceled && !job.userCancelRequested
+            ? 'interrupted'
+            : (cause.isNotEmpty
+                ? cause
+                : (_transferReason(update, userCancelRequested: job.userCancelRequested).isNotEmpty
+                    ? _transferReason(update, userCancelRequested: job.userCancelRequested)
+                    : update.status.name)));
     _trackFailureReason(job, failReason);
+
+    // Rule A2: App-initiated / internal cancellation without user cancel requested
+    // must never lead to final failure.
+    final isInternalInterrupt = update.status == TaskStatus.canceled && !job.userCancelRequested;
+    if (isInternalInterrupt) {
+      if (partialBytes > 0 && isResumable) {
+        // Handled below by the existing partialBytes > 0 && isResumable block
+      } else {
+        // If no downloaded data: automatically re-enqueue from scratch, counting towards regular retry attempts.
+        if (job.attempts < cap) {
+          unawaited(DevLog.write(
+            'V16DL',
+            'auto_retry reason=interrupted from_bytes=0 attempt=${job.attempts + 1}/$cap',
+          ));
+          job.state = JobState.queued;
+          job.error = null;
+          await _persist(batch);
+          notifyListeners();
+          await _enqueueAttempt(batch, job, source: 'interrupted_retry');
+          return;
+        } else {
+          // Cap exhausted: park as paused ("已中断，点继续"), NEVER final fail, NEVER cleanup temp with final_fail
+          job.state = JobState.paused;
+          job.userPaused = false;
+          job.error = '已中断，点继续';
+          _autoResumeTimers.remove(job.key)?.cancel();
+          await _persist(batch);
+          notifyListeners();
+          unawaited(_refreshNotification(batch));
+          return;
+        }
+      }
+    }
 
     // B5: 同一原因连续失败 2 次（例如两次都是 resume_failed）时，不再用同样的参数重试：按 B1 重新计算起点；仍然失败就转为「已中断，点继续」，不得无限循环。
     if (job.consecutiveFailCount >= 2 && isResumable) {
@@ -5255,7 +5290,7 @@ class DownloadManager extends ChangeNotifier {
       'candidate index=${job.itemIndex} role=${roleOf(job)} '
           'label=${candidateLabelOf(_candidateUrlOf(job) ?? '')} '
           'host_class=${_hostClassOf(batch, job)} bytes=- '
-          'sniff=- result=transfer_failed reason=${_transferReason(update)} '
+          'sniff=- result=transfer_failed reason=${_transferReason(update, userCancelRequested: job.userCancelRequested)} '
           'cause=$cause attempts=${job.attempts}/$cap '
           'candidate=${candidateProgressLabel(job)} '
           'format_pref=${batch.formatPref.logToken}'
@@ -5278,7 +5313,8 @@ class DownloadManager extends ChangeNotifier {
     }
     if (await _importBestSetAside(batch, job, reason: 'transfer_failed')) return;
     _log('transfer gave up index=${job.itemIndex} role=${roleOf(job)} '
-        'reason=${_transferReason(update)} cause=${_failureCause(update)} '
+        'reason=${_transferReason(update, userCancelRequested: job.userCancelRequested)} '
+        'cause=${_failureCause(update, userCancelRequested: job.userCancelRequested)} '
         'detail=${update.exception?.toString() ?? 'unknown'}');
     await _cleanupJobTemp(batch, job);
     // A file that never got a connection is a network failure, never a content
@@ -5329,7 +5365,10 @@ class DownloadManager extends ChangeNotifier {
   }
 
   /// Short, log-safe transfer failure reason (no URL, no query).
-  static String _transferReason(TaskStatusUpdate update) {
+  static String _transferReason(TaskStatusUpdate update, {bool userCancelRequested = false}) {
+    if (update.status == TaskStatus.canceled) {
+      return userCancelRequested ? 'canceled' : 'interrupted';
+    }
     final status = update.responseStatusCode;
     if (status != null) return 'http_$status';
     final description = update.exception?.description ?? '';
@@ -5345,7 +5384,10 @@ class DownloadManager extends ChangeNotifier {
 
   /// Detail of a connection failure as a fixed token. The native description
   /// is never logged: on Android it embeds the host name and the request URL.
-  static String _failureCause(TaskStatusUpdate update) {
+  static String _failureCause(TaskStatusUpdate update, {bool userCancelRequested = false}) {
+    if (update.status == TaskStatus.canceled) {
+      return userCancelRequested ? 'canceled' : 'interrupted';
+    }
     if (update.responseStatusCode != null) return 'http';
     final description = update.exception?.description ?? '';
     bool has(String pattern) =>
@@ -6695,10 +6737,13 @@ String failedJobLogLine(DownloadBatch batch, DownloadJob job) {
       ? 'POLICY'
       : error.contains('不是图片') ||
             error.contains('不是视频') ||
-            error.contains('下载失败')
+            error.contains('wrong_content') ||
+            error.contains('sniff_mismatch')
       ? 'CONTENT'
       : error.contains('保存') || error.contains('import')
       ? 'IMPORT'
+      : error.contains('中断') || error.contains('interrupted')
+      ? 'INTERRUPTED'
       : 'TRANSFER';
   return 'item failed index=${job.itemIndex} role=${DownloadManager.roleOf(job)} '
       'reason=$reason attempt=${job.attempts}/${retryCapFor(batch, job)}';
