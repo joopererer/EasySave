@@ -386,11 +386,17 @@ class DownloadTaskRunner(context: TaskJobContext) : TaskRunner(context) {
 
                 TaskStatus.paused -> {
                     BDPlugin.pausedTaskIds.remove(task.taskId)
+                    val tempFile = if (tempFilePath.isNotEmpty()) File(tempFilePath) else null
+                    val tempExists = tempFile?.exists() ?: false
+                    val tempSize = if (tempExists) tempFile?.length() ?: 0L else 0L
+                    val present = if (taskCanResume) "yes" else "no"
+                    val reqStartByte = if (tempSize > 0) tempSize else (bytesTotal + startByte)
+                    logV16dl("pause_resume_data taskId=${task.taskId} present=$present required_start_byte=$reqStartByte temp_exists=$tempExists temp_size=$tempSize")
                     if (taskCanResume) {
                         Log.i(TAG, "Task ${task.taskId} paused")
                         processResumeData(
                             ResumeData(
-                                task, tempFilePath, bytesTotal + startByte, eTagHeader
+                                task, tempFilePath, reqStartByte, eTagHeader
                             ), prefs
                         )
                         return TaskStatus.paused
@@ -400,7 +406,7 @@ class DownloadTaskRunner(context: TaskJobContext) : TaskRunner(context) {
                         // so we only store local resumeData without posting it
                         Log.i(TAG, "Task ${task.taskId} paused in order to re-enqueue")
                         BDPlugin.localResumeData[task.taskId] = ResumeData(
-                            task, tempFilePath, bytesTotal + startByte, eTagHeader
+                            task, tempFilePath, reqStartByte, eTagHeader
                         )
                         return TaskStatus.paused
                     }

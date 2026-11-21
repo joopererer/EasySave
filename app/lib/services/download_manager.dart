@@ -2144,7 +2144,14 @@ class DownloadManager extends ChangeNotifier {
   Future<ResumeData?> _getResumeData(String taskId) async {
     final hook = getResumeDataForTesting;
     if (hook != null) return await hook(taskId);
-    return await FileDownloader().getResumeData(taskId);
+    try {
+      return await FileDownloader().getResumeData(taskId).timeout(
+        const Duration(milliseconds: 300),
+        onTimeout: () => null,
+      );
+    } catch (_) {
+      return null;
+    }
   }
 
   Future<void> _setResumeData(ResumeData resumeData) async {
@@ -2602,9 +2609,27 @@ class DownloadManager extends ChangeNotifier {
     String? filename,
     String? batchId,
   }) async {
-    String? tempPath = tempPathOverride ?? resumeData?.data ?? job.resumeTempPath;
+    final isResumable = !job.isImage &&
+        (job.expectedBytes == null || job.expectedBytes! >= kResumableMinBytes);
+    if (!isResumable) return 0;
+
+    final tId = taskId ?? job.currentTaskId ?? job.key;
+    ResumeData? rData = resumeData;
+    if (rData == null && (job.resumeTempPath == null || job.resumeTempPath!.isEmpty)) {
+      if (tId.isNotEmpty) {
+        try {
+          rData = await _getResumeData(tId);
+        } catch (_) {}
+      }
+      if (rData == null && tId != job.key && job.key.isNotEmpty) {
+        try {
+          rData = await _getResumeData(job.key);
+        } catch (_) {}
+      }
+    }
+
+    String? tempPath = tempPathOverride ?? rData?.data ?? job.resumeTempPath;
     if (tempPath == null || tempPath.isEmpty) {
-      final tId = taskId ?? job.currentTaskId ?? job.key;
       final fName = filename ?? job.filename;
       final bId = batchId ?? '';
       try {
@@ -2635,15 +2660,15 @@ class DownloadManager extends ChangeNotifier {
       return 0;
     }
 
-    final recorded = resumeData?.requiredStartByte ?? job.resumeStartByte ?? 0;
+    final recorded = rData?.requiredStartByte ?? job.resumeStartByte ?? 0;
     if (recorded > fileSize) {
       unawaited(DevLog.write('V16DL', 'resume_data_ahead record=$recorded file=$fileSize'));
     }
 
     job.resumeStartByte = fileSize;
     job.resumeTempPath = tempPath;
-    if (resumeData?.eTag != null && resumeData!.eTag!.isNotEmpty) {
-      job.resumeEtag = resumeData.eTag;
+    if (rData?.eTag != null && rData!.eTag!.isNotEmpty) {
+      job.resumeEtag = rData.eTag;
     }
     return fileSize;
   }
@@ -2673,7 +2698,18 @@ class DownloadManager extends ChangeNotifier {
 
   Future<void> _safeCancelPreservingTemp(String taskId, DownloadJob job) async {
     File? preserved;
-    final tempPath = job.resumeTempPath;
+    var tempPath = job.resumeTempPath;
+    final isResumable = !job.isImage &&
+        (job.expectedBytes == null || job.expectedBytes! >= kResumableMinBytes);
+    if ((tempPath == null || tempPath.isEmpty) && isResumable) {
+      try {
+        final rd = await _getResumeData(taskId);
+        if (rd != null && rd.data.isNotEmpty) {
+          tempPath = rd.data;
+          job.resumeTempPath = rd.data;
+        }
+      } catch (_) {}
+    }
     if (tempPath != null && tempPath.isNotEmpty) {
       try {
         final f = File(tempPath);
@@ -3130,19 +3166,42 @@ class DownloadManager extends ChangeNotifier {
     if (job.resumeStartByte != null && job.resumeStartByte! > 0) {
       partialBytes = job.resumeStartByte!;
     }
-    if (partialBytes == 0 && job.currentTaskId != null) {
+    final isResumable = !job.isImage &&
+        (job.expectedBytes == null || job.expectedBytes! >= kResumableMinBytes);
+    if (partialBytes == 0 && isResumable && (job.currentTaskId != null || job.key.isNotEmpty)) {
       try {
-        final rd = await _getResumeData(job.currentTaskId!).timeout(
+        final tId = job.currentTaskId ?? job.key;
+        var rd = await _getResumeData(tId).timeout(
           const Duration(milliseconds: 300),
           onTimeout: () => null,
         );
-        if (rd != null && rd.requiredStartByte > 0) {
-          partialBytes = rd.requiredStartByte;
-          job.resumeStartByte = rd.requiredStartByte;
-          job.resumeTempPath = rd.data;
-          job.resumeEtag = rd.eTag;
+        if (rd == null && tId != job.key) {
+          rd = await _getResumeData(job.key).timeout(
+            const Duration(milliseconds: 300),
+            onTimeout: () => null,
+          );
+        }
+        if (rd != null && rd.data.isNotEmpty) {
+          final f = File(rd.data);
+          if (f.existsSync()) {
+            final len = f.lengthSync();
+            if (len > 0) {
+              partialBytes = len;
+              job.resumeStartByte = len;
+              job.resumeTempPath = rd.data;
+              job.resumeEtag = rd.eTag;
+            }
+          } else if (rd.requiredStartByte > 0) {
+            partialBytes = rd.requiredStartByte;
+            job.resumeStartByte = rd.requiredStartByte;
+            job.resumeTempPath = rd.data;
+            job.resumeEtag = rd.eTag;
+          }
         }
       } catch (_) {}
+    }
+    if (partialBytes == 0 && job.resumeStartByte != null && job.resumeStartByte! > 0) {
+      partialBytes = job.resumeStartByte!;
     }
     if (partialBytes == 0) {
       final candidates = <String>[];
@@ -3852,6 +3911,20 @@ class DownloadManager extends ChangeNotifier {
         }
         unawaited(_afterTerminal(batch, recovered: false));
       case TaskStatus.paused:
+        job.state = JobState.paused;
+        final currentJob = job;
+        unawaited(() async {
+          try {
+            final rData = await _getResumeData(task.taskId);
+            if (rData != null) {
+              currentJob.resumeStartByte = rData.requiredStartByte;
+              currentJob.resumeTempPath = rData.data;
+              currentJob.resumeEtag = rData.eTag;
+              await _persist(batch);
+            }
+          } catch (_) {}
+        }());
+        notifyListeners();
       case TaskStatus.enqueued:
       case TaskStatus.waitingToRetry:
         notifyListeners();
@@ -5899,6 +5972,19 @@ class DownloadManager extends ChangeNotifier {
                   job.resumeEtag = resumeData.eTag;
                 }
               } catch (_) {}
+              if (pauseForTesting != null) {
+                final rd = await _getResumeData(id);
+                final p = rd?.data ?? job.resumeTempPath;
+                final f = p != null && p.isNotEmpty ? File(p) : null;
+                final exists = f?.existsSync() ?? false;
+                final size = exists ? f!.lengthSync() : 0;
+                final present = rd != null || job.resumeTempPath != null ? 'yes' : 'no';
+                final reqStart = rd?.requiredStartByte ?? job.resumeStartByte ?? size;
+                unawaited(DevLog.write(
+                  'V16DL',
+                  'pause_resume_data taskId=$id present=$present required_start_byte=$reqStart temp_exists=$exists temp_size=$size',
+                ));
+              }
             }
           } else {
             await _cancelTaskWithId(id, source: 'pause_batch_fallback');
@@ -5916,6 +6002,7 @@ class DownloadManager extends ChangeNotifier {
     batch = await _ownedOrAdopt(batch);
     final now = DateTime.now().millisecondsSinceEpoch;
     for (final job in batch.jobs.where((j) => j.state == JobState.paused)) {
+      final wasUserPaused = job.userPaused;
       job.userPaused = false;
       job.userCancelRequested = false;
       _inFlightResumes.remove(job.key);
@@ -5926,31 +6013,60 @@ class DownloadManager extends ChangeNotifier {
       job.error = null;
       job.lastProgressAt = now;
 
-      // A1: 用户暂停后点继续：对同一个已暂停的任务调用插件 resume（同一个 taskId，不开新一轮）
+      // A1: 用户暂停后点继续：只要该 job 有一个处于 paused 状态的插件任务，就直接对它调用插件 resume（同一个 taskId），不做 preflight 判断，也不开新一轮
       bool resumedSameTask = false;
       final id = job.currentTaskId;
       if (id != null && !needsSessionDownload(batch, job)) {
         try {
-          final task = await _taskForId(id);
-          if (task is DownloadTask && task.allowPause) {
+          var task = await _taskForId(id);
+          final status = await _queryTaskStatus(id);
+          final isPluginPaused = (status == TaskStatus.paused || (wasUserPaused && status != TaskStatus.failed && status != TaskStatus.complete));
+          if (task == null && isPluginPaused && !job.isImage) {
+            task = DownloadTask(
+              taskId: id,
+              url: job.urls.first,
+              filename: job.filename,
+              directory: downloadTempDirectory(batch.batchId, job.key),
+              baseDirectory: BaseDirectory.temporary,
+              group: batch.batchId,
+              updates: Updates.statusAndProgress,
+              retries: 0,
+              allowPause: true,
+            );
+          }
+          if (task is DownloadTask && task.allowPause && isPluginPaused) {
+            var rData = await _getResumeData(id);
+            if (rData == null && id != job.key) {
+              rData = await _getResumeData(job.key);
+            }
+            if (rData == null && job.resumeTempPath != null && job.resumeTempPath!.isNotEmpty) {
+              rData = ResumeData(
+                task,
+                job.resumeTempPath!,
+                job.resumeStartByte ?? 0,
+                job.resumeEtag,
+              );
+              await _setResumeData(rData);
+            }
+
             final startByte = await _calculateResumeStartByte(
               job,
+              resumeData: rData,
               taskId: id,
               filename: job.filename,
               batchId: batch.batchId,
             );
-            if (startByte > 0) {
-              final rData = await _getResumeData(id);
-              final path = rData?.data ?? job.resumeTempPath;
-              if (path != null && path.isNotEmpty) {
-                await _setResumeData(ResumeData(
-                  task,
-                  path,
-                  startByte,
-                  rData?.eTag ?? job.resumeEtag,
-                ));
-              }
+
+            final path = rData?.data ?? job.resumeTempPath;
+            if (path != null && path.isNotEmpty) {
+              await _setResumeData(ResumeData(
+                task,
+                path,
+                startByte,
+                rData?.eTag ?? job.resumeEtag,
+              ));
             }
+
             final ok = await _resumeTask(task);
             if (ok) {
               resumedSameTask = true;
