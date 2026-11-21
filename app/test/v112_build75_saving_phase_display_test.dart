@@ -124,10 +124,10 @@ void main() {
         ),
       );
 
-      // Percentage is rendered in the ring Stack
+      // Percentage is rendered in the ring Stack, not repeated in label
       expect(find.text('65%'), findsOneWidget); // in progress ring
-      expect(find.text('下载中 65%'), findsOneWidget); // in label
-      expect(find.textContaining('65%'), findsNWidgets(2));
+      expect(find.text('下载中'), findsOneWidget); // in label
+      expect(find.textContaining('65%'), findsOneWidget);
     });
   });
 }

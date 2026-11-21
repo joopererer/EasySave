@@ -305,7 +305,7 @@ void main() {
     });
 
     test('A6.4b: Stale task complete with size mismatch or corrupt content is discarded', () async {
-      final batch = createTestBatch();
+      final batch = createTestBatch(batchId: 'single-native-b74-1b');
       final job = batch.jobs.first;
       job.round = 3;
       job.currentTaskId = '${job.key}-r3';
@@ -331,7 +331,10 @@ void main() {
       DownloadManager.instance.taskUpdateForTesting(
         TaskStatusUpdate(r1Task, TaskStatus.complete),
       );
-      await Future<void>.delayed(const Duration(milliseconds: 100));
+      final sw = Stopwatch()..start();
+      while (r1File.existsSync() && sw.elapsed < const Duration(seconds: 3)) {
+        await Future<void>.delayed(const Duration(milliseconds: 50));
+      }
 
       final lines = DevLog.recentLines(500);
       expect(lines.any((e) => e.contains('stale_complete_discarded taskId=${job.key}-r1')), isTrue);

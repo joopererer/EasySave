@@ -390,9 +390,9 @@ class DownloadingOverlay extends StatelessWidget {
     } else if (waitingForNetwork) {
       label = '等待网络…联网后自动继续';
     } else if (stalled) {
-      label = '已停滞 $pct%';
+      label = '已停滞';
     } else {
-      label = '下载中 $pct%';
+      label = '下载中';
     }
 
     final String narrowLabel;
@@ -423,7 +423,7 @@ class DownloadingOverlay extends StatelessWidget {
     } else if (waitingForNetwork) {
       narrowLabel = '等网络';
     } else {
-      narrowLabel = '$pct%';
+      narrowLabel = '';
     }
 
     return LayoutBuilder(
@@ -531,7 +531,7 @@ class DownloadingOverlay extends StatelessWidget {
                 // 4a, 4b: Right independent pause / resume button (hit target >= 40x40)
                 if (onTogglePause != null)
                   _OverlayToggleButton(
-                    compact: compact || isNarrow,
+                    compact: compact,
                     paused: paused,
                     failed: failed,
                     stalled: stalled,
@@ -639,7 +639,7 @@ class _OverlayToggleButtonState extends State<_OverlayToggleButton> {
         ? '清理后继续'
         : (showPlay ? '继续下载' : (showRefresh ? '重试' : '暂停下载'));
 
-    final targetSize = widget.compact ? 24.0 : 38.0;
+    final targetSize = widget.compact ? 24.0 : 44.0;
     final iconContainerSize = widget.compact ? 22.0 : 30.0;
     final iconSize = widget.compact ? 14.0 : 18.0;
 

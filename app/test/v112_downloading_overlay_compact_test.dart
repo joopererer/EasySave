@@ -26,7 +26,8 @@ void main() {
     );
 
     // Left side: progress text and chevron
-    expect(find.text('下载中 45%'), findsOneWidget);
+    expect(find.text('下载中'), findsOneWidget);
+    expect(find.text('45%'), findsOneWidget);
     expect(find.byIcon(Icons.chevron_right), findsOneWidget);
 
     // 4c: No cancel button on the card
@@ -36,7 +37,7 @@ void main() {
     expect(find.byIcon(Icons.pause_rounded), findsOneWidget);
 
     // Tap left area -> triggers queue
-    await tester.tap(find.text('下载中 45%'));
+    await tester.tap(find.text('下载中'));
     expect(queueOpened, isTrue);
 
     // 4a: Right side toggle button touch target is >= 40x40dp
