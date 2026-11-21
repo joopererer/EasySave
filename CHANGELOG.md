@@ -9,6 +9,16 @@ This file documents notable user-facing changes following [Keep a Changelog](htt
 
 ### 客户端 / App
 
+- 断点以磁盘临时文件为准与暂停恢复修复（build 76）：
+  - 修复暂停后点击继续从 0 重新下载的问题：用户主动暂停后点击继续，直接针对原已暂停的原生任务恢复下载（保持同一 taskId，不发起新一轮），消除因新轮次取消旧任务而误删 ResumeData 的问题；「只能有一个原生任务」检查中将 paused 视为不在运行，取消旧任务前强制备份保护已有临时文件；
+  - 续传起点严格以磁盘上实际落盘的物理临时文件长度为准，彻底废除「只增不减」与「取较大者」逻辑；记录大于文件物理长度时按文件实际长度续传并记录日志（`resume_data_ahead`）；从 0 重新下载时彻底清空 App 与插件续传记录；同一原因连续失败超过 2 次（如 `resume_failed`）后转入「已中断，点继续」，避免死循环；
+  - 修复发布门禁中的卡片按钮触摸热区（恢复 $\ge 44\times 44\text{dp}$ 规范）与同一卡片内百分比唯一展示规范（圈内展示百分比时文字标签不再重复）；修复单任务并发测试中的异步删除等待竞态。
+  Disk temporary file length as ground truth for resume and pause/resume fix (build 76):
+  - Fixes bug where resuming after user pause restarted from 0: resumes the exact same paused native task (`taskId`) without starting a new round, preventing old task preemption from clearing plugin ResumeData; treats paused tasks as not actively running and protects temp files before any non-terminal cancellation;
+  - Resumption start byte is strictly determined by physical disk file size, discarding monotonic non-decreasing and max-value assumptions; when records exceed disk file size, truncates start byte to disk size and logs `resume_data_ahead`; wipes all resume metadata and plugin state when restarting from 0; pauses at "已中断，点继续" on repeated failure without infinite retry loops;
+  - Fixes release gate failures: restores toggle touch target to $\ge 44\times 44\text{dp}$ and ensures single percentage display per card (omits duplicate percentage text next to progress rings); resolves async deletion polling race condition in concurrent tests.
+
+
 - 收尾阶段细分显示恢复与优先级对齐（build 75）：恢复下载达 100% 后入库耗时阶段的细分文案呈现，在历史卡片底栏、下载队列、悬浮球三处完整联动展示「正在保存到相册（写入来源信息）」与「正在保存到相册（复制到相册）」；统一状态显示优先级为：空间不足 > 已暂停 > 收尾阶段（`isFinishing`） > 失败 > 状态文案 > 进度百分比，消除大文件在 100% 停滞约 50 秒的假死感，且与中断、暂停等异常状态互不覆盖混淆；历史页下载刷新逻辑补充入库阶段变化监听，保证进度达到 1.0 时仍能实时刷新子阶段文案。
   Restored saving phase granular display and priority alignment (build 75): re-enables detailed saving phase labels during post-download file import across history card overlays, download queue items, and the floating bubble ("正在保存到相册（写入来源信息）" and "正在保存到相册（复制到相册）"); aligns status display priority as: storage shortage > paused > saving phase (`isFinishing`) > failed > status text > progress percentage, removing the frozen feeling at 100% during prolonged finishing of large files without clobbering interrupted or paused states; downloads refresh loop in history page now tracks saving phase transitions to guarantee UI updates when progress reaches 1.0.
 
