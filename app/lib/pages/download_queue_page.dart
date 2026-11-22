@@ -9,6 +9,8 @@ import 'package:flutter/material.dart';
 
 import '../core/models.dart';
 import '../services/download_manager.dart';
+import '../services/network_status.dart';
+import '../services/storage_guard.dart';
 import '../theme/app_theme.dart';
 import '../widgets/shared.dart';
 
@@ -135,11 +137,11 @@ class _DownloadQueuePageState extends State<DownloadQueuePage> {
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('删除下载任务'),
+        title: Text(batch.isTerminal ? '删除下载任务' : '取消下载？'),
         content: Text(
           batch.isTerminal
               ? '从队列中移除这条记录？已保存的文件不会被删除。'
-              : '取消未完成的下载并移除任务？已保存的文件不会被删除。',
+              : '取消并删除已下载部分？',
         ),
         actions: [
           TextButton(
@@ -148,13 +150,59 @@ class _DownloadQueuePageState extends State<DownloadQueuePage> {
           ),
           TextButton(
             onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('删除'),
+            child: Text(batch.isTerminal ? '删除' : '取消并删除'),
           ),
         ],
       ),
     );
     if (ok == true) {
-      await _run(() => DownloadManager.instance.removeBatch(batch));
+      await _run(() => DownloadManager.instance.removeBatch(batch, source: 'queue_remove'));
+    }
+  }
+
+  Future<void> _cancelJobWithConfirm(DownloadBatch batch, DownloadJob job) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('取消下载？'),
+        content: const Text('取消并删除已下载部分？'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('保留'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('取消并删除'),
+          ),
+        ],
+      ),
+    );
+    if (ok == true) {
+      await _run(() => DownloadManager.instance.cancelJob(batch, job, source: 'queue_job'));
+    }
+  }
+
+  Future<void> _cancelAllWithConfirm() async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('全部取消？'),
+        content: const Text('取消并删除所有任务已下载部分？'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('保留'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('全部取消'),
+          ),
+        ],
+      ),
+    );
+    if (ok == true) {
+      await _run(() => DownloadManager.instance.cancelAll(source: 'queue_all'));
     }
   }
 
@@ -169,7 +217,7 @@ class _DownloadQueuePageState extends State<DownloadQueuePage> {
             TextButton(
               onPressed: _busy
                   ? null
-                  : () => _run(DownloadManager.instance.cancelAll),
+                  : _cancelAllWithConfirm,
               child: const Text('全部取消'),
             ),
         ],
@@ -191,9 +239,7 @@ class _DownloadQueuePageState extends State<DownloadQueuePage> {
                 batch: _batches[i],
                 stalled: _batches[i].isStalledAt(now),
                 busy: _busy,
-                onCancelJob: (j) => _run(
-                  () => DownloadManager.instance.cancelJob(_batches[i], j),
-                ),
+                onCancelJob: (j) => _cancelJobWithConfirm(_batches[i], j),
                 onRetryJob: (j) => _run(() async {
                   final owned = await DownloadManager.instance.forceAdopt(
                     _batches[i],
@@ -251,7 +297,29 @@ class _BatchCard extends StatelessWidget {
 
   String get _status {
     if (batch.isTerminal && batch.failedCount > 0) return '下载失败，点击重试';
-    if (batch.isPaused) return '已暂停';
+    final isStorageFull = batch.statusText?.contains('空间不足') == true ||
+        batch.jobs.any((j) => j.errorCode == storageFullCode || j.error?.contains('空间不足') == true);
+    if (isStorageFull) {
+      return batch.statusText ?? '空间不足';
+    }
+    if (batch.isPaused) {
+      if (batch.isUserPaused) return '已暂停';
+      if (!NetworkStatus.instance.online) return '下载中断 · 等待网络';
+      return batch.statusText ?? '已中断，点继续';
+    }
+    final finishing = batch.jobs.cast<DownloadJob?>().firstWhere(
+      (j) => j?.isFinishing == true,
+      orElse: () => null,
+    );
+    if (finishing != null) {
+      return finishing.savingPhase != null
+          ? '正在保存到相册（${finishing.savingPhase}）'
+          : '正在保存到相册';
+    }
+    if (!NetworkStatus.instance.online) return '下载中断 · 等待网络';
+    if (batch.statusText != null && batch.statusText!.isNotEmpty) {
+      return batch.statusText!;
+    }
     return stalled ? '已停滞' : '下载中';
   }
 
@@ -262,10 +330,14 @@ class _BatchCard extends StatelessWidget {
     final items = batchItems(batch);
     final paused = batch.isPaused;
     final failed = batch.isTerminal && batch.failedCount > 0;
-    final toggleTip = failed ? '重试' : paused ? '继续下载' : (stalled ? '重试' : '暂停下载');
-    final toggleIcon = paused
-        ? Icons.play_arrow_rounded
-        : (stalled || failed ? Icons.refresh : Icons.pause_rounded);
+    final isStorageFull = batch.statusText?.contains('空间不足') == true ||
+        batch.jobs.any((j) => j.errorCode == storageFullCode || j.error?.contains('空间不足') == true);
+    final toggleTip = isStorageFull
+        ? '清理后继续'
+        : (failed ? '重试' : paused ? '继续下载' : (stalled ? '重试' : '暂停下载'));
+    final toggleIcon = isStorageFull
+        ? Icons.refresh_rounded
+        : (paused ? Icons.play_arrow_rounded : (stalled || failed ? Icons.refresh : Icons.pause_rounded));
     return Card(
       margin: EdgeInsets.zero,
       child: ExpansionTile(
@@ -306,7 +378,12 @@ class _BatchCard extends StatelessWidget {
         trailing: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            if (batch.supportsPause)
+            if (isStorageFull)
+              TextButton(
+                onPressed: busy ? null : onToggle,
+                child: const Text('清理后继续'),
+              )
+            else if (batch.supportsPause)
               IconButton(
                 tooltip: toggleTip,
                 icon: Icon(toggleIcon),
@@ -366,15 +443,28 @@ class _JobTile extends StatelessWidget {
   final VoidCallback onCancel;
   final VoidCallback onRetry;
 
-  String get _label => switch (job.state) {
-    JobState.queued => '排队中',
-    JobState.active => '下载中 ${(job.progress.clamp(0.0, 1.0) * 100).round()}%',
-    JobState.done => '已保存',
-    JobState.failed => job.error ?? '失败',
-    JobState.canceled => '已取消',
-    JobState.paused => '已暂停',
-    JobState.waitingNetwork => '等待网络…联网后自动继续',
-  };
+  String get _label {
+    if (job.isFinishing) {
+      return job.savingPhase != null
+          ? '正在保存到相册（${job.savingPhase}）'
+          : '正在保存到相册';
+    }
+    return switch (job.state) {
+      JobState.queued => job.error?.isNotEmpty == true
+          ? job.error!
+          : (!NetworkStatus.instance.online ? '下载中断 · 等待网络' : '排队中'),
+      JobState.active => '下载中 ${(job.progress.clamp(0.0, 1.0) * 100).round()}%',
+      JobState.done => '已保存',
+      JobState.failed => job.error ?? '失败',
+      JobState.canceled => '已取消',
+      JobState.paused => job.userPaused
+          ? '已暂停'
+          : (job.error?.isNotEmpty == true
+              ? job.error!
+              : (!NetworkStatus.instance.online ? '下载中断 · 等待网络' : '已中断，点继续')),
+      JobState.waitingNetwork => '下载中断 · 等待网络',
+    };
+  }
 
   @override
   Widget build(BuildContext context) {

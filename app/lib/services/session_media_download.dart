@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 import '../core/media_request.dart';
 import 'media_request_policy.dart';
+import 'resumable_download_store.dart';
 import 'transfer_headers.dart';
 
 const expiredMediaMessage = '链接已过期，请重新解析';
@@ -36,6 +37,8 @@ abstract class SessionTransfer {
     MediaRequestPolicy? policy,
     MediaRequestResource? resource,
     required void Function(double progress) onProgress,
+    String? jobKey,
+    int? itemIndex,
   });
 
   Future<void> cancel();
@@ -69,14 +72,73 @@ class SessionMediaDownload implements SessionTransfer {
     MediaRequestPolicy? policy,
     MediaRequestResource? resource,
     required void Function(double progress) onProgress,
+    String? jobKey,
+    int? itemIndex,
   }) async {
     RandomAccessFile? output;
     var complete = false;
+    final store = ResumableDownloadStore.instance;
+    File? partialFile;
+    ResumeMetadata? initialMeta;
+    var isResumeAttempt = false;
+    var existingBytes = 0;
+    String? currentValidator;
+    var activeOutputIsPartial = false;
+    var received = 0;
+    var expectedTotal = -1;
+
+    Future<void> safeCloseOutput() async {
+      try {
+        await output?.close();
+        output = null;
+      } catch (_) {}
+    }
+
     try {
       if (_canceled) throw const SessionDownloadCanceled();
+      if (jobKey != null) {
+        partialFile = await store.partialFileFor(jobKey);
+        initialMeta = await store.readMetadata(jobKey);
+        if (await partialFile.exists()) {
+          final len = await partialFile.length();
+          if (len >= kResumableMinBytes &&
+              initialMeta != null &&
+              initialMeta.validator.isNotEmpty) {
+            isResumeAttempt = true;
+            existingBytes = len;
+            currentValidator = initialMeta.validator;
+          } else if (len > 0 && len < kResumableMinBytes) {
+            await store.cleanForJob(jobKey);
+          }
+        }
+      }
+
+      final roleStr = resource?.role.name ?? 'video';
+      final idx = itemIndex ?? 0;
+
+      MediaRequestResource? reqResource = resource;
+      if (isResumeAttempt && resource != null && currentValidator != null) {
+        reqResource = MediaRequestResource(
+          role: resource.role,
+          url: resource.url,
+          fallbackFor: resource.fallbackFor,
+          request: MediaRequestRequirements(
+            headers: {
+              ...resource.request.headers,
+              'Range': 'bytes=$existingBytes-',
+              'If-Range': currentValidator,
+            },
+            cookieDomains: resource.request.cookieDomains,
+            expiresAt: resource.request.expiresAt,
+            transport: resource.request.transport,
+            resumable: resource.request.resumable,
+          ),
+        );
+      }
+
       var authorized = policy == null
           ? null
-          : await policy.authorize(resource!);
+          : await policy.authorize(reqResource ?? resource!);
       final client = _client = HttpClient()
         ..connectionTimeout = const Duration(seconds: 30)
         ..autoUncompress = false;
@@ -91,6 +153,10 @@ class SessionMediaDownload implements SessionTransfer {
             request.headers.set(header.key, header.value);
           }
         } else {
+          if (isResumeAttempt && currentValidator != null) {
+            request.headers.set(HttpHeaders.rangeHeader, 'bytes=$existingBytes-');
+            request.headers.set('If-Range', currentValidator);
+          }
           final cookie = await readCookie?.call() ?? '';
           if (cookie.isNotEmpty) {
             request.headers.set(HttpHeaders.cookieHeader, cookie);
@@ -110,91 +176,260 @@ class SessionMediaDownload implements SessionTransfer {
         authorized = await policy.redirect(authorized, location);
         current = authorized.uri;
       }
-      if (response.statusCode == 403) {
-        throw const SessionDownloadException(
+
+      if (response.statusCode == 403 || response.statusCode == 410) {
+        if (isResumeAttempt && jobKey != null) {
+          ResumableDownloadStore.logResume(
+            index: idx,
+            role: roleStr,
+            fromBytes: existingBytes,
+            total: -1,
+            result: 'restart',
+            reason: 'expired',
+          );
+          await store.cleanForJob(jobKey);
+        }
+        throw SessionDownloadException(
           expiredMediaMessage,
-          statusCode: 403,
+          statusCode: response.statusCode,
         );
       }
-      if (response.statusCode != 200) {
+
+      String? respValidator = response.headers.value(HttpHeaders.etagHeader) ??
+          response.headers.value(HttpHeaders.lastModifiedHeader);
+      if (respValidator != null) {
+        if (!respValidator.startsWith('"') &&
+            !respValidator.startsWith('W/"') &&
+            !respValidator.contains('GMT')) {
+          respValidator = '"$respValidator"';
+        }
+        currentValidator = respValidator;
+      }
+
+      final targetFile = partialFile ?? destination;
+      activeOutputIsPartial = partialFile != null;
+      await targetFile.parent.create(recursive: true);
+
+      if (response.statusCode == 206) {
+        final contentRange =
+            response.headers.value(HttpHeaders.contentRangeHeader) ?? '';
+        final match =
+            RegExp(r'bytes\s+(\d+)-(\d+)/(?:\*|(\d+))').firstMatch(contentRange);
+        final start = match != null ? int.tryParse(match.group(1)!) : null;
+        final total = match != null && match.group(3) != null
+            ? int.tryParse(match.group(3)!)
+            : null;
+        if (isResumeAttempt && start == existingBytes) {
+          expectedTotal = total ?? (existingBytes + response.contentLength);
+          ResumableDownloadStore.logResume(
+            index: idx,
+            role: roleStr,
+            fromBytes: existingBytes,
+            total: expectedTotal,
+            result: 'resumed',
+            reason: 'range_accepted',
+          );
+          output = await targetFile.open(mode: FileMode.append);
+          received = existingBytes;
+        } else {
+          if (isResumeAttempt && jobKey != null) {
+            ResumableDownloadStore.logResume(
+              index: idx,
+              role: roleStr,
+              fromBytes: existingBytes,
+              total: total ?? response.contentLength,
+              result: 'restart',
+              reason: 'validator_changed',
+            );
+            await store.cleanForJob(jobKey);
+          }
+          expectedTotal = response.contentLength;
+          output = await targetFile.open(mode: FileMode.write);
+          received = 0;
+        }
+      } else if (response.statusCode == 200) {
+        if (isResumeAttempt && jobKey != null) {
+          final reason = (initialMeta != null &&
+                  respValidator != null &&
+                  respValidator != initialMeta.validator)
+              ? 'validator_changed'
+              : 'status_200';
+          ResumableDownloadStore.logResume(
+            index: idx,
+            role: roleStr,
+            fromBytes: existingBytes,
+            total: response.contentLength,
+            result: 'restart',
+            reason: reason,
+          );
+          await store.cleanForJob(jobKey);
+        }
+        expectedTotal = response.contentLength;
+        output = await targetFile.open(mode: FileMode.write);
+        received = 0;
+      } else {
         throw SessionDownloadException(
           '下载失败，请重新解析',
           statusCode: response.statusCode,
         );
       }
-      await destination.parent.create(recursive: true);
-      output = await destination.open(mode: FileMode.write);
-      var received = 0;
+
       await for (final chunk in response.timeout(const Duration(seconds: 30))) {
         if (_canceled) throw const SessionDownloadCanceled();
-        await output.writeFrom(chunk);
+        await output?.writeFrom(chunk);
         received += chunk.length;
         onProgress(
-          response.contentLength > 0
-              ? (received / response.contentLength).clamp(0.0, 1.0)
+          expectedTotal > 0
+              ? (received / expectedTotal).clamp(0.0, 1.0)
               : 0,
         );
       }
+
       if (_canceled) throw const SessionDownloadCanceled();
       if (received == 0 ||
-          (response.contentLength >= 0 && received != response.contentLength)) {
+          (expectedTotal >= 0 && received != expectedTotal)) {
         throw const SessionDownloadException('下载不完整，请重新解析');
       }
-      await output.flush();
+
+      await output?.flush();
+      await output?.close();
+      output = null;
+
+      if (partialFile != null && targetFile.path != destination.path) {
+        await destination.parent.create(recursive: true);
+        if (await destination.exists()) await destination.delete();
+        await targetFile.copy(destination.path);
+        if (jobKey != null) await store.cleanForJob(jobKey);
+      }
+
       complete = true;
-    } on SessionDownloadException {
-      rethrow;
     } on SessionDownloadCanceled {
+      await safeCloseOutput();
+      if (jobKey != null) await store.cleanForJob(jobKey);
+      rethrow;
+    } on SessionDownloadException {
+      await safeCloseOutput();
       rethrow;
     } on MediaPolicyException {
+      await safeCloseOutput();
+      if (jobKey != null) await store.cleanForJob(jobKey);
       rethrow;
     } on TimeoutException {
-      // A connect, header or byte timeout: the peer never answered. Retrying
-      // the URL by hand is the user's choice, not the app's verdict on it.
-      if (_canceled) throw const SessionDownloadCanceled();
+      await safeCloseOutput();
+      if (_canceled) {
+        if (jobKey != null) await store.cleanForJob(jobKey);
+        throw const SessionDownloadCanceled();
+      }
+      await _handleNetworkInterruption(
+        store,
+        jobKey,
+        received,
+        expectedTotal,
+        currentValidator,
+      );
       throw const SessionDownloadException(
         networkUnavailableMessage,
         network: true,
       );
     } on SocketException {
-      // No route, DNS failure, refused or reset connection: the network could
-      // not be reached (v1.11 batch 3).
-      if (_canceled) throw const SessionDownloadCanceled();
+      await safeCloseOutput();
+      if (_canceled) {
+        if (jobKey != null) await store.cleanForJob(jobKey);
+        throw const SessionDownloadCanceled();
+      }
+      await _handleNetworkInterruption(
+        store,
+        jobKey,
+        received,
+        expectedTotal,
+        currentValidator,
+      );
       throw const SessionDownloadException(
         networkUnavailableMessage,
         network: true,
       );
     } on TlsException {
-      if (_canceled) throw const SessionDownloadCanceled();
+      await safeCloseOutput();
+      if (_canceled) {
+        if (jobKey != null) await store.cleanForJob(jobKey);
+        throw const SessionDownloadCanceled();
+      }
+      await _handleNetworkInterruption(
+        store,
+        jobKey,
+        received,
+        expectedTotal,
+        currentValidator,
+      );
       throw const SessionDownloadException(
         networkUnavailableMessage,
         network: true,
       );
     } on HttpException {
-      // `HttpException` covers a connection closed before the headers or the
-      // body completed — a transport failure, never a content verdict.
-      if (_canceled) throw const SessionDownloadCanceled();
+      await safeCloseOutput();
+      if (_canceled) {
+        if (jobKey != null) await store.cleanForJob(jobKey);
+        throw const SessionDownloadCanceled();
+      }
+      await _handleNetworkInterruption(
+        store,
+        jobKey,
+        received,
+        expectedTotal,
+        currentValidator,
+      );
       throw const SessionDownloadException(
         networkUnavailableMessage,
         network: true,
       );
     } catch (_) {
-      if (_canceled) throw const SessionDownloadCanceled();
+      await safeCloseOutput();
+      if (_canceled) {
+        if (jobKey != null) await store.cleanForJob(jobKey);
+        throw const SessionDownloadCanceled();
+      }
+      if (jobKey != null) await store.cleanForJob(jobKey);
       throw const SessionDownloadException('下载失败，请重新解析');
     } finally {
       _client?.close(force: true);
       _client = null;
       try {
-        await output?.close();
+        await safeCloseOutput();
       } finally {
         try {
-          if (!complete && await destination.exists()) {
-            await destination.delete();
+          if (!complete) {
+            if (!activeOutputIsPartial && await destination.exists()) {
+              await destination.delete();
+            }
           }
         } finally {
           _finished.complete();
         }
       }
+    }
+  }
+
+  Future<void> _handleNetworkInterruption(
+    ResumableDownloadStore store,
+    String? jobKey,
+    int received,
+    int total,
+    String? validator,
+  ) async {
+    if (jobKey == null) return;
+    if (received >= kResumableMinBytes &&
+        validator != null &&
+        validator.isNotEmpty) {
+      await store.writeMetadata(
+        jobKey,
+        ResumeMetadata(
+          validator: validator,
+          totalBytes: total,
+          updatedAt: DateTime.now().millisecondsSinceEpoch,
+        ),
+      );
+    } else {
+      await store.cleanForJob(jobKey);
     }
   }
 }

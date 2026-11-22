@@ -36,6 +36,13 @@ class MediaPolicyRedirectsTest {
         assertEquals("REQUEST_HEADER_REJECTED",
             MediaPolicyRedirects.rejectHeaders(mapOf("Referer" to "ok\nCookie: secret"), "tiktok.com")?.code)
         assertNull(MediaPolicyRedirects.rejectHeaders(mapOf("Range" to "bytes=0-"), "tiktok.com"))
+        assertNull(MediaPolicyRedirects.rejectHeaders(mapOf("If-Range" to "\"5f8a-12345\""), "tiktok.com"))
+        assertNull(MediaPolicyRedirects.rejectHeaders(mapOf("if-range" to "W/\"weak-etag-1\""), "tiktok.com"))
+        assertNull(MediaPolicyRedirects.rejectHeaders(mapOf("If-Range" to "Wed, 21 Oct 2015 07:28:00 GMT"), "tiktok.com"))
+        assertEquals("REQUEST_HEADER_REJECTED",
+            MediaPolicyRedirects.rejectHeaders(mapOf("If-Range" to "unquoted-token"), "tiktok.com")?.code)
+        assertEquals("REQUEST_HEADER_REJECTED",
+            MediaPolicyRedirects.rejectHeaders(mapOf("If-Range" to "\"etag\"\nInjected: true"), "tiktok.com")?.code)
     }
 
     // v1.10.3 build 47: every background transfer carries the same two headers

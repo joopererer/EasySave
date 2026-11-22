@@ -105,27 +105,9 @@ void main() {
         await tester.tap(pendingTitle);
         await tester.pump();
         await tester.pump(const Duration(milliseconds: 400));
-        expect(find.byType(DownloadQueuePage), findsOneWidget,
-          reason: 'A zero-saved pending card opens the selected job list, never a one-cover/full-post gallery.');
-        expect(find.byType(GalleryBrowserPage), findsNothing);
-        // The queue may focus/expand this batch on navigation or leave its card
-        // collapsed; expand through the rendered control when needed.
-        if (find.text('第 2 项').evaluate().isEmpty) {
-          await tester.tap(find.descendant(of: find.byType(DownloadQueuePage),
-              matching: find.text('Selected pending post')));
-          await tester.pump();
-          await tester.pump(const Duration(milliseconds: 300));
-        }
-        for (var index = 1; index <= 8; index++) {
-          expect(find.text('第 $index 项'), index.isEven ? findsOneWidget : findsNothing);
-        }
-        expect(find.text('已保存'), findsNothing);
-        if (state == JobState.failed) {
-          expect(find.descendant(of: find.byType(DownloadQueuePage),
-              matching: find.textContaining('下载失败')), findsOneWidget);
-          expect(find.text('重试失败项'), findsOneWidget);
-          expect(find.byTooltip('重试此文件'), findsNWidgets(4));
-        }
+        // v1.12 build 68 (5a): tapping upper card in any state must open preview (GalleryBrowserPage), not queue
+        expect(find.byType(GalleryBrowserPage), findsOneWidget);
+        expect(find.byType(DownloadQueuePage), findsNothing);
       });
     }
   }

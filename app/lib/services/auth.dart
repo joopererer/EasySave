@@ -125,6 +125,28 @@ Future<void> saveXhsDomainStatus(String domain, SessionStatus status) async {
   await prefs.setString(xhsSessionKey(domain), status.name);
 }
 
+/// Tracks and bounds Xiaohongshu domain alternate switches within a single parse attempt (v1.12).
+class XhsDomainCoordinator {
+  XhsDomainCoordinator({this.maxSwitches = 1});
+
+  final int maxSwitches;
+  int _switchCount = 0;
+  final List<String> _switchReasons = [];
+
+  int get switchCount => _switchCount;
+  bool get canSwitch => _switchCount < maxSwitches;
+  List<String> get switchReasons => List.unmodifiable(_switchReasons);
+
+  void recordSwitch({
+    required String from,
+    required String to,
+    required String reason,
+  }) {
+    _switchCount++;
+    _switchReasons.add('from=$from to=$to reason=$reason');
+  }
+}
+
 String? xhsValidAlternate(String origin, Map<String, SessionStatus> statuses) {
   final source = xhsDomain(origin);
   if (source == null || statuses[source] == SessionStatus.valid) return null;
@@ -140,27 +162,36 @@ Future<String> selectXhsPostUrl(
   String url,
   String postId, {
   String entry = 'app_input',
+  XhsDomainCoordinator? coordinator,
 }) async {
   final uri = Uri.tryParse(url);
   if (uri == null) return url;
   final origin = xhsDomain(uri.host);
   if (origin == null) return url;
   final statuses = await loadXhsDomainStatuses();
+  final canSwitch = coordinator?.canSwitch ?? true;
   final targetDomain = statuses[origin] == SessionStatus.valid
       ? origin
-      : xhsValidAlternate(origin, statuses);
+      : (canSwitch ? xhsValidAlternate(origin, statuses) : null);
   final reason = statuses[origin] == SessionStatus.valid
       ? 'original_valid'
       : targetDomain != null
       ? 'alias_valid'
-      : 'none_valid';
+      : (!canSwitch ? 'switch_limit_reached' : 'none_valid');
   final safeEntry = RegExp(r'^[a-zA-Z0-9_]{1,64}$').hasMatch(entry)
       ? entry
       : 'other';
+
+  if (targetDomain != null && targetDomain != origin) {
+    coordinator?.recordSwitch(from: origin, to: targetDomain, reason: reason);
+  }
+  final totalSwitches = coordinator?.switchCount ??
+      (targetDomain != null && targetDomain != origin ? 1 : 0);
+
   unawaited(
     DevLog.write(
       'XhsDomain',
-      'event=choose from=$origin to=${targetDomain ?? origin} reason=$reason entry=$safeEntry',
+      'event=choose from=$origin to=${targetDomain ?? origin} reason=$reason switches=$totalSwitches entry=$safeEntry',
     ),
   );
   if (targetDomain == null || targetDomain == origin) return url;

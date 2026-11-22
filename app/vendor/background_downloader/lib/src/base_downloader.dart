@@ -837,7 +837,7 @@ abstract base class BaseDownloader {
     // has retriesRemaining > 0: those are always sent here, and are
     // intercepted to hold the task and reschedule in the near future
     final task = update.task;
-    if (update.status == TaskStatus.failed && task.retriesRemaining > 0) {
+    if (update.status == TaskStatus.failed && task.retriesRemaining > 0 && !task.allowPause) {
       _emitStatusUpdate(TaskStatusUpdate(task, TaskStatus.waitingToRetry));
       _emitProgressUpdate(TaskProgressUpdate(task, progressWaitingToRetry));
       task.decreaseRetriesRemaining();
@@ -879,7 +879,9 @@ abstract base class BaseDownloader {
         setPausedTask(task);
       }
       if (update.status.isFinalState) {
-        _clearPauseResumeInfo(task);
+        if (!task.allowPause || update.status != TaskStatus.failed) {
+          _clearPauseResumeInfo(task);
+        }
       }
       if (update.status.isFinalState || update.status == TaskStatus.paused) {
         notifyTaskQueues(task);

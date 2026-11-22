@@ -560,6 +560,7 @@ class ErrorCard extends StatelessWidget {
     this.message,
     this.diagnostics,
     this.canLogin = true,
+    this.showLoginAction = false,
   });
 
   final String code;
@@ -567,6 +568,7 @@ class ErrorCard extends StatelessWidget {
   final Future<void> Function(ErrorAction action) onAction;
   final String Function()? diagnostics;
   final bool canLogin;
+  final bool showLoginAction;
 
   @override
   Widget build(BuildContext context) {
@@ -589,6 +591,11 @@ class ErrorCard extends StatelessWidget {
                   FilledButton(
                     onPressed: () => onAction(copy.action),
                     child: Text(_actionLabel(copy.action)),
+                  ),
+                if (showLoginAction && copy.action != ErrorAction.goLogin && canLogin)
+                  OutlinedButton(
+                    onPressed: () => onAction(ErrorAction.goLogin),
+                    child: const Text('去登录'),
                   ),
                 if (code == ParseErrorCode.invalidPage && diagnostics != null)
                   OutlinedButton(
@@ -617,6 +624,8 @@ class ErrorCard extends StatelessWidget {
         return '重试';
       case ErrorAction.repaste:
         return '重新粘贴';
+      case ErrorAction.openUrl:
+        return '打开原链接';
     }
   }
 }

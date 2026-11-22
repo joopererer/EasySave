@@ -158,6 +158,7 @@ class MainActivity : FlutterActivity() {
 
     override fun cleanUpFlutterEngine(flutterEngine: FlutterEngine) {
         SharedPreviewBridge.detach(flutterEngine.dartExecutor.binaryMessenger)
+        NetworkStatusChannel.detach(flutterEngine.dartExecutor.binaryMessenger)
         super.cleanUpFlutterEngine(flutterEngine)
     }
 

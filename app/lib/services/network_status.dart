@@ -25,11 +25,15 @@ class NetworkStatus extends ChangeNotifier {
   static const MethodChannel _channel = MethodChannel('easysave/connectivity');
 
   bool _online = true;
+  String _networkType = 'unknown';
   bool _listening = false;
   bool _detached = false;
 
   /// Whether the system currently has a validated connection.
   bool get online => _online;
+
+  /// The active network transport type: 'wifi', 'cellular', 'ethernet', or 'none'.
+  String get networkType => _online ? (_networkType == 'none' ? 'unknown' : _networkType) : 'none';
 
   /// Starts reading the system state. Call once from `main`.
   Future<void> start() async {
@@ -37,10 +41,13 @@ class NetworkStatus extends ChangeNotifier {
     _listening = true;
     _channel.setMethodCallHandler((MethodCall call) async {
       if (call.method == 'online') _apply(call.arguments == true);
+      if (call.method == 'networkType') _applyType(call.arguments as String? ?? 'none');
       return null;
     });
     try {
       final online = await _channel.invokeMethod<bool>('isOnline');
+      final type = await _channel.invokeMethod<String>('networkType');
+      if (type != null && !_detached) _applyType(type);
       if (online != null && !_detached) _apply(online);
     } catch (_) {
       // No platform implementation (tests, desktop, older engine): stay
@@ -54,9 +61,28 @@ class NetworkStatus extends ChangeNotifier {
     notifyListeners();
   }
 
+  void _applyType(String type) {
+    if (_networkType == type) return;
+    _networkType = type;
+    notifyListeners();
+  }
+
   /// Test seam: pretend the system reported [online].
   @visibleForTesting
   void setOnlineForTesting(bool online) => _apply(online);
+
+  /// Test seam: pretend the system reported [type].
+  @visibleForTesting
+  void setNetworkTypeForTesting(String type) => _applyType(type);
+
+  /// Test seam: update online and networkType atomically and notify listeners once.
+  @visibleForTesting
+  void setStatusForTesting({required bool online, required String type}) {
+    final changed = _online != online || _networkType != type;
+    _online = online;
+    _networkType = type;
+    if (changed) notifyListeners();
+  }
 
   @visibleForTesting
   void resetForTesting() {
@@ -64,6 +90,7 @@ class NetworkStatus extends ChangeNotifier {
     _listening = false;
     _detached = false;
     _online = true;
+    _networkType = 'unknown';
   }
 
   /// Stops listening (the app is going away).

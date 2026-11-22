@@ -82,11 +82,13 @@ void main() {
     LocalAutoBackup.resetThrottleForTest();
     SafService.resetThrottleForTest();
     HistoryDb.resetInstanceForTesting();
-    db = await HistoryDb.instance();
+    db = await HistoryDb.instance(dbPath: ':memory:');
+    HistoryDb.setInstanceForTesting(db);
     await db.clear();
     manager.clearBatchesForTesting();
     DownloadManager.owner = DownloadBatch.sourceBackground;
     manager.prepareStartForTesting = () async {};
+    manager.allRecordsForTesting = (_) async => [];
     saveSucceeds = true;
     manager.enqueueForTesting = (_, job) async {
       // Since build 30 a failed post stays in history; only a canceled
@@ -139,8 +141,10 @@ void main() {
     manager.clearBatchesForTesting();
     manager.prepareStartForTesting = null;
     manager.enqueueForTesting = null;
+    manager.allRecordsForTesting = null;
     DownloadManager.owner = originalOwner;
     messenger.setMockMethodCallHandler(safChannel, null);
+    HistoryDb.setInstanceForTesting(null);
     HistoryDb.resetInstanceForTesting();
     IOOverrides.global = originalIo;
     SiteRegistry.useBuiltin();
@@ -200,15 +204,22 @@ void main() {
         await checked.future.timeout(const Duration(seconds: 5));
       }
       await settle();
-      expect(written, isEmpty);
-      expect(operations.where((op) => op != 'checkDirectoryAccess'), isEmpty);
-      if (scenario == 'disabled' || scenario == 'no_folder') {
-        expect(operations, isEmpty);
-      } else {
-        expect(operations, ['checkDirectoryAccess']);
-      }
       if (scenario == 'empty_history') {
-        expect(await db.getAllActiveForBackup(), isEmpty);
+        // 1d: User-initiated downloads producing 0 files are preserved with failed status,
+        // so backup correctly archives the failed post record.
+        expect(written, hasLength(1));
+        final records = await db.getAllActiveForBackup();
+        expect(records, hasLength(1));
+        expect(records.first.savedFiles, isEmpty);
+        expect(records.first.downloadError, isNotNull);
+      } else {
+        expect(written, isEmpty);
+        expect(operations.where((op) => op != 'checkDirectoryAccess'), isEmpty);
+        if (scenario == 'disabled' || scenario == 'no_folder') {
+          expect(operations, isEmpty);
+        } else {
+          expect(operations, ['checkDirectoryAccess']);
+        }
       }
     });
   }

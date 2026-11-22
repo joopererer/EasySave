@@ -7,6 +7,63 @@ This file documents notable user-facing changes following [Keep a Changelog](htt
 
 ## [Unreleased]
 
+## [1.12.0] - 2026-11-21
+
+### 客户端 / App
+
+- 大文件断点续传：
+  - 支持手动暂停与继续，继续下载时从已有进度恢复；
+  - 下载中断网后会在网络恢复时自动续传，网络在 Wi-Fi 与移动网络之间切换时不中断；
+  - 保护已下载数据，网络异常与重试耗尽时安全挂起并提示继续，不会轻易从头重下。
+  Resumable downloads for large files:
+  - Supports pause and resume, resuming seamlessly from downloaded progress;
+  - Automatically resumes when network reconnects after disconnection; network switches between Wi-Fi and mobile data no longer interrupt in-flight downloads;
+  - Preserves downloaded data safely on network errors or retry exhaustion with a prompt to continue, preventing accidental restart from scratch.
+
+- 悬浮球下载进度同步：使用悬浮球在后台下载时，主程序内的历史记录与下载队列中也能实时看到下载进度。
+  Bubble download progress sync: when downloading via the floating bubble, progress is now synced in real time to the main app's history and download queue.
+
+- 下载卡片交互与状态展示优化：
+  - 点击卡片封面与主体可直接打开大图预览，点击底栏左侧进入下载队列；
+  - 优化底栏暂停/继续按钮，触控区域更大且响应更灵敏；
+  - 下载完成后进入保存阶段明确显示「正在保存到相册」，不再停滞在 100%；
+  - 存储空间不足时，卡片与队列明确提示需要多少空间并提供清理后继续操作。
+  Download card interaction and status display improvements:
+  - Tapping the card cover or body directly opens fullscreen preview; tapping the left bottom bar navigates to the download queue;
+  - Enhanced pause/resume button with a larger touch target and instant responsive feedback;
+  - Shows clear saving phase status ("正在保存到相册") after download reaches 100%, removing the perceived freeze;
+  - Clearly displays required and available storage when disk space is insufficient, with an action to continue after cleanup.
+
+- 批量删除与删除计数体验优化：
+  - 全屏大图浏览中多选批量删除整合为单次 App 确认与单次系统相册授权；
+  - 删除确认弹窗中，实况照片会如实显示包含的实际文件数（静态图加视频）。
+  Batch deletion and item count improvements:
+  - Batch deletion in fullscreen viewer now requires only a single app confirmation and a single gallery permission request;
+  - Deletion confirmation dialog accurately shows the actual number of files included for Live photos (image plus video).
+
+- 缩略图与全屏浏览优化：
+  - 历史页缩略图加载超时后先显示网络封面，原清晰缩略图就绪后会自动平滑变清晰；
+  - 全屏大图浏览底部新增半透明信息条，展示分辨率、格式、大小及视频时长，数秒后自动收起为图标，点击可展开完整详情面板。
+  Thumbnail and fullscreen viewer enhancements:
+  - History cards fall back to low-res covers on thumbnail timeout, smoothly fading in sharp thumbnails once ready;
+  - Adds a translucent media info strip at the bottom of fullscreen viewer showing dimensions, format, size, and duration, collapsing into an icon and expandable to full metadata details.
+
+- 站点解析与体验优化：
+  - 小红书域名切换收敛，登录状态判定更精准，未登录或跳转时提供明确的登录引导，不再展示原始代码报错；
+  - TikTok 地区受限时给出明确的平台限制提示并保留打开原链接；
+  - 悬浮球后台引擎启动逻辑精简，冷启动速度显著提升。
+  Site parsing and experience improvements:
+  - Bounded Xiaohongshu domain switching with more accurate login detection and clear sign-in prompts instead of raw exceptions;
+  - Improved TikTok region restriction notice with an option to open original link;
+  - Streamlined floating bubble background engine startup for much faster cold starts.
+
+- 已知限制：
+  - 极端不稳定的网络环境下，自动续传重试耗尽后可能需要手动点击「继续」；
+  - 超大视频文件下载完成后，因系统相册写入机制，保存入库耗时相对较长（如 732MB 视频约需 50 秒）。
+  Known limitations:
+  - Under extremely unstable network conditions, manual tapping of "继续" (Continue) may be required after automatic retries are exhausted;
+  - After downloading very large video files, saving into the system gallery takes noticeable time due to Android MediaStore copy mechanics (~50s for a 732MB video).
+
 ### 解析器 / Parser
 
 - parser 1.4.17（`manifestVersion` 14，只走解析器通道，不随 App 版本发布）：已登录但会话失效时不再一律报「该帖子不存在、私密或已删除」。小红书与 Instagram 各自区分两类页面信号——平台自己的「内容不存在 / 无法查看」提示仍按原样回答 `PRIVATE_OR_UNAVAILABLE`；而登录表单、登录提示或跳转到登录页说明是会话失效，回答 `LOGIN_REQUIRED` 并显示「登录可能已失效，请重新登录」，用户可以直接去登录后重新解析。两类信号都读不到时保持 1.4.16 的原有答案。没有新增错误码，仍在用旧版 App 的设备看到的是同一个 `LOGIN_REQUIRED` 与「去登录」按钮，提示文案用解析器给的这一句。

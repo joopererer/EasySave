@@ -7,8 +7,8 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/widget_previews.dart';
+import 'package:http/http.dart' as http;
 import 'package:photo_manager/photo_manager.dart';
-import 'package:photo_manager_image_provider/photo_manager_image_provider.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:video_player/video_player.dart';
@@ -215,6 +215,210 @@ class GalleryBrowserItem {
         ..cacheItemIndex = cacheItemIndex ?? index;
 }
 
+class MediaInfoData {
+  const MediaInfoData({
+    this.width,
+    this.height,
+    this.format,
+    this.sizeBytes,
+    this.isEstimatedSize = false,
+    this.durationSeconds,
+    this.isLive = false,
+    this.isVideo = false,
+    this.filename,
+    this.path,
+    this.url,
+    this.title,
+    this.author,
+  });
+
+  final int? width;
+  final int? height;
+  final String? format;
+  final int? sizeBytes;
+  final bool isEstimatedSize;
+  final int? durationSeconds;
+  final bool isLive;
+  final bool isVideo;
+  final String? filename;
+  final String? path;
+  final String? url;
+  final String? title;
+  final String? author;
+
+  MediaInfoData copyWith({
+    int? width,
+    int? height,
+    String? format,
+    int? sizeBytes,
+    bool? isEstimatedSize,
+    int? durationSeconds,
+    bool? isLive,
+    bool? isVideo,
+    String? filename,
+    String? path,
+    String? url,
+    String? title,
+    String? author,
+  }) =>
+      MediaInfoData(
+        width: width ?? this.width,
+        height: height ?? this.height,
+        format: format ?? this.format,
+        sizeBytes: sizeBytes ?? this.sizeBytes,
+        isEstimatedSize: isEstimatedSize ?? this.isEstimatedSize,
+        durationSeconds: durationSeconds ?? this.durationSeconds,
+        isLive: isLive ?? this.isLive,
+        isVideo: isVideo ?? this.isVideo,
+        filename: filename ?? this.filename,
+        path: path ?? this.path,
+        url: url ?? this.url,
+        title: title ?? this.title,
+        author: author ?? this.author,
+      );
+
+  String formatSize() {
+    if (sizeBytes == null || sizeBytes! <= 0) return '';
+    final mb = sizeBytes! / (1024 * 1024);
+    final str = mb >= 100
+        ? '${mb.toStringAsFixed(0)} MB'
+        : (mb >= 1
+            ? '${mb.toStringAsFixed(1)} MB'
+            : '${(sizeBytes! / 1024).toStringAsFixed(0)} KB');
+    return isEstimatedSize ? '预计 $str' : str;
+  }
+
+  String formatDuration() {
+    if (durationSeconds == null || durationSeconds! <= 0) return '';
+    final m = durationSeconds! ~/ 60;
+    final s = durationSeconds! % 60;
+    return '${m.toString().padLeft(2, '0')}:${s.toString().padLeft(2, '0')}';
+  }
+
+  String summaryText() {
+    final parts = <String>[];
+    if (width != null && height != null && width! > 0 && height! > 0) {
+      parts.add('$width×$height');
+    }
+    if (format != null && format!.isNotEmpty) {
+      parts.add(format!.toUpperCase());
+    }
+    final size = formatSize();
+    if (size.isNotEmpty) {
+      parts.add(size);
+    }
+    if (isVideo && durationSeconds != null && durationSeconds! > 0) {
+      parts.add(formatDuration());
+    }
+    if (isLive) {
+      parts.add('实况');
+    }
+    return parts.join(' · ');
+  }
+}
+
+class _MediaDetailsSheet extends StatelessWidget {
+  const _MediaDetailsSheet({required this.info});
+  final MediaInfoData info;
+
+  Widget _buildRow(BuildContext context, String label, String value) {
+    if (value.isEmpty) return const SizedBox.shrink();
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 8),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SizedBox(
+            width: 80,
+            child: Text(
+              label,
+              style: const TextStyle(
+                color: Colors.white54,
+                fontSize: 14,
+              ),
+            ),
+          ),
+          Expanded(
+            child: SelectableText(
+              value,
+              style: const TextStyle(
+                color: Colors.white,
+                fontSize: 14,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final typeText = info.isLive ? '实况照片' : (info.isVideo ? '视频' : '图片');
+    final resText = (info.width != null && info.height != null && info.width! > 0 && info.height! > 0)
+        ? '${info.width} × ${info.height}'
+        : '';
+    final sizeText = info.formatSize();
+    final durText = (info.isVideo && info.durationSeconds != null && info.durationSeconds! > 0)
+        ? info.formatDuration()
+        : '';
+
+    return SafeArea(
+      top: false,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(20, 16, 20, 32),
+        child: SingleChildScrollView(
+          physics: const BouncingScrollPhysics(),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  const Text(
+                    '媒体详情',
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 18,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.close, color: Colors.white70),
+                    onPressed: () => Navigator.of(context).pop(),
+                  ),
+                ],
+              ),
+              const Divider(color: Colors.white24, height: 16),
+              if (info.title != null && info.title!.isNotEmpty)
+                _buildRow(context, '标题', info.title!),
+              if (info.author != null && info.author!.isNotEmpty)
+                _buildRow(context, '作者', info.author!),
+              _buildRow(context, '类型', typeText),
+              if (resText.isNotEmpty)
+                _buildRow(context, '分辨率', resText),
+              if (info.format != null && info.format!.isNotEmpty)
+                _buildRow(context, '格式', info.format!.toUpperCase()),
+              if (sizeText.isNotEmpty)
+                _buildRow(context, '大小', sizeText),
+              if (durText.isNotEmpty)
+                _buildRow(context, '时长', durText),
+              if (info.filename != null && info.filename!.isNotEmpty)
+                _buildRow(context, '文件名', info.filename!),
+              if (info.path != null && info.path!.isNotEmpty)
+                _buildRow(context, '存储路径', info.path!),
+              if (info.url != null && info.url!.isNotEmpty)
+                _buildRow(context, '来源链接', info.url!),
+              const SizedBox(height: 12),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 /// Initial selection of the browser. [selectedIndices] holds original post
 /// item indices ([GalleryBrowserItem.index]); null means nothing is selected.
 Set<int> initialGallerySelection(Set<int>? selectedIndices) =>
@@ -317,6 +521,25 @@ class GalleryBrowserItemDeletion {
   final Future<void> Function()? undo;
 }
 
+/// What deleting multiple items of a post did in a single batch.
+class BatchGalleryBrowserItemDeletion {
+  const BatchGalleryBrowserItemDeletion({
+    required this.ok,
+    this.cancelled = false,
+    this.succeededIndices = const {},
+    this.failedCount = 0,
+    this.message,
+    this.undo,
+  });
+
+  final bool ok;
+  final bool cancelled;
+  final Set<int> succeededIndices;
+  final int failedCount;
+  final String? message;
+  final Future<void> Function()? undo;
+}
+
 /// Locates the album asset behind one stored history row.
 typedef HistoryAssetLocator = Future<AssetEntity?> Function(HistoryFile file);
 
@@ -332,9 +555,21 @@ Future<({List<GalleryBrowserItem> items, int initial})> savedBrowserItems({
   int? highlightItemIndex,
   HistoryAssetLocator? locate,
   bool? albumScanned,
+  bool allowRemoteFallback = false,
 }) async {
   final entries = pairSavedMedia(files);
   if (entries.isEmpty) {
+    if (allowRemoteFallback && post.items.isNotEmpty) {
+      final items = <GalleryBrowserItem>[
+        for (var i = 0; i < post.items.length; i++)
+          GalleryBrowserItem.fromMediaItem(
+            post.items[i],
+            index: i,
+            cachePostId: record.postId,
+          ),
+      ];
+      return (items: items, initial: 0);
+    }
     return (items: <GalleryBrowserItem>[], initial: 0);
   }
 
@@ -569,6 +804,7 @@ class GalleryBrowserPage extends StatefulWidget {
     this.onRedownload,
     this.onRedownloadItems,
     this.onDeleteItem,
+    this.onDeleteItems,
     this.onDeletePost,
     this.onReparse,
     this.showSave = false,
@@ -612,6 +848,12 @@ class GalleryBrowserPage extends StatefulWidget {
     required bool deleteAlbumFiles,
   })? onDeleteItem;
 
+  /// Deletes multiple items of the post in a single batch.
+  final Future<BatchGalleryBrowserItemDeletion> Function(
+    List<GalleryBrowserItem> items, {
+    required bool deleteAlbumFiles,
+  })? onDeleteItems;
+
   /// Called when every remaining item of the post has been deleted and the user
   /// agrees to drop the post record as well.
   final Future<void> Function()? onDeletePost;
@@ -621,11 +863,221 @@ class GalleryBrowserPage extends StatefulWidget {
   /// the viewer with `true` so the caller can start the save.
   final bool showSave;
 
+  /// Test seam for remote size fetcher (v1.12 build 75).
+  @visibleForTesting
+  static Future<int?> Function(String url)? remoteSizeFetcherForTesting;
+
   @override
   State<GalleryBrowserPage> createState() => _GalleryBrowserPageState();
 }
 
 class _GalleryBrowserPageState extends State<GalleryBrowserPage> {
+  Timer? _collapseTimer;
+  bool _infoCollapsed = false;
+  final Map<String, MediaInfoData> _mediaInfoCache = {};
+  final Set<int> _remoteSizeRequested = {};
+
+  void _resetCollapseTimer() {
+    _collapseTimer?.cancel();
+    _collapseTimer = Timer(const Duration(seconds: 4), () {
+      if (mounted && !_infoCollapsed) {
+        setState(() => _infoCollapsed = true);
+      }
+    });
+  }
+
+  MediaInfoData _getOrComputeInfo(GalleryBrowserItem item) {
+    final key = '${item.index}_${item.asset?.id ?? item.url}';
+    final cached = _mediaInfoCache[key];
+    if (cached != null) return cached;
+
+    String? format;
+    final urlOrTitle = item.asset?.title ?? item.videoUrl ?? item.url;
+    if (urlOrTitle.isNotEmpty) {
+      final dot = urlOrTitle.lastIndexOf('.');
+      if (dot != -1 && dot < urlOrTitle.length - 1) {
+        final ext = urlOrTitle.substring(dot + 1).split('?').first.split('#').first;
+        if (ext.length <= 5) format = ext;
+      }
+    }
+
+    final isLive = item.type == 'live';
+    final isVideo = item.type == 'video' || item.isGif;
+
+    int? width = item.width?.toInt();
+    int? height = item.height?.toInt();
+    int? duration;
+    int? size;
+
+    if (item.asset != null) {
+      final a = item.asset!;
+      if (width == null || width <= 0) width = a.width;
+      if (height == null || height <= 0) height = a.height;
+      duration = a.videoDuration.inSeconds;
+      _loadLocalFileSize(key, a);
+    } else {
+      _loadRemoteFileSize(key, item);
+    }
+
+    final created = MediaInfoData(
+      width: width,
+      height: height,
+      format: format,
+      sizeBytes: size,
+      durationSeconds: duration,
+      isLive: isLive,
+      isVideo: isVideo,
+      filename: item.asset?.title,
+      url: widget.postUrl,
+    );
+    _mediaInfoCache[key] = created;
+    return created;
+  }
+
+  Future<void> _loadLocalFileSize(String key, AssetEntity asset) async {
+    try {
+      final f = await asset.file;
+      if (f != null && await f.exists()) {
+        final length = await f.length();
+        if (mounted) {
+          final current = _mediaInfoCache[key];
+          if (current != null) {
+            setState(() {
+              _mediaInfoCache[key] = current.copyWith(
+                sizeBytes: length,
+                path: f.path,
+                filename: f.path.split(Platform.pathSeparator).last,
+              );
+            });
+          }
+        }
+      }
+    } catch (_) {}
+  }
+
+  Future<void> _loadRemoteFileSize(String key, GalleryBrowserItem item) async {
+    if (item.index != _currentItem?.index) return;
+    if (_remoteSizeRequested.contains(item.index)) return;
+    _remoteSizeRequested.add(item.index);
+
+    final targetUrl = item.videoUrl ?? item.url;
+    try {
+      int? size;
+      if (GalleryBrowserPage.remoteSizeFetcherForTesting != null) {
+        size = await GalleryBrowserPage.remoteSizeFetcherForTesting!(targetUrl);
+      } else {
+        final uri = Uri.tryParse(targetUrl);
+        if (uri != null) {
+          final client = http.Client();
+          try {
+            final headResp = await client.head(uri).timeout(const Duration(seconds: 3));
+            if (headResp.statusCode == 200 && headResp.contentLength != null) {
+              size = headResp.contentLength;
+            } else {
+              final rangeResp = await client.get(
+                uri,
+                headers: {'Range': 'bytes=0-0'},
+              ).timeout(const Duration(seconds: 3));
+              final rangeHeader = rangeResp.headers['content-range'];
+              if (rangeHeader != null) {
+                final match = RegExp(r'/(\d+)').firstMatch(rangeHeader);
+                if (match != null) {
+                  size = int.tryParse(match.group(1)!);
+                }
+              }
+            }
+          } finally {
+            client.close();
+          }
+        }
+      }
+      if (size != null && size > 0 && mounted) {
+        final current = _mediaInfoCache[key];
+        if (current != null) {
+          setState(() {
+            _mediaInfoCache[key] = current.copyWith(
+              sizeBytes: size,
+              isEstimatedSize: true,
+            );
+          });
+        }
+      }
+    } catch (_) {}
+  }
+
+  void _showMediaDetailsSheet(BuildContext context, MediaInfoData info) {
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: const Color(0xFF1E1E1E),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (ctx) => ConstrainedBox(
+        constraints: BoxConstraints(
+          maxHeight: MediaQuery.of(ctx).size.height * 0.85,
+        ),
+        child: _MediaDetailsSheet(info: info),
+      ),
+    );
+  }
+
+  Widget _buildCollapsedInfoIcon() => Semantics(
+    button: true,
+    label: '显示媒体信息',
+    child: GestureDetector(
+      key: const Key('browser_info_toggle'),
+      onTap: () {
+        setState(() => _infoCollapsed = false);
+        _resetCollapseTimer();
+      },
+      child: Container(
+        padding: const EdgeInsets.all(6),
+        decoration: BoxDecoration(
+          color: Colors.black.withValues(alpha: 0.5),
+          shape: BoxShape.circle,
+          border: Border.all(color: Colors.white24, width: 0.5),
+        ),
+        child: const Icon(Icons.info_outline, color: Colors.white70, size: 16),
+      ),
+    ),
+  );
+
+  Widget _buildExpandedInfoStrip(String summary, MediaInfoData info) => Semantics(
+    button: true,
+    label: '媒体信息详情：$summary',
+    child: GestureDetector(
+      key: const Key('browser_info_strip'),
+      onTap: () => _showMediaDetailsSheet(context, info),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+        decoration: BoxDecoration(
+          color: Colors.black.withValues(alpha: 0.5),
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: Colors.white24, width: 0.5),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Flexible(
+              child: Text(
+                summary,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                  color: Colors.white70,
+                  fontSize: 12,
+                  letterSpacing: 0.2,
+                ),
+              ),
+            ),
+            const SizedBox(width: 4),
+            const Icon(Icons.chevron_right, color: Colors.white38, size: 14),
+          ],
+        ),
+      ),
+    ),
+  );
   /// The pages shown right now. A delete or a re-download replaces this, so the
   /// viewer updates in place instead of asking the user to open the post again.
   late List<GalleryBrowserItem> _items = List<GalleryBrowserItem>.of(
@@ -759,93 +1211,157 @@ class _GalleryBrowserPageState extends State<GalleryBrowserPage> {
   /// stays undoable and the system dialog for the album files is the same one.
   Future<void> _deleteTargets() async {
     final remove = widget.onDeleteItem;
-    if (_targets.isEmpty || remove == null || _busy) return;
+    final removeBatch = widget.onDeleteItems;
+    if (_targets.isEmpty || (remove == null && removeBatch == null) || _busy) return;
     // Remember where every item sits before the first one leaves, so an undo
     // can put each of them back exactly where it was.
     final items = [
       for (final item in _targets)
         (item: item, at: _items.indexWhere((it) => it.index == item.index)),
     ];
+    final counts = deletionCountsForGalleryItems(items.map((e) => e.item));
     final title = items.length == 1
-        ? '第 ${_position.position} 项'
-        : '已选的 ${items.length} 项';
+        ? (counts.livePhotos > 0 ? '实况（共 2 个文件）' : '第 ${_position.position} 项')
+        : counts.format(nonLiveFallback: '已选的 ${items.length} 项');
     final withFile = await _askDeleteMode(title);
     if (withFile == null || !mounted) return;
     setState(() => _busy = true);
-    final removed =
-        <({GalleryBrowserItem item, int at, GalleryBrowserItemDeletion result})>[];
-    var failed = 0;
+    final messenger = ScaffoldMessenger.of(context);
+
     try {
-      for (final entry in items) {
-        if (!mounted) break;
-        GalleryBrowserItemDeletion? result;
-        try {
-          result = await remove(
-            entry.item,
-            deleteAlbumFiles: withFile,
+      if (removeBatch != null) {
+        final result = await removeBatch(
+          items.map((e) => e.item).toList(),
+          deleteAlbumFiles: withFile,
+        );
+        if (result.cancelled) {
+          if (mounted) {
+            messenger.hideCurrentSnackBar();
+            messenger.showSnackBar(const SnackBar(content: Text('已取消删除')));
+          }
+          return;
+        }
+        if (!result.ok || result.succeededIndices.isEmpty) {
+          if (mounted) {
+            messenger.hideCurrentSnackBar();
+            messenger.showSnackBar(const SnackBar(content: Text('删除失败，请重试')));
+          }
+          return;
+        }
+
+        for (final index in result.succeededIndices) {
+          _removeItem(index);
+        }
+
+        if (mounted) {
+          setState(() {
+            _selected.removeWhere((idx) => result.succeededIndices.contains(idx));
+          });
+          widget.onSelectionChanged?.call(_selected);
+
+          messenger.hideCurrentSnackBar();
+          final String message;
+          if (result.failedCount > 0) {
+            message = '已删除 ${result.succeededIndices.length} 项，${result.failedCount} 项失败';
+          } else if (result.succeededIndices.length == 1) {
+            final summary = counts.format(nonLiveFallback: '这张');
+            message = withFile ? '已删除 $summary，并删除相册文件' : '已删除 $summary';
+          } else {
+            final summary = counts.format(nonLiveFallback: '${result.succeededIndices.length} 项');
+            message = withFile ? '已删除 $summary，并删除相册文件' : '已删除 $summary';
+          }
+          messenger.showSnackBar(
+            SnackBar(
+              content: Text(message),
+              duration: const Duration(seconds: 4),
+              action: result.undo == null
+                  ? null
+                  : SnackBarAction(
+                      label: '撤销',
+                      onPressed: () async {
+                        await result.undo!();
+                      },
+                    ),
+            ),
           );
-        } catch (_) {
-          result = null;
         }
-        if (result == null || !result.ok) {
-          failed++;
-          continue;
+      } else if (remove != null) {
+        final removed =
+            <({GalleryBrowserItem item, int at, GalleryBrowserItemDeletion result})>[];
+        var failed = 0;
+        for (final entry in items) {
+          if (!mounted) break;
+          GalleryBrowserItemDeletion? result;
+          try {
+            result = await remove(
+              entry.item,
+              deleteAlbumFiles: withFile,
+            );
+          } catch (_) {
+            result = null;
+          }
+          if (result == null || !result.ok) {
+            failed++;
+            continue;
+          }
+          _removeItem(entry.item.index);
+          removed.add((item: entry.item, at: entry.at, result: result));
         }
-        _removeItem(entry.item.index);
-        removed.add((item: entry.item, at: entry.at, result: result));
+
+        if (!mounted) return;
+        setState(
+          () => _selected.removeWhere(
+            (index) => !_items.any((item) => item.index == index),
+          ),
+        );
+        widget.onSelectionChanged?.call(_selected);
+
+        messenger.hideCurrentSnackBar();
+        if (removed.isEmpty) {
+          messenger.showSnackBar(const SnackBar(content: Text('删除失败，请重试')));
+          return;
+        }
+        final undos = [
+          for (final entry in removed)
+            if (entry.result.undo != null) entry.result.undo!,
+        ];
+        final undoAll = undos.length == removed.length && undos.isNotEmpty
+            ? () async {
+                for (final undo in undos) {
+                  await undo();
+                }
+              }
+            : null;
+        final message = removed.length == 1
+            ? (removed.single.result.message ?? '已删除这张')
+            : (failed > 0 ? '已删除 ${removed.length} 项，$failed 项删除失败' : '已删除 ${removed.length} 项');
+        messenger.showSnackBar(
+          SnackBar(
+            content: Text(message),
+            duration: const Duration(seconds: 4),
+            action: undoAll == null
+                ? null
+                : SnackBarAction(
+                    label: '撤销',
+                    onPressed: () async {
+                      await undoAll();
+                      if (!mounted) return;
+                      for (final entry in removed) {
+                        _insertItem(entry.item, entry.at);
+                      }
+                    },
+                  ),
+          ),
+        );
       }
     } finally {
       if (mounted) setState(() => _busy = false);
     }
+
     if (!mounted) return;
-
-    // Whatever left the viewer cannot stay selected.
-    setState(
-      () => _selected.removeWhere(
-        (index) => !_items.any((item) => item.index == index),
-      ),
-    );
-    widget.onSelectionChanged?.call(_selected);
-
-    final messenger = ScaffoldMessenger.of(context);
-    messenger.hideCurrentSnackBar();
-    if (removed.isEmpty) {
-      messenger.showSnackBar(const SnackBar(content: Text('删除失败，请重试')));
-      return;
+    if (_items.isEmpty) {
+      Navigator.of(context).pop();
     }
-    final undos = [
-      for (final entry in removed)
-        if (entry.result.undo != null) entry.result.undo!,
-    ];
-    final undoAll = undos.length == removed.length && undos.isNotEmpty
-        ? () async {
-            for (final undo in undos) {
-              await undo();
-            }
-          }
-        : null;
-    final message = removed.length == 1
-        ? (removed.single.result.message ?? '已删除这张')
-        : (failed > 0 ? '已删除 ${removed.length} 项，$failed 项删除失败' : '已删除 ${removed.length} 项');
-    messenger.showSnackBar(
-      SnackBar(
-        content: Text(message),
-        duration: const Duration(seconds: 6),
-        action: undoAll == null
-            ? null
-            : SnackBarAction(
-                label: '撤销',
-                onPressed: () async {
-                  await undoAll();
-                  if (!mounted) return;
-                  for (final entry in removed) {
-                    _insertItem(entry.item, entry.at);
-                  }
-                },
-              ),
-      ),
-    );
-    if (_items.isEmpty) await _askDeletePost();
   }
 
   void _removeItem(int index) {
@@ -951,7 +1467,14 @@ class _GalleryBrowserPageState extends State<GalleryBrowserPage> {
   }
 
   @override
+  void initState() {
+    super.initState();
+    _resetCollapseTimer();
+  }
+
+  @override
   void dispose() {
+    _collapseTimer?.cancel();
     _decoded.dispose();
     _pageController.dispose();
     _thumbController.dispose();
@@ -1182,6 +1705,12 @@ class _GalleryBrowserPageState extends State<GalleryBrowserPage> {
                       _isZoomed = false;
                     });
                     _keepDecodedAround(idx);
+                    _resetCollapseTimer();
+                    final item = _currentItem;
+                    if (item != null && item.asset == null) {
+                      final key = '${item.index}_${item.url}';
+                      _loadRemoteFileSize(key, item);
+                    }
                     // Scroll thumbnail into view
                     if (_thumbController.hasClients) {
                       _thumbController.animateTo(
@@ -1421,6 +1950,26 @@ class _GalleryBrowserPageState extends State<GalleryBrowserPage> {
                     child: Column(
                       mainAxisSize: MainAxisSize.min,
                       children: [
+                        // Media Info Strip (v1.12 build 75)
+                        if (!_isZoomed && currentItem != null) ...[
+                          Builder(builder: (context) {
+                            final info = _getOrComputeInfo(currentItem);
+                            final summary = info.summaryText();
+                            if (summary.isEmpty) return const SizedBox.shrink();
+                            return Padding(
+                              padding: const EdgeInsets.only(left: 15, right: 15, bottom: 6),
+                              child: Align(
+                                alignment: Alignment.centerRight,
+                                child: FittedBox(
+                                  fit: BoxFit.scaleDown,
+                                  child: _infoCollapsed
+                                      ? _buildCollapsedInfoIcon()
+                                      : _buildExpandedInfoStrip(summary, info),
+                                ),
+                              ),
+                            );
+                          }),
+                        ],
                         // Thumbnails strip
                         if (_items.length > 1)
                           SizedBox(
@@ -1520,7 +2069,8 @@ class _GalleryBrowserPageState extends State<GalleryBrowserPage> {
                               ? _redownloadFromBar
                               : null,
                           onDelete:
-                              widget.onDeleteItem != null &&
+                              (widget.onDeleteItem != null ||
+                                      widget.onDeleteItems != null) &&
                                   currentItem != null
                               ? _deleteTargets
                               : null,

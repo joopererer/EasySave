@@ -3,14 +3,18 @@
 // Thumbnails read the local album (via GalleryLocatorService) and never hit
 // the CDN, so signed-URL expiry can't break them.
 
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:photo_manager/photo_manager.dart';
 
 import '../core/models.dart';
+import '../pages/download_queue_page.dart';
 import '../services/gallery_locator_service.dart';
 import '../services/history_db.dart';
 import '../services/live_pairs.dart';
 import '../services/local_thumbnail_tiers.dart';
+import '../services/network_status.dart';
 import '../theme/app_theme.dart';
 import 'shared.dart';
 import 'verified_asset_image.dart';
@@ -303,12 +307,17 @@ class DownloadingOverlay extends StatelessWidget {
     required this.progress,
     this.compact = false,
     this.paused = false,
+    this.userPaused,
+    this.statusText,
     this.stalled = false,
     this.failed = false,
     this.waitingForNetwork = false,
+    this.isFinishing = false,
+    this.savingPhase,
     this.partial = false,
     this.failureReason,
     this.onTogglePause,
+    this.onTapQueue,
     this.onCancel,
   });
 
@@ -317,6 +326,12 @@ class DownloadingOverlay extends StatelessWidget {
 
   /// The user paused the download: shows a play icon and "已暂停".
   final bool paused;
+
+  /// Whether pause was initiated by user (vs network/internal interrupt).
+  final bool? userPaused;
+
+  /// Explicit status message (e.g. "下载中断 · 等待网络", "自动重试 1/5", "已中断，点继续").
+  final String? statusText;
 
   /// No sign of life for a while: the toggle becomes "retry".
   final bool stalled;
@@ -327,96 +342,347 @@ class DownloadingOverlay extends StatelessWidget {
   /// silently (v1.11 batch 2). Display only — nothing here pauses anything.
   final bool waitingForNetwork;
 
+  /// Finishing stage: fully downloaded, saving to album/embedding provenance.
+  final bool isFinishing;
+
+  /// Sub-phase during finishing (e.g. '写入来源信息' or '复制到相册').
+  final String? savingPhase;
+
   final bool partial;
 
-  /// Short failure reason ("存储空间不足", "HTTP 403", ...) shown in the label.
+  /// Short failure reason ("存储空间不足", "空间不足", "HTTP 403", ...) shown in the label.
   final String? failureReason;
 
   /// Pause / resume (retry when [stalled]); null hides the control.
   final VoidCallback? onTogglePause;
 
-  /// Cancel and discard the download; null hides the control.
+  /// Tap left area to navigate to download queue management.
+  final VoidCallback? onTapQueue;
+
+  /// Cancel and discard the download; kept for compatibility (card does not show cancel button).
   final VoidCallback? onCancel;
 
   @override
   Widget build(BuildContext context) {
     final pct = (progress.clamp(0.0, 1.0) * 100).round();
-    final size = compact ? 28.0 : 44.0;
-    final reason = failureReason?.isNotEmpty == true ? '（$failureReason）' : '';
-    final label = failed ? (partial ? '部分保存成功$reason，点击重试' : '下载失败$reason，点击重试') : paused ? '已暂停 $pct%' : (stalled ? '已停滞 $pct%' : '下载中 $pct%');
-    final shownLabel = !failed && !paused && waitingForNetwork
-        ? '等待网络…联网后自动继续'
-        : label;
-    final toggleIcon = paused
-        ? Icons.play_arrow_rounded
-        : (stalled || failed ? Icons.refresh : Icons.pause_rounded);
-    final toggleTip = failed ? '重试' : paused ? '继续下载' : (stalled ? '重试' : '暂停下载');
-    final actionSize = compact ? 18.0 : 22.0;
+    final isStorageFull = failureReason?.contains('空间不足') == true ||
+        failureReason?.contains('STORAGE_FULL') == true ||
+        statusText?.contains('空间不足') == true;
 
-    Widget action(IconData icon, String tip, VoidCallback onTap) {
-      return IconButton(
-        tooltip: tip,
-        onPressed: onTap,
-        icon: Icon(icon, color: Colors.white, size: actionSize),
-        padding: EdgeInsets.zero,
-        visualDensity: VisualDensity.compact,
-        constraints: BoxConstraints.tightFor(
-          width: compact ? 28 : 36,
-          height: compact ? 28 : 36,
-        ),
-        style: IconButton.styleFrom(backgroundColor: Colors.black38,
-          minimumSize: Size.zero, tapTargetSize: MaterialTapTargetSize.shrinkWrap),
-      );
+    final String label;
+    if (isStorageFull) {
+      label = statusText ?? '空间不足';
+    } else if (paused) {
+      if (userPaused ?? true) {
+        label = '已暂停 $pct%';
+      } else if (!NetworkStatus.instance.online) {
+        label = '下载中断 · 等待网络';
+      } else {
+        label = '已中断，点继续';
+      }
+    } else if (isFinishing) {
+      label = savingPhase != null ? '正在保存到相册（$savingPhase）' : '正在保存到相册';
+    } else if (failed) {
+      final reason = failureReason?.isNotEmpty == true ? '（$failureReason）' : '';
+      label = partial ? '部分保存成功$reason' : '下载失败$reason';
+    } else if (statusText != null && statusText!.isNotEmpty) {
+      label = statusText!;
+    } else if (waitingForNetwork) {
+      label = '等待网络…联网后自动继续';
+    } else if (stalled) {
+      label = '已停滞';
+    } else {
+      label = '下载中';
     }
 
-    return Semantics(
-      label: shownLabel,
-      child: ColoredBox(
-        color: Colors.black.withValues(alpha: 0.45),
-        child: Center(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
+    final String narrowLabel;
+    if (isStorageFull) {
+      narrowLabel = '空间不足';
+    } else if (paused) {
+      if (userPaused ?? true) {
+        narrowLabel = '已暂停';
+      } else if (!NetworkStatus.instance.online) {
+        narrowLabel = '等网络';
+      } else {
+        narrowLabel = '已中断';
+      }
+    } else if (isFinishing) {
+      narrowLabel = '保存中';
+    } else if (failed) {
+      narrowLabel = '失败';
+    } else if (statusText != null && statusText!.isNotEmpty) {
+      if (statusText == '下载中断 · 等待网络') {
+        narrowLabel = '等网络';
+      } else if (statusText!.startsWith('自动重试')) {
+        narrowLabel = statusText!.replaceFirst('自动重试', '重试');
+      } else if (statusText == '已中断，点继续') {
+        narrowLabel = '已中断';
+      } else {
+        narrowLabel = statusText!;
+      }
+    } else if (waitingForNetwork) {
+      narrowLabel = '等网络';
+    } else {
+      narrowLabel = '';
+    }
+
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final isNarrow = constraints.maxWidth < 130 || compact;
+        final barHeight = compact ? 28.0 : 44.0;
+        final circleSize = compact ? 18.0 : 26.0;
+        final showPercent = !isStorageFull && !failed && !waitingForNetwork && !paused;
+        final percentText = '$pct%';
+
+        Widget progressWidget;
+        if (isStorageFull) {
+          progressWidget = Icon(Icons.disc_full_outlined, size: circleSize, color: Colors.orangeAccent);
+        } else if (failed) {
+          progressWidget = Icon(Icons.error_outline, size: circleSize, color: Colors.amberAccent);
+        } else if (waitingForNetwork) {
+          progressWidget = Icon(Icons.wifi_off_rounded, size: circleSize, color: Colors.white70);
+        } else if (paused) {
+          progressWidget = Icon(Icons.pause_circle_outline, size: circleSize, color: Colors.white70);
+        } else {
+          progressWidget = Stack(
+            alignment: Alignment.center,
             children: [
-              SizedBox(
-                width: size,
-                height: size,
-                child: failed ? const Icon(Icons.error_outline, color: Colors.white) : CircularProgressIndicator(
-                  // Indeterminate until the first bytes arrive.
-                  value: paused || progress > 0
-                      ? progress.clamp(0.0, 1.0)
-                      : null,
-                  strokeWidth: 3,
-                  color: paused ? Colors.white54 : Colors.white,
-                  backgroundColor: Colors.white24,
-                ),
+              CircularProgressIndicator(
+                value: progress > 0 ? progress.clamp(0.0, 1.0) : null,
+                strokeWidth: compact ? 1.5 : 2.0,
+                color: Colors.white,
+                backgroundColor: Colors.white24,
               ),
-              if (!compact) ...[
-                const SizedBox(height: 6),
-                Text(
-                  shownLabel,
-                  textAlign: TextAlign.center,
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontSize: 12,
-                    fontWeight: FontWeight.w600,
+              if (showPercent && progress > 0)
+                FittedBox(
+                  fit: BoxFit.scaleDown,
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 1.5),
+                    child: Text(
+                      percentText,
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontSize: compact ? 7.0 : 8.5,
+                        fontWeight: FontWeight.bold,
+                        height: 1.0,
+                      ),
+                    ),
                   ),
                 ),
-              ],
-              if (onTogglePause != null || onCancel != null) ...[
-                SizedBox(height: compact ? 2 : 6),
-                Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    if (onTogglePause != null)
-                      action(toggleIcon, toggleTip, onTogglePause!),
-                    if (onTogglePause != null && onCancel != null)
-                      SizedBox(width: compact ? 4 : 8),
-                    if (onCancel != null)
-                      action(Icons.close, '取消下载', onCancel!),
-                  ],
-                ),
-              ],
             ],
+          );
+        }
+
+        return Semantics(
+          label: label,
+          child: Container(
+            height: barHeight,
+            padding: EdgeInsets.symmetric(horizontal: compact ? 4 : 8),
+            decoration: BoxDecoration(
+              color: Colors.black.withValues(alpha: 0.75),
+            ),
+            child: Row(
+              children: [
+                // 4d: Left hit-test area navigates to download management
+                Expanded(
+                  child: GestureDetector(
+                    behavior: HitTestBehavior.opaque,
+                    onTap: () {
+                      if (onTapQueue != null) {
+                        onTapQueue!();
+                      } else {
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute<void>(
+                            builder: (_) => DownloadQueuePage(),
+                          ),
+                        );
+                      }
+                    },
+                    child: Row(
+                      children: [
+                        SizedBox(
+                          width: circleSize,
+                          height: circleSize,
+                          child: progressWidget,
+                        ),
+                        SizedBox(width: compact ? 4 : 6),
+                        Expanded(
+                          child: Text(
+                            isNarrow ? narrowLabel : label,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              color: Colors.white,
+                              fontSize: compact ? 9.0 : 10.5,
+                              fontWeight: FontWeight.w600,
+                              letterSpacing: -0.3,
+                            ),
+                          ),
+                        ),
+                        if (!isNarrow) ...[
+                          const SizedBox(width: 2),
+                          const Icon(Icons.chevron_right, size: 14, color: Colors.white54),
+                        ],
+                      ],
+                    ),
+                  ),
+                ),
+                // 4a, 4b: Right independent pause / resume button (hit target >= 40x40)
+                if (onTogglePause != null)
+                  _OverlayToggleButton(
+                    compact: compact,
+                    paused: paused,
+                    failed: failed,
+                    stalled: stalled,
+                    storageFull: isStorageFull,
+                    waitingForNetwork: waitingForNetwork,
+                    onTap: onTogglePause!,
+                  ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+}
+
+class _OverlayToggleButton extends StatefulWidget {
+  const _OverlayToggleButton({
+    required this.compact,
+    required this.paused,
+    required this.failed,
+    required this.stalled,
+    required this.storageFull,
+    required this.waitingForNetwork,
+    required this.onTap,
+  });
+
+  final bool compact;
+  final bool paused;
+  final bool failed;
+  final bool stalled;
+  final bool storageFull;
+  final bool waitingForNetwork;
+  final VoidCallback onTap;
+
+  @override
+  State<_OverlayToggleButton> createState() => _OverlayToggleButtonState();
+}
+
+class _OverlayToggleButtonState extends State<_OverlayToggleButton> {
+  bool? _optimisticPaused;
+  bool _busy = false;
+  Timer? _fallbackTimer;
+
+  @override
+  void dispose() {
+    _fallbackTimer?.cancel();
+    super.dispose();
+  }
+
+  @override
+  void didUpdateWidget(covariant _OverlayToggleButton oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.paused != oldWidget.paused ||
+        widget.failed != oldWidget.failed ||
+        widget.stalled != oldWidget.stalled ||
+        widget.waitingForNetwork != oldWidget.waitingForNetwork) {
+      _optimisticPaused = null;
+      _busy = false;
+      _fallbackTimer?.cancel();
+    }
+  }
+
+  void _handleTap() {
+    if (_busy) return;
+    final isToggle = !widget.failed && !widget.stalled && !widget.storageFull;
+    setState(() {
+      _busy = true;
+      if (isToggle) {
+        _optimisticPaused = !widget.paused;
+      }
+    });
+    try {
+      widget.onTap();
+    } catch (_) {
+      if (mounted) {
+        setState(() {
+          _optimisticPaused = null;
+          _busy = false;
+        });
+      }
+      return;
+    }
+    // Optimistic fallback timeout: revert if neither widget updates nor success occurs
+    _fallbackTimer?.cancel();
+    _fallbackTimer = Timer(const Duration(milliseconds: 1500), () {
+      if (mounted && _busy) {
+        setState(() {
+          _optimisticPaused = null;
+          _busy = false;
+        });
+      }
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final effectivePaused = _optimisticPaused ?? widget.paused;
+    final showPlay = effectivePaused;
+    final showRefresh = widget.failed || widget.stalled || widget.storageFull;
+    final icon = showPlay
+        ? Icons.play_arrow_rounded
+        : (showRefresh ? Icons.refresh_rounded : Icons.pause_rounded);
+    final tip = widget.storageFull
+        ? '清理后继续'
+        : (showPlay ? '继续下载' : (showRefresh ? '重试' : '暂停下载'));
+
+    final targetSize = widget.compact ? 24.0 : 44.0;
+    final iconContainerSize = widget.compact ? 22.0 : 30.0;
+    final iconSize = widget.compact ? 14.0 : 18.0;
+
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: _handleTap,
+      child: Tooltip(
+        message: tip,
+        child: Container(
+          width: targetSize,
+          height: targetSize,
+          alignment: Alignment.center,
+          child: Container(
+            width: iconContainerSize,
+            height: iconContainerSize,
+            decoration: BoxDecoration(
+              color: Colors.white.withValues(alpha: 0.18),
+              shape: BoxShape.circle,
+            ),
+            alignment: Alignment.center,
+            child: Stack(
+              alignment: Alignment.center,
+              children: [
+                Icon(
+                  icon,
+                  color: Colors.white,
+                  size: iconSize,
+                ),
+                if (_busy)
+                  Positioned(
+                    right: 0,
+                    bottom: 0,
+                    child: SizedBox(
+                      width: widget.compact ? 6 : 8,
+                      height: widget.compact ? 6 : 8,
+                      child: const CircularProgressIndicator(
+                        strokeWidth: 1.5,
+                        color: Colors.white,
+                      ),
+                    ),
+                  ),
+              ],
+            ),
           ),
         ),
       ),
@@ -512,52 +778,59 @@ List<Widget> coverBadges(
       widgets.add(
         const Positioned(top: 8, left: 8, child: WhiteBadge(label: 'GIF')),
       );
-    } else if (kind == '视频') {
-      final label = videoDurationLabel(cover);
-      widgets.add(
-        Positioned(
-          top: 8,
-          left: 8,
-          child: DarkBadge(
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                const Icon(Icons.play_arrow, color: Colors.white, size: 12),
-                if (label != null) ...[
-                  const SizedBox(width: 2),
-                  Text(
-                    label,
-                    style: const TextStyle(color: Colors.white, fontSize: 10),
-                  ),
-                ],
-              ],
-            ),
-          ),
-        ),
-      );
     }
   }
-  if (itemCount > 1) {
+
+  // Top-right badges: duration (for video) and item count (if > 1)
+  final isVideo = showInfo && cover != null && mediaKindLabel(cover) == '视频';
+  final videoLabel = isVideo ? videoDurationLabel(cover) : null;
+  final hasDuration = isVideo;
+  final hasCount = itemCount > 1;
+
+  if (hasDuration || hasCount) {
     widgets.add(
       Positioned(
         top: 8,
         right: 8,
-        child: DarkBadge(
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Icon(Icons.collections, color: Colors.white, size: 11),
-              const SizedBox(width: 3),
-              Text(
-                '$itemCount',
-                style: const TextStyle(
-                  color: Colors.white,
-                  fontSize: 10,
-                  fontWeight: FontWeight.w600,
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (hasDuration)
+              DarkBadge(
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Icon(Icons.play_arrow, color: Colors.white, size: 12),
+                    if (videoLabel != null) ...[
+                      const SizedBox(width: 2),
+                      Text(
+                        videoLabel,
+                        style: const TextStyle(color: Colors.white, fontSize: 10),
+                      ),
+                    ],
+                  ],
                 ),
               ),
-            ],
-          ),
+            if (hasDuration && hasCount) const SizedBox(width: 4),
+            if (hasCount)
+              DarkBadge(
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Icon(Icons.collections, color: Colors.white, size: 11),
+                    const SizedBox(width: 3),
+                    Text(
+                      '$itemCount',
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 10,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+          ],
         ),
       ),
     );
@@ -593,11 +866,16 @@ class WaterfallPostCard extends StatelessWidget {
     this.onToggleSelect,
     this.downloadProgress,
     this.downloadPaused = false,
+    this.downloadUserPaused = false,
+    this.downloadStatusText,
     this.downloadStalled = false,
     this.downloadFailed = false,
     this.downloadWaitingForNetwork = false,
+    this.downloadIsFinishing = false,
+    this.downloadSavingPhase,
     this.downloadFailureReason,
     this.onToggleDownload,
+    this.onTapQueue,
     this.onCancelDownload,
   });
 
@@ -611,16 +889,23 @@ class WaterfallPostCard extends StatelessWidget {
   /// 0..1 while a download of this post is running, null otherwise.
   final double? downloadProgress;
   final bool downloadPaused;
+  final bool downloadUserPaused;
+  final String? downloadStatusText;
   final bool downloadStalled;
   final bool downloadFailed;
 
   /// No system connection: the overlay explains the wait (display only).
   final bool downloadWaitingForNetwork;
 
+  /// Saving to album / finishing stage.
+  final bool downloadIsFinishing;
+  final String? downloadSavingPhase;
+
   final String? downloadFailureReason;
 
   /// Pause / resume (retry when stalled) and cancel of the running download.
   final VoidCallback? onToggleDownload;
+  final VoidCallback? onTapQueue;
   final VoidCallback? onCancelDownload;
 
   @override
@@ -667,7 +952,7 @@ class WaterfallPostCard extends StatelessWidget {
                     Positioned(
                       left: 0,
                       right: 0,
-                      bottom: 0,
+                      bottom: downloadProgress != null ? 44 : 0,
                       child: Container(
                         padding: const EdgeInsets.fromLTRB(10, 22, 10, 10),
                         decoration: const BoxDecoration(
@@ -716,19 +1001,27 @@ class WaterfallPostCard extends StatelessWidget {
                       notOriginal: record.savedFiles.any((f) => f.notOriginal),
                     ),
                     if (downloadProgress != null)
-                      Positioned.fill(
+                      Positioned(
+                        left: 0,
+                        right: 0,
+                        bottom: 0,
                         child: DownloadingOverlay(
                           progress: downloadProgress!,
                           paused: downloadPaused,
+                          userPaused: downloadUserPaused,
+                          statusText: downloadStatusText,
                           stalled: downloadStalled,
                           failed: downloadFailed,
                           waitingForNetwork: downloadWaitingForNetwork,
+                          isFinishing: downloadIsFinishing,
+                          savingPhase: downloadSavingPhase,
                           failureReason: downloadFailureReason,
                           partial: record.savedFiles.isNotEmpty,
                           // Hidden in multi-select so taps keep selecting.
                           onTogglePause: selectionMode
                               ? null
                               : onToggleDownload,
+                          onTapQueue: selectionMode ? null : onTapQueue,
                           onCancel: selectionMode ? null : onCancelDownload,
                         ),
                       ),
@@ -835,10 +1128,15 @@ class ListPostRow extends StatelessWidget {
     this.onToggleSelect,
     this.downloadProgress,
     this.downloadPaused = false,
+    this.downloadUserPaused = false,
+    this.downloadStatusText,
     this.downloadStalled = false,
     this.downloadFailed = false,
+    this.downloadIsFinishing = false,
+    this.downloadSavingPhase,
     this.downloadFailureReason,
     this.onToggleDownload,
+    this.onTapQueue,
     this.onCancelDownload,
   });
 
@@ -854,10 +1152,15 @@ class ListPostRow extends StatelessWidget {
   /// 0..1 while a download of this post is running, null otherwise.
   final double? downloadProgress;
   final bool downloadPaused;
+  final bool downloadUserPaused;
+  final String? downloadStatusText;
   final bool downloadStalled;
   final bool downloadFailed;
+  final bool downloadIsFinishing;
+  final String? downloadSavingPhase;
   final String? downloadFailureReason;
   final VoidCallback? onToggleDownload;
+  final VoidCallback? onTapQueue;
   final VoidCallback? onCancelDownload;
 
   @override
@@ -893,18 +1196,26 @@ class ListPostRow extends StatelessWidget {
                     children: [
                       HistoryThumb(record: record, fit: BoxFit.cover),
                       if (downloadProgress != null)
-                        Positioned.fill(
+                        Positioned(
+                          left: 0,
+                          right: 0,
+                          bottom: 0,
                           child: DownloadingOverlay(
                             progress: downloadProgress!,
                             compact: true,
                             paused: downloadPaused,
+                            userPaused: downloadUserPaused,
+                            statusText: downloadStatusText,
                             stalled: downloadStalled,
-                          failed: downloadFailed,
-                          failureReason: downloadFailureReason,
-                          partial: record.savedFiles.isNotEmpty,
+                            failed: downloadFailed,
+                            isFinishing: downloadIsFinishing,
+                            savingPhase: downloadSavingPhase,
+                            failureReason: downloadFailureReason,
+                            partial: record.savedFiles.isNotEmpty,
                             onTogglePause: selectionMode
                                 ? null
                                 : onToggleDownload,
+                            onTapQueue: selectionMode ? null : onTapQueue,
                             onCancel: selectionMode ? null : onCancelDownload,
                           ),
                         ),

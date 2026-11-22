@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 
 class AlreadyDownloading implements Exception {
@@ -72,6 +73,12 @@ class DownloadClaims {
     } else {
       _owners.removeWhere((key, owner) => owner == batch);
     }
+  }
+
+  @visibleForTesting
+  static void resetForTesting() {
+    _owners.clear();
+    _cancelled.clear();
   }
 }
 

@@ -298,7 +298,7 @@ class _BackupRestorePageState extends State<BackupRestorePage> with WidgetsBindi
       }
       if (choice != 'cancelAll') return;
       try {
-        await DownloadManager.instance.cancelAll();
+        await DownloadManager.instance.cancelAll(source: 'backup_restore');
       } catch (e) {
         if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(

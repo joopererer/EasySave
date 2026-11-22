@@ -22,6 +22,7 @@ Future<DeleteSheetResult?> showDeleteRecordsSheet(
   BuildContext context, {
   required int recordCount,
   required int itemCount,
+  String? itemSummary,
   bool cancelDownloads = false,
 }) {
   return showModalBottomSheet<DeleteSheetResult>(
@@ -34,17 +35,24 @@ Future<DeleteSheetResult?> showDeleteRecordsSheet(
     builder: (context) => _DeleteSheet(
       recordCount: recordCount,
       itemCount: itemCount,
+      itemSummary: itemSummary,
       cancelDownloads: cancelDownloads,
     ),
   );
 }
 
 class _DeleteSheet extends StatefulWidget {
-  const _DeleteSheet({required this.recordCount, required this.itemCount, required this.cancelDownloads});
+  const _DeleteSheet({
+    required this.recordCount,
+    required this.itemCount,
+    this.itemSummary,
+    required this.cancelDownloads,
+  });
   final bool cancelDownloads;
 
   final int recordCount;
   final int itemCount;
+  final String? itemSummary;
 
   @override
   State<_DeleteSheet> createState() => _DeleteSheetState();
@@ -55,7 +63,7 @@ class _DeleteSheetState extends State<_DeleteSheet> {
 
   @override
   Widget build(BuildContext context) {
-    final canDeleteFiles = widget.itemCount > 0;
+    final canDeleteFiles = widget.itemCount > 0 && widget.itemSummary != '0 项';
     return SafeArea(
       child: Padding(
         padding: const EdgeInsets.fromLTRB(20, 20, 20, 20),
@@ -99,7 +107,7 @@ class _DeleteSheetState extends State<_DeleteSheet> {
                           ),
                           Expanded(
                             child: Text(
-                              '同时删除相册中的 ${widget.itemCount} 项',
+                              '同时删除相册中的 ${widget.itemSummary ?? '${widget.itemCount} 项'}',
                               style: const TextStyle(fontSize: 14),
                             ),
                           ),

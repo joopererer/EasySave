@@ -24,6 +24,8 @@ import 'package:easysave/core/models.dart';
 import 'package:easysave/services/download_manager.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+
+import 'test_helpers.dart';
 // The preferences plugin interface is not a direct dependency of the app: it is
 // imported here only to stand in for the plugin the rebuilt engine no longer
 // has.
@@ -207,7 +209,7 @@ void main() {
     bg.backgroundEntry();
     await settle(const Duration(milliseconds: 50));
     await host.submit();
-    await settle();
+    await waitFor(() => host.logged('DOWNLOAD done: 1/1'), description: 'first engine finishes download');
 
     expect(host.logged('step=received'), isTrue);
     expect(host.logged('step=settings ok'), isTrue);
@@ -224,7 +226,7 @@ void main() {
     bg.backgroundEntry();
     await settle(const Duration(milliseconds: 50));
     await host.submit();
-    await settle();
+    await waitFor(() => host.logged('DOWNLOAD done: 1/1'), description: 'engine #1 finishes download');
     expect(host.logged('DOWNLOAD done: 1/1'), isTrue);
 
     // Engine #2: rebuilt by HostService. Its channels are (re)registered, but
@@ -235,7 +237,10 @@ void main() {
     bg.backgroundEntry();
     await settle(const Duration(milliseconds: 50));
     await host.submit();
-    await settle();
+    await waitFor(
+      () => host.logged('step=settings FAILED') && host.logged('DOWNLOAD done: 1/1'),
+      description: 'engine #2 logs settings FAILED and completes download',
+    );
 
     expect(
       host.logged('step=settings FAILED'),
@@ -265,7 +270,7 @@ void main() {
       bg.backgroundEntry();
       await settle(const Duration(milliseconds: 50));
       await host.submit();
-      await settle(const Duration(milliseconds: 800));
+      await waitFor(() => host.logged('step=batch-start ok'), description: 'engine proceeds to batch start after settings timeout');
 
       expect(host.logged('step=settings TIMEOUT'), isTrue);
       expect(host.logged('step=parse begin'), isTrue);
@@ -282,7 +287,7 @@ void main() {
     bg.backgroundEntry();
     await settle(const Duration(milliseconds: 50));
     await host.submit();
-    await settle(const Duration(milliseconds: 800));
+    await waitFor(() => host.logged('step=batch-start ok'), description: 'engine proceeds to batch start when channel silent');
 
     expect(host.logged('step=parse begin'), isTrue);
     expect(host.logged('step=batch-start ok'), isTrue);
@@ -303,7 +308,7 @@ void main() {
           ),
           (_) {},
         );
-    await settle(const Duration(milliseconds: 200));
+    await waitFor(() => host.methods.contains('stop'), description: 'engine stops on empty input');
 
     expect(host.logged('no supported link in input'), isTrue);
     expect(host.methods, contains('stop'));

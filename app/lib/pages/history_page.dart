@@ -7,6 +7,7 @@
 
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
@@ -177,6 +178,8 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
 
   /// postId -> unfinished batch, for the pause / cancel controls on a card.
   Map<String, DownloadBatch> _downloadBatches = const {};
+  Set<String> _lastFinishing = const {};
+  Map<String, String?> _lastStatus = const {};
 
   bool _isPaused(String postId) => _downloadBatches[postId]?.isPaused ?? false;
   bool _isFailed(String postId) => _downloadBatches[postId]?.isTerminal == true &&
@@ -228,15 +231,15 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text('取消下载？'),
-        content: const Text('未下载完的图片将被丢弃，已保存的内容保留。'),
+        content: const Text('取消并删除已下载部分？'),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('继续下载'),
+            child: const Text('保留'),
           ),
           TextButton(
             onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('取消下载'),
+            child: const Text('取消并删除'),
           ),
         ],
       ),
@@ -244,7 +247,7 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
     if (ok != true || !mounted) return;
     try {
       final dm = DownloadManager.instance;
-      await dm.cancelBatch(await dm.forceAdopt(batch));
+      await dm.cancelBatch(await dm.forceAdopt(batch), source: 'history_card');
     } catch (_) {
       // The next refresh shows the real state.
     }
@@ -267,19 +270,31 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
         for (final b in unfinished)
           if (b.isPaused) b.postId,
       };
+      final finishingNow = {
+        for (final b in unfinished)
+          for (final j in b.jobs)
+            if (j.isFinishing) '${b.postId}:${j.savingPhase}',
+      };
+      final statusNow = {
+        for (final b in unfinished) b.postId: b.statusText,
+      };
       final changed = progress.length != _downloadProgress.length ||
           unfinished.length != _unfinished.length ||
           pausedNow.length !=
               _downloadBatches.values.where((b) => b.isPaused).length ||
           progress.entries.any(
             (e) => (_downloadProgress[e.key] ?? -1) != e.value,
-          );
+          ) ||
+          !setEquals(finishingNow, _lastFinishing) ||
+          !mapEquals(statusNow, _lastStatus);
       if (changed) {
         setState(() {
           _markHiddenModesPending();
           _unfinished = unfinished;
           _downloadProgress = progress;
           _downloadBatches = {for (final b in unfinished) b.postId: b};
+          _lastFinishing = finishingNow;
+          _lastStatus = statusNow;
         });
       } else {
         // Same numbers, but keep the batch objects fresh for the actions.
@@ -668,6 +683,56 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
     widget.onSelectionModeChanged?.call(true);
   }
 
+  void _handleCardLongPress(HistoryRecord record, String key) {
+    if (_selectionMode) {
+      _enterSelection(key);
+      return;
+    }
+    final batch = _downloadBatches[record.postId];
+    final isDownloading = batch != null && !batch.isTerminal;
+    if (!isDownloading) {
+      _enterSelection(key);
+      return;
+    }
+    final paused = _isPaused(record.postId);
+    final failed = _isFailed(record.postId) || _recordFailed(record);
+    final toggleLabel = failed ? '重试' : (paused ? '继续下载' : '暂停下载');
+    showModalBottomSheet(
+      context: context,
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: Icon(failed ? Icons.refresh : (paused ? Icons.play_arrow : Icons.pause)),
+              title: Text(toggleLabel),
+              onTap: () {
+                Navigator.pop(ctx);
+                _toggleDownload(record.postId);
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.close),
+              title: const Text('取消下载'),
+              onTap: () {
+                Navigator.pop(ctx);
+                _cancelDownload(record.postId);
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.checklist),
+              title: const Text('多选'),
+              onTap: () {
+                Navigator.pop(ctx);
+                _enterSelection(key);
+              },
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   void _exitSelection() {
     setState(() {
       _selectionMode = false;
@@ -846,20 +911,20 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
     }
   }
 
+  void _openDownloadQueue() {
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(builder: (_) => const DownloadQueuePage()),
+    ).then((_) {
+      if (mounted) {
+        unawaited(_refreshDownloads());
+        unawaited(_reload());
+      }
+    });
+  }
+
   /// Build the fullscreen browser items for a record and open it.
   Future<void> _openRecord(HistoryRecord record, {int? highlightItemIndex}) async {
     if (_opening) return;
-    if (record.fileCount == 0 && record.savedFiles.isEmpty &&
-        _downloadBatches.containsKey(record.postId)) {
-      _opening = true;
-      try {
-        await Navigator.of(context).push(MaterialPageRoute<void>(
-            builder: (_) => const DownloadQueuePage()));
-      } finally {
-        _opening = false;
-      }
-      return;
-    }
     _opening = true;
 
     try {
@@ -869,11 +934,13 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
       // album confirmed as gone. A post whose files all left the device still
       // opens, with a placeholder per item, instead of silently doing nothing
       // (v1.11 batch 4).
+      final isDownloading = _downloadBatches.containsKey(record0.postId);
       final built = await savedBrowserItems(
         record: record0,
         files: record0.visibleFiles,
         post: post,
         highlightItemIndex: highlightItemIndex,
+        allowRemoteFallback: isDownloading,
       );
       final items = built.items;
       final initial = built.initial;
@@ -918,6 +985,15 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
                   record0,
                   item,
                   deleteAlbumFiles: deleteAlbumFiles,
+                ),
+            onDeleteItems: (items, {required bool deleteAlbumFiles}) =>
+                deleteBrowserItemsForRecord(
+                  record0,
+                  items,
+                  deleteAlbumFiles: deleteAlbumFiles,
+                  onChanged: () {
+                    if (mounted) unawaited(_reload());
+                  },
                 ),
             onDeletePost: () => _deleteWholeRecord(record0),
             onReparse: () {
@@ -1029,16 +1105,21 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
     // not been synced yet. It counts items (v1.11 build 59): a Live photo's
     // still and clip are one item, and the album delete still removes both.
     final savedItemCount = savedItemCountFor(records);
+    final counts = deletionCountsForRecords(records);
+    final itemSummary = savedItemCount > 0
+        ? counts.format(nonLiveFallback: '$savedItemCount 项')
+        : null;
     DevLog.write(
       'HIST',
       'delete sheet records=${records.length} files=${savedFileCountFor(records)} '
-          'items=$savedItemCount',
+          'items=$savedItemCount${itemSummary != null ? ' summary=$itemSummary' : ''}',
     );
     if (!mounted) return;
     final result = await showDeleteRecordsSheet(
       context,
       recordCount: records.length,
       itemCount: savedItemCount,
+      itemSummary: itemSummary,
       cancelDownloads: true,
     );
     if (result == null || !mounted) return;
@@ -1076,7 +1157,9 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(
-            '未能在相册中找到这 $savedItemCount 项，仅删除了历史记录',
+            savedItemCount > 0
+                ? '未能在相册中找到这 $savedItemCount 项，仅删除了历史记录'
+                : '已删除 ${records.length} 条记录',
           ),
         ),
       );
@@ -1095,12 +1178,14 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
     if (!await _deleteDatabaseRecords(db, records)) return;
     if (!mounted) return;
     final problem = outcome.problem;
+    final deletedItems = deletableItemCountFor(records, media);
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text(
           problem == null
-              ? '已删除 ${records.length} 条记录，并从相册删除 '
-                  '${deletableItemCountFor(records, media)} 项'
+              ? (deletedItems > 0
+                  ? '已删除 ${records.length} 条记录，并从相册删除 ${counts.format(nonLiveFallback: '$deletedItems 项')}'
+                  : '已删除 ${records.length} 条记录')
               : '$problem，仅删除了 ${records.length} 条记录',
         ),
       ),
@@ -2238,17 +2323,22 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
                   selected: _selected.contains(key),
                   downloadProgress: _downloadProgress[record.postId] ?? (_recordFailed(record) ? 0 : null),
                   downloadPaused: _isPaused(record.postId),
+                  downloadUserPaused: _downloadBatches[record.postId]?.isUserPaused ?? false,
+                  downloadStatusText: _downloadBatches[record.postId]?.statusText,
                   downloadStalled: _isStalled(record.postId),
                   downloadWaitingForNetwork:
                       !NetworkStatus.instance.online ||
                       (_downloadBatches[record.postId]?.waitingForNetwork ??
                           false),
                   downloadFailed: _isFailed(record.postId) || _recordFailed(record),
+                  downloadIsFinishing: _downloadBatches[record.postId]?.jobs.any((j) => j.isFinishing) ?? false,
+                  downloadSavingPhase: _downloadBatches[record.postId]?.jobs.cast<DownloadJob?>().firstWhere((j) => j?.isFinishing == true, orElse: () => null)?.savingPhase,
                   downloadFailureReason: _downloadBatches[record.postId]?.failureReason ?? record.downloadError,
                   onToggleDownload: _recordFailed(record) ? () => _reparse(record) : _downloadBatches[record.postId]?.supportsPause == false && !_isFailed(record.postId) ? null : () => _toggleDownload(record.postId),
+                  onTapQueue: _openDownloadQueue,
                   onCancelDownload: () => _cancelDownload(record.postId),
                   onTap: () => _openRecord(record),
-                  onLongPress: () => _enterSelection(key),
+                  onLongPress: () => _handleCardLongPress(record, key),
                   onToggleSelect: () => _toggleSelection(key),
                 ));
               },
@@ -2316,14 +2406,19 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
                         selected: _selected.contains(key),
                         downloadProgress: _downloadProgress[record.postId] ?? (_recordFailed(record) ? 0 : null),
                         downloadPaused: _isPaused(record.postId),
+                        downloadUserPaused: _downloadBatches[record.postId]?.isUserPaused ?? false,
+                        downloadStatusText: _downloadBatches[record.postId]?.statusText,
                         downloadStalled: _isStalled(record.postId),
                   downloadFailed: _isFailed(record.postId) || _recordFailed(record),
+                  downloadIsFinishing: _downloadBatches[record.postId]?.jobs.any((j) => j.isFinishing) ?? false,
+                  downloadSavingPhase: _downloadBatches[record.postId]?.jobs.cast<DownloadJob?>().firstWhere((j) => j?.isFinishing == true, orElse: () => null)?.savingPhase,
                   downloadFailureReason: _downloadBatches[record.postId]?.failureReason ?? record.downloadError,
                         onToggleDownload: _recordFailed(record) ? () => _reparse(record) : _downloadBatches[record.postId]?.supportsPause == false && !_isFailed(record.postId) ? null : () => _toggleDownload(record.postId),
+                        onTapQueue: _openDownloadQueue,
                         onCancelDownload: () =>
                             _cancelDownload(record.postId),
                         onTap: () => _openRecord(record),
-                        onLongPress: () => _enterSelection(key),
+                        onLongPress: () => _handleCardLongPress(record, key),
                         onToggleSelect: () => _toggleSelection(key),
                         onReparse: () => _reparse(record),
                         onOpenOriginal: () => _openOriginal(record.postUrl),

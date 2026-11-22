@@ -185,7 +185,7 @@ open class TaskRunner(
             // A 'failed' progress update is only provided if
             // a retry is not needed: if it is needed, a `waitingToRetry` progress update
             // will be generated on the Dart side
-            val retryNeeded = modifiedStatus == TaskStatus.failed && task.retriesRemaining > 0
+            val retryNeeded = modifiedStatus == TaskStatus.failed && task.retriesRemaining > 0 && !task.allowPause
             var canSendStatusUpdate = true  // may become false for cancellations
             // if task is in final state, process a final progressUpdate
             when (modifiedStatus) {

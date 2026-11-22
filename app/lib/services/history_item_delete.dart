@@ -125,6 +125,93 @@ Future<ItemDeletionOutcome> deleteHistoryItem(
   );
 }
 
+/// Outcome of deleting multiple history items from the viewer.
+class BatchItemDeletionOutcome {
+  const BatchItemDeletionOutcome({
+    required this.ok,
+    this.cancelled = false,
+    this.succeededIndices = const {},
+    this.failedIndices = const {},
+    this.before = const [],
+    this.after = const [],
+    this.albumOutcome,
+    this.problem,
+    this.deleteAlbumFiles = false,
+  });
+
+  final bool ok;
+  final bool cancelled;
+  final Set<int> succeededIndices;
+  final Set<int> failedIndices;
+  final List<HistoryFile> before;
+  final List<HistoryFile> after;
+  final MediaDeleteOutcome? albumOutcome;
+  final String? problem;
+  final bool deleteAlbumFiles;
+}
+
+/// Delete multiple post items from [record], optionally removing their album
+/// files in a single batch operation through [MediaDeleteService].
+Future<BatchItemDeletionOutcome> deleteHistoryItems(
+  HistoryRecord record, {
+  required Set<int> itemIndices,
+  required bool deleteAlbumFiles,
+  HistoryDb? database,
+  GalleryLocatorService? locator,
+  Future<MediaDeleteOutcome> Function(List<MediaRef> media)? deleteMedia,
+}) async {
+  final id = record.id;
+  if (id == null || itemIndices.isEmpty) {
+    return const BatchItemDeletionOutcome(ok: false);
+  }
+
+  final allRows = <HistoryFile>[];
+  for (final idx in itemIndices) {
+    allRows.addAll(historyRowsForItem(record, idx));
+  }
+  if (allRows.isEmpty) return const BatchItemDeletionOutcome(ok: false);
+
+  MediaDeleteOutcome? album;
+  String? problem;
+  if (deleteAlbumFiles) {
+    final refs = deletableRefs(allRows);
+    if (refs.isNotEmpty) {
+      final call = deleteMedia ?? MediaDeleteService.instance.deleteMedia;
+      album = await call(refs);
+      if (!album.approved) {
+        // User cancelled system deletion dialog
+        return const BatchItemDeletionOutcome(ok: false, cancelled: true);
+      }
+      if (!album.deletedAll) {
+        problem = album.problem ?? '部分相册文件未删除';
+      }
+    }
+  }
+
+  final before = record.files;
+  final target = allRows.map((r) => '${r.itemIndex}_${r.isImage}').toSet();
+  final after = [
+    for (final file in before)
+      target.contains('${file.itemIndex}_${file.isImage}') &&
+              isVisibleHistoryFile(file)
+          ? file.copyWith(status: FileStatus.deleted)
+          : file,
+  ];
+
+  final db = database ?? await HistoryDb.instance();
+  await db.updateFiles(id, after, source: 'viewer-batch-items-delete');
+
+  return BatchItemDeletionOutcome(
+    ok: true,
+    succeededIndices: itemIndices,
+    before: before,
+    after: after,
+    albumOutcome: album,
+    problem: problem,
+    deleteAlbumFiles: deleteAlbumFiles,
+  );
+}
+
 /// Undo of a "仅删除记录". Restores exactly the rows the deletion replaced.
 Future<void> undoHistoryItemDelete(
   HistoryDb db,

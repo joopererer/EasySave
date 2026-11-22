@@ -204,6 +204,30 @@ void main() {
           rejected('REQUEST_HEADER_REJECTED'),
         );
       }
+      for (final value in ['"etag-1234"', 'W/"etag-weak"', 'Wed, 21 Oct 2015 07:28:00 GMT']) {
+        expect(
+          p
+              .validate(
+                resource(
+                  'https://www.tiktok.com/a',
+                  headers: {'If-Range': value},
+                ),
+              )
+              .host,
+          'www.tiktok.com',
+        );
+      }
+      for (final value in ['unquoted-etag', '"etag"\r\nInjected: 1', 'bad date', '', '   ']) {
+        expect(
+          () => p.validate(
+            resource(
+              'https://www.tiktok.com/a',
+              headers: {'if-range': value},
+            ),
+          ),
+          rejected('REQUEST_HEADER_REJECTED'),
+        );
+      }
       expect(
         () => p.validate(
           resource(

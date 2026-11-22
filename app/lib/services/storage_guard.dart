@@ -16,18 +16,19 @@ const storageFullCode = 'STORAGE_FULL';
 const int kStorageMarginBytes = 256 * 1024 * 1024;
 
 /// Free bytes a download of [contentLength] bytes needs before it starts.
-int requiredBytesForDownload(int contentLength) =>
-    contentLength * 2 + kStorageMarginBytes;
-
-/// User-facing copy; [requiredBytes] is shown in GB when known.
-String storageFullMessage([int? requiredBytes]) {
-  if (requiredBytes == null || requiredBytes <= 0) {
-    return '存储空间不足，请清理手机空间后重试';
-  }
-  final gb = requiredBytes / (1024 * 1024 * 1024);
-  final shown = gb < 0.1 ? '0.1' : gb.toStringAsFixed(1);
-  return '存储空间不足，需要约 $shown GB';
+/// Android MediaStore import is a COPY (streaming via ContentResolver),
+/// so at peak import time the complete temp file (contentLength) and the
+/// public gallery copy (contentLength) coexist on disk.
+/// When resuming with [partialBytes] already on disk in temp, the incremental
+/// bytes to download are (contentLength - partialBytes), plus the full
+/// contentLength for the gallery copy, plus the safety margin.
+int requiredBytesForDownload(int contentLength, [int partialBytes = 0]) {
+  final remaining = (contentLength - partialBytes).clamp(0, contentLength);
+  return remaining + contentLength + kStorageMarginBytes;
 }
+
+/// User-facing copy: short copy "空间不足".
+String storageFullMessage([int? requiredBytes]) => '空间不足';
 
 /// A download or write that cannot proceed because storage is full.
 class StorageFullException implements Exception {
@@ -87,11 +88,11 @@ abstract final class StorageGuard {
   /// Check [contentLength] against free space. Returns the required bytes when
   /// storage is insufficient, null when the download may start (including when
   /// either size is unknown).
-  static Future<int?> shortfall(int? contentLength) async {
+  static Future<int?> shortfall(int? contentLength, [int partialBytes = 0]) async {
     if (contentLength == null || contentLength <= 0) return null;
     final free = await freeBytes();
     if (free == null) return null;
-    final required = requiredBytesForDownload(contentLength);
+    final required = requiredBytesForDownload(contentLength, partialBytes);
     return free < required ? required : null;
   }
 }

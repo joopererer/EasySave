@@ -1130,6 +1130,19 @@ class _MinePageState extends State<MinePage> with WidgetsBindingObserver {
                       setState(() {});
                     },
                   ),
+                  SwitchListTile(
+                    key: const Key('manual_resume_only_on_disconnect'),
+                    title: const Text('断网不自动续传（停在「点继续」）'),
+                    subtitle: const Text(
+                      '开发者开关：大文件断网时不发起自动续传，直接停在「下载中断，点继续」，'
+                      '用户点继续时走「暂停 → 继续」路径。',
+                    ),
+                    value: _settings.manualResumeOnlyOnDisconnect,
+                    onChanged: (on) async {
+                      setState(() => _settings.manualResumeOnlyOnDisconnect = on);
+                      await _saveSettings();
+                    },
+                  ),
                 ],
               ),
             ),

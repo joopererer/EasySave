@@ -25,8 +25,28 @@ import android.system.Os
 import android.system.ErrnoException
 import kotlin.math.absoluteValue
 import kotlin.random.Random
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.longOrNull
 
 class DownloadTaskRunner(context: TaskJobContext) : TaskRunner(context) {
+
+    private fun logV16dl(line: String) {
+        Log.i(TAG, "[V16DL] $line")
+        try {
+            val clazz = Class.forName("com.james.easysave.NativeLog")
+            val field = clazz.getDeclaredField("INSTANCE")
+            val instance = field.get(null)
+            val method = clazz.getDeclaredMethod("i", String::class.java, String::class.java)
+            method.invoke(instance, "V16DL", line)
+        } catch (_: Throwable) {
+            try {
+                val logFile = File(context.appContext.filesDir, "v16dl.log")
+                logFile.appendText("[INFO] [V16DL] $line\n")
+            } catch (_: Throwable) {}
+        }
+    }
 
     private var eTagHeader: String? = null
     private var serverAcceptsRanges = false // if true, send resume data on fail
@@ -51,7 +71,7 @@ class DownloadTaskRunner(context: TaskJobContext) : TaskRunner(context) {
         }
         val result = super.connectAndProcess(connection)
         if (result == TaskStatus.canceled) {
-            deleteTempFile()
+            logV16dl("native_task_canceled taskId=${task.taskId}")
         }
         if (result == TaskStatus.failed) {
             prepResumeAfterFailure()
@@ -93,10 +113,33 @@ class DownloadTaskRunner(context: TaskJobContext) : TaskRunner(context) {
             // determine if we are using Uri or not.  Uri means pause/resume not allowed
             val directoryUri = UriUtils.uriFromStringValue(task.directory)
             val usesUri = directoryUri != null
-            eTagHeader = connection.headerFields["ETag"]?.first()
-            val acceptRangesHeader = connection.headerFields["Accept-Ranges"]
-            serverAcceptsRanges =
-                acceptRangesHeader?.first() == "bytes" || connection.responseCode == 206
+            eTagHeader = connection.getHeaderField("ETag")
+            val acceptRangesHeader = connection.getHeaderField("Accept-Ranges")
+            val explicitlyNoRanges = acceptRangesHeader?.lowercase() == "none"
+            serverAcceptsRanges = !explicitlyNoRanges && (
+                acceptRangesHeader?.lowercase() == "bytes" ||
+                connection.responseCode == 206 ||
+                task.allowPause
+            )
+            val hasEtag = !eTagHeader.isNullOrEmpty()
+            val hasLastModified = !connection.getHeaderField("Last-Modified").isNullOrEmpty()
+            val contentRangeHeader = connection.getHeaderField("Content-Range")
+            var crStart = startByte
+            var crTotal = connection.getHeaderField("Content-Length")?.toLongOrNull() ?: -1L
+            if (!contentRangeHeader.isNullOrEmpty()) {
+                val match = Regex("""bytes\s+(\d+)-(\d+)/(\d+|\*)""").find(contentRangeHeader)
+                if (match != null) {
+                    crStart = match.groupValues[1].toLongOrNull() ?: startByte
+                    val t = match.groupValues[3].toLongOrNull()
+                    if (t != null) crTotal = t
+                }
+            }
+            val startByteInfo = if (isResume && connection.responseCode == 206) " content_range_start=$crStart" else ""
+            logV16dl(
+                "response taskId=${task.taskId} status=${connection.responseCode} " +
+                    "accept_ranges=${acceptRangesHeader ?: "none"} has_etag=$hasEtag " +
+                    "has_last_modified=$hasLastModified is_resume=$isResume$startByteInfo"
+            )
             if (task.allowPause && !usesUri) {
                 taskCanResume = serverAcceptsRanges
                 processCanResume(
@@ -104,12 +147,36 @@ class DownloadTaskRunner(context: TaskJobContext) : TaskRunner(context) {
                     taskCanResume
                 )
             }
+            val wasResume = isResume
             isResume = isResume && connection.responseCode == 206  // confirm resume response
+            if (wasResume && !isResume) {
+                logV16dl(
+                    "resume_response taskId=${task.taskId} status=${connection.responseCode} " +
+                        "content_range_start=0 content_range_total=$crTotal " +
+                        "result=restart reason=status_${connection.responseCode}"
+                )
+            } else if (isResume) {
+                logV16dl(
+                    "resume_response taskId=${task.taskId} status=206 " +
+                        "content_range_start=$crStart content_range_total=$crTotal " +
+                        "result=resumed reason=range_accepted"
+                )
+            }
             if (isResume && !prepareResume(connection)) {
-                deleteTempFile()
+                val isSizeMismatch = taskException?.description?.contains("size_mismatch") == true
+                if (isSizeMismatch) {
+                    logV16dl("temp_discard reason=size_mismatch")
+                    deleteTempFile()
+                }
+                val reason = if (isSizeMismatch) "size_mismatch" else "resume_failed"
+                logV16dl(
+                    "resume_response taskId=${task.taskId} status=${connection.responseCode} " +
+                        "content_range_start=0 content_range_total=$crTotal " +
+                        "result=restart reason=$reason"
+                )
                 return TaskStatus.failed
             }
-            if (isResume && (eTagHeader != eTag || eTag?.startsWith("W/") == true)) {
+            if (isResume && !eTag.isNullOrEmpty() && (eTagHeader != eTag || eTag?.startsWith("W/") == true)) {
                 deleteTempFile()
                 Log.i(TAG, "Cannot resume: ETag is not identical, or is weak")
                 taskException = TaskException(
@@ -195,7 +262,13 @@ class DownloadTaskRunner(context: TaskJobContext) : TaskRunner(context) {
                     )
                     return TaskStatus.failed
                 }
-                File(tempFilePath)
+                val f = File(tempFilePath)
+                if (f.exists() && f.length() > 0L && !isResume) {
+                    val reason = if (connection.responseCode == 200) "status_200" else "no_range"
+                    logV16dl("temp_discard reason=$reason")
+                    f.delete()
+                }
+                f
             } else {
                 null
             }
@@ -313,11 +386,17 @@ class DownloadTaskRunner(context: TaskJobContext) : TaskRunner(context) {
 
                 TaskStatus.paused -> {
                     BDPlugin.pausedTaskIds.remove(task.taskId)
+                    val tempFile = if (tempFilePath.isNotEmpty()) File(tempFilePath) else null
+                    val tempExists = tempFile?.exists() ?: false
+                    val tempSize = if (tempExists) tempFile?.length() ?: 0L else 0L
+                    val present = if (taskCanResume) "yes" else "no"
+                    val reqStartByte = if (tempSize > 0) tempSize else (bytesTotal + startByte)
+                    logV16dl("pause_resume_data taskId=${task.taskId} present=$present required_start_byte=$reqStartByte temp_exists=$tempExists temp_size=$tempSize")
                     if (taskCanResume) {
                         Log.i(TAG, "Task ${task.taskId} paused")
                         processResumeData(
                             ResumeData(
-                                task, tempFilePath, bytesTotal + startByte, eTagHeader
+                                task, tempFilePath, reqStartByte, eTagHeader
                             ), prefs
                         )
                         return TaskStatus.paused
@@ -327,7 +406,7 @@ class DownloadTaskRunner(context: TaskJobContext) : TaskRunner(context) {
                         // so we only store local resumeData without posting it
                         Log.i(TAG, "Task ${task.taskId} paused in order to re-enqueue")
                         BDPlugin.localResumeData[task.taskId] = ResumeData(
-                            task, tempFilePath, bytesTotal + startByte, eTagHeader
+                            task, tempFilePath, reqStartByte, eTagHeader
                         )
                         return TaskStatus.paused
                     }
@@ -341,44 +420,19 @@ class DownloadTaskRunner(context: TaskJobContext) : TaskRunner(context) {
                 }
 
                 TaskStatus.enqueued -> {
-                    // Special status, in this context means that the task timed out
-                    // so if allowed, pause it and schedule the resume task immediately
-                    if (!task.allowPause) {
-                        Log.i(TAG, "Task ${task.taskId} timed out")
-                        taskException =
-                            TaskException(
-                                ExceptionType.connection,
-                                description = "Task timed out"
-                            )
-                        return TaskStatus.failed
-                    }
+                    // Special status: task timed out.
+                    // For resumable tasks, post resume data so App initiates the new round with Range.
                     if (taskCanResume) {
-                        Log.i(
-                            TAG,
-                            "Task ${task.taskId} paused due to timeout, will resume in 1 second"
-                        )
                         val start = bytesTotal + startByte
-                        val success = BDPlugin.doEnqueue(
-                            context.appContext,
-                            task,
-                            notificationConfigJsonString,
+                        processResumeData(
                             ResumeData(task, tempFilePath, start, eTagHeader),
-                            1000
+                            prefs
                         )
-                        if (!success) {
-                            Log.w(TAG, "Task ${task.taskId} timed out and could not re-enqueue to resume")
-                            taskException = TaskException(
-                                ExceptionType.general,
-                                description = "Task timed out and could not re-enqueue to resume"
-                            )
-                            cleanup(usesUri, destUri)
-                            return TaskStatus.failed
-                        }
-                        return TaskStatus.paused
                     }
-                    Log.i(TAG, "Task ${task.taskId} timed out and cannot pause/resume")
-                    taskException =
-                        TaskException(ExceptionType.connection, description = "Task timed out")
+                    taskException = TaskException(
+                        ExceptionType.connection,
+                        description = "Task timed out"
+                    )
                     cleanup(usesUri, destUri)
                     return TaskStatus.failed
                 }
@@ -448,24 +502,12 @@ class DownloadTaskRunner(context: TaskJobContext) : TaskRunner(context) {
             val tempFileLength = tempFile.length()
             if (tempFileLength == requiredStartByte) {
                 return true
+            } else if (tempFileLength > 0) {
+                val effectiveStart = maxOf(requiredStartByte, tempFileLength)
+                Log.i(TAG, "Adjusting requiredStartByte from $requiredStartByte to on-disk length $effectiveStart (tempFileLength=$tempFileLength)")
+                requiredStartByte = effectiveStart
+                return true
             } else {
-                // attempt to truncate the file to the expected size
-                Log.d(
-                    TAG,
-                    "File length = ${tempFile.length()} vs requiredStartByte = $requiredStartByte"
-                )
-                if (tempFileLength > requiredStartByte && Build.VERSION.SDK_INT >= 26) {
-                    try {
-                        val fileChannel =
-                            FileChannel.open(tempFile.toPath(), StandardOpenOption.WRITE)
-                        fileChannel.truncate(requiredStartByte)
-                        fileChannel.close()
-                        Log.d(TAG, "Truncated temp file to desired length")
-                        return true
-                    } catch (e: IOException) {
-                        e.printStackTrace()
-                    }
-                }
                 Log.i(TAG, "Partially downloaded file is corrupted, resume not possible")
             }
         } else {
@@ -483,15 +525,14 @@ class DownloadTaskRunner(context: TaskJobContext) : TaskRunner(context) {
         if (tempFilePath.isEmpty()) {
             return false
         }
-        val contentRanges = connection.headerFields["Content-Range"]
-        if (contentRanges == null || contentRanges.size > 1) {
+        val range = connection.getHeaderField("Content-Range")
+        if (range == null) {
             Log.i(
                 TAG, "Could not " +
-                        "process partial response Content-Range"
+                        "process partial response Content-Range: header missing"
             )
             return false
         }
-        val range = contentRanges.first()
         val contentRangeRegEx = Regex("(\\d+)-(\\d+)/(\\d+)")
         val matchResult = contentRangeRegEx.find(range)
         if (matchResult == null) {
@@ -503,6 +544,23 @@ class DownloadTaskRunner(context: TaskJobContext) : TaskRunner(context) {
             return false
         }
         val start = matchResult.groups[1]?.value?.toLong()!!
+        val serverTotal = matchResult.groups[3]?.value?.toLongOrNull()
+        val expectedTotal = try {
+            if (task.metaData.isNotEmpty()) {
+                val json = Json.parseToJsonElement(task.metaData).jsonObject
+                json["expectedBytes"]?.jsonPrimitive?.longOrNull
+            } else null
+        } catch (_: Exception) {
+            null
+        }
+        if (expectedTotal != null && expectedTotal > 0 && serverTotal != null && serverTotal != expectedTotal) {
+            Log.w(TAG, "Content-Range total $serverTotal does not match expected total $expectedTotal for taskId ${task.taskId}")
+            taskException = TaskException(
+                ExceptionType.resume,
+                description = "size_mismatch: server total $serverTotal != expected $expectedTotal"
+            )
+            return false
+        }
         val tempFile = File(tempFilePath)
         val tempFileLength = tempFile.length()
         startByte = start - taskRangeStartByte // relative to start of range
@@ -536,16 +594,40 @@ class DownloadTaskRunner(context: TaskJobContext) : TaskRunner(context) {
      * If this is not possible, the temp file will be deleted
      */
     private suspend fun prepResumeAfterFailure() {
-        if (serverAcceptsRanges && bytesTotal + startByte > 1 shl 20) {
+        val tempFile = if (tempFilePath.isNotEmpty()) File(tempFilePath) else null
+        val tempExists = tempFile?.exists() ?: false
+        val tempSize = if (tempExists) tempFile?.length() ?: 0L else 0L
+        val hasEtag = !eTagHeader.isNullOrEmpty()
+
+        Log.i(
+            TAG,
+            "[V16DL] failure_callback taskId=${task.taskId} " +
+                "status=failed exception_type=${taskException?.type ?: "none"} " +
+                "server_accepts_ranges=$serverAcceptsRanges " +
+                "bytes_total=$bytesTotal start_byte=$startByte " +
+                "temp_exists=$tempExists temp_size=$tempSize " +
+                "has_etag=$hasEtag"
+        )
+
+        val canResume = (serverAcceptsRanges && (bytesTotal + startByte > 1 shl 20 || (task.allowPause && tempSize > 0))) || (tempSize > 0)
+        if (canResume) {
             // if failure can be resumed, post resume data
+            val resumeBytes = if (bytesTotal + startByte > 0) bytesTotal + startByte else tempSize
             processResumeData(
                 ResumeData(
-                    task, tempFilePath, bytesTotal + startByte, eTagHeader
+                    task, tempFilePath, resumeBytes, eTagHeader
                 ), prefs
             )
+        } else if (responseStatusCode in listOf(403, 410) && (requiredStartByte > 0 || isResume)) {
+            // Signed URL expired during resume; keep temp file and resume data so App can reparse and resume
+            Log.i(TAG, "Signed URL expired (status $responseStatusCode) for taskId ${task.taskId}, keeping temp file for reparse")
         } else {
-            // if it cannot be resumed, delete the temp file
-            deleteTempFile()
+            // Only delete if temp file is empty or 0 bytes
+            if (tempSize == 0L) {
+                deleteTempFile()
+            } else {
+                Log.i(TAG, "Preserving partial temp file (${tempSize} bytes) despite failure for taskId ${task.taskId}")
+            }
         }
     }
 

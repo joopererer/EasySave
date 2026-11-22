@@ -22,6 +22,7 @@ abstract final class ParseErrorCode {
   static const tokenRequired = 'TOKEN_REQUIRED';
   static const unsupportedUrl = 'UNSUPPORTED_URL';
   static const timeout = 'TIMEOUT';
+  static const regionRestricted = 'REGION_RESTRICTED';
 }
 
 class PostAuthor {

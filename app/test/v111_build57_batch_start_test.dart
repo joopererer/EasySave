@@ -25,6 +25,8 @@ import 'package:flutter_test/flutter_test.dart';
 // ignore: depend_on_referenced_packages
 import 'package:shared_preferences_platform_interface/shared_preferences_platform_interface.dart';
 
+import 'test_helpers.dart';
+
 const MethodChannel _task = MethodChannel('easysave/bgtask');
 const StandardMethodCodec _codec = StandardMethodCodec();
 const String _link = 'https://xhslink.cn/o/pSk2BZw53J';
@@ -206,7 +208,10 @@ void main() {
 
       // While the preflight still runs (well before 10 s, the build 56
       // deadline) the batch is already reported and the bubble counts files.
-      await _wait(const Duration(milliseconds: 2500));
+      await waitFor(
+        () => host.logged('DOWNLOAD started $files files') && host.bubbles.any((b) => b.total == files),
+        description: 'batch reported and bubble counts files',
+      );
       expect(
         host.logged('DOWNLOAD started $files files'),
         isTrue,
@@ -225,8 +230,11 @@ void main() {
       );
 
       // The whole batch (about 11 s of preflight) finishes.
-      await _wait(const Duration(milliseconds: 11000));
-      await _wait(const Duration(milliseconds: 2500));
+      await waitFor(
+        () => host.logged('step=batch-start ok') && host.userTexts.any((text) => text.contains('下载完成：$files/$files')),
+        timeout: const Duration(seconds: 25),
+        description: 'batch finishes completely',
+      );
 
       expect(
         host.logged('step=batch-start ok'),
@@ -283,7 +291,11 @@ void main() {
     bg.backgroundEntry();
     await _wait(const Duration(milliseconds: 50));
     await host.submit();
-    await _wait(const Duration(milliseconds: 3000));
+    await waitFor(
+      () => host.logged('step=batch-start late failure') &&
+          host.userTexts.any((text) => text.contains('下载完成：$files/$files')),
+      description: 'batch start reports late failure and completion text',
+    );
 
     expect(host.logged('step=batch-start late failure'), isTrue);
     expect(

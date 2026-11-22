@@ -105,6 +105,7 @@ android {
             // Every delivered APK must be release-signed so upgrades keep installing over
             // each other. Never fall back to the debug keystore.
             signingConfig = signingConfigs.getByName("release")
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
         }
     }
 

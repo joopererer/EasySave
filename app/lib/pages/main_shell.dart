@@ -39,11 +39,6 @@ class _MainShellState extends State<MainShell> with WidgetsBindingObserver {
 
   static bool hintShownInCurrentSession = false;
 
-  /// Resets session throttle for testing.
-  static void resetSessionHintForTesting() {
-    hintShownInCurrentSession = false;
-  }
-
   @override
   void initState() {
     super.initState();

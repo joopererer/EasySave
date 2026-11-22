@@ -36,6 +36,8 @@ import 'package:path_provider_platform_interface/path_provider_platform_interfac
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
+import 'test_helpers.dart';
+
 const _videoUrl = 'https://v16-webapp.tiktok.com/clip.mp4';
 const _imageUrl = 'https://sns-img-bd.xhscdn.com/a.jpg';
 
@@ -66,6 +68,8 @@ class _ScriptedTransfer implements SessionTransfer {
     MediaRequestPolicy? policy,
     MediaRequestResource? resource,
     required void Function(double progress) onProgress,
+    String? jobKey,
+    int? itemIndex,
   }) async {
     calls++;
     urls.add(url);
@@ -116,13 +120,7 @@ DownloadJob _imageJob(String id) => DownloadJob(
 /// Waits until [condition] holds, so an unawaited resume can be observed
 /// without sleeping for a fixed time.
 Future<void> _until(bool Function() condition, {String? reason}) async {
-  final deadline = DateTime.now().add(const Duration(seconds: 5));
-  while (!condition()) {
-    if (DateTime.now().isAfter(deadline)) {
-      fail(reason ?? 'condition not reached');
-    }
-    await Future<void>.delayed(const Duration(milliseconds: 10));
-  }
+  await waitFor(condition, description: reason);
 }
 
 void main() {

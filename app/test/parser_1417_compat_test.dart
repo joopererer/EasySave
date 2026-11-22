@@ -121,6 +121,7 @@ Future<List<ErrorAction>> pumpErrorCard(WidgetTester tester, HookRun run) async 
     ErrorAction.backHome => '返回首页',
     ErrorAction.retry => '重试',
     ErrorAction.repaste => '重新粘贴',
+    ErrorAction.openUrl => '打开原链接',
   };
   expect(find.text(button), findsOneWidget);
   await tester.tap(find.text(button));

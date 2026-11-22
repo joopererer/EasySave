@@ -12,6 +12,7 @@ import '../pages/preview_page.dart';
 import '../services/history_db.dart';
 import '../services/history_deletion.dart';
 import '../services/history_item_delete.dart';
+import '../services/media_delete_service.dart';
 import '../services/parse_service.dart';
 import 'gallery_browser.dart';
 
@@ -180,6 +181,45 @@ Future<GalleryBrowserItemDeletion?> deleteBrowserItemForRecord(
     ok: true,
     message: outcome.problem ??
         (deleteAlbumFiles ? '已删除这张，并删除相册文件' : '已删除这张'),
+    undo: deleteAlbumFiles || id == null
+        ? null
+        : () async {
+            final db = await HistoryDb.instance();
+            await undoHistoryItemDelete(db, id, outcome.before);
+            onChanged?.call();
+          },
+  );
+}
+
+/// Delete multiple items from the open viewer in a single batch.
+Future<BatchGalleryBrowserItemDeletion> deleteBrowserItemsForRecord(
+  HistoryRecord record,
+  List<GalleryBrowserItem> items, {
+  required bool deleteAlbumFiles,
+  void Function()? onChanged,
+  Future<MediaDeleteOutcome> Function(List<MediaRef> media)? deleteMedia,
+}) async {
+  final fresh = await reloadRecord(record);
+  final indices = items.map((i) => i.index).toSet();
+  final outcome = await deleteHistoryItems(
+    fresh,
+    itemIndices: indices,
+    deleteAlbumFiles: deleteAlbumFiles,
+    deleteMedia: deleteMedia,
+  );
+  if (outcome.cancelled) {
+    return const BatchGalleryBrowserItemDeletion(ok: false, cancelled: true);
+  }
+  if (!outcome.ok) {
+    return const BatchGalleryBrowserItemDeletion(ok: false);
+  }
+  onChanged?.call();
+  final id = fresh.id;
+  return BatchGalleryBrowserItemDeletion(
+    ok: true,
+    succeededIndices: outcome.succeededIndices,
+    failedCount: outcome.failedIndices.length,
+    message: outcome.problem,
     undo: deleteAlbumFiles || id == null
         ? null
         : () async {

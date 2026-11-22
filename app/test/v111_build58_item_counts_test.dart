@@ -21,6 +21,8 @@ import 'package:flutter_test/flutter_test.dart';
 // ignore: depend_on_referenced_packages
 import 'package:shared_preferences_platform_interface/shared_preferences_platform_interface.dart';
 
+import 'test_helpers.dart';
+
 const MethodChannel _task = MethodChannel('easysave/bgtask');
 const StandardMethodCodec _codec = StandardMethodCodec();
 const String _link = 'https://xhslink.cn/o/items58';
@@ -377,7 +379,12 @@ void main() {
         bg.backgroundEntry();
         await _wait(const Duration(milliseconds: 50));
         await host.submit();
-        await _wait(const Duration(milliseconds: 4000));
+        await waitFor(
+          () => host.logged('DOWNLOAD started 14 files items=11') &&
+              host.bubbles.isNotEmpty &&
+              host.bubbles.last.done == 11,
+          description: '11 items batch completed',
+        );
 
         expect(
           host.logged('DOWNLOAD started 14 files items=11'),
@@ -438,7 +445,12 @@ void main() {
         bg.backgroundEntry();
         await _wait(const Duration(milliseconds: 50));
         await host.submit();
-        await _wait(const Duration(milliseconds: 3000));
+        await waitFor(
+          () => host.bubbles.isNotEmpty &&
+              host.bubbles.last.done == 1 &&
+              host.bubbles.last.error,
+          description: 'failed batch finished reporting',
+        );
 
         expect(host.bubbles.map((b) => b.total).toSet(), {2});
         expect(host.bubbles.last.done, 1);

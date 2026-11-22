@@ -29,6 +29,8 @@ import 'package:path_provider_platform_interface/path_provider_platform_interfac
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
+import 'test_helpers.dart';
+
 const _postId = '2118566677374022101';
 
 class _FakePaths extends PathProviderPlatform {
@@ -218,7 +220,10 @@ void main() {
     job.state = JobState.waitingNetwork;
     NetworkStatus.instance.setOnlineForTesting(false);
     NetworkStatus.instance.setOnlineForTesting(true);
-    await Future<void>.delayed(const Duration(milliseconds: 100));
+    await waitFor(
+      () => job.state == JobState.failed,
+      description: 'job returns to failed state after network reconnect',
+    );
 
     expect(enqueued, 0, reason: 'a decided failure is never re-downloaded');
     expect(job.state, JobState.failed);

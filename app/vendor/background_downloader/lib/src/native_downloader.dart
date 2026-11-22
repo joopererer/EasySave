@@ -204,10 +204,12 @@ abstract base class NativeDownloader extends BaseDownloader {
       // resumeData Android and Desktop variant
       case ('resumeData', [String data, int requiredStartByte, String? eTag]):
         setResumeData(ResumeData(task, data, requiredStartByte, eTag));
+        return true;
 
       // resumeData iOS and ParallelDownloads variant
       case ('resumeData', String data):
         setResumeData(ResumeData(task, data));
+        return true;
 
       case ('notificationTap', int notificationTypeOrdinal):
         final notificationType =
@@ -353,6 +355,24 @@ abstract base class NativeDownloader extends BaseDownloader {
       taskIds,
     );
     return results?.cast<bool>() ?? tasksToPause.map((task) => false).toList();
+  }
+
+  @override
+  Future<ResumeData?> getResumeData(String taskId) async {
+    var resumeData = await super.getResumeData(taskId);
+    if (resumeData != null) return resumeData;
+    try {
+      final resumeDataMap = await popUndeliveredData(Undelivered.resumeData);
+      for (final jsonString in resumeDataMap.values) {
+        final rd = ResumeData.fromJsonString(jsonString);
+        await setResumeData(rd);
+        await setPausedTask(rd.task);
+        if (rd.task.taskId == taskId) {
+          resumeData = rd;
+        }
+      }
+    } catch (_) {}
+    return resumeData;
   }
 
   @override
