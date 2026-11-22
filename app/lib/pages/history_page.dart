@@ -149,6 +149,13 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
   /// Whether the floating "back to top" button is currently visible (v1.12.1 Item C).
   bool _showScrollToTop = false;
 
+  /// Post IDs for new items received while the user was away from the top (v1.12.1 Item D).
+  final Set<String> _pendingNewPostIds = {};
+
+  /// Post IDs currently receiving a 1.5s subtle visual highlight after returning to top (v1.12.1 Item D).
+  Set<String> _highlightedPostIds = {};
+  Timer? _highlightTimer;
+
   // Keys: posts view -> 'p{recordId}'; all view -> 'm{recordId}:{itemIndex}'.
   final Set<String> _selected = {};
 
@@ -312,6 +319,7 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
 
   @override
   void dispose() {
+    _highlightTimer?.cancel();
     _historyRefresh.dispose();
     _modeSwitch?.dispose();
     for (final controller in _modeScroll.values) {
@@ -446,13 +454,29 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
           () => HistoryDb.instance().then((db) => db.recent(limit: 10000)),
           deadline: _historyRefresh.deadline);
       if (!mounted) return;
+      final oldPostIds = _records.map((r) => r.postId).toSet();
+      final hadRecordsBefore = _records.isNotEmpty;
+      final newRecords = dropDeletedRecords(
+        records,
+        ids: _suppressedIds(readStartedAt),
+        postKeys: _suppressedPostKeys(readStartedAt),
+      );
+      final incomingPostIds = newRecords.map((r) => r.postId).toSet();
+      final addedPostIds = incomingPostIds.difference(oldPostIds);
+
+      final viewportHeight = _activeController.hasClients && _activeController.position.hasViewportDimension
+          ? _activeController.position.viewportDimension
+          : 800.0;
+      final isAwayFromTop = offset > viewportHeight;
+
       setState(() {
         _markHiddenModesPending();
-        _records = dropDeletedRecords(
-          records,
-          ids: _suppressedIds(readStartedAt),
-          postKeys: _suppressedPostKeys(readStartedAt),
-        );
+        _records = newRecords;
+        if (hadRecordsBefore && isAwayFromTop && addedPostIds.isNotEmpty) {
+          _pendingNewPostIds.addAll(addedPostIds);
+        } else if (!isAwayFromTop) {
+          _pendingNewPostIds.clear();
+        }
         _loading = false;
         _dbError = null;
       });
@@ -556,6 +580,94 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
         _showScrollToTop = shouldShow;
       });
     }
+
+    // D3: User manually scrolls back to top -> dismiss new content banner and highlight
+    if (offset <= 10.0 && _pendingNewPostIds.isNotEmpty) {
+      _consumePendingNewPosts();
+    }
+  }
+
+  void _consumePendingNewPosts() {
+    if (_pendingNewPostIds.isEmpty) return;
+    _highlightTimer?.cancel();
+    setState(() {
+      _highlightedPostIds = Set<String>.from(_pendingNewPostIds);
+      _pendingNewPostIds.clear();
+    });
+    _highlightTimer = Timer(const Duration(milliseconds: 1500), () {
+      if (!mounted) return;
+      setState(() {
+        _highlightedPostIds.clear();
+      });
+    });
+  }
+
+  Future<void> _onTapNewContentBanner() async {
+    _consumePendingNewPosts();
+    await _scrollToTop();
+  }
+
+  Widget _buildNewContentBanner() {
+    final count = _pendingNewPostIds.length;
+    final show = count > 0;
+    return AnimatedOpacity(
+      opacity: show ? 1.0 : 0.0,
+      duration: const Duration(milliseconds: 250),
+      curve: Curves.easeInOut,
+      child: IgnorePointer(
+        ignoring: !show,
+        child: Material(
+          elevation: 4,
+          borderRadius: BorderRadius.circular(20),
+          color: Theme.of(context).colorScheme.primaryContainer,
+          shadowColor: Colors.black26,
+          child: InkWell(
+            key: const ValueKey('history_new_content_banner'),
+            borderRadius: BorderRadius.circular(20),
+            onTap: _onTapNewContentBanner,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(
+                    Icons.arrow_upward_rounded,
+                    size: 16,
+                    color: Theme.of(context).colorScheme.onPrimaryContainer,
+                  ),
+                  const SizedBox(width: 6),
+                  Text(
+                    '有 $count 条新内容 ↑',
+                    style: TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                      color: Theme.of(context).colorScheme.onPrimaryContainer,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _highlightWrapper(String postId, Widget child) {
+    final isHighlighted = _highlightedPostIds.contains(postId);
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 300),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(AppTokens.cardRadius),
+        border: Border.all(
+          color: isHighlighted
+              ? Theme.of(context).colorScheme.primary
+              : Colors.transparent,
+          width: 2.0,
+        ),
+      ),
+      child: child,
+    );
   }
 
   Future<void> _scrollToTop() async {
@@ -637,6 +749,8 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
   /// After a filter or sort change: back to the top, except when the change
   /// goes back to the unfiltered list, which returns to where it was left.
   void _afterPositionKeyChange() {
+    _pendingNewPostIds.clear();
+    _highlightedPostIds.clear();
     final key = _positionKey;
     final remembered = _scrollMemory.offsetFor(key);
     final destination = destinationForChange(key, remembered: remembered);
@@ -1512,6 +1626,15 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
               child: Stack(
                 children: [
                   Positioned.fill(child: _body()),
+                  if (!_selectionMode)
+                    Positioned(
+                      top: 12,
+                      left: 0,
+                      right: 0,
+                      child: Center(
+                        child: _buildNewContentBanner(),
+                      ),
+                    ),
                   if (!_selectionMode)
                     Positioned(
                       right: 16,
@@ -2420,7 +2543,7 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
               itemBuilder: (context, index) {
                 final record = group.posts[index];
                 final key = _postKey(record);
-                return _anchored(key, WaterfallPostCard(
+                return _anchored(key, _highlightWrapper(record.postId, WaterfallPostCard(
                   key: ValueKey('wf-${record.id}'),
                   record: record,
                   selectionMode: _selectionMode,
@@ -2444,7 +2567,7 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
                   onTap: () => _openRecord(record),
                   onLongPress: () => _handleCardLongPress(record, key),
                   onToggleSelect: () => _toggleSelection(key),
-                ));
+                )));
               },
               ),
             ),
@@ -2472,9 +2595,13 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
                 delegate: SliverChildBuilderDelegate((context, index) {
                   final record = group.posts[index];
                   final key = _postKey(record);
-                  return _anchored(key, Padding(
-                    padding: const EdgeInsets.only(bottom: 12),
-                    child: Dismissible(
+                  return _anchored(
+                    key,
+                    _highlightWrapper(
+                      record.postId,
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: 12),
+                        child: Dismissible(
                       key: ValueKey('row-${record.id}'),
                       direction: _selectionMode
                           ? DismissDirection.none
@@ -2528,7 +2655,7 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
                         onOpenOriginal: () => _openOriginal(record.postUrl),
                       ),
                     ),
-                  ));
+                  )));
                 }, childCount: group.posts.length),
               ),
               ),
@@ -2567,17 +2694,20 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
                 final key = _mediaKey(ref.record, ref.itemIndex);
                 return _anchored(
                   key,
-                  AllMediaCard(
-                  key: ValueKey('all-${ref.record.id}-${ref.itemIndex}'),
-                  record: ref.record,
-                  itemIndex: ref.itemIndex,
-                  selectionMode: _selectionMode,
-                  selected: _selected.contains(key),
-                  onTap: () =>
-                      _openRecord(ref.record, highlightItemIndex: ref.itemIndex),
-                  onLongPress: () => _enterSelection(key),
-                  onToggleSelect: () => _toggleSelection(key),
-                ),
+                  _highlightWrapper(
+                    ref.record.postId,
+                    AllMediaCard(
+                      key: ValueKey('all-${ref.record.id}-${ref.itemIndex}'),
+                      record: ref.record,
+                      itemIndex: ref.itemIndex,
+                      selectionMode: _selectionMode,
+                      selected: _selected.contains(key),
+                      onTap: () =>
+                          _openRecord(ref.record, highlightItemIndex: ref.itemIndex),
+                      onLongPress: () => _enterSelection(key),
+                      onToggleSelect: () => _toggleSelection(key),
+                    ),
+                  ),
                 );
               },
               ),
