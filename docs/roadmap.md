@@ -5,9 +5,9 @@
 
 ## 当前版本
 
-- App：**v1.12.1**（versionCode 80）。下一版 **v2.0**。
+- App：**v1.12.1**（versionCode 81）。下一版 **v2.0**。
 - 内置 parser：**1.4.17**（manifestVersion 14）。
-- versionCode 规则：正式 App 的下一个 versionCode 须 ≥ 81。
+- versionCode 规则：正式 App 的下一个 versionCode 须 ≥ 82。
 
 ## v1.11
 

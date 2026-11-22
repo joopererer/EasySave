@@ -7,31 +7,37 @@ This file documents notable user-facing changes following [Keep a Changelog](htt
 
 ## [Unreleased]
 
+## [1.12.1] - 2026-11-22
+
 ### 客户端 / App
 
-- 下载状态提示一致化：统一了历史卡片、下载队列、解析保存弹窗、悬浮球与系统通知上的状态文案与图标；在存储空间不足等特殊情况下，所有界面均展示清晰统一的「空间不足」提示。
-  Unified download status presentation: unified status text and icons across history cards, download queue, parsing save dialogs, floating bubble, and system notifications; consistently displays "Insufficient storage" across all surfaces when disk space is low.
-
-- 历史记录 Live 图标记对齐与修复：
-  - 历史卡片与大图浏览对齐实况图识别逻辑，修复了从备份恢复或相册扫描导入的帖子偶发缺失 Live 标记的问题；
-  - 启动时自动检查并修复存量记录中缺失的实况标记，无需重新导入。
-  Live photo badge alignment and repair in history:
-  - Aligns history card Live photo detection with the fullscreen viewer, resolving missing Live badges on posts imported from backups or gallery rebuild scans;
-  - Automatically heals missing Live badges in legacy records on app launch without requiring re-imports.
-
-- 历史列表便捷「返回顶部」：
+- 历史页新增「返回顶部」按钮：
   - 列表向下滚动超过约两屏时，右下角优雅淡入返回顶部按钮，回到顶部附近时自动隐藏；
-  - 点击按钮平滑回滚至顶部；长距离滚动时自动采用快速跳跃并平滑过渡，保证 500ms 内快速归位。
+  - 点击按钮平滑回滚至顶部；长距离浏览时自动采用快速跳跃并平滑过渡，保证 500ms 内快速归位。
   Scroll-to-top button in history:
   - A scroll-to-top button smoothly fades in at the bottom-right after scrolling down about two screens and fades out near the top;
-  - Tapping smoothly scrolls back to the top, utilizing a quick jump transition for long scroll distances to complete within 500ms.
+  - Tapping smoothly scrolls back to the top, utilizing a quick jump transition for long scroll distances within 500ms.
 
 - 历史页「新内容提示」与新增卡片高亮：
-  - 正在浏览历史列表时，后台新下载完成的帖子不会突然打断当前阅读位置，顶部将出现「有 N 条新内容 ↑」浮动胶囊提示；
-  - 点击提示胶囊或向上滑回顶部时，提示自动收起，并在新加入的卡片上提供醒目的瞬时高亮边框反馈。
+  - 正在浏览历史时，若后台有新帖子下载完成，不会打乱当前阅读位置，顶部会提示「有 N 条新内容 ↑」，点一下即可平滑回到顶部；
+  - 手动滑回顶部时提示条也会自动消失；新出现的内容卡片带有短暂的微光高亮反馈。
   New content indicator and card highlight in history:
-  - While browsing down the history list, newly completed background downloads gently accumulate without jumping scroll positions, showing a floating "N new items ↑" chip at the top;
+  - While browsing down the history list, newly completed background downloads show a floating "N new items ↑" chip at the top without disrupting scroll positions;
   - Tapping the chip or scrolling back to the top dismisses the indicator and highlights new cards with a subtle temporary border accent.
+
+- 修复实况图标记：
+  - 修复了部分从备份或相册扫描恢复的实况帖子在历史页缺少 Live 标记的问题；
+  - 启动时自动检查并修复存量记录中缺失的实况标记，无需重新导入。
+  Live photo badge alignment and repair:
+  - Resolves missing Live badges on posts imported from backups or gallery rebuild scans;
+  - Automatically heals missing Live badges in legacy records on app launch without requiring re-imports.
+
+- 下载状态提示在各处统一：
+  - 统一了历史卡片、下载队列、解析保存弹窗、悬浮球与系统通知上的状态文案与图标；
+  - 例如在存储空间不足时，预览页底部的保存弹窗也会如实显示「空间不足」（不再显示「已暂停」）。
+  Unified download status presentation:
+  - Unified status text and icons across history cards, download queue, parsing save dialogs, floating bubble, and system notifications;
+  - Consistently displays "Insufficient storage" across all surfaces (including the save dialog) when disk space is low.
 
 ## [1.12.0] - 2026-11-21
 

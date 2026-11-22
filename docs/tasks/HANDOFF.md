@@ -3,16 +3,16 @@
 > 给接手的 agent 会话：先读这一页，再读 `docs/roadmap.md` 与对应版本的
 > `docs/tasks/*-evidence.md`。这里的约定与约束优先级高于任何“看起来更快”的做法。
 
-## 1. 当前状态（截至 v1.12.0 发布准备）
+## 1. 当前状态（截至 v1.12.1 发布）
 
-- **App**：仓库内 `pubspec.yaml` 为 `1.12.0+79`（v1.12.0，versionCode 79）。
+- **App**：仓库内 `pubspec.yaml` 为 `1.12.1+81`（v1.12.1，versionCode 81）。
 - **内置 parser**：仓库 `app/assets/parser/` 为 **1.4.17 / manifestVersion 14**，
   bundle sha256 `f49a8928542842b2f6c1d1730c61815500d8c4ce790e50f4dc8be1bbd207eca1`。
 - **parser 发布状态**：已发布。`master` 上的 merge commit
   `fdc9386` 打了 annotated tag `parser-v1.4.17`，Release 资产与
   `spec/v2/manifest.json` 已由 CI 更新，`tools/verify_v2_channel.mjs` 校验通过。
-- **versionCode 规则**：v1.12.0 正式包使用 **versionCode 79**。**下一个正式 versionCode 必须 ≥ 80**。
-- **App 发布状态**：v1.12.0 发布准备完成（versionCode 79）。
+- **versionCode 规则**：v1.12.1 正式包使用 **versionCode 81**。**下一个正式 versionCode 必须 ≥ 82**。
+- **App 发布状态**：v1.12.1 发布完成（versionCode 81）。
 
 ## 2. 分支与发布流程
 
