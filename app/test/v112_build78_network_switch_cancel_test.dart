@@ -15,6 +15,8 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:path_provider_platform_interface/path_provider_platform_interface.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'test_helpers.dart';
+
 class _FakePaths extends PathProviderPlatform {
   final String root;
   _FakePaths(this.root);
@@ -41,13 +43,18 @@ void main() {
 
   void writeMockMp4(File file) {
     file.parent.createSync(recursive: true);
-    final bytes = List<int>.filled(10000, 0);
-    bytes[3] = 0x18;
-    bytes[4] = 0x66; // 'f'
-    bytes[5] = 0x74; // 't'
-    bytes[6] = 0x79; // 'y'
-    bytes[7] = 0x70; // 'p'
-    file.writeAsBytesSync(bytes);
+    final fixture = File('../docs/provenance-spec/test-vectors/mp4-no-xmp.mp4');
+    if (fixture.existsSync()) {
+      fixture.copySync(file.path);
+    } else {
+      final bytes = List<int>.filled(10000, 0);
+      bytes[3] = 0x18;
+      bytes[4] = 0x66; // 'f'
+      bytes[5] = 0x74; // 't'
+      bytes[6] = 0x79; // 'y'
+      bytes[7] = 0x70; // 'p'
+      file.writeAsBytesSync(bytes);
+    }
   }
 
   setUpAll(() {
@@ -194,7 +201,7 @@ void main() {
       DownloadManager.instance.taskUpdateForTesting(
         TaskStatusUpdate(runningTask, TaskStatus.complete),
       );
-      await Future<void>.delayed(const Duration(milliseconds: 100));
+      await waitFor(() => job.state == JobState.done, description: 'job done after complete');
 
       final finalLogs = DevLog.recentLines(500);
       expect(finalLogs.any((l) => l.contains('batch_settle') && l.contains('all_completed') && l.contains('files=1')), isTrue);
@@ -253,7 +260,7 @@ void main() {
       DownloadManager.instance.taskUpdateForTesting(
         TaskStatusUpdate(task1, TaskStatus.canceled),
       );
-      await Future<void>.delayed(const Duration(milliseconds: 100));
+      await waitFor(() => job.attempts >= 2, description: 'job auto-retry attempt 2');
 
       final logs = DevLog.recentLines(500);
 
@@ -286,7 +293,7 @@ void main() {
       DownloadManager.instance.taskUpdateForTesting(
         TaskStatusUpdate(task2, TaskStatus.complete),
       );
-      await Future<void>.delayed(const Duration(milliseconds: 100));
+      await waitFor(() => job.state == JobState.done, description: 'job done after 2nd complete');
 
       final finalLogs = DevLog.recentLines(500);
       expect(finalLogs.any((l) => l.contains('batch_settle') && l.contains('all_completed') && l.contains('files=1')), isTrue);
@@ -358,7 +365,7 @@ void main() {
       DownloadManager.instance.taskUpdateForTesting(
         TaskStatusUpdate(initialTask, TaskStatus.canceled),
       );
-      await Future<void>.delayed(const Duration(milliseconds: 100));
+      await waitFor(() => job.state == JobState.paused, description: 'job paused after cancel with data');
 
       // Job should enter JobState.paused ("下载中断") preserving the temp file
       expect(job.state, equals(JobState.paused));
@@ -395,7 +402,7 @@ void main() {
       DownloadManager.instance.taskUpdateForTesting(
         TaskStatusUpdate(taskToComplete, TaskStatus.complete),
       );
-      await Future<void>.delayed(const Duration(milliseconds: 100));
+      await waitFor(() => job.state == JobState.done, description: 'job done after resumed complete');
 
       final finalLogs = DevLog.recentLines(500);
       expect(finalLogs.any((l) => l.contains('batch_settle') && l.contains('all_completed') && l.contains('files=1')), isTrue);

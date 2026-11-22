@@ -13,6 +13,8 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
+import 'test_helpers.dart';
+
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
   sqfliteFfiInit();
@@ -59,7 +61,9 @@ void main() {
     DownloadManager.instance.resetInitForTesting();
     DownloadManager.instance.clearBatchesForTesting();
 
-    final db = await HistoryDb.instance();
+    HistoryDb.resetInstanceForTesting();
+    final db = await HistoryDb.instance(dbPath: '${tempDir.path}/history.db');
+    HistoryDb.setInstanceForTesting(db);
     await db.clear();
   });
 
@@ -73,6 +77,8 @@ void main() {
 
     DevLog.resetRecentForTesting();
     DownloadManager.owner = DownloadBatch.sourceMain;
+    HistoryDb.setInstanceForTesting(null);
+    HistoryDb.resetInstanceForTesting();
     DownloadManager.instance.activeQueryRetryDelay = const Duration(seconds: 30);
     DownloadManager.instance.downloaderStartForTesting = null;
     DownloadManager.instance.historyWriterForTesting = null;
@@ -147,7 +153,7 @@ void main() {
       // Simulate plugin reporting TaskStatus.canceled without userCancelRequested
       expect(job.userCancelRequested, isFalse);
       DownloadManager.instance.taskUpdateForTesting(TaskStatusUpdate(task, TaskStatus.canceled));
-      await Future<void>.delayed(const Duration(milliseconds: 100));
+      await waitFor(() => job.state == JobState.paused, description: 'job paused after unrequested cancel');
 
       // Temp file should still exist
       final tempFile = File(job.resumeTempPath!);
@@ -310,7 +316,7 @@ void main() {
         TaskStatus.failed,
         TaskConnectionException('Software caused connection abort'),
       ));
-      await Future<void>.delayed(const Duration(milliseconds: 100));
+      await waitFor(() => job.state == JobState.paused, description: 'job paused after connection abort');
 
       // Job should be paused with copy "已中断，点继续"
       expect(job.state, equals(JobState.paused));

@@ -18,6 +18,8 @@ import 'package:path_provider_platform_interface/path_provider_platform_interfac
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
+import 'test_helpers.dart';
+
 class _FakePaths extends PathProviderPlatform {
   _FakePaths(this.root);
   final String root;
@@ -75,7 +77,9 @@ void main() {
     DownloadManager.instance.resetInitForTesting();
     DownloadManager.instance.clearBatchesForTesting();
 
-    final db = await HistoryDb.instance();
+    HistoryDb.resetInstanceForTesting();
+    final db = await HistoryDb.instance(dbPath: '${tempDir.path}/history.db');
+    HistoryDb.setInstanceForTesting(db);
     await db.clear();
   });
 
@@ -88,6 +92,8 @@ void main() {
         .setMockMethodCallHandler(notifyChannel, null);
 
     DevLog.resetRecentForTesting();
+    HistoryDb.setInstanceForTesting(null);
+    HistoryDb.resetInstanceForTesting();
     DownloadManager.owner = DownloadBatch.sourceMain;
     DownloadManager.roundWaitTimeout = const Duration(seconds: 10);
     DownloadManager.roundWaitPollInterval = const Duration(milliseconds: 100);
@@ -157,7 +163,10 @@ void main() {
       // Simulate network transition wifi -> cellular
       NetworkStatus.instance.setStatusForTesting(online: true, type: 'cellular');
       DownloadManager.instance.onNetworkChangedForTesting();
-      await Future<void>.delayed(const Duration(milliseconds: 50));
+      await waitFor(
+        () => DevLog.recentLines(500).any((e) => e.contains('network_change from=wifi to=cellular action=observe')),
+        description: 'network_change observed',
+      );
 
       final lines = DevLog.recentLines(500);
       expect(
@@ -229,7 +238,10 @@ void main() {
       DownloadManager.instance.taskUpdateForTesting(
         TaskStatusUpdate(oldTask, TaskStatus.running),
       );
-      await Future<void>.delayed(const Duration(milliseconds: 50));
+      await waitFor(
+        () => cancelledTasks.contains('${job.key}-r1'),
+        description: 'zombie task cancelled on running',
+      );
 
       var lines = DevLog.recentLines(500);
       expect(lines.any((e) => e.contains('zombie_task taskId=${job.key}-r1')), isTrue);
@@ -240,7 +252,10 @@ void main() {
       DownloadManager.instance.taskUpdateForTesting(
         TaskProgressUpdate(oldTask, 0.45),
       );
-      await Future<void>.delayed(const Duration(milliseconds: 50));
+      await waitFor(
+        () => cancelledTasks.contains('${job.key}-r1'),
+        description: 'zombie task cancelled on progress',
+      );
 
       lines = DevLog.recentLines(500);
       expect(lines.any((e) => e.contains('zombie_task taskId=${job.key}-r1')), isTrue);
@@ -290,7 +305,10 @@ void main() {
         DownloadManager.instance.taskUpdateForTesting(
           TaskStatusUpdate(r2Task, TaskStatus.complete),
         );
-        await Future<void>.delayed(const Duration(milliseconds: 150));
+        await waitFor(
+          () => cancelledTasks.contains('${job.key}-r4'),
+          description: 'adopt stale complete cancels current round',
+        );
 
         final lines = DevLog.recentLines(500);
         expect(lines.any((e) => e.contains('adopt_stale_complete taskId=${job.key}-r2')), isTrue);
@@ -331,10 +349,10 @@ void main() {
       DownloadManager.instance.taskUpdateForTesting(
         TaskStatusUpdate(r1Task, TaskStatus.complete),
       );
-      final sw = Stopwatch()..start();
-      while (r1File.existsSync() && sw.elapsed < const Duration(seconds: 3)) {
-        await Future<void>.delayed(const Duration(milliseconds: 50));
-      }
+      await waitFor(
+        () => !r1File.existsSync(),
+        description: 'r1File deleted after stale complete discarded',
+      );
 
       final lines = DevLog.recentLines(500);
       expect(lines.any((e) => e.contains('stale_complete_discarded taskId=${job.key}-r1')), isTrue);

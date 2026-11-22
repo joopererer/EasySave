@@ -141,7 +141,8 @@ void main() {
     manager.prepareStartForTesting = () async {};
     manager.enqueueForTesting = null;
     HistoryDb.resetInstanceForTesting();
-    await HistoryDb.instance();
+    final db = await HistoryDb.instance(dbPath: ':memory:');
+    HistoryDb.setInstanceForTesting(db);
     enqueued.clear();
     cookies.lookups.clear();
   });
@@ -151,6 +152,7 @@ void main() {
     }
     manager.clearBatchesForTesting();
     manager.prepareStartForTesting = null;
+    HistoryDb.setInstanceForTesting(null);
     HistoryDb.resetInstanceForTesting();
     SiteRegistry.useBuiltin();
   });

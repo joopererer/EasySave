@@ -13,6 +13,8 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
+import 'test_helpers.dart';
+
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
   sqfliteFfiInit();
@@ -49,6 +51,11 @@ void main() {
     DownloadManager.instance.allRecordsForTesting = (_) async => [];
     DownloadManager.instance.resetInitForTesting();
     DownloadManager.instance.clearBatchesForTesting();
+
+    HistoryDb.resetInstanceForTesting();
+    final db = await HistoryDb.instance(dbPath: '${tempDir.path}/history.db');
+    HistoryDb.setInstanceForTesting(db);
+    await db.clear();
   });
 
   tearDown(() async {
@@ -59,6 +66,8 @@ void main() {
 
     DownloadManager.owner = previousOwner;
     DevLog.resetRecentForTesting();
+    HistoryDb.setInstanceForTesting(null);
+    HistoryDb.resetInstanceForTesting();
     DownloadManager.instance.downloaderStartForTesting = null;
     DownloadManager.instance.historyWriterForTesting = null;
     DownloadManager.instance.allRecordsForTesting = null;
@@ -267,7 +276,10 @@ void main() {
       await dm.afterTerminalForTesting(batch); // settlement or finish
       dm.taskUpdateForTesting(TaskStatusUpdate(task, TaskStatus.complete));
 
-      await Future<void>.delayed(const Duration(milliseconds: 50));
+      await waitFor(
+        () => job0.state == JobState.done && job0.saved,
+        description: 'job0 saved and done after finishFile',
+      );
 
       final logs = DevLog.recentLines(100);
       expect(

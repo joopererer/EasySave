@@ -82,7 +82,8 @@ void main() {
     LocalAutoBackup.resetThrottleForTest();
     SafService.resetThrottleForTest();
     HistoryDb.resetInstanceForTesting();
-    db = await HistoryDb.instance();
+    db = await HistoryDb.instance(dbPath: ':memory:');
+    HistoryDb.setInstanceForTesting(db);
     await db.clear();
     manager.clearBatchesForTesting();
     DownloadManager.owner = DownloadBatch.sourceBackground;
@@ -143,6 +144,7 @@ void main() {
     manager.allRecordsForTesting = null;
     DownloadManager.owner = originalOwner;
     messenger.setMockMethodCallHandler(safChannel, null);
+    HistoryDb.setInstanceForTesting(null);
     HistoryDb.resetInstanceForTesting();
     IOOverrides.global = originalIo;
     SiteRegistry.useBuiltin();

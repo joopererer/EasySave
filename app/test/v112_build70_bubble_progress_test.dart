@@ -10,6 +10,8 @@ import 'package:easysave/services/site_registry.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+
+import 'test_helpers.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 void main() {
@@ -120,19 +122,19 @@ void main() {
 
       final prefs = await SharedPreferences.getInstance();
 
-      // Initial progress: 0.005 (less than 1%)
-      batch.jobs[0].progress = 0.005;
-      dm.throttlePersistProgressForTesting(batch, 0.005);
-      await Future<void>.delayed(const Duration(milliseconds: 20));
-
       // Progress increased by >= 1%: 0.02
       batch.jobs[0].progress = 0.02;
       dm.throttlePersistProgressForTesting(batch, 0.02);
-      await Future<void>.delayed(const Duration(milliseconds: 50));
 
-      final raw = prefs.getString('easysave_batch_${batch.batchId}');
-      expect(raw, isNotNull);
-      final stored = DownloadBatch.fromJson((jsonDecode(raw!) as Map).cast<String, Object?>());
+      final stored = await waitFor(() {
+        final raw = prefs.getString('easysave_batch_${batch.batchId}');
+        if (raw == null) return null;
+        final decoded = DownloadBatch.fromJson((jsonDecode(raw) as Map).cast<String, Object?>());
+        if ((decoded.jobs[0].progress - 0.02).abs() < 0.001) {
+          return decoded;
+        }
+        return null;
+      }, description: 'progress >= 1% persisted to SharedPreferences');
       expect(stored.jobs[0].progress, closeTo(0.02, 0.001));
     });
 

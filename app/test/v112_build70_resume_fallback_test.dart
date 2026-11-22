@@ -10,6 +10,8 @@ import 'package:easysave/services/site_registry.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+
+import 'test_helpers.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 void main() {
@@ -211,18 +213,23 @@ void main() {
 
       // Start offline
       NetworkStatus.instance.setStatusForTesting(online: false, type: 'none');
-      await Future<void>.delayed(const Duration(milliseconds: 20));
 
       // Network recovers: flight mode off -> connects to cellular
       NetworkStatus.instance.setStatusForTesting(online: true, type: 'cellular');
-      await Future<void>.delayed(const Duration(milliseconds: 50));
+      await waitFor(
+        () => DevLog.recentLines(100).any((l) => l.contains('network_change from=none to=cellular action=observe')),
+        description: 'observe network_change from none to cellular',
+      );
 
       var logs = DevLog.recentLines(100);
       expect(logs.any((l) => l.contains('network_change from=none to=cellular action=observe')), isTrue);
 
       // Switches to Wi-Fi while online: logs observe without interruption
       NetworkStatus.instance.setNetworkTypeForTesting('wifi');
-      await Future<void>.delayed(const Duration(milliseconds: 50));
+      await waitFor(
+        () => DevLog.recentLines(100).any((l) => l.contains('network_change from=cellular to=wifi action=observe')),
+        description: 'observe network_change from cellular to wifi',
+      );
 
       logs = DevLog.recentLines(100);
       expect(logs.any((l) => l.contains('network_change from=cellular to=wifi action=observe')), isTrue);
@@ -238,11 +245,13 @@ void main() {
 
       // First establish cellular connection
       NetworkStatus.instance.setStatusForTesting(online: true, type: 'cellular');
-      await Future<void>.delayed(const Duration(milliseconds: 20));
 
       // Mid-download switch from cellular to wifi: observe without interrupt
       NetworkStatus.instance.setNetworkTypeForTesting('wifi');
-      await Future<void>.delayed(const Duration(milliseconds: 20));
+      await waitFor(
+        () => DevLog.recentLines(100).any((l) => l.contains('network_change from=cellular to=wifi action=observe')),
+        description: 'observe mid-download network_change from cellular to wifi',
+      );
 
       var logs = DevLog.recentLines(100);
       expect(logs.any((l) => l.contains('network_change from=cellular to=wifi action=observe')), isTrue);

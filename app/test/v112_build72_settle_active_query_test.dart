@@ -16,6 +16,8 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
+import 'test_helpers.dart';
+
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
   sqfliteFfiInit();
@@ -52,7 +54,9 @@ void main() {
     DownloadManager.instance.historyWriterForTesting = null;
     DownloadManager.instance.activeQueryRetryDelay = Duration.zero;
 
-    final db = await HistoryDb.instance();
+    HistoryDb.resetInstanceForTesting();
+    final db = await HistoryDb.instance(dbPath: '${tempDir.path}/history.db');
+    HistoryDb.setInstanceForTesting(db);
     await db.clear();
   });
 
@@ -64,6 +68,8 @@ void main() {
 
     DevLog.resetRecentForTesting();
     DownloadManager.owner = DownloadBatch.sourceMain;
+    HistoryDb.setInstanceForTesting(null);
+    HistoryDb.resetInstanceForTesting();
     DownloadManager.instance.downloaderStartForTesting = null;
     DownloadManager.instance.allRecordsForTesting = null;
     DownloadManager.instance.recordForIdForTesting = null;
@@ -244,9 +250,12 @@ void main() {
 
       // Verify history has the file row
       final db = await HistoryDb.instance();
-      final record = await db.getByPostId('p_timeout_3');
+      final record = await waitFor(
+        () async => await db.getByPostId('p_timeout_3'),
+        description: 'wait for p_timeout_3 record in history',
+      );
       expect(record, isNotNull);
-      expect(record!.files.length, 1);
+      expect(record.files.length, 1);
       expect(record.files.first.mediaId, '79030');
     });
 
@@ -322,9 +331,12 @@ void main() {
       expect(logs.any((l) => l.contains('batch_settle id=x-stuck-batch') && l.contains('reason=settle_repair') && l.contains('files=1')), isTrue);
 
       // 4. Verify History has file rows with mediaId 79003
-      final updatedRecord = await db.getByPostId(postId);
+      final updatedRecord = await waitFor(
+        () async => await db.getByPostId(postId),
+        description: 'wait for X post record after settle_repair',
+      );
       expect(updatedRecord, isNotNull);
-      expect(updatedRecord!.fileCount, 1);
+      expect(updatedRecord.fileCount, 1);
       expect(updatedRecord.files.length, 1);
       expect(updatedRecord.files.first.mediaId, '79003');
       expect(updatedRecord.downloadError, isNull);
@@ -378,9 +390,12 @@ void main() {
       expect(logs.any((l) => l.contains('settle_repair batch=xhs-bubble-stuck-batch files=4')), isTrue);
       expect(logs.any((l) => l.contains('batch_settle id=xhs-bubble-stuck-batch') && l.contains('reason=settle_repair') && l.contains('files=4')), isTrue);
 
-      final updatedRecord = await db.getByPostId(postId);
+      final updatedRecord = await waitFor(
+        () async => await db.getByPostId(postId),
+        description: 'wait for XHS post record after settle_repair',
+      );
       expect(updatedRecord, isNotNull);
-      expect(updatedRecord!.fileCount, 4);
+      expect(updatedRecord.fileCount, 4);
       expect(updatedRecord.files.length, 4);
       expect(updatedRecord.files.map((f) => f.mediaId).toList(), ['79007', '79008', '79009', '79010']);
       expect(updatedRecord.downloadError, isNull);
@@ -431,9 +446,12 @@ void main() {
       expect(logs.any((l) => l.contains('settle_repair batch=bubble-repair-batch files=1')), isTrue);
       expect(logs.any((l) => l.contains('batch_settle id=bubble-repair-batch by=background reason=settle_repair files=1')), isTrue);
 
-      final updatedRecord = await db.getByPostId(postId);
+      final updatedRecord = await waitFor(
+        () async => await db.getByPostId(postId),
+        description: 'wait for XHS post record after settle_repair',
+      );
       expect(updatedRecord, isNotNull);
-      expect(updatedRecord!.fileCount, 1);
+      expect(updatedRecord.fileCount, 1);
       expect(updatedRecord.files.first.mediaId, '79050');
     });
   });
