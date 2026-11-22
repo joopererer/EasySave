@@ -11,6 +11,7 @@ import 'services/download_manager.dart';
 import 'services/gallery_locator_service.dart';
 import 'services/heic_self_check.dart';
 import 'services/host_bridge.dart';
+import 'services/live_badge_repair_service.dart';
 import 'services/network_status.dart';
 import 'services/preview_route_observer.dart';
 import 'services/settings.dart';
@@ -46,6 +47,7 @@ Future<void> main() async {
   // Verification-only build switch; a release build without the dart-define
   // never reaches this code.
   unawaited(HeicSelfCheck.runIfEnabled());
+  unawaited(LiveBadgeRepairService.repairIfNeeded());
   runApp(const EasySaveApp());
   // Ask for album access up-front (first launch only) so the first history
   // view and "recent" thumbnails don't stall on a mid-flow permission prompt.

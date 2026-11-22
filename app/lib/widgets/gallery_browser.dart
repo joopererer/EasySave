@@ -661,6 +661,12 @@ Future<({List<GalleryBrowserItem> items, int initial})> savedBrowserItems({
       ),
     );
   }
+  final cardLive = isSavedMediaCoverLive(record.savedFiles);
+  final viewerLive = items.any((it) => it.type == 'live');
+  DevLog.write(
+    'LiveBadge',
+    'post=${record.postId} card=${cardLive ? "yes" : "no"} viewer=${viewerLive ? "yes" : "no"}',
+  );
   return (items: items, initial: initial);
 }
 

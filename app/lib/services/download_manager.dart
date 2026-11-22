@@ -32,6 +32,7 @@ import 'history_db.dart';
 import 'history_io.dart';
 import 'image_format_preference.dart';
 import 'image_dimensions.dart';
+import 'live_pairs.dart';
 import 'network_status.dart';
 import 'image_decode_probe.dart';
 import 'media_content_type.dart';
@@ -1270,6 +1271,9 @@ Future<void> writeBatchHistory(
         }
       } catch (_) {}
     }
+    final filesWithPairs = ensureLivePairIds(batch.postId, files);
+    files.clear();
+    files.addAll(filesWithPairs);
   }
 
   // 1c: Settlement rule: batches producing 0 saved files can only be failed or canceled.

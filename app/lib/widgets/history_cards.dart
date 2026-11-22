@@ -44,19 +44,51 @@ String formatSavedAt(DateTime time) {
 /// the device still points at that same item (its placeholder) instead of
 /// silently jumping to another one.
 MediaItem? coverItemFor(HistoryRecord record) {
+  final entries = pairSavedMedia(record.savedFiles);
+  final isCoverLive = entries.isNotEmpty && entries.first.isLive;
   final post = record.toPost();
-  if (post.items.isEmpty) return null;
+  if (post.items.isEmpty) {
+    if (entries.isNotEmpty) {
+      final first = entries.first;
+      return MediaItem(
+        type: isCoverLive ? 'live' : (first.cover.isImage ? 'image' : 'video'),
+        url: first.cover.filename,
+      );
+    }
+    return null;
+  }
   final visible = record.visibleFiles;
+  MediaItem base;
   if (visible.isNotEmpty) {
     final idx = visible.first.itemIndex;
     final is1Based = visible.every((f) => f.itemIndex > 0);
     final zeroBased = is1Based ? idx - 1 : idx;
     if (zeroBased >= 0 && zeroBased < post.items.length) {
-      return post.items[zeroBased];
+      base = post.items[zeroBased];
+    } else {
+      base = post.items.where((item) => item.cacheItemIndex == zeroBased).firstOrNull ?? post.items.first;
     }
-    return post.items.where((item) => item.cacheItemIndex == zeroBased).firstOrNull;
+  } else {
+    base = post.items.first;
   }
-  return post.items.first;
+  if (isCoverLive && base.type != 'live') {
+    return MediaItem(
+      type: 'live',
+      url: base.url,
+      videoUrl: base.videoUrl,
+      posterUrl: base.posterUrl,
+      thumbnailUrl: base.thumbnailUrl,
+      width: base.width,
+      height: base.height,
+      duration: base.duration,
+      isGif: base.isGif,
+      fallbacks: base.fallbacks,
+      requestResources: base.requestResources,
+      localFilename: base.localFilename,
+      localVideoFilename: base.localVideoFilename,
+    );
+  }
+  return base;
 }
 
 /// Human type bucket used for badges and "按类型" grouping.
@@ -101,18 +133,42 @@ double allMediaCardHeight(MediaItem? item, double width) =>
 
 /// The media item an [AllMediaCard] shows for [itemIndex].
 MediaItem? allMediaItemFor(HistoryRecord record, int itemIndex) {
+  final entries = pairSavedMedia(record.savedFiles);
+  final matchingEntry = entries.where((e) => e.itemIndex == itemIndex).firstOrNull;
   final post = record.toPost();
   final visible = record.visibleFiles;
   final is1Based = visible.isNotEmpty &&
       visible.every((f) => f.itemIndex > 0);
   final zeroBased = is1Based ? itemIndex - 1 : itemIndex;
+  MediaItem? base;
   if (zeroBased >= 0 && zeroBased < post.items.length) {
-    return post.items[zeroBased];
+    base = post.items[zeroBased];
+  } else if (itemIndex >= 0 && itemIndex < post.items.length) {
+    base = post.items[itemIndex];
+  } else if (matchingEntry != null) {
+    base = MediaItem(
+      type: matchingEntry.isLive ? 'live' : (matchingEntry.cover.isImage ? 'image' : 'video'),
+      url: matchingEntry.cover.filename,
+    );
   }
-  if (itemIndex >= 0 && itemIndex < post.items.length) {
-    return post.items[itemIndex];
+  if (base != null && matchingEntry?.isLive == true && base.type != 'live') {
+    return MediaItem(
+      type: 'live',
+      url: base.url,
+      videoUrl: base.videoUrl,
+      posterUrl: base.posterUrl,
+      thumbnailUrl: base.thumbnailUrl,
+      width: base.width,
+      height: base.height,
+      duration: base.duration,
+      isGif: base.isGif,
+      fallbacks: base.fallbacks,
+      requestResources: base.requestResources,
+      localFilename: base.localFilename,
+      localVideoFilename: base.localVideoFilename,
+    );
   }
-  return null;
+  return base;
 }
 
 /// Local-album thumbnail for a record (optionally a specific file). Falls back

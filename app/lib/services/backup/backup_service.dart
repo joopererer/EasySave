@@ -376,7 +376,8 @@ abstract final class BackupService {
           ),
         );
       }
-      final restoredFiles = repairHistoryFiles(files) ?? files;
+      final filesWithPairs = ensureLivePairIds(post.sourceId, files);
+      final restoredFiles = repairHistoryFiles(filesWithPairs) ?? filesWithPairs;
       restoredFilesCount += restoredFiles.where(isVisibleHistoryFile).length;
       // Items, not files, for everything the user reads (v1.11 build 59).
       restoredItemsCount += savedMediaEntryCount(
@@ -406,6 +407,32 @@ abstract final class BackupService {
             : post.failureReason ?? '',
       };
 
+      String? itemsJson = existing?.itemsJson;
+      if (itemsJson == null && restoredFiles.isNotEmpty) {
+        final entries = pairSavedMedia(restoredFiles);
+        final postItems = <Map<String, Object?>>[];
+        for (final entry in entries) {
+          if (entry.isLive) {
+            postItems.add({
+              'type': 'live',
+              'url': entry.image?.filename ?? '',
+              'videoUrl': entry.video?.filename,
+            });
+          } else if (entry.image != null) {
+            postItems.add({
+              'type': 'image',
+              'url': entry.image!.filename,
+            });
+          } else if (entry.video != null) {
+            postItems.add({
+              'type': 'video',
+              'url': entry.video!.filename,
+            });
+          }
+        }
+        itemsJson = jsonEncode(postItems);
+      }
+
       final record = HistoryRecord(
         platform: appPlatform,
         postId: post.sourceId,
@@ -419,7 +446,7 @@ abstract final class BackupService {
         fileCount: restoredFiles.where(isSavedHistoryFile).length,
         createdAt: resolvedCreatedAt,
         // Media URLs are not backed up; a local record keeps its own items.
-        itemsJson: existing?.itemsJson,
+        itemsJson: itemsJson,
         files: restoredFiles,
         isDeleted: false,
         downloadError: downloadError,

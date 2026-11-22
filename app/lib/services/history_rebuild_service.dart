@@ -12,6 +12,7 @@ import '../core/dev_log.dart';
 import '../metadata/metadata_service.dart';
 import 'gallery_locator_service.dart';
 import 'history_db.dart';
+import 'live_pairs.dart';
 import 'media_header_service.dart';
 import 'provenance_pair.dart';
 import 'settings.dart';
@@ -424,10 +425,10 @@ class HistoryRebuildService {
       }
 
       // Build history files
-      final files = <HistoryFile>[];
+      final rawFiles = <HistoryFile>[];
       for (final awx in resolvedAssets) {
         final savedAtTime = awx.provenance.capturedAt ?? awx.asset.createDateTime;
-        files.add(HistoryFile(
+        rawFiles.add(HistoryFile(
           filename: awx.asset.title ?? '',
           savedAt: savedAtTime.millisecondsSinceEpoch,
           mediaId: isFixedFileReference(awx.asset.id) ? null : awx.asset.id,
@@ -438,44 +439,29 @@ class HistoryRebuildService {
           status: isFixedFileReference(awx.asset.id) ? FileStatus.unknown : FileStatus.found,
         ));
       }
+      final files = ensureLivePairIds(sourceId, rawFiles);
 
       String generateItemsJson(List<HistoryFile> postFiles) {
-        final byIndex = <int, List<HistoryFile>>{};
-        for (final f in postFiles) {
-          byIndex.putIfAbsent(f.itemIndex, () => []).add(f);
-        }
-        final sortedIndices = byIndex.keys.toList()..sort();
+        final entries = pairSavedMedia(postFiles);
         final postItems = <Map<String, Object?>>[];
-        for (final idx in sortedIndices) {
-          final group = byIndex[idx]!;
-          final img = group.where((f) => f.isImage).firstOrNull;
-          final vid = group.where((f) => !f.isImage).firstOrNull;
-          final isPaired = img != null &&
-              vid != null &&
-              img.mediaId != null &&
-              vid.mediaId != null &&
-              pairedImageIds.contains(img.mediaId) &&
-              pairedVideoAssets.contains(vid.mediaId);
-          if (img != null && vid != null && isPaired) {
+        for (final entry in entries) {
+          if (entry.isLive) {
             postItems.add({
               'type': 'live',
-              'url': img.filename,
-              'videoUrl': vid.filename,
+              'url': entry.image?.filename ?? '',
+              'videoUrl': entry.video?.filename,
             });
-          } else {
-            if (img != null) {
-              postItems.add({
-                'type': 'image',
-                'url': img.filename,
-              });
-            }
-            if (vid != null) {
-              postItems.add({
-                'type': 'video',
-                'url': vid.filename,
-                'videoUrl': vid.filename,
-              });
-            }
+          } else if (entry.image != null) {
+            postItems.add({
+              'type': 'image',
+              'url': entry.image!.filename,
+            });
+          } else if (entry.video != null) {
+            postItems.add({
+              'type': 'video',
+              'url': entry.video!.filename,
+              'videoUrl': entry.video!.filename,
+            });
           }
         }
         return jsonEncode(postItems);

@@ -132,3 +132,38 @@ int _itemIndexOf(HistoryFile image, HistoryFile video) {
   if (index >= 1) return index;
   return albumSequenceOf(image.filename) ?? albumSequenceOf(video.filename) ?? 0;
 }
+
+/// Whether the representative (cover) entry of [files] is a Live photo.
+/// Reuses the exact same pairing logic as the fullscreen viewer.
+bool isSavedMediaCoverLive(Iterable<HistoryFile> files) {
+  final entries = pairSavedMedia(files);
+  if (entries.isEmpty) return false;
+  return entries.first.isLive;
+}
+
+/// Backfill pairId for any paired Live entries in [files] that lack one.
+List<HistoryFile> ensureLivePairIds(String postId, List<HistoryFile> files) {
+  final entries = pairSavedMedia(files);
+  var changed = false;
+  final result = List<HistoryFile>.from(files);
+  for (final entry in entries) {
+    if (entry.isLive) {
+      final pairId = '$postId#${entry.itemIndex}';
+      if (entry.image != null && (entry.image!.pairId == null || entry.image!.pairId!.isEmpty)) {
+        final idx = result.indexOf(entry.image!);
+        if (idx >= 0) {
+          result[idx] = entry.image!.copyWith(pairId: pairId);
+          changed = true;
+        }
+      }
+      if (entry.video != null && (entry.video!.pairId == null || entry.video!.pairId!.isEmpty)) {
+        final idx = result.indexOf(entry.video!);
+        if (idx >= 0) {
+          result[idx] = entry.video!.copyWith(pairId: pairId);
+          changed = true;
+        }
+      }
+    }
+  }
+  return changed ? result : files;
+}
