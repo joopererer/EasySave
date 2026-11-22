@@ -9,6 +9,7 @@ import 'package:gal/gal.dart';
 
 import '../core/models.dart';
 import '../services/download_manager.dart';
+import '../services/download_status_display.dart';
 import '../services/network_status.dart';
 import '../services/saver.dart';
 import '../services/settings.dart';
@@ -128,6 +129,26 @@ class _DownloadSheetState extends State<DownloadSheet> {
         final waitingForNetwork =
             running &&
             (!NetworkStatus.instance.online || batch.waitingForNetwork);
+        final batchStatus = resolveDownloadStatus(
+          batch: batch,
+          waitingForNetwork: waitingForNetwork,
+        );
+        final String headlineText;
+        if (batchStatus.isStorageFull) {
+          headlineText = batchStatus.label;
+        } else if (batchStatus.isUserPaused) {
+          headlineText = '已暂停';
+        } else if (batchStatus.isWaitingNetwork || batchStatus.isInterrupted) {
+          headlineText = batchStatus.label;
+        } else if (batchStatus.isFinishing) {
+          headlineText = batchStatus.label;
+        } else if (running) {
+          headlineText = '正在保存 $doneCount/${batch.itemTotal}';
+        } else if (failed == 0) {
+          headlineText = '全部完成 ✓';
+        } else {
+          headlineText = '$failed 项失败';
+        }
         return SafeArea(
           child: Padding(
             padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
@@ -141,13 +162,7 @@ class _DownloadSheetState extends State<DownloadSheet> {
                     const SizedBox(width: 8),
                     Expanded(
                       child: Text(
-                        running
-                            ? waitingForNetwork
-                            ? '等待网络…联网后自动继续'
-                            : '正在保存 $doneCount/${batch.itemTotal}'
-                            : failed == 0
-                            ? '全部完成 ✓'
-                            : '$failed 项失败',
+                        headlineText,
                         style: const TextStyle(
                           fontSize: 16,
                           fontWeight: FontWeight.w600,
@@ -320,30 +335,22 @@ class _DownloadSheetState extends State<DownloadSheet> {
     DownloadJob job, {
     bool waitingForNetwork = false,
   }) {
-    switch (job.state) {
-      case JobState.queued:
-        return waitingForNetwork ? '等待网络…联网后自动继续' : '等待中';
-      case JobState.active:
-        if (waitingForNetwork) return '等待网络…联网后自动继续';
-        return job.progress > 0
-            ? '下载中 ${(job.progress * 100).round()}%'
-            : '下载中…';
-      case JobState.done:
-        return job.metadataNotice ?? '已完成';
-      case JobState.failed:
-        // The real budget of this file, not the per-candidate transfer limit:
-        // a still walks several candidates, so "已试 5/3" was showing a
-        // denominator the file never had.
-        final attempt = '（已试 ${job.attempts}/${retryCapFor(batch, job)}）';
-        return '失败$attempt：${job.error ?? '未知错误'}';
-      case JobState.canceled:
-        return '已取消';
-      case JobState.paused:
-        return '已暂停';
-      case JobState.waitingNetwork:
-        // A parked file: not a failure, not a spent attempt (v1.11 batch 3).
-        return '等待网络…联网后自动继续';
+    if (job.state == JobState.done) {
+      return job.metadataNotice ?? '已完成';
     }
+    if (job.state == JobState.canceled) {
+      return '已取消';
+    }
+    final status = resolveDownloadStatus(
+      batch: batch,
+      job: job,
+      waitingForNetwork: waitingForNetwork,
+    );
+    if (job.state == JobState.failed) {
+      final attempt = '（已试 ${job.attempts}/${retryCapFor(batch, job)}）';
+      return '失败$attempt：${job.error ?? '未知错误'}';
+    }
+    return status.label;
   }
 
   Future<void> _share(DownloadBatch batch) async {

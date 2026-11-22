@@ -26,6 +26,7 @@ import 'backup/local_auto_backup.dart';
 import 'backup/saf_service.dart';
 import 'dev_download_failure.dart';
 import 'download_failure_snapshots.dart';
+import 'download_status_display.dart';
 import 'gallery_locator_service.dart';
 import 'history_db.dart';
 import 'history_io.dart';
@@ -2050,11 +2051,13 @@ class DownloadManager extends ChangeNotifier {
       await _notifications.show(
         id: _notificationId(batch),
         title: downloadNotificationTitle(
+          batch: batch,
           done: done,
           total: batch.itemTotal,
           waitingForNetwork: waitingForNetwork,
         ),
         body: downloadNotificationBody(
+          batch: batch,
           percent: percent,
           waitingForNetwork: waitingForNetwork,
         ),
@@ -6702,17 +6705,41 @@ class DownloadManager extends ChangeNotifier {
 /// Offline the batch keeps waiting and continues by itself, so the title says
 /// that instead of "正在下载" (v1.11 batch 2). Display only.
 String downloadNotificationTitle({
+  DownloadBatch? batch,
   required int done,
   required int total,
   required bool waitingForNetwork,
-}) => waitingForNetwork ? '等待网络 $done/$total' : '正在下载 $done/$total';
+}) {
+  if (batch != null) {
+    final status = resolveDownloadStatus(batch: batch, waitingForNetwork: waitingForNetwork);
+    if (status.isStorageFull) return '空间不足 $done/$total';
+    if (status.isUserPaused) return '已暂停 $done/$total';
+    if (status.isWaitingNetwork) return '等待网络 $done/$total';
+    if (status.isFinishing) return '正在保存 $done/$total';
+  }
+  return waitingForNetwork ? '等待网络 $done/$total' : '正在下载 $done/$total';
+}
 
 /// Body of the single merged download notification (see
 /// [downloadNotificationTitle]).
 String downloadNotificationBody({
+  DownloadBatch? batch,
   required int percent,
   required bool waitingForNetwork,
-}) => waitingForNetwork ? '等待网络…联网后自动继续' : '$percent%';
+}) {
+  if (batch != null) {
+    final status = resolveDownloadStatus(
+      batch: batch,
+      waitingForNetwork: waitingForNetwork,
+      progress: percent / 100.0,
+    );
+    if (status.isStorageFull) return status.label;
+    if (status.isUserPaused) return '已暂停';
+    if (status.isWaitingNetwork) return '等待网络…联网后自动继续';
+    if (status.isFinishing) return status.label;
+  }
+  return waitingForNetwork ? '等待网络…联网后自动继续' : '$percent%';
+}
 
 /// One `item failed` log line: the fixed reason token, and the attempts of the
 /// file over the budget it actually has ([retryCapFor]) — never the

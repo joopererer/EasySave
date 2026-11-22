@@ -10,6 +10,7 @@ import 'package:photo_manager/photo_manager.dart';
 
 import '../core/models.dart';
 import '../pages/download_queue_page.dart';
+import '../services/download_status_display.dart';
 import '../services/gallery_locator_service.dart';
 import '../services/history_db.dart';
 import '../services/live_pairs.dart';
@@ -365,66 +366,24 @@ class DownloadingOverlay extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final pct = (progress.clamp(0.0, 1.0) * 100).round();
-    final isStorageFull = failureReason?.contains('空间不足') == true ||
-        failureReason?.contains('STORAGE_FULL') == true ||
-        statusText?.contains('空间不足') == true;
+    final status = resolveDownloadStatus(
+      progress: progress,
+      statusText: statusText,
+      failureReason: failureReason,
+      paused: paused,
+      userPaused: userPaused,
+      isFinishing: isFinishing,
+      savingPhase: savingPhase,
+      waitingForNetwork: waitingForNetwork,
+      stalled: stalled,
+      failed: failed,
+      partial: partial,
+    );
 
-    final String label;
-    if (isStorageFull) {
-      label = statusText ?? '空间不足';
-    } else if (paused) {
-      if (userPaused ?? true) {
-        label = '已暂停 $pct%';
-      } else if (!NetworkStatus.instance.online) {
-        label = '下载中断 · 等待网络';
-      } else {
-        label = '已中断，点继续';
-      }
-    } else if (isFinishing) {
-      label = savingPhase != null ? '正在保存到相册（$savingPhase）' : '正在保存到相册';
-    } else if (failed) {
-      final reason = failureReason?.isNotEmpty == true ? '（$failureReason）' : '';
-      label = partial ? '部分保存成功$reason' : '下载失败$reason';
-    } else if (statusText != null && statusText!.isNotEmpty) {
-      label = statusText!;
-    } else if (waitingForNetwork) {
-      label = '等待网络…联网后自动继续';
-    } else if (stalled) {
-      label = '已停滞';
-    } else {
-      label = '下载中';
-    }
-
-    final String narrowLabel;
-    if (isStorageFull) {
-      narrowLabel = '空间不足';
-    } else if (paused) {
-      if (userPaused ?? true) {
-        narrowLabel = '已暂停';
-      } else if (!NetworkStatus.instance.online) {
-        narrowLabel = '等网络';
-      } else {
-        narrowLabel = '已中断';
-      }
-    } else if (isFinishing) {
-      narrowLabel = '保存中';
-    } else if (failed) {
-      narrowLabel = '失败';
-    } else if (statusText != null && statusText!.isNotEmpty) {
-      if (statusText == '下载中断 · 等待网络') {
-        narrowLabel = '等网络';
-      } else if (statusText!.startsWith('自动重试')) {
-        narrowLabel = statusText!.replaceFirst('自动重试', '重试');
-      } else if (statusText == '已中断，点继续') {
-        narrowLabel = '已中断';
-      } else {
-        narrowLabel = statusText!;
-      }
-    } else if (waitingForNetwork) {
-      narrowLabel = '等网络';
-    } else {
-      narrowLabel = '';
-    }
+    final String label = status.label;
+    final String narrowLabel =
+        status.kind == DownloadStatusKind.downloading ? '' : status.shortLabel;
+    final isStorageFull = status.isStorageFull;
 
     return LayoutBuilder(
       builder: (context, constraints) {

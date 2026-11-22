@@ -9,8 +9,7 @@ import 'package:flutter/material.dart';
 
 import '../core/models.dart';
 import '../services/download_manager.dart';
-import '../services/network_status.dart';
-import '../services/storage_guard.dart';
+import '../services/download_status_display.dart';
 import '../theme/app_theme.dart';
 import '../widgets/shared.dart';
 
@@ -297,30 +296,8 @@ class _BatchCard extends StatelessWidget {
 
   String get _status {
     if (batch.isTerminal && batch.failedCount > 0) return '下载失败，点击重试';
-    final isStorageFull = batch.statusText?.contains('空间不足') == true ||
-        batch.jobs.any((j) => j.errorCode == storageFullCode || j.error?.contains('空间不足') == true);
-    if (isStorageFull) {
-      return batch.statusText ?? '空间不足';
-    }
-    if (batch.isPaused) {
-      if (batch.isUserPaused) return '已暂停';
-      if (!NetworkStatus.instance.online) return '下载中断 · 等待网络';
-      return batch.statusText ?? '已中断，点继续';
-    }
-    final finishing = batch.jobs.cast<DownloadJob?>().firstWhere(
-      (j) => j?.isFinishing == true,
-      orElse: () => null,
-    );
-    if (finishing != null) {
-      return finishing.savingPhase != null
-          ? '正在保存到相册（${finishing.savingPhase}）'
-          : '正在保存到相册';
-    }
-    if (!NetworkStatus.instance.online) return '下载中断 · 等待网络';
-    if (batch.statusText != null && batch.statusText!.isNotEmpty) {
-      return batch.statusText!;
-    }
-    return stalled ? '已停滞' : '下载中';
+    final status = resolveDownloadStatus(batch: batch, stalled: stalled);
+    return status.label;
   }
 
   @override
@@ -328,16 +305,11 @@ class _BatchCard extends StatelessWidget {
     final title = (batch.title?.isNotEmpty == true) ? batch.title! : '无标题';
     final pct = (batch.progress * 100).round();
     final items = batchItems(batch);
-    final paused = batch.isPaused;
-    final failed = batch.isTerminal && batch.failedCount > 0;
-    final isStorageFull = batch.statusText?.contains('空间不足') == true ||
-        batch.jobs.any((j) => j.errorCode == storageFullCode || j.error?.contains('空间不足') == true);
-    final toggleTip = isStorageFull
-        ? '清理后继续'
-        : (failed ? '重试' : paused ? '继续下载' : (stalled ? '重试' : '暂停下载'));
-    final toggleIcon = isStorageFull
-        ? Icons.refresh_rounded
-        : (paused ? Icons.play_arrow_rounded : (stalled || failed ? Icons.refresh : Icons.pause_rounded));
+    final status = resolveDownloadStatus(batch: batch, stalled: stalled);
+    final toggleTip = status.actionTip;
+    final toggleIcon = status.actionIcon;
+    final paused = status.isUserPaused || batch.isPaused;
+    final isStorageFull = status.isStorageFull;
     return Card(
       margin: EdgeInsets.zero,
       child: ExpansionTile(
@@ -444,26 +416,10 @@ class _JobTile extends StatelessWidget {
   final VoidCallback onRetry;
 
   String get _label {
-    if (job.isFinishing) {
-      return job.savingPhase != null
-          ? '正在保存到相册（${job.savingPhase}）'
-          : '正在保存到相册';
-    }
-    return switch (job.state) {
-      JobState.queued => job.error?.isNotEmpty == true
-          ? job.error!
-          : (!NetworkStatus.instance.online ? '下载中断 · 等待网络' : '排队中'),
-      JobState.active => '下载中 ${(job.progress.clamp(0.0, 1.0) * 100).round()}%',
-      JobState.done => '已保存',
-      JobState.failed => job.error ?? '失败',
-      JobState.canceled => '已取消',
-      JobState.paused => job.userPaused
-          ? '已暂停'
-          : (job.error?.isNotEmpty == true
-              ? job.error!
-              : (!NetworkStatus.instance.online ? '下载中断 · 等待网络' : '已中断，点继续')),
-      JobState.waitingNetwork => '下载中断 · 等待网络',
-    };
+    if (job.state == JobState.done) return '已保存';
+    if (job.state == JobState.canceled) return '已取消';
+    final status = resolveDownloadStatus(job: job);
+    return status.label;
   }
 
   @override

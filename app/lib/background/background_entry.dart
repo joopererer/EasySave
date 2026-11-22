@@ -15,6 +15,7 @@ import '../core/media_request.dart';
 import '../services/media_request_policy.dart';
 import '../services/site_registry.dart';
 import '../services/download_manager.dart';
+import '../services/download_status_display.dart';
 import '../services/download_claims.dart';
 import '../services/gallery_locator_service.dart';
 import '../services/history_db.dart';
@@ -803,16 +804,19 @@ Future<void> _awaitBatchAndNotify(
       // still and clip are one item and the batch only counts it once
       // (v1.11 build 58).
       final done = batch.itemDone;
-      final finishingJob = batch.jobs.cast<DownloadJob?>().firstWhere(
-        (j) => j?.isFinishing == true,
-        orElse: () => null,
-      );
-      final bubbleLabel = finishingJob != null
-          ? (finishingJob.savingPhase != null
-              ? '正在保存到相册（${finishingJob.savingPhase}）'
-              : '正在保存到相册')
-          : null;
-      if (done != lastDone || finishingJob != null) {
+      final status = resolveDownloadStatus(batch: batch);
+      final bubbleLabel = status.isStorageFull
+          ? status.shortLabel
+          : (status.isUserPaused
+              ? '已暂停'
+              : (status.isWaitingNetwork
+                  ? '等待网络'
+                  : (status.isFinishing
+                      ? status.label
+                      : (status.isInterrupted
+                          ? status.shortLabel
+                          : (status.isFailed ? '下载失败' : null)))));
+      if (done != lastDone || status.isFinishing || status.isStorageFull || status.isUserPaused) {
         lastDone = done;
         await _tile(channel, true, '$done/$total');
         await _bubble(channel, true, done, total, bubbleLabel, false);
