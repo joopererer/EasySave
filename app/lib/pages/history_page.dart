@@ -146,6 +146,9 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
   _PendingScroll? _pendingScroll;
   int _pendingFrames = 0;
 
+  /// Whether the floating "back to top" button is currently visible (v1.12.1 Item C).
+  bool _showScrollToTop = false;
+
   // Keys: posts view -> 'p{recordId}'; all view -> 'm{recordId}:{itemIndex}'.
   final Set<String> _selected = {};
 
@@ -526,9 +529,97 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
     // Every scroll is remembered at the key it belongs to, so switching away
     // and back always finds the place it was left at.
     created.addListener(() {
-      if (view == _view) _rememberScrollNow();
+      if (view == _view) {
+        _rememberScrollNow();
+        _updateScrollMetrics();
+      }
     });
     return created;
+  }
+
+  void _updateScrollMetrics() {
+    if (!mounted || !_activeAttached) return;
+    final controller = _activeController;
+    if (!controller.hasClients) return;
+    final offset = controller.offset;
+    final viewportHeight = controller.position.hasViewportDimension
+        ? controller.position.viewportDimension
+        : (context.mounted ? MediaQuery.sizeOf(context).height : 800.0);
+
+    // C1: Show when offset > 2.0 * viewportHeight, hide when offset <= 1.0 * viewportHeight
+    final shouldShow = _showScrollToTop
+        ? offset > viewportHeight
+        : offset > 2.0 * viewportHeight;
+
+    if (shouldShow != _showScrollToTop) {
+      setState(() {
+        _showScrollToTop = shouldShow;
+      });
+    }
+  }
+
+  Future<void> _scrollToTop() async {
+    if (!_activeAttached) return;
+    final controller = _activeController;
+    if (!controller.hasClients) return;
+    final offset = controller.offset;
+    if (offset <= 0) return;
+    final viewportHeight = controller.position.hasViewportDimension
+        ? controller.position.viewportDimension
+        : 800.0;
+
+    if (offset > 20 * viewportHeight) {
+      // C3: Very far (> 20 screens): fast jump near top, then smooth scroll
+      controller.jumpTo(2 * viewportHeight);
+      await controller.animateTo(
+        0.0,
+        duration: const Duration(milliseconds: 300),
+        curve: Curves.easeOutCubic,
+      );
+    } else {
+      // Smooth scroll to top, duration <= 500ms
+      final durationMs = (offset / (4 * viewportHeight) * 300).clamp(200, 450).toInt();
+      await controller.animateTo(
+        0.0,
+        duration: Duration(milliseconds: durationMs),
+        curve: Curves.easeOutCubic,
+      );
+    }
+  }
+
+  Widget _buildScrollToTopButton() {
+    return AnimatedOpacity(
+      opacity: _showScrollToTop ? 1.0 : 0.0,
+      duration: const Duration(milliseconds: 250),
+      curve: Curves.easeInOut,
+      child: IgnorePointer(
+        ignoring: !_showScrollToTop,
+        child: Material(
+          elevation: 4,
+          shape: const CircleBorder(),
+          color: Theme.of(context).colorScheme.surface,
+          shadowColor: Colors.black26,
+          child: Tooltip(
+            message: '返回顶部',
+            child: InkWell(
+              key: const ValueKey('history_scroll_to_top_button'),
+              customBorder: const CircleBorder(),
+              onTap: _scrollToTop,
+              child: const SizedBox(
+                width: 44,
+                height: 44,
+                child: Center(
+                  child: Icon(
+                    Icons.arrow_upward_rounded,
+                    size: 22,
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
   }
 
   bool get _activeAttached =>
@@ -606,6 +697,7 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
       _activeController.jumpTo(resolved);
     }
     _scrollMemory.remember(_positionKey, resolved);
+    _updateScrollMetrics();
   }
 
   /// Where the anchored card is now, or null when it is not built (yet).
@@ -1416,7 +1508,19 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
             _videoBackfillHintBanner(),
             if (!_selectionMode) _viewSwitcher(),
             if (_searchOpen && !_selectionMode) _searchField(),
-            Expanded(child: _body()),
+            Expanded(
+              child: Stack(
+                children: [
+                  Positioned.fill(child: _body()),
+                  if (!_selectionMode)
+                    Positioned(
+                      right: 16,
+                      bottom: 20,
+                      child: _buildScrollToTopButton(),
+                    ),
+                ],
+              ),
+            ),
           ],
         ),
         bottomNavigationBar: _selectionMode ? _selectionBottomBar() : null,

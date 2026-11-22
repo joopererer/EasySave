@@ -425,43 +425,64 @@ class HistoryRebuildService {
       }
 
       // Build history files
-      final rawFiles = <HistoryFile>[];
+      final files = <HistoryFile>[];
       for (final awx in resolvedAssets) {
         final savedAtTime = awx.provenance.capturedAt ?? awx.asset.createDateTime;
-        rawFiles.add(HistoryFile(
+        final isPaired = (awx.asset.type == AssetType.image && pairedImageIds.contains(awx.asset.id)) ||
+            (awx.asset.type == AssetType.video && pairedVideoAssets.contains(awx.asset.id));
+        final pairId = isPaired
+            ? (awx.provenance.pairId ?? '$sourceId#${awx.provenance.itemIndex ?? 1}')
+            : awx.provenance.pairId;
+        files.add(HistoryFile(
           filename: awx.asset.title ?? '',
           savedAt: savedAtTime.millisecondsSinceEpoch,
           mediaId: isFixedFileReference(awx.asset.id) ? null : awx.asset.id,
           itemIndex: awx.provenance.itemIndex ?? 1,
+          pairId: pairId,
           isImage: awx.asset.type == AssetType.image,
           assetId: awx.provenance.assetId,
           relativePath: await locator.getRelativePath(awx.asset),
           status: isFixedFileReference(awx.asset.id) ? FileStatus.unknown : FileStatus.found,
         ));
       }
-      final files = ensureLivePairIds(sourceId, rawFiles);
 
       String generateItemsJson(List<HistoryFile> postFiles) {
-        final entries = pairSavedMedia(postFiles);
+        final byIndex = <int, List<HistoryFile>>{};
+        for (final f in postFiles) {
+          byIndex.putIfAbsent(f.itemIndex, () => []).add(f);
+        }
+        final sortedIndices = byIndex.keys.toList()..sort();
         final postItems = <Map<String, Object?>>[];
-        for (final entry in entries) {
-          if (entry.isLive) {
+        for (final idx in sortedIndices) {
+          final group = byIndex[idx]!;
+          final img = group.where((f) => f.isImage).firstOrNull;
+          final vid = group.where((f) => !f.isImage).firstOrNull;
+          final isPaired = img != null &&
+              vid != null &&
+              img.mediaId != null &&
+              vid.mediaId != null &&
+              pairedImageIds.contains(img.mediaId) &&
+              pairedVideoAssets.contains(vid.mediaId);
+          if (img != null && vid != null && isPaired) {
             postItems.add({
               'type': 'live',
-              'url': entry.image?.filename ?? '',
-              'videoUrl': entry.video?.filename,
+              'url': img.filename,
+              'videoUrl': vid.filename,
             });
-          } else if (entry.image != null) {
-            postItems.add({
-              'type': 'image',
-              'url': entry.image!.filename,
-            });
-          } else if (entry.video != null) {
-            postItems.add({
-              'type': 'video',
-              'url': entry.video!.filename,
-              'videoUrl': entry.video!.filename,
-            });
+          } else {
+            if (img != null) {
+              postItems.add({
+                'type': 'image',
+                'url': img.filename,
+              });
+            }
+            if (vid != null) {
+              postItems.add({
+                'type': 'video',
+                'url': vid.filename,
+                'videoUrl': vid.filename,
+              });
+            }
           }
         }
         return jsonEncode(postItems);
