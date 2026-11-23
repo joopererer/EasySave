@@ -75,18 +75,26 @@ class TransferSchedulerTest {
         }
     }
 
+    class TestNetworkChecker(var isValidated: Boolean = true) : NetworkCapabilityChecker {
+        override fun isDefaultNetworkValidated(): Boolean = isValidated
+    }
+
     @Before
     fun setUp() {
         context = RuntimeEnvironment.getApplication()
         context.deleteDatabase("test_transfer.db")
         store = TransferStore(context, "test_transfer.db")
         testScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        FakeWorkerRegistry.reset()
+        TransferNetworkMonitor.resetCounts()
     }
 
     @After
     fun tearDown() {
         store.close()
         context.deleteDatabase("test_transfer.db")
+        FakeWorkerRegistry.reset()
+        TransferNetworkMonitor.resetCounts()
     }
 
     private suspend fun pollUntil(
@@ -178,11 +186,11 @@ class TransferSchedulerTest {
         }
 
         // 验证特定核心非法转移分类
-        assertFalse(JobState.canTransition(JobState.RUNNING, JobState.QUEUED)) // running 不能直转 queued
-        assertFalse(JobState.canTransition(JobState.QUEUED, JobState.DONE)) // queued 不能直转 done
-        assertFalse(JobState.canTransition(JobState.DONE, JobState.QUEUED)) // 终态不能转 queued
-        assertFalse(JobState.canTransition(JobState.FAILED, JobState.RUNNING)) // 终态不能转 running
-        assertFalse(JobState.canTransition(JobState.CANCELED, JobState.QUEUED)) // 终态不能转 queued
+        assertFalse(JobState.canTransition(JobState.RUNNING, JobState.QUEUED))
+        assertFalse(JobState.canTransition(JobState.QUEUED, JobState.DONE))
+        assertFalse(JobState.canTransition(JobState.DONE, JobState.QUEUED))
+        assertFalse(JobState.canTransition(JobState.FAILED, JobState.RUNNING))
+        assertFalse(JobState.canTransition(JobState.CANCELED, JobState.QUEUED))
         assertTrue("Expected dozens of illegal combinations rejected", illegalCount > 50)
     }
 
@@ -192,6 +200,7 @@ class TransferSchedulerTest {
         val clock = TestTransferClock()
         val scheduler = TransferScheduler(
             store = store,
+            workerFactory = { job -> FakeWorker() },
             scope = testScope,
             clock = clock,
         )
@@ -200,7 +209,6 @@ class TransferSchedulerTest {
         val handledList = CopyOnWriteArrayList<Int>()
         val allDone = CompletableDeferred<Unit>()
 
-        // 10 个并发协程投递
         val coroutineCount = 10
         val perCoroutine = totalEvents / coroutineCount
 
@@ -220,16 +228,14 @@ class TransferSchedulerTest {
 
         allDone.await()
 
-        // 验证处理了 1000 个事件
         assertEquals(totalEvents, handledList.size)
-        // 验证任何时刻只有一个处理者
         assertEquals(1, scheduler.maxObservedConcurrency)
         assertEquals(0, scheduler.activeProcessors.get())
 
         scheduler.shutdown()
     }
 
-    // 3. 并发上限：图片 3、大文件 1
+    // 3. 并发上限：图片 3、大文件 1（经过工厂路径）
     @Test
     fun testConcurrencyLimit_images3_largeFiles1() = runBlocking {
         val activeImages = AtomicInteger(0)
@@ -239,82 +245,63 @@ class TransferSchedulerTest {
 
         val gates = (1..8).associateWith { CompletableDeferred<Unit>() }
 
-        val worker = object : TransferWorker {
-            override suspend fun execute(
-                job: TransferJob,
-                onProgress: suspend (bytesRead: Long, totalBytes: Long) -> Unit
-            ): WorkerResult {
-                val index = job.jobId.filter { it.isDigit() }.toInt()
-                if (job.category == JobCategory.IMAGE) {
+        for (i in 1..8) {
+            val isImg = i <= 5
+            val jobId = if (isImg) "img$i" else "large$i"
+            FakeWorkerRegistry.registerCustomPlan(jobId) { job, _ ->
+                if (isImg) {
                     val curr = activeImages.incrementAndGet()
-                    synchronized(maxImages) {
-                        if (curr > maxImages.get()) maxImages.set(curr)
-                    }
+                    synchronized(maxImages) { if (curr > maxImages.get()) maxImages.set(curr) }
                 } else {
                     val curr = activeLargeFiles.incrementAndGet()
-                    synchronized(maxLargeFiles) {
-                        if (curr > maxLargeFiles.get()) maxLargeFiles.set(curr)
-                    }
+                    synchronized(maxLargeFiles) { if (curr > maxLargeFiles.get()) maxLargeFiles.set(curr) }
                 }
 
-                // 等待控制闸门放行
-                gates[index]?.await()
+                runBlocking {
+                    gates[i]?.await()
+                }
 
-                if (job.category == JobCategory.IMAGE) {
+                if (isImg) {
                     activeImages.decrementAndGet()
                 } else {
                     activeLargeFiles.decrementAndGet()
                 }
-                return WorkerResult.Success()
+                FakeWorker.FakePlan(WorkerResult.Success())
             }
         }
 
         val clock = TestTransferClock()
         val scheduler = TransferScheduler(
             store = store,
-            workerFactory = { worker },
+            workerFactory = { job -> FakeWorker() }, // 严格使用工厂路径
             scope = testScope,
             clock = clock,
         )
 
-        // 入队 5 张图片（img1..img5）与 3 个大文件（large6..large8）
         for (i in 1..5) {
-            scheduler.send(
-                SchedulerEvent.Enqueue(
-                    TransferJob(jobId = "img$i", category = JobCategory.IMAGE)
-                )
-            )
+            scheduler.send(SchedulerEvent.Enqueue(TransferJob(jobId = "img$i", category = JobCategory.IMAGE)))
         }
         for (i in 6..8) {
-            scheduler.send(
-                SchedulerEvent.Enqueue(
-                    TransferJob(jobId = "large$i", category = JobCategory.LARGE_FILE)
-                )
-            )
+            scheduler.send(SchedulerEvent.Enqueue(TransferJob(jobId = "large$i", category = JobCategory.LARGE_FILE)))
         }
 
-        // 轮询等待调度分发
         pollUntil { activeImages.get() == 3 && activeLargeFiles.get() == 1 }
 
-        // 验证并发上限：图片 3，大文件 1
         assertEquals(3, activeImages.get())
         assertEquals(1, activeLargeFiles.get())
         assertEquals(3, maxImages.get())
         assertEquals(1, maxLargeFiles.get())
 
-        // 放行 1 张图片，后续图片应该补入，图片最大并发仍不超过 3
         gates[1]?.complete(Unit)
         pollUntil { scheduler.jobs["img1"]?.state == JobState.DONE }
         pollUntil { activeImages.get() == 3 }
         assertEquals(3, maxImages.get())
 
-        // 放行 1 个大文件，后续大文件补入，大文件最大并发仍不超过 1
         gates[6]?.complete(Unit)
         pollUntil { scheduler.jobs["large6"]?.state == JobState.DONE }
         pollUntil { activeLargeFiles.get() == 1 }
         assertEquals(1, maxLargeFiles.get())
 
-        // 全部放行
         for (i in 1..8) {
             gates[i]?.complete(Unit)
         }
@@ -328,31 +315,18 @@ class TransferSchedulerTest {
         scheduler.shutdown()
     }
 
-    // 4. 重试：网络错误不计次；其他错误的间隔序列为 5/15/30/60/120 且第 6 次进 interrupted（用可注入时钟，不真等）
+    // 4. 重试：网络错误在无网络时不计次进 waiting_network；其他错误按 5/15/30/60/120 秒重试 5 次，第 6 次进 interrupted
     @Test
     fun testRetry_networkErrorDoesNotIncrementCount_andOtherErrorsIntervalSequence() = runBlocking {
         val clock = TestTransferClock()
+        val networkChecker = TestNetworkChecker(isValidated = false) // 模拟断网
 
-        // 4.1 网络错误测试
-        val netJob = TransferJob(jobId = "net_job", category = JobCategory.IMAGE)
-        val netWorker = object : TransferWorker {
-            var calls = 0
-            override suspend fun execute(
-                job: TransferJob,
-                onProgress: suspend (bytesRead: Long, totalBytes: Long) -> Unit
-            ): WorkerResult {
-                calls++
-                return if (calls == 1) {
-                    WorkerResult.NetworkError("simulated_disconnect")
-                } else {
-                    WorkerResult.Success()
-                }
-            }
-        }
+        val netJob = TransferJob(jobId = "net_job", category = JobCategory.IMAGE, fakePlan = "network_once")
 
         var scheduler = TransferScheduler(
             store = store,
-            workerFactory = { netWorker },
+            workerFactory = { job -> FakeWorker() }, // 严格使用工厂路径
+            networkChecker = networkChecker,
             scope = testScope,
             clock = clock,
         )
@@ -360,15 +334,14 @@ class TransferSchedulerTest {
         scheduler.send(SchedulerEvent.Enqueue(netJob))
         pollUntil { scheduler.jobs["net_job"]?.state == JobState.WAITING_NETWORK }
 
-        // 验证网络错误不计重试次数
         assertEquals(JobState.WAITING_NETWORK, scheduler.jobs["net_job"]?.state)
         assertEquals(0, scheduler.jobs["net_job"]?.retryCount)
 
-        // 模拟网络恢复，并验证稳定 3 秒后重新排队
-        scheduler.send(SchedulerEvent.NetworkChanged(true))
+        // 模拟网络恢复为可用
+        networkChecker.isValidated = true
+        scheduler.send(SchedulerEvent.NetworkChanged(isAvailable = true, wasOffline = true))
         pollUntil { clock.scheduledTasks.any { !it.isCancelled && it.delayMs == 3000L } }
 
-        // 推进 3000ms 时钟
         clock.advanceTimeBy(3000L)
         pollUntil { scheduler.jobs["net_job"]?.state == JobState.DONE }
         assertEquals(JobState.DONE, scheduler.jobs["net_job"]?.state)
@@ -376,19 +349,12 @@ class TransferSchedulerTest {
         scheduler.shutdown()
 
         // 4.2 其他错误按 5/15/30/60/120 秒重试 5 次，第 6 次进 interrupted
-        val otherJob = TransferJob(jobId = "other_job", category = JobCategory.IMAGE)
-        val failWorker = object : TransferWorker {
-            override suspend fun execute(
-                job: TransferJob,
-                onProgress: suspend (bytesRead: Long, totalBytes: Long) -> Unit
-            ): WorkerResult {
-                return WorkerResult.OtherError("http_500")
-            }
-        }
+        val otherJob = TransferJob(jobId = "other_job", category = JobCategory.IMAGE, fakePlan = "other_always")
 
         scheduler = TransferScheduler(
             store = store,
-            workerFactory = { failWorker },
+            workerFactory = { job -> FakeWorker() }, // 工厂路径
+            networkChecker = TestNetworkChecker(isValidated = true),
             scope = testScope,
             clock = clock,
         )
@@ -401,7 +367,6 @@ class TransferSchedulerTest {
             val expectedDelay = expectedDelays[i]
             val expectedAttempt = i + 1
 
-            // 轮询直到产生了对应的定时重试任务
             pollUntil {
                 clock.scheduledTasks.any { !it.isCancelled && it.delayMs == expectedDelay }
             }
@@ -409,11 +374,9 @@ class TransferSchedulerTest {
             assertEquals(expectedAttempt, scheduler.jobs["other_job"]?.retryCount)
             assertEquals(JobState.RUNNING, scheduler.jobs["other_job"]?.state)
 
-            // 虚拟时钟推进
             clock.advanceTimeBy(expectedDelay)
         }
 
-        // 第 6 次失败（5 次重试耗尽），进 interrupted
         pollUntil { scheduler.jobs["other_job"]?.state == JobState.INTERRUPTED }
         assertEquals(JobState.INTERRUPTED, scheduler.jobs["other_job"]?.state)
         assertEquals(5, scheduler.jobs["other_job"]?.retryCount)
@@ -424,7 +387,6 @@ class TransferSchedulerTest {
     // 5. 恢复：Store 里有 running 任务时重建服务，任务回到 queued 并能完成
     @Test
     fun testRecovery_runningJobsRestoredToQueuedAndCompleted() = runBlocking {
-        // 在 Store 中预置 running 任务（模拟进程被杀）
         val killedJob = TransferJob(
             jobId = "killed_job_1",
             state = JobState.RUNNING,
@@ -438,15 +400,13 @@ class TransferSchedulerTest {
         val clock = TestTransferClock()
         val scheduler = TransferScheduler(
             store = store,
-            workerFactory = { FakeWorker() },
+            workerFactory = { job -> FakeWorker() },
             scope = testScope,
             clock = clock,
         )
 
-        // 触发服务重建恢复逻辑
         scheduler.send(SchedulerEvent.RestoreFromStore)
 
-        // 轮询验证恢复为 queued 并最终执行到 DONE
         pollUntil { scheduler.jobs["killed_job_1"]?.state == JobState.DONE }
         assertEquals(JobState.DONE, store.getJob("killed_job_1")?.state)
 
@@ -457,20 +417,15 @@ class TransferSchedulerTest {
     @Test
     fun testOnTimeout_allRunningJobsTransitionToInterruptedWithReasonFgsTimeout() = runBlocking {
         val gate = CompletableDeferred<Unit>()
-        val blockingWorker = object : TransferWorker {
-            override suspend fun execute(
-                job: TransferJob,
-                onProgress: suspend (bytesRead: Long, totalBytes: Long) -> Unit
-            ): WorkerResult {
-                gate.await()
-                return WorkerResult.Success()
-            }
+        FakeWorkerRegistry.registerCustomPlan("timeout_job") { _, _ ->
+            runBlocking { gate.await() }
+            FakeWorker.FakePlan(WorkerResult.Success())
         }
 
         val clock = TestTransferClock()
         val scheduler = TransferScheduler(
             store = store,
-            workerFactory = { blockingWorker },
+            workerFactory = { job -> FakeWorker() },
             scope = testScope,
             clock = clock,
         )
@@ -480,7 +435,6 @@ class TransferSchedulerTest {
 
         pollUntil { scheduler.jobs["timeout_job"]?.state == JobState.RUNNING }
 
-        // 触发 onTimeout
         scheduler.onTimeout("fgs_timeout")
 
         pollUntil { scheduler.jobs["timeout_job"]?.state == JobState.INTERRUPTED }
@@ -495,29 +449,20 @@ class TransferSchedulerTest {
     @Test
     fun testPauseResume_sameJobIdNotRecreated() = runBlocking {
         val resumeGate = CompletableDeferred<Unit>()
-        val controllableWorker = object : TransferWorker {
-            var runCount = 0
-            override suspend fun execute(
-                job: TransferJob,
-                onProgress: suspend (bytesRead: Long, totalBytes: Long) -> Unit
-            ): WorkerResult {
-                runCount++
-                if (runCount == 1) {
-                    // 第一次挂起等待暂停
-                    delay(5000L)
-                    return WorkerResult.Success()
-                } else {
-                    // 继续后等待闸门放行完成
-                    resumeGate.await()
-                    return WorkerResult.Success()
-                }
+        FakeWorkerRegistry.registerCustomPlan("pause_resume_job_888") { _, attempt ->
+            if (attempt == 0) {
+                runBlocking { delay(5000L) }
+                FakeWorker.FakePlan(WorkerResult.Success())
+            } else {
+                runBlocking { resumeGate.await() }
+                FakeWorker.FakePlan(WorkerResult.Success())
             }
         }
 
         val clock = TestTransferClock()
         val scheduler = TransferScheduler(
             store = store,
-            workerFactory = { controllableWorker },
+            workerFactory = { job -> FakeWorker() },
             scope = testScope,
             clock = clock,
         )
@@ -527,26 +472,221 @@ class TransferSchedulerTest {
 
         pollUntil { scheduler.jobs[targetJobId]?.state == JobState.RUNNING }
 
-        // 暂停任务
         scheduler.send(SchedulerEvent.Pause(targetJobId))
         pollUntil { scheduler.jobs[targetJobId]?.state == JobState.PAUSED }
         assertEquals(JobState.PAUSED, store.getJob(targetJobId)?.state)
 
-        // 继续同一任务
         scheduler.send(SchedulerEvent.Resume(targetJobId))
         pollUntil { scheduler.jobs[targetJobId]?.state == JobState.RUNNING }
 
-        // 放行完成
         resumeGate.complete(Unit)
         pollUntil { scheduler.jobs[targetJobId]?.state == JobState.DONE }
         assertEquals(JobState.DONE, store.getJob(targetJobId)?.state)
 
-        // 验证 Store 中自始至终只有一个任务，jobId 一致，没有新建任务
         val allStored = store.getAllJobs()
         assertEquals(1, allStored.size)
         assertEquals(targetJobId, allStored.first().jobId)
 
         scheduler.shutdown()
     }
-}
 
+    // --- P0-1b 新增单元测试 ---
+
+    // 8. 新增测试：网络可用时的网络错误计次并退避，不进 waiting_network
+    @Test
+    fun testNetworkErrorWhileValidated_incrementsRetryAndBackoff_doesNotEnterWaitingNetwork() = runBlocking {
+        val clock = TestTransferClock()
+        val networkChecker = TestNetworkChecker(isValidated = true) // 网络已验证可用
+
+        val scheduler = TransferScheduler(
+            store = store,
+            workerFactory = { job -> FakeWorker() },
+            networkChecker = networkChecker,
+            scope = testScope,
+            clock = clock,
+        )
+
+        val job = TransferJob(jobId = "validated_net_err_job", category = JobCategory.IMAGE, fakePlan = "network_always")
+        scheduler.send(SchedulerEvent.Enqueue(job))
+
+        // 轮询直到产生了重试定时器（首轮 5000ms）
+        pollUntil { clock.scheduledTasks.any { !it.isCancelled && it.delayMs == 5000L } }
+
+        val currentJob = scheduler.jobs["validated_net_err_job"]
+        assertNotNull(currentJob)
+        // 验证没有进入 waiting_network，而是按其他错误处理
+        assertEquals(JobState.RUNNING, currentJob?.state)
+        assertEquals(1, currentJob?.retryCount)
+
+        scheduler.shutdown()
+    }
+
+    // 9. 新增测试：网络回调从可用到可用不唤醒，从不可用到可用才唤醒
+    @Test
+    fun testNetworkCallback_availableToAvailableDoesNotWake_offlineAvailableWakes() = runBlocking {
+        val clock = TestTransferClock()
+        val networkChecker = TestNetworkChecker(isValidated = true) // 初始可用
+
+        val scheduler = TransferScheduler(
+            store = store,
+            workerFactory = { job -> FakeWorker() },
+            networkChecker = networkChecker,
+            scope = testScope,
+            clock = clock,
+        )
+
+        val monitor = TransferNetworkMonitor(context, scheduler, networkChecker)
+        monitor.start()
+
+        // 验证初始状态 wasOffline 为 false
+        assertFalse(monitor.wasOffline)
+
+        // 模拟一个处于 WAITING_NETWORK 的任务
+        val waitJob = TransferJob(jobId = "waiting_job", state = JobState.WAITING_NETWORK, category = JobCategory.IMAGE)
+        store.insertOrReplace(waitJob)
+        scheduler.jobs["waiting_job"] = waitJob
+
+        // 网络变动但仍可用（可用到可用）：不应调度 3 秒唤醒
+        monitor.checkAndDispatch()
+        assertFalse(clock.scheduledTasks.any { it.delayMs == 3000L })
+        assertEquals(JobState.WAITING_NETWORK, scheduler.jobs["waiting_job"]?.state)
+
+        // 网络变为不可用
+        networkChecker.isValidated = false
+        monitor.checkAndDispatch()
+        assertTrue(monitor.wasOffline)
+
+        // 网络从不可用变为可用：必须调度 3 秒稳定唤醒
+        networkChecker.isValidated = true
+        monitor.checkAndDispatch()
+        pollUntil { clock.scheduledTasks.any { !it.isCancelled && it.delayMs == 3000L } }
+
+        // 推进 3 秒时钟，任务成功被唤醒回到 QUEUED 并执行至 DONE
+        clock.advanceTimeBy(3000L)
+        pollUntil { scheduler.jobs["waiting_job"]?.state == JobState.DONE }
+        assertEquals(JobState.DONE, scheduler.jobs["waiting_job"]?.state)
+
+        monitor.stop()
+        scheduler.shutdown()
+    }
+
+    // 10. 新增测试：回调只注册一次
+    @Test
+    fun testNetworkCallback_registeredOnlyOnce() {
+        val clock = TestTransferClock()
+        val scheduler = TransferScheduler(store = store, scope = testScope, clock = clock)
+        val monitor = TransferNetworkMonitor(context, scheduler, TestNetworkChecker())
+
+        assertEquals(0, TransferNetworkMonitor.totalRegisterCount.get())
+        monitor.start()
+        assertEquals(1, TransferNetworkMonitor.totalRegisterCount.get())
+
+        // 重复调用 start 不会再次注册
+        monitor.start()
+        assertEquals(1, TransferNetworkMonitor.totalRegisterCount.get())
+
+        monitor.stop()
+        assertEquals(1, TransferNetworkMonitor.totalUnregisterCount.get())
+
+        monitor.stop()
+        assertEquals(1, TransferNetworkMonitor.totalUnregisterCount.get())
+
+        scheduler.shutdown()
+    }
+
+    // 11. 新增测试：重复 jobId 入队被拒绝
+    @Test
+    fun testDuplicateEnqueue_rejectedAndLogged() = runBlocking {
+        val clock = TestTransferClock()
+        val scheduler = TransferScheduler(
+            store = store,
+            workerFactory = { job -> FakeWorker() },
+            scope = testScope,
+            clock = clock,
+        )
+
+        val gate = CompletableDeferred<Unit>()
+        FakeWorkerRegistry.registerCustomPlan("dup_job_1") { _, _ ->
+            runBlocking { gate.await() }
+            FakeWorker.FakePlan(WorkerResult.Success())
+        }
+
+        val job = TransferJob(jobId = "dup_job_1", category = JobCategory.IMAGE, batchId = "batch_original")
+        scheduler.send(SchedulerEvent.Enqueue(job))
+        pollUntil { scheduler.jobs["dup_job_1"]?.state == JobState.RUNNING }
+
+        // 重复入队同一未终态任务
+        val duplicateJob = TransferJob(jobId = "dup_job_1", category = JobCategory.LARGE_FILE, batchId = "batch_tampered")
+        scheduler.send(SchedulerEvent.Enqueue(duplicateJob))
+
+        // 验证任务没有被篡改覆盖
+        assertEquals("batch_original", scheduler.jobs["dup_job_1"]?.batchId)
+        assertEquals(JobCategory.IMAGE, scheduler.jobs["dup_job_1"]?.category)
+
+        gate.complete(Unit)
+        pollUntil { scheduler.jobs["dup_job_1"]?.state == JobState.DONE }
+
+        scheduler.shutdown()
+    }
+
+    // 12. 新增测试：通过工厂路径跑自检三场景，全部到 done
+    @Test
+    fun testSelfCheckThreeScenarios_viaWorkerFactory_allReachDone() = runBlocking {
+        val clock = TestTransferClock()
+        val networkChecker = TestNetworkChecker(isValidated = false) // 初始断网以触发网络错误进 waiting_network
+
+        val scheduler = TransferScheduler(
+            store = store,
+            workerFactory = { job -> FakeWorker() }, // 纯工厂路径，每次调用均为新建实例
+            networkChecker = networkChecker,
+            scope = testScope,
+            clock = clock,
+        )
+
+        val ts = "p0_1b_test"
+        val job1Id = "job1_ok_$ts"
+        val job2Id = "job2_net_$ts"
+        val job3Id = "job3_ret_$ts"
+
+        scheduler.send(SchedulerEvent.Enqueue(TransferJob(jobId = job1Id, category = JobCategory.IMAGE, fakePlan = "success")))
+        scheduler.send(SchedulerEvent.Enqueue(TransferJob(jobId = job2Id, category = JobCategory.IMAGE, fakePlan = "network_once")))
+        scheduler.send(SchedulerEvent.Enqueue(TransferJob(jobId = job3Id, category = JobCategory.LARGE_FILE, fakePlan = "other_twice")))
+
+        // 任务 1 直接成功
+        pollUntil { scheduler.jobs[job1Id]?.state == JobState.DONE }
+        assertEquals(JobState.DONE, scheduler.jobs[job1Id]?.state)
+
+        // 任务 2 首次报网络错误进入 waiting_network
+        pollUntil { scheduler.jobs[job2Id]?.state == JobState.WAITING_NETWORK }
+        assertEquals(JobState.WAITING_NETWORK, scheduler.jobs[job2Id]?.state)
+
+        // 任务 3 大文件执行中，第 1 次失败，调度 5s 重试
+        pollUntil { clock.scheduledTasks.any { !it.isCancelled && it.delayMs == 5000L } }
+        clock.advanceTimeBy(5000L)
+
+        // 任务 3 第 2 次失败，调度 15s 重试
+        pollUntil { clock.scheduledTasks.any { !it.isCancelled && it.delayMs == 15000L } }
+        clock.advanceTimeBy(15000L)
+
+        // 任务 3 第 3 次成功完成
+        pollUntil { scheduler.jobs[job3Id]?.state == JobState.DONE }
+        assertEquals(JobState.DONE, scheduler.jobs[job3Id]?.state)
+
+        // 此时网络恢复并稳定 3 秒，唤醒任务 2
+        networkChecker.isValidated = true
+        scheduler.send(SchedulerEvent.NetworkChanged(isAvailable = true, wasOffline = true))
+        pollUntil { clock.scheduledTasks.any { !it.isCancelled && it.delayMs == 3000L } }
+        clock.advanceTimeBy(3000L)
+
+        // 任务 2 第二次运行通过工厂重建 FakeWorker，由于计数保存在注册表，成功完成
+        pollUntil { scheduler.jobs[job2Id]?.state == JobState.DONE }
+        assertEquals(JobState.DONE, scheduler.jobs[job2Id]?.state)
+
+        // 验证 3 个任务全部到达 DONE 终态
+        assertEquals(JobState.DONE, scheduler.jobs[job1Id]?.state)
+        assertEquals(JobState.DONE, scheduler.jobs[job2Id]?.state)
+        assertEquals(JobState.DONE, scheduler.jobs[job3Id]?.state)
+
+        scheduler.shutdown()
+    }
+}

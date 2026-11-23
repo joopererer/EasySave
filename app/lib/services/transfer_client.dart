@@ -174,5 +174,10 @@ class TransferClient {
     final res = await _methodChannel.invokeMethod<bool>('simulateNetwork', {'isAvailable': isAvailable});
     return res ?? false;
   }
+
+  Future<bool> clearSelfCheckJobs() async {
+    final res = await _methodChannel.invokeMethod<bool>('clearSelfCheckJobs');
+    return res ?? false;
+  }
 }
 

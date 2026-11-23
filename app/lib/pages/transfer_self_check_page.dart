@@ -85,14 +85,14 @@ class _TransferSelfCheckPageState extends State<TransferSelfCheckPage> {
       _logs.add('[XFER] ====== 开始传输服务骨架自检 ======');
     });
 
-    final ts = DateTime.now().millisecondsSinceEpoch;
+    final ts = DateTime.now().millisecondsSinceEpoch.toRadixString(36);
 
     // 1. 任务 1：成功（图片类）
-    _job1Id = 'job1_success_$ts';
+    _job1Id = 'job1_ok_$ts';
     // 2. 任务 2：先网络错误后成功（图片类）
-    _job2Id = 'job2_neterr_$ts';
+    _job2Id = 'job2_net_$ts';
     // 3. 任务 3：其他错误 2 次后成功（大文件类）
-    _job3Id = 'job3_retry2_$ts';
+    _job3Id = 'job3_ret_$ts';
 
     await _client.enqueue(
       jobId: _job1Id,
@@ -117,6 +117,19 @@ class _TransferSelfCheckPageState extends State<TransferSelfCheckPage> {
       batchId: 'self_check_batch',
       fakePlan: 'other_twice',
     );
+  }
+
+  Future<void> _clearSelfCheckJobs() async {
+    await _client.clearSelfCheckJobs();
+    setState(() {
+      _isRunning = false;
+      _isFinished = false;
+      _logs.clear();
+      _completedJobs.clear();
+      _job1Id = null;
+      _job2Id = null;
+      _job3Id = null;
+    });
   }
 
   @override
@@ -161,6 +174,13 @@ class _TransferSelfCheckPageState extends State<TransferSelfCheckPage> {
                               )
                             : const Icon(Icons.play_arrow),
                         label: Text(_isRunning ? '自检运行中...' : '开始自检'),
+                      ),
+                      const SizedBox(width: 8),
+                      OutlinedButton.icon(
+                        key: const Key('clear_self_check_button'),
+                        onPressed: _isRunning ? null : _clearSelfCheckJobs,
+                        icon: const Icon(Icons.delete_outline),
+                        label: const Text('清空自检任务'),
                       ),
                       const SizedBox(width: 12),
                       if (_isFinished)

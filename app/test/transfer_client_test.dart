@@ -21,6 +21,7 @@ void main() {
         case 'cancel':
         case 'retry':
         case 'simulateNetwork':
+        case 'clearSelfCheckJobs':
           return true;
         case 'snapshot':
           return [
@@ -77,11 +78,13 @@ void main() {
     expect(await client.resume('job_1'), isTrue);
     expect(await client.cancel('job_1'), isTrue);
     expect(await client.retry('job_1'), isTrue);
+    expect(await client.clearSelfCheckJobs(), isTrue);
 
-    expect(calls.map((c) => c.method).toList(), ['pause', 'resume', 'cancel', 'retry']);
-    for (final call in calls) {
+    expect(calls.map((c) => c.method).toList(), ['pause', 'resume', 'cancel', 'retry', 'clearSelfCheckJobs']);
+    for (final call in calls.take(4)) {
       expect((call.arguments as Map)['jobId'], 'job_1');
     }
+    expect(calls.last.arguments, isNull);
   });
 
   test('TransferClient snapshot parses list of TransferJobSnapshot', () async {

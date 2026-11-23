@@ -210,6 +210,16 @@ class TransferStore(context: Context, dbName: String = DB_NAME) :
     }
 
     @Synchronized
+    fun deleteJob(jobId: String): Int {
+        return writableDatabase.delete(TABLE_JOBS, "$COL_JOB_ID = ?", arrayOf(jobId))
+    }
+
+    @Synchronized
+    fun deleteJobsByBatch(batchId: String): Int {
+        return writableDatabase.delete(TABLE_JOBS, "$COL_BATCH_ID = ?", arrayOf(batchId))
+    }
+
+    @Synchronized
     fun clearAll() {
         writableDatabase.delete(TABLE_JOBS, null, null)
     }

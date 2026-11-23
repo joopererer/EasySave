@@ -49,16 +49,23 @@ class TransferService : Service() {
         @Volatile
         private var sharedScheduler: TransferScheduler? = null
 
+        @Volatile
+        var sharedNetworkChecker: AndroidNetworkCapabilityChecker? = null
+
         @Synchronized
         fun getOrCreateScheduler(context: Context): TransferScheduler {
             sharedScheduler?.let { return it }
             val appContext = context.applicationContext
             val store = TransferStore(appContext)
             val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+            val networkChecker = AndroidNetworkCapabilityChecker(appContext).also {
+                sharedNetworkChecker = it
+            }
             val scheduler = TransferScheduler(
                 store = store,
                 workerFactory = { job -> FakeWorker() },
                 scope = scope,
+                networkChecker = networkChecker,
                 eventListener = { event ->
                     TransferChannels.broadcastEvent(event)
                 },
@@ -90,11 +97,20 @@ class TransferService : Service() {
     private var isForegroundStarted = false
 
     lateinit var scheduler: TransferScheduler
+    private var networkMonitor: TransferNetworkMonitor? = null
 
     override fun onCreate() {
         super.onCreate()
         instance = this
         scheduler = getOrCreateScheduler(this)
+
+        val checker = sharedNetworkChecker ?: AndroidNetworkCapabilityChecker(applicationContext).also {
+            sharedNetworkChecker = it
+        }
+        networkMonitor = TransferNetworkMonitor(this, scheduler, checker).apply {
+            start()
+        }
+
         createNotificationChannel()
         startForegroundNotification()
         TransferLog.i("TransferService created")
@@ -164,7 +180,8 @@ class TransferService : Service() {
                 if (idleRunnable == null) {
                     TransferLog.i("No active transfer tasks, 60s idle countdown started")
                     val runnable = Runnable {
-                        TransferLog.i("60s idle timeout reached without active tasks → stopSelf")
+                        TransferLog.i("idle stop: 60s idle timeout reached without active tasks → stopSelf")
+                        MainThreadLagMonitor.stop()
                         stopForeground(STOP_FOREGROUND_REMOVE)
                         stopSelf()
                     }
@@ -189,15 +206,18 @@ class TransferService : Service() {
         super.onTimeout(startId, fgsType)
         TransferLog.w("onTimeout reached for dataSync service (startId=$startId, fgsType=$fgsType). Transitioning all running jobs to interrupted with reason fgs_timeout.")
         scheduler.onTimeout("fgs_timeout")
+        MainThreadLagMonitor.stop()
         stopSelf()
     }
 
     override fun onDestroy() {
-        TransferLog.i("TransferService destroyed")
+        TransferLog.i("TransferService destroying")
+        networkMonitor?.stop()
+        networkMonitor = null
+        MainThreadLagMonitor.stop()
         idleRunnable?.let { mainHandler.removeCallbacks(it) }
         serviceScope.cancel()
         instance = null
         super.onDestroy()
     }
 }
-

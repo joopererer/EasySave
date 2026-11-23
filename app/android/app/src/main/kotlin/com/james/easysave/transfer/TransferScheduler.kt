@@ -5,11 +5,13 @@ import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicInteger
 
 /**
@@ -54,7 +56,7 @@ sealed class SchedulerEvent {
     data class Resume(val jobId: String) : SchedulerEvent()
     data class Cancel(val jobId: String) : SchedulerEvent()
     data class Retry(val jobId: String) : SchedulerEvent()
-    data class NetworkChanged(val isAvailable: Boolean) : SchedulerEvent()
+    data class NetworkChanged(val isAvailable: Boolean, val wasOffline: Boolean = true) : SchedulerEvent()
     object NetworkStabilized : SchedulerEvent()
     data class WorkerResultEvent(val jobId: String, val result: WorkerResult) : SchedulerEvent()
     data class WorkerProgressEvent(val jobId: String, val bytesRead: Long, val totalBytes: Long) : SchedulerEvent()
@@ -62,6 +64,7 @@ sealed class SchedulerEvent {
     object RestoreFromStore : SchedulerEvent()
     data class ServiceTimeout(val reason: String = "fgs_timeout") : SchedulerEvent()
     data class GetSnapshot(val callback: (List<TransferJob>) -> Unit) : SchedulerEvent()
+    data class ClearJobsByBatch(val batchId: String, val callback: () -> Unit) : SchedulerEvent()
     data class CustomEvent(val id: Int, val onHandled: (Int) -> Unit) : SchedulerEvent()
 }
 
@@ -74,20 +77,31 @@ sealed class SchedulerEvent {
  * 3. 避免依赖 Android 系统的 HandlerThread/Looper，使得所有业务逻辑与重试时序可在 JVM 单元测试中秒级快速运行；
  * 4. 易于与协程取消、超时、虚拟时钟协同。
  *
+ * 线程要求：
+ * - actor 运行在专用单线程（例如 Executors.newSingleThreadExecutor().asCoroutineDispatcher()）；
+ * - Worker 运行在 Dispatchers.IO，均不得占用主线程。
+ *
  * 并发上限：
  * - 图片类（IMAGE）：3
  * - 大文件类（LARGE_FILE）：1
  *
- * 重试策略：
- * - 网络错误 → waiting_network，不计次数；网络恢复且稳定 3 秒后重新排队；
- * - 其他错误 → 5/15/30/60/120 秒重试 5 次，用完进 interrupted；
- * - 空间不足 → storage_full。
+ * 重试策略（2026-11-23 修订）：
+ * - Worker 报网络错误时，先查当前默认网络是否有 NET_CAPABILITY_VALIDATED：
+ *   * 无可用网络：进入 waiting_network，不计次；
+ *   * 网络可用：按「其他错误」处理，计次，按 5/15/30/60/120 秒退避，用完转 interrupted；
+ * - waiting_network 的任务只在网络从「无可用」变为「可用并稳定 3 秒」时重新排队；初次注册时系统立即回调的 onAvailable 若之前并没有断网，不算恢复；
+ * - 其他错误：按 5/15/30/60/120 秒重试 5 次，用完进 interrupted；
+ * - 空间不足：storage_full。
  */
 class TransferScheduler(
     val store: TransferStore,
     val workerFactory: (TransferJob) -> TransferWorker = { FakeWorker() },
     val scope: CoroutineScope,
     clock: TransferClock? = null,
+    actorDispatcher: CoroutineDispatcher? = null,
+    val networkChecker: NetworkCapabilityChecker = object : NetworkCapabilityChecker {
+        override fun isDefaultNetworkValidated(): Boolean = true
+    },
     val eventListener: ((TransferEvent) -> Unit)? = null,
     val onIdleChanged: ((isIdle: Boolean) -> Unit)? = null,
 ) {
@@ -100,6 +114,11 @@ class TransferScheduler(
     }
 
     val clock: TransferClock = clock ?: CoroutineTransferClock(scope)
+
+    private val defaultActorExecutor = Executors.newSingleThreadExecutor { r ->
+        Thread(r, "Xfer-Actor-Thread").apply { isDaemon = true }
+    }
+    val actorDispatcher: CoroutineDispatcher = actorDispatcher ?: defaultActorExecutor.asCoroutineDispatcher()
 
     private val channel = Channel<SchedulerEvent>(Channel.UNLIMITED)
 
@@ -126,7 +145,7 @@ class TransferScheduler(
     }
 
     private fun startActor() {
-        actorJob = scope.launch {
+        actorJob = scope.launch(actorDispatcher) {
             for (event in channel) {
                 val current = activeProcessors.incrementAndGet()
                 if (current > maxObservedConcurrency) {
@@ -158,7 +177,7 @@ class TransferScheduler(
             is SchedulerEvent.Resume -> handleResume(event.jobId)
             is SchedulerEvent.Cancel -> handleCancel(event.jobId)
             is SchedulerEvent.Retry -> handleRetry(event.jobId)
-            is SchedulerEvent.NetworkChanged -> handleNetworkChanged(event.isAvailable)
+            is SchedulerEvent.NetworkChanged -> handleNetworkChanged(event.isAvailable, event.wasOffline)
             is SchedulerEvent.NetworkStabilized -> handleNetworkStabilized()
             is SchedulerEvent.WorkerResultEvent -> handleWorkerResult(event.jobId, event.result)
             is SchedulerEvent.WorkerProgressEvent -> handleWorkerProgress(event.jobId, event.bytesRead, event.totalBytes)
@@ -166,6 +185,7 @@ class TransferScheduler(
             is SchedulerEvent.RestoreFromStore -> handleRestoreFromStore()
             is SchedulerEvent.ServiceTimeout -> handleServiceTimeout(event.reason)
             is SchedulerEvent.GetSnapshot -> event.callback(jobs.values.map { it.copy() })
+            is SchedulerEvent.ClearJobsByBatch -> handleClearJobsByBatch(event.batchId, event.callback)
             is SchedulerEvent.CustomEvent -> event.onHandled(event.id)
         }
     }
@@ -173,11 +193,11 @@ class TransferScheduler(
     private fun handleEnqueue(newJob: TransferJob) {
         val existing = jobs[newJob.jobId]
         if (existing != null) {
-            if (existing.state.isTerminal) {
-                // 已终态的任务不重新入队，除非显式 retry
+            if (!existing.state.isTerminal) {
+                TransferLog.w("job=${TransferLog.shortId(newJob.jobId)} duplicate_enqueue state=${existing.state.value} rejected")
                 return
             }
-            // 任务已存在且在进行中，忽略重复 enqueue
+            // 已终态的任务，忽略重复入队
             return
         }
 
@@ -244,7 +264,6 @@ class TransferScheduler(
         val job = jobs[jobId] ?: return
         val fromState = job.state
         if (fromState == JobState.INTERRUPTED || fromState == JobState.STORAGE_FULL || fromState == JobState.FAILED) {
-            // 重置重试次数
             job.retryCount = 0
             val targetState = JobState.QUEUED
             if (JobState.validateAndLog(jobId, fromState, targetState, "user_retry", 0)) {
@@ -257,14 +276,19 @@ class TransferScheduler(
         }
     }
 
-    private fun handleNetworkChanged(isAvailable: Boolean) {
+    private fun handleNetworkChanged(isAvailable: Boolean, wasOffline: Boolean) {
         if (!isAvailable) {
             networkStabilizeTimer?.cancel()
             networkStabilizeTimer = null
             TransferLog.i("network disconnected")
         } else {
+            if (!wasOffline) {
+                // 初次注册或未断网时的可用事件，不算恢复
+                TransferLog.i("network available but not recovered from offline -> ignore")
+                return
+            }
             networkStabilizeTimer?.cancel()
-            TransferLog.i("network connected, waiting 3s stabilization")
+            TransferLog.i("network connected after offline, waiting 3s stabilization")
             networkStabilizeTimer = clock.schedule(NETWORK_STABILIZATION_MS) {
                 send(SchedulerEvent.NetworkStabilized)
             }
@@ -300,7 +324,6 @@ class TransferScheduler(
 
         when (result) {
             is WorkerResult.Success -> {
-                // finishing → done
                 if (JobState.validateAndLog(jobId, JobState.RUNNING, JobState.FINISHING, "transfer_complete", job.retryCount)) {
                     job.state = JobState.FINISHING
                     job.updatedAt = clock.currentTimeMillis()
@@ -316,16 +339,22 @@ class TransferScheduler(
                 }
             }
             is WorkerResult.NetworkError -> {
-                // 网络类错误 → waiting_network，不计次数
-                if (JobState.validateAndLog(jobId, JobState.RUNNING, JobState.WAITING_NETWORK, "network_error", job.retryCount)) {
-                    job.state = JobState.WAITING_NETWORK
-                    job.updatedAt = clock.currentTimeMillis()
-                    store.updateJobState(jobId, JobState.WAITING_NETWORK, job.retryCount, job.updatedAt)
-                    emitStateChange(jobId, JobState.RUNNING, JobState.WAITING_NETWORK, "network_error", job.retryCount)
+                // 查 ConnectivityManager 当前默认网络是否有 NET_CAPABILITY_VALIDATED
+                val isValidated = networkChecker.isDefaultNetworkValidated()
+                if (!isValidated) {
+                    // 无可用网络：进入 waiting_network，不计次数
+                    if (JobState.validateAndLog(jobId, JobState.RUNNING, JobState.WAITING_NETWORK, "network_error", job.retryCount)) {
+                        job.state = JobState.WAITING_NETWORK
+                        job.updatedAt = clock.currentTimeMillis()
+                        store.updateJobState(jobId, JobState.WAITING_NETWORK, job.retryCount, job.updatedAt)
+                        emitStateChange(jobId, JobState.RUNNING, JobState.WAITING_NETWORK, "network_error", job.retryCount)
+                    }
+                } else {
+                    // 网络可用但出现网络类错误：按「其他错误」处理，计次，退避
+                    handleOtherError(jobId, job, "network_error_while_validated")
                 }
             }
             is WorkerResult.StorageFull -> {
-                // 空间不足 → storage_full
                 if (JobState.validateAndLog(jobId, JobState.RUNNING, JobState.STORAGE_FULL, "storage_full", job.retryCount)) {
                     job.state = JobState.STORAGE_FULL
                     job.updatedAt = clock.currentTimeMillis()
@@ -334,33 +363,36 @@ class TransferScheduler(
                 }
             }
             is WorkerResult.OtherError -> {
-                // 其他错误按 5/15/30/60/120 秒重试，共 5 次，第 6 次用完进 interrupted
-                if (job.retryCount < MAX_RETRIES) {
-                    val delayMs = RETRY_DELAYS_MS[job.retryCount]
-                    val attempt = job.retryCount + 1
-                    job.retryCount = attempt
-                    job.updatedAt = clock.currentTimeMillis()
-                    store.updateJobState(jobId, job.state, job.retryCount, job.updatedAt)
-
-                    TransferLog.i("job=${TransferLog.shortId(jobId)} scheduled retry #$attempt in ${delayMs / 1000}s")
-
-                    val timer = clock.schedule(delayMs) {
-                        send(SchedulerEvent.RetryTimerFired(jobId, attempt))
-                    }
-                    pendingTimers[jobId] = timer
-                } else {
-                    // 第 6 次错误（5 次重试耗尽），进 interrupted
-                    if (JobState.validateAndLog(jobId, JobState.RUNNING, JobState.INTERRUPTED, "max_retries_exceeded", job.retryCount)) {
-                        job.state = JobState.INTERRUPTED
-                        job.updatedAt = clock.currentTimeMillis()
-                        store.updateJobState(jobId, JobState.INTERRUPTED, job.retryCount, job.updatedAt)
-                        emitStateChange(jobId, JobState.RUNNING, JobState.INTERRUPTED, "max_retries_exceeded", job.retryCount)
-                    }
-                }
+                handleOtherError(jobId, job, result.error)
             }
         }
 
         dispatchNext()
+    }
+
+    private fun handleOtherError(jobId: String, job: TransferJob, reason: String) {
+        if (job.retryCount < MAX_RETRIES) {
+            val delayMs = RETRY_DELAYS_MS[job.retryCount]
+            val attempt = job.retryCount + 1
+            job.retryCount = attempt
+            job.updatedAt = clock.currentTimeMillis()
+            store.updateJobState(jobId, job.state, job.retryCount, job.updatedAt)
+
+            TransferLog.i("job=${TransferLog.shortId(jobId)} scheduled retry #$attempt in ${delayMs / 1000}s (reason: $reason)")
+
+            val timer = clock.schedule(delayMs) {
+                send(SchedulerEvent.RetryTimerFired(jobId, attempt))
+            }
+            pendingTimers[jobId] = timer
+        } else {
+            // 第 6 次失败（5 次重试耗尽），进 interrupted
+            if (JobState.validateAndLog(jobId, JobState.RUNNING, JobState.INTERRUPTED, "max_retries_exceeded", job.retryCount)) {
+                job.state = JobState.INTERRUPTED
+                job.updatedAt = clock.currentTimeMillis()
+                store.updateJobState(jobId, JobState.INTERRUPTED, job.retryCount, job.updatedAt)
+                emitStateChange(jobId, JobState.RUNNING, JobState.INTERRUPTED, "max_retries_exceeded", job.retryCount)
+            }
+        }
     }
 
     private fun handleWorkerProgress(jobId: String, bytesRead: Long, totalBytes: Long) {
@@ -393,13 +425,11 @@ class TransferScheduler(
 
     private fun handleServiceTimeout(reason: String) {
         TransferLog.i("Service timeout: $reason. Stopping all running jobs → interrupted")
-        // 取消所有 Worker
         for ((jobId, workerJob) in runningWorkers) {
             workerJob.cancel(CancellationException("fgs_timeout"))
         }
         runningWorkers.clear()
 
-        // 取消所有重试定时器
         for ((_, timer) in pendingTimers) {
             timer.cancel()
         }
@@ -415,6 +445,20 @@ class TransferScheduler(
                 }
             }
         }
+    }
+
+    private fun handleClearJobsByBatch(batchId: String, callback: () -> Unit) {
+        val targets = jobs.values.filter { it.batchId == batchId }
+        for (job in targets) {
+            cancelWorker(job.jobId)
+            pendingTimers.remove(job.jobId)?.cancel()
+            jobs.remove(job.jobId)
+            FakeWorkerRegistry.reset(job.jobId)
+        }
+        store.deleteJobsByBatch(batchId)
+        TransferLog.i("cleared ${targets.size} jobs for batch=$batchId")
+        dispatchNext()
+        callback()
     }
 
     fun dispatchNext() {
@@ -451,7 +495,6 @@ class TransferScheduler(
             }
         }
 
-        // 检查活跃任务数（queued / running / waiting_network / finishing）
         val activeCount = jobs.values.count {
             it.state == JobState.QUEUED ||
                 it.state == JobState.RUNNING ||
@@ -463,14 +506,14 @@ class TransferScheduler(
 
     private fun launchWorker(job: TransferJob) {
         val worker = workerFactory(job)
-        val workerJob = scope.launch {
+        // 保证 Worker 运行在 Dispatchers.IO，不占用主线程与 actor 线程
+        val workerJob = scope.launch(Dispatchers.IO) {
             try {
                 val result = worker.execute(job) { bytesRead, totalBytes ->
                     send(SchedulerEvent.WorkerProgressEvent(job.jobId, bytesRead, totalBytes))
                 }
                 send(SchedulerEvent.WorkerResultEvent(job.jobId, result))
             } catch (ce: CancellationException) {
-                // 停止写入，不删除任何文件
                 TransferLog.i("job=${TransferLog.shortId(job.jobId)} worker cancelled")
             } catch (t: Throwable) {
                 send(SchedulerEvent.WorkerResultEvent(job.jobId, WorkerResult.OtherError(t.message ?: "unknown_error")))
@@ -503,6 +546,6 @@ class TransferScheduler(
         }
         pendingTimers.clear()
         networkStabilizeTimer?.cancel()
+        defaultActorExecutor.shutdown()
     }
 }
-

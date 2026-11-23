@@ -24,6 +24,43 @@ interface TransferWorker {
 }
 
 /**
+ * FakeWorker 场景与运行计数注册表（服务生命周期单例）。
+ *
+ * 解决真机上每次创建新 Worker 实例导致运行计数被重置的问题。
+ * 计数按 jobId 绑定在服务生命周期内，不随 Worker 实例销毁与重建丢失。
+ */
+object FakeWorkerRegistry {
+    private val attemptCounters = ConcurrentHashMap<String, AtomicInteger>()
+    private val customPlans = ConcurrentHashMap<String, (job: TransferJob, attempt: Int) -> FakeWorker.FakePlan?>()
+
+    fun getAttempt(jobId: String): Int {
+        return attemptCounters.computeIfAbsent(jobId) { AtomicInteger(0) }.getAndIncrement()
+    }
+
+    fun peekAttempt(jobId: String): Int {
+        return attemptCounters[jobId]?.get() ?: 0
+    }
+
+    fun registerCustomPlan(jobId: String, planProvider: (job: TransferJob, attempt: Int) -> FakeWorker.FakePlan?) {
+        customPlans[jobId] = planProvider
+    }
+
+    fun getCustomPlan(job: TransferJob, attempt: Int): FakeWorker.FakePlan? {
+        return customPlans[job.jobId]?.invoke(job, attempt)
+    }
+
+    fun reset(jobId: String? = null) {
+        if (jobId != null) {
+            attemptCounters.remove(jobId)
+            customPlans.remove(jobId)
+        } else {
+            attemptCounters.clear()
+            customPlans.clear()
+        }
+    }
+}
+
+/**
  * 假 Worker 实现，支持可配置的成功/网络错误/其他错误/空间不足/多次进度上报。
  */
 class FakeWorker(
@@ -35,24 +72,21 @@ class FakeWorker(
 
     data class FakePlan(
         val result: WorkerResult,
-        val progressReports: List<Pair<Long, Long>> = listOf(512 * 1024L to 1024 * 1024L, 1024 * 1024L to 1024 * 1024L),
+        val progressReports: List<Pair<Long, Long>> = listOf(
+            512 * 1024L to 1024 * 1024L,
+            1024 * 1024L to 1024 * 1024L
+        ),
     )
-
-    private val attemptCounters = ConcurrentHashMap<String, AtomicInteger>()
-
-    fun resetAttempts() {
-        attemptCounters.clear()
-    }
 
     override suspend fun execute(
         job: TransferJob,
         onProgress: suspend (bytesRead: Long, totalBytes: Long) -> Unit,
     ): WorkerResult {
-        val counter = attemptCounters.computeIfAbsent(job.jobId) { AtomicInteger(0) }
-        val attempt = counter.getAndIncrement()
+        // 从单例注册表中获取累加运行次数，确保跨 Worker 实例重建不被重置
+        val attempt = FakeWorkerRegistry.getAttempt(job.jobId)
 
-        // 1. 自定义计划优先
-        val customPlan = customPlanProvider?.invoke(job, attempt)
+        // 1. 优先查实例级或注册表级自定义计划
+        val customPlan = customPlanProvider?.invoke(job, attempt) ?: FakeWorkerRegistry.getCustomPlan(job, attempt)
         if (customPlan != null) {
             for (p in customPlan.progressReports) {
                 onProgress(p.first, p.second)
@@ -104,4 +138,3 @@ class FakeWorker(
         }
     }
 }
-

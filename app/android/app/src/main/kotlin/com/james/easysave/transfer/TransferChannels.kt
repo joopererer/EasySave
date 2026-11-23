@@ -7,6 +7,9 @@ import io.flutter.plugin.common.BinaryMessenger
 import io.flutter.plugin.common.EventChannel
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import java.util.UUID
 import java.util.concurrent.CopyOnWriteArrayList
 
@@ -22,6 +25,7 @@ object TransferChannels {
 
     private val mainHandler = Handler(Looper.getMainLooper())
     private val eventSinks = CopyOnWriteArrayList<EventChannel.EventSink>()
+    private val channelScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
     fun register(context: Context, messenger: BinaryMessenger) {
         val appContext = context.applicationContext
@@ -40,7 +44,6 @@ object TransferChannels {
             }
 
             override fun onCancel(arguments: Any?) {
-                // EventChannel can have only 1 active sink per channel instance
                 eventSinks.clear()
             }
         })
@@ -57,6 +60,10 @@ object TransferChannels {
                 val category = JobCategory.fromValue(args["category"] as? String ?: "image")
                 val batchId = args["batchId"] as? String
                 val fakePlan = args["fakePlan"] as? String
+
+                if (batchId == "self_check_batch") {
+                    MainThreadLagMonitor.start(channelScope)
+                }
 
                 val job = TransferJob(
                     jobId = jobId,
@@ -121,10 +128,19 @@ object TransferChannels {
                     }
                 })
             }
+            "clearSelfCheckJobs" -> {
+                scheduler.send(SchedulerEvent.ClearJobsByBatch("self_check_batch") {
+                    MainThreadLagMonitor.stop()
+                    mainHandler.post {
+                        result.success(true)
+                    }
+                })
+            }
             "simulateNetwork" -> {
                 val args = call.arguments as? Map<*, *> ?: emptyMap<String, Any?>()
                 val isAvailable = args["isAvailable"] as? Boolean ?: true
-                scheduler.send(SchedulerEvent.NetworkChanged(isAvailable))
+                TransferService.sharedNetworkChecker?.simulatedValidated = isAvailable
+                scheduler.send(SchedulerEvent.NetworkChanged(isAvailable = isAvailable, wasOffline = true))
                 result.success(true)
             }
             else -> result.notImplemented()
@@ -147,4 +163,3 @@ object TransferChannels {
         }
     }
 }
-
