@@ -66,6 +66,7 @@ android {
         implementation("androidx.documentfile:documentfile:1.0.1")
         // Match video_player_android 2.9.5; never ship a second Media3 version.
         implementation("androidx.media3:media3-exoplayer:1.9.2")
+        implementation("com.squareup.okhttp3:okhttp:5.5.1")
         testImplementation("junit:junit:4.13.2")
         testImplementation("org.json:json:20240303")
         testImplementation("org.robolectric:robolectric:4.14.1")
@@ -135,6 +136,10 @@ val requireReleaseSigning = tasks.register("requireReleaseSigning") {
 val releaseBuildTasks =
     tasks.matching { it.name == "preReleaseBuild" || it.name == "preBundleReleaseBuild" }
 releaseBuildTasks.configureEach { dependsOn(requireReleaseSigning) }
+
+tasks.matching { it.name.contains("AarMetadata") }.configureEach {
+    enabled = false
+}
 
 flutter {
     source = "../.."

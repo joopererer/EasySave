@@ -66,6 +66,11 @@
             android:name=".HostService"
             android:exported="false"
             android:foregroundServiceType="dataSync"/>
+        <!-- v1.13: unified background transfer service (阶段 0). -->
+        <service
+            android:name=".transfer.TransferService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync"/>
         <!-- v1.6: Quick Settings tile. -->
         <service
             android:name=".EasySaveTileService"

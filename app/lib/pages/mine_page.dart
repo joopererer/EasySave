@@ -24,6 +24,7 @@ import '../services/update_service.dart';
 import 'backup_restore_page.dart';
 import 'failure_log_page.dart';
 import 'login_page.dart';
+import 'transfer_self_check_page.dart';
 
 class MinePage extends StatefulWidget {
   const MinePage({super.key, this.xhsSessionProbe = probeXhsSessions});
@@ -1141,6 +1142,19 @@ class _MinePageState extends State<MinePage> with WidgetsBindingObserver {
                     onChanged: (on) async {
                       setState(() => _settings.manualResumeOnlyOnDisconnect = on);
                       await _saveSettings();
+                    },
+                  ),
+                  ListTile(
+                    key: const Key('transfer_service_self_check'),
+                    title: const Text('传输服务自检'),
+                    subtitle: const Text('入队 3 个 FakeWorker 任务并实时查看 [XFER] 转移日志'),
+                    trailing: const Icon(Icons.chevron_right),
+                    onTap: () {
+                      Navigator.of(context).push(
+                        MaterialPageRoute(
+                          builder: (_) => const TransferSelfCheckPage(),
+                        ),
+                      );
                     },
                   ),
                 ],

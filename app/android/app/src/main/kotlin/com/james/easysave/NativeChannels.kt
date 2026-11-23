@@ -1,6 +1,7 @@
 package com.james.easysave
 
 import android.content.Context
+import com.james.easysave.transfer.TransferChannels
 import io.flutter.plugin.common.BinaryMessenger
 
 /**
@@ -39,5 +40,6 @@ internal object NativeChannels {
         SharedPreviewBridge.register(context, messenger, background = background)
         ProvenancePairWriter.register(context, messenger)
         DownloadControl.register(messenger)
+        TransferChannels.register(context, messenger)
     }
 }
