@@ -12,6 +12,7 @@
 
 import 'package:flutter/foundation.dart';
 
+import '../core/dev_log.dart';
 import 'gallery_locator_service.dart';
 import 'history_db.dart';
 import 'live_pairs.dart';
@@ -78,51 +79,62 @@ Future<ItemDeletionOutcome> deleteHistoryItem(
 }) async {
   final id = record.id;
   if (id == null) return ItemDeletionOutcome(ok: false);
-  final rows = historyRowsForItem(record, itemIndex);
-  if (rows.isEmpty) return ItemDeletionOutcome(ok: false);
 
-  MediaDeleteOutcome? album;
-  String? problem;
-  if (deleteAlbumFiles) {
-    final refs = deletableRefs(rows);
-    if (refs.isEmpty) {
-      // A row the album never located cannot be deleted by id: say so instead
-      // of pretending the file went away.
-      problem = '相册中未找到这个文件，已仅删除记录';
-    } else {
-      final call =
-          deleteMedia ?? MediaDeleteService.instance.deleteMedia;
-      album = await call(refs);
-      if (!album.deletedAll) {
-        problem = '${album.problem ?? '相册文件未删除'}，已仅删除记录';
+  return HistoryDb.withPostLock(id, () async {
+    final rows = historyRowsForItem(record, itemIndex);
+    if (rows.isEmpty) return ItemDeletionOutcome(ok: false);
+
+    MediaDeleteOutcome? album;
+    String? problem;
+    if (deleteAlbumFiles) {
+      final refs = deletableRefs(rows);
+      if (refs.isEmpty) {
+        // A row the album never located cannot be deleted by id: say so instead
+        // of pretending the file went away.
+        problem = '相册中未找到这个文件，已仅删除记录';
+      } else {
+        final call =
+            deleteMedia ?? MediaDeleteService.instance.deleteMedia;
+        album = await call(refs);
+        if (!album.deletedAll) {
+          problem = '${album.problem ?? '相册文件未删除'}，已仅删除记录';
+        }
       }
     }
-  }
 
-  final before = record.files;
-  final target = rows.map((r) => '${r.itemIndex}_${r.isImage}').toSet();
-  final after = [
-    for (final file in before)
-      target.contains('${file.itemIndex}_${file.isImage}') &&
-              isVisibleHistoryFile(file)
-          ? file.copyWith(status: FileStatus.deleted)
-          : file,
-  ];
+    final before = record.files;
+    final target = rows.map((r) => '${r.itemIndex}_${r.isImage}').toSet();
+    final after = [
+      for (final file in before)
+        target.contains('${file.itemIndex}_${file.isImage}') &&
+                isVisibleHistoryFile(file)
+            ? file.copyWith(status: FileStatus.deleted)
+            : file,
+    ];
 
-  final db = database ?? await HistoryDb.instance();
-  await db.updateFiles(id, after, source: 'viewer-item-delete');
+    final db = database ?? await HistoryDb.instance();
+    await db.updateFiles(id, after, source: 'viewer-item-delete');
 
-  return ItemDeletionOutcome(
-    ok: true,
-    before: before,
-    after: after,
-    albumOutcome: album,
-    problem: problem,
-    visibleRemaining: pairSavedMedia(
-      after.where(isVisibleHistoryFile),
-    ).length,
-    deleteAlbumFiles: deleteAlbumFiles,
-  );
+    final liveCount = pairSavedMedia(rows).where((e) => e.isLive).length;
+    final deletedFiles = album != null ? (album.requested - album.remaining) : 0;
+    final failedFiles = album != null ? album.remaining : 0;
+    DevLog.write(
+      'HIST',
+      'viewer-delete post=${record.postId} selectedItems=1 files=${rows.length} live=$liveCount deletedFiles=$deletedFiles failedFiles=$failedFiles',
+    );
+
+    return ItemDeletionOutcome(
+      ok: true,
+      before: before,
+      after: after,
+      albumOutcome: album,
+      problem: problem,
+      visibleRemaining: pairSavedMedia(
+        after.where(isVisibleHistoryFile),
+      ).length,
+      deleteAlbumFiles: deleteAlbumFiles,
+    );
+  });
 }
 
 /// Outcome of deleting multiple history items from the viewer.
@@ -165,51 +177,61 @@ Future<BatchItemDeletionOutcome> deleteHistoryItems(
     return const BatchItemDeletionOutcome(ok: false);
   }
 
-  final allRows = <HistoryFile>[];
-  for (final idx in itemIndices) {
-    allRows.addAll(historyRowsForItem(record, idx));
-  }
-  if (allRows.isEmpty) return const BatchItemDeletionOutcome(ok: false);
+  return HistoryDb.withPostLock(id, () async {
+    final allRows = <HistoryFile>[];
+    for (final idx in itemIndices) {
+      allRows.addAll(historyRowsForItem(record, idx));
+    }
+    if (allRows.isEmpty) return const BatchItemDeletionOutcome(ok: false);
 
-  MediaDeleteOutcome? album;
-  String? problem;
-  if (deleteAlbumFiles) {
-    final refs = deletableRefs(allRows);
-    if (refs.isNotEmpty) {
-      final call = deleteMedia ?? MediaDeleteService.instance.deleteMedia;
-      album = await call(refs);
-      if (!album.approved) {
-        // User cancelled system deletion dialog
-        return const BatchItemDeletionOutcome(ok: false, cancelled: true);
-      }
-      if (!album.deletedAll) {
-        problem = album.problem ?? '部分相册文件未删除';
+    MediaDeleteOutcome? album;
+    String? problem;
+    if (deleteAlbumFiles) {
+      final refs = deletableRefs(allRows);
+      if (refs.isNotEmpty) {
+        final call = deleteMedia ?? MediaDeleteService.instance.deleteMedia;
+        album = await call(refs);
+        if (!album.approved) {
+          // User cancelled system deletion dialog
+          return const BatchItemDeletionOutcome(ok: false, cancelled: true);
+        }
+        if (!album.deletedAll) {
+          problem = album.problem ?? '部分相册文件未删除';
+        }
       }
     }
-  }
 
-  final before = record.files;
-  final target = allRows.map((r) => '${r.itemIndex}_${r.isImage}').toSet();
-  final after = [
-    for (final file in before)
-      target.contains('${file.itemIndex}_${file.isImage}') &&
-              isVisibleHistoryFile(file)
-          ? file.copyWith(status: FileStatus.deleted)
-          : file,
-  ];
+    final before = record.files;
+    final target = allRows.map((r) => '${r.itemIndex}_${r.isImage}').toSet();
+    final after = [
+      for (final file in before)
+        target.contains('${file.itemIndex}_${file.isImage}') &&
+                isVisibleHistoryFile(file)
+            ? file.copyWith(status: FileStatus.deleted)
+            : file,
+    ];
 
-  final db = database ?? await HistoryDb.instance();
-  await db.updateFiles(id, after, source: 'viewer-batch-items-delete');
+    final db = database ?? await HistoryDb.instance();
+    await db.updateFiles(id, after, source: 'viewer-batch-items-delete');
 
-  return BatchItemDeletionOutcome(
-    ok: true,
-    succeededIndices: itemIndices,
-    before: before,
-    after: after,
-    albumOutcome: album,
-    problem: problem,
-    deleteAlbumFiles: deleteAlbumFiles,
-  );
+    final liveCount = pairSavedMedia(allRows).where((e) => e.isLive).length;
+    final deletedFiles = album != null ? (album.requested - album.remaining) : 0;
+    final failedFiles = album != null ? album.remaining : 0;
+    DevLog.write(
+      'HIST',
+      'viewer-delete post=${record.postId} selectedItems=${itemIndices.length} files=${allRows.length} live=$liveCount deletedFiles=$deletedFiles failedFiles=$failedFiles',
+    );
+
+    return BatchItemDeletionOutcome(
+      ok: true,
+      succeededIndices: itemIndices,
+      before: before,
+      after: after,
+      albumOutcome: album,
+      problem: problem,
+      deleteAlbumFiles: deleteAlbumFiles,
+    );
+  });
 }
 
 /// Undo of a "仅删除记录". Restores exactly the rows the deletion replaced.
