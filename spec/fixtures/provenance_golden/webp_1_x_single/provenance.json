@@ -1,0 +1,28 @@
+{
+  "schema": "0.1",
+  "assetId": "golden_asset_010",
+  "capturedAt": "2026-11-23T12:00:00.000Z",
+  "capturedBy": "EasySave/1.13.0",
+  "metadataDate": "2026-11-23T12:00:00.000Z",
+  "sourceUrl": "https://example.com/post/10",
+  "platform": "xiaohongshu",
+  "sourceId": "post_source_10",
+  "itemIndex": 1,
+  "itemCount": 3,
+  "authorId": "author_10",
+  "publishedAt": "2026-11-20T08:30:00.000Z",
+  "title": "Golden Title 10",
+  "creator": [
+    "Creator 10"
+  ],
+  "description": "Golden Description for sample 10",
+  "subject": [
+    "tag1",
+    "tag2",
+    "golden"
+  ],
+  "credit": "Creator 10 / xiaohongshu",
+  "aiLabel": "Creator labeled as AI-generated",
+  "aiLabelSource": "author",
+  "digitalSourceType": "http://cv.iptc.org/newscodes/digitalsourcetype/compositeWithTrainedAlgorithmicMedia"
+}
