@@ -1,3 +1,6 @@
+@Timeout(Duration(minutes: 2))
+library;
+
 import 'dart:async';
 import 'dart:io';
 
@@ -36,10 +39,15 @@ void main() {
     store.overrideDirectory = tempDir;
     localPartFile = File('${tempDir.path}/test_part.tmp');
     await localPartFile.writeAsBytes(List.filled(1024, 0));
+    HistoryDb.resetInstanceForTesting();
+    final db = await HistoryDb.instance(dbPath: inMemoryDatabasePath);
+    HistoryDb.setInstanceForTesting(db);
   });
 
   tearDown(() async {
     SiteRegistry.useBuiltin();
+    HistoryDb.setInstanceForTesting(null);
+    HistoryDb.resetInstanceForTesting();
     store.overrideDirectory = null;
     try {
       if (await tempDir.exists()) {
@@ -1254,6 +1262,7 @@ void main() {
       final dbPath = '${tempDir.path}/p0_test.db';
       HistoryDb.resetInstanceForTesting();
       final testDb = await HistoryDb.instance(dbPath: dbPath);
+      HistoryDb.setInstanceForTesting(testDb);
 
       final job = DownloadJob(
         key: 'p0-job',

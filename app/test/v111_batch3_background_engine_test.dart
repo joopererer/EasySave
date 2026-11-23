@@ -217,6 +217,7 @@ void main() {
     expect(host.logged('step=parse begin'), isTrue);
     expect(host.logged('step=batch-start ok'), isTrue);
     expect(host.logged('DOWNLOAD done: 1/1'), isTrue);
+    await waitFor(() => host.methods.contains('idle'), description: 'first engine signals idle');
     expect(host.methods, contains('idle'));
   });
 
@@ -228,6 +229,8 @@ void main() {
     await host.submit();
     await waitFor(() => host.logged('DOWNLOAD done: 1/1'), description: 'engine #1 finishes download');
     expect(host.logged('DOWNLOAD done: 1/1'), isTrue);
+    await waitFor(() => host.methods.contains('idle'), description: 'engine #1 signals idle');
+    expect(host.methods, contains('idle'));
 
     // Engine #2: rebuilt by HostService. Its channels are (re)registered, but
     // the settings plugin the first engine used is not there any more — the
@@ -258,6 +261,10 @@ void main() {
       host.logged('DOWNLOAD done: 1/1'),
       isTrue,
       reason: 'the second submit parses and downloads like the first one',
+    );
+    await waitFor(
+      () => host.methods.where((m) => m == 'idle').length >= 2,
+      description: 'engine #2 signals idle',
     );
   });
 
