@@ -11,6 +11,7 @@
 
 import 'dart:convert';
 import 'package:easysave/services/download_manager.dart';
+import 'package:easysave/services/history_db.dart';
 import 'package:easysave/services/image_format_preference.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -29,9 +30,12 @@ void main() {
   const MethodChannel downloaderBgChannel = MethodChannel('com.bbflight.background_downloader.background');
   final List<String> notificationCalls = <String>[];
 
-  setUp(() {
+  setUp(() async {
     SharedPreferencesStorePlatform.instance =
         InMemorySharedPreferencesStore.empty();
+    HistoryDb.resetInstanceForTesting();
+    final db = await HistoryDb.instance(dbPath: inMemoryDatabasePath);
+    HistoryDb.setInstanceForTesting(db);
     notificationCalls.clear();
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(channel, (MethodCall call) async {
@@ -55,7 +59,12 @@ void main() {
     DownloadManager.instance.clearBatchesForTesting();
   });
 
-  tearDown(() {
+  tearDown(() async {
+    try {
+      await DownloadManager.instance.reconcileFutureForTesting;
+    } catch (_) {}
+    HistoryDb.setInstanceForTesting(null);
+    HistoryDb.resetInstanceForTesting();
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(channel, null);
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger

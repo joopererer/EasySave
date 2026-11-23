@@ -376,7 +376,8 @@ abstract final class BackupService {
           ),
         );
       }
-      final restoredFiles = repairHistoryFiles(files) ?? files;
+      final filesWithPairs = ensureLivePairIds(post.sourceId, files);
+      final restoredFiles = repairHistoryFiles(filesWithPairs) ?? filesWithPairs;
       restoredFilesCount += restoredFiles.where(isVisibleHistoryFile).length;
       // Items, not files, for everything the user reads (v1.11 build 59).
       restoredItemsCount += savedMediaEntryCount(

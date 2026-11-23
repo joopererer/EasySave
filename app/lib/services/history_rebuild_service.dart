@@ -427,11 +427,17 @@ class HistoryRebuildService {
       final files = <HistoryFile>[];
       for (final awx in resolvedAssets) {
         final savedAtTime = awx.provenance.capturedAt ?? awx.asset.createDateTime;
+        final isPaired = (awx.asset.type == AssetType.image && pairedImageIds.contains(awx.asset.id)) ||
+            (awx.asset.type == AssetType.video && pairedVideoAssets.contains(awx.asset.id));
+        final pairId = isPaired
+            ? (awx.provenance.pairId ?? '$sourceId#${awx.provenance.itemIndex ?? 1}')
+            : awx.provenance.pairId;
         files.add(HistoryFile(
           filename: awx.asset.title ?? '',
           savedAt: savedAtTime.millisecondsSinceEpoch,
           mediaId: isFixedFileReference(awx.asset.id) ? null : awx.asset.id,
           itemIndex: awx.provenance.itemIndex ?? 1,
+          pairId: pairId,
           isImage: awx.asset.type == AssetType.image,
           assetId: awx.provenance.assetId,
           relativePath: await locator.getRelativePath(awx.asset),
