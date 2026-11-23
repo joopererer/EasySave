@@ -332,6 +332,8 @@ class TransferSchedulerTest {
         )
 
         scheduler.send(SchedulerEvent.Enqueue(netJob))
+        pollUntil { clock.scheduledTasks.any { !it.isCancelled && it.delayMs == 2000L } }
+        clock.advanceTimeBy(2000L)
         pollUntil { scheduler.jobs["net_job"]?.state == JobState.WAITING_NETWORK }
 
         assertEquals(JobState.WAITING_NETWORK, scheduler.jobs["net_job"]?.state)
@@ -448,10 +450,11 @@ class TransferSchedulerTest {
     // 7. 暂停→继续：同一 jobId，不新建任务
     @Test
     fun testPauseResume_sameJobIdNotRecreated() = runBlocking {
+        val pauseGate = CompletableDeferred<Unit>()
         val resumeGate = CompletableDeferred<Unit>()
         FakeWorkerRegistry.registerCustomPlan("pause_resume_job_888") { _, attempt ->
             if (attempt == 0) {
-                runBlocking { delay(5000L) }
+                runBlocking { pauseGate.await() }
                 FakeWorker.FakePlan(WorkerResult.Success())
             } else {
                 runBlocking { resumeGate.await() }
@@ -508,6 +511,10 @@ class TransferSchedulerTest {
 
         val job = TransferJob(jobId = "validated_net_err_job", category = JobCategory.IMAGE, fakePlan = "network_always")
         scheduler.send(SchedulerEvent.Enqueue(job))
+
+        // 轮询直到产生了 2000ms 的网络判定定时器
+        pollUntil { clock.scheduledTasks.any { !it.isCancelled && it.delayMs == 2000L } }
+        clock.advanceTimeBy(2000L)
 
         // 轮询直到产生了重试定时器（首轮 5000ms）
         pollUntil { clock.scheduledTasks.any { !it.isCancelled && it.delayMs == 5000L } }
@@ -656,7 +663,9 @@ class TransferSchedulerTest {
         pollUntil { scheduler.jobs[job1Id]?.state == JobState.DONE }
         assertEquals(JobState.DONE, scheduler.jobs[job1Id]?.state)
 
-        // 任务 2 首次报网络错误进入 waiting_network
+        // 任务 2 首次报网络错误，等待 2 秒网络判定定时器推进后进入 waiting_network
+        pollUntil { clock.scheduledTasks.any { !it.isCancelled && it.delayMs == 2000L } }
+        clock.advanceTimeBy(2000L)
         pollUntil { scheduler.jobs[job2Id]?.state == JobState.WAITING_NETWORK }
         assertEquals(JobState.WAITING_NETWORK, scheduler.jobs[job2Id]?.state)
 
@@ -686,6 +695,95 @@ class TransferSchedulerTest {
         assertEquals(JobState.DONE, scheduler.jobs[job1Id]?.state)
         assertEquals(JobState.DONE, scheduler.jobs[job2Id]?.state)
         assertEquals(JobState.DONE, scheduler.jobs[job3Id]?.state)
+
+        scheduler.shutdown()
+    }
+
+    // --- P0-2c 新增单元测试 ---
+
+    // 14. 报错后 1 秒内网络回调报断开，任务进 waiting_network，不计次
+    @Test
+    fun testNetworkError_disconnectWithin1s_entersWaitingNetworkWithoutIncrementingRetry() = runBlocking {
+        val clock = TestTransferClock()
+        val networkChecker = TestNetworkChecker(isValidated = true) // 初始网络可用
+
+        val scheduler = TransferScheduler(
+            store = store,
+            workerFactory = { job -> FakeWorker() },
+            networkChecker = networkChecker,
+            scope = testScope,
+            clock = clock,
+        )
+
+        val targetJobId = "disconnect_1s_job"
+        val job = TransferJob(jobId = targetJobId, category = JobCategory.IMAGE, fakePlan = "network_always")
+        scheduler.send(SchedulerEvent.Enqueue(job))
+
+        // 轮询直到产生了 2000ms 的网络判定定时器（Worker 已报网络错误）
+        pollUntil { clock.scheduledTasks.any { !it.isCancelled && it.delayMs == 2000L } }
+
+        // 报错后 1 秒内断网（飞行模式）
+        networkChecker.isValidated = false
+        scheduler.send(SchedulerEvent.NetworkChanged(isAvailable = false, wasOffline = false))
+
+        // 推进 2000ms 定时器
+        clock.advanceTimeBy(2000L)
+
+        // 任务必须进入 WAITING_NETWORK，且重试次数为 0（不计次）
+        pollUntil { scheduler.jobs[targetJobId]?.state == JobState.WAITING_NETWORK }
+        val currentJob = scheduler.jobs[targetJobId]
+        assertEquals(JobState.WAITING_NETWORK, currentJob?.state)
+        assertEquals(0, currentJob?.retryCount)
+
+        scheduler.shutdown()
+    }
+
+    // 15. 连续 5 次「开飞行模式再关闭」不会进 interrupted
+    @Test
+    fun testFiveConsecutiveAirplaneModeCycles_neverEntersInterrupted() = runBlocking {
+        val clock = TestTransferClock()
+        val networkChecker = TestNetworkChecker(isValidated = true)
+
+        val scheduler = TransferScheduler(
+            store = store,
+            workerFactory = { job -> FakeWorker() },
+            networkChecker = networkChecker,
+            scope = testScope,
+            clock = clock,
+        )
+
+        val targetJobId = "airplane_5_cycles_job"
+        val job = TransferJob(jobId = targetJobId, category = JobCategory.IMAGE, fakePlan = "network_always")
+        scheduler.send(SchedulerEvent.Enqueue(job))
+
+        for (cycle in 1..5) {
+            // Worker 运行并报错，调度 2000ms 判定定时器
+            pollUntil { clock.scheduledTasks.any { !it.isCancelled && it.delayMs == 2000L } }
+
+            // 1 秒内断开网络（开飞行模式）
+            networkChecker.isValidated = false
+            scheduler.send(SchedulerEvent.NetworkChanged(isAvailable = false, wasOffline = false))
+
+            // 推进 2000ms 定时器，任务进入 WAITING_NETWORK，重试次数保持为 0
+            clock.advanceTimeBy(2000L)
+            pollUntil { scheduler.jobs[targetJobId]?.state == JobState.WAITING_NETWORK }
+            assertEquals(0, scheduler.jobs[targetJobId]?.retryCount)
+
+            // 关闭飞行模式（网络恢复），调度 3 秒稳定唤醒
+            networkChecker.isValidated = true
+            scheduler.send(SchedulerEvent.NetworkChanged(isAvailable = true, wasOffline = true))
+            pollUntil { clock.scheduledTasks.any { !it.isCancelled && it.delayMs == 3000L } }
+            clock.advanceTimeBy(3000L)
+
+            // 任务恢复到 RUNNING，准备进入下一轮
+            pollUntil { scheduler.jobs[targetJobId]?.state == JobState.RUNNING }
+            assertEquals(JobState.RUNNING, scheduler.jobs[targetJobId]?.state)
+            assertEquals(0, scheduler.jobs[targetJobId]?.retryCount)
+        }
+
+        // 5 次飞行模式循环完毕后，验证从未进入 INTERRUPTED，且 retryCount 仍为 0
+        assertFalse(scheduler.jobs[targetJobId]?.state == JobState.INTERRUPTED)
+        assertEquals(0, scheduler.jobs[targetJobId]?.retryCount)
 
         scheduler.shutdown()
     }

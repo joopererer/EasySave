@@ -6,6 +6,7 @@ import android.media.MediaScannerConnection
 import android.net.Uri
 import android.os.Build
 import android.os.Environment
+import android.os.Looper
 import android.provider.MediaStore
 import java.io.File
 
@@ -99,8 +100,10 @@ object PublicMediaWriter {
             check(resolver.update(uri, ContentValues().apply { put("is_pending", 0) }, null, null) == 1)
             val mediaId = uri.lastPathSegment!!
             val duration = if (video) publishDuration(context, uri, mediaId, source, mime) else null
+            val isMain = Looper.myLooper() == Looper.getMainLooper()
             buildMap {
                 put("mediaId", mediaId); put("title", name); put("relativePath", relative)
+                put("thread", if (isMain) "main" else "bg")
                 if (duration != null) put("duration", duration.toString())
             }
         } catch (e: Exception) {
@@ -155,7 +158,13 @@ object PublicMediaWriter {
             val latch = java.util.concurrent.CountDownLatch(1); var uri: Uri? = null
             android.media.MediaScannerConnection.scanFile(context, arrayOf(target.path), arrayOf(mime)) { _, result -> uri = result; latch.countDown() }
             check(latch.await(30, java.util.concurrent.TimeUnit.SECONDS))
-            return mapOf("mediaId" to checkNotNull(uri).lastPathSegment!!, "title" to name, "relativePath" to relative)
+            val isMain = Looper.myLooper() == Looper.getMainLooper()
+            return mapOf(
+                "mediaId" to checkNotNull(uri).lastPathSegment!!,
+                "title" to name,
+                "relativePath" to relative,
+                "thread" to (if (isMain) "main" else "bg"),
+            )
         } catch (e: Exception) { check(target.delete() || !target.exists()); throw e }
     }
 }

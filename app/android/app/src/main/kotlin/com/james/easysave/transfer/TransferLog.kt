@@ -23,13 +23,15 @@ object TransferLog {
         return if (jobId.length <= 8) jobId else jobId.takeLast(8)
     }
 
-    private fun formatLine(message: String): String {
+    fun cleanMessage(message: String): String {
         var cleaned = message.trim()
         while (cleaned.startsWith("[XFER]")) {
             cleaned = cleaned.removePrefix("[XFER]").trim()
         }
-        return "[XFER] $cleaned"
+        return cleaned
     }
+
+    private fun formatUiLine(cleaned: String): String = "[XFER] $cleaned"
 
     fun logTransition(
         jobId: String,
@@ -38,9 +40,9 @@ object TransferLog {
         reason: String?,
         retryCount: Int = 0,
     ) {
-        val line = formatLine("job=${shortId(jobId)} state=${from.value}->${to.value} reason=${reason ?: "none"} retry=$retryCount")
-        runCatching { NativeLog.i(TAG, line) }
-        logListener?.invoke(line)
+        val clean = cleanMessage("job=${shortId(jobId)} state=${from.value}->${to.value} reason=${reason ?: "none"} retry=$retryCount")
+        runCatching { NativeLog.i(TAG, clean) }
+        logListener?.invoke(formatUiLine(clean))
     }
 
     fun logIllegalTransition(
@@ -49,27 +51,27 @@ object TransferLog {
         to: JobState,
         reason: String?,
     ) {
-        val line = formatLine("job=${shortId(jobId)} illegal_transition ${from.value}->${to.value} rejected reason=${reason ?: "none"}")
-        runCatching { NativeLog.w(TAG, line) }
-        logListener?.invoke(line)
+        val clean = cleanMessage("job=${shortId(jobId)} illegal_transition ${from.value}->${to.value} rejected reason=${reason ?: "none"}")
+        runCatching { NativeLog.w(TAG, clean) }
+        logListener?.invoke(formatUiLine(clean))
     }
 
     fun i(message: String) {
-        val line = formatLine(message)
-        runCatching { NativeLog.i(TAG, line) }
-        logListener?.invoke(line)
+        val clean = cleanMessage(message)
+        runCatching { NativeLog.i(TAG, clean) }
+        logListener?.invoke(formatUiLine(clean))
     }
 
     fun w(message: String) {
-        val line = formatLine(message)
-        runCatching { NativeLog.w(TAG, line) }
-        logListener?.invoke(line)
+        val clean = cleanMessage(message)
+        runCatching { NativeLog.w(TAG, clean) }
+        logListener?.invoke(formatUiLine(clean))
     }
 
     fun e(message: String, throwable: Throwable? = null) {
-        val line = formatLine(message)
-        runCatching { NativeLog.e(TAG, line, throwable) }
-        logListener?.invoke(line)
+        val clean = cleanMessage(message)
+        runCatching { NativeLog.e(TAG, clean, throwable) }
+        logListener?.invoke(formatUiLine(clean))
     }
 }
 

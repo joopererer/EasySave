@@ -83,6 +83,7 @@ void main() {
             mediaId: 'new',
             title: name,
             relativePath: pair ? 'Download/EasySave/' : 'Pictures/EasySave/',
+            thread: 'bg',
           );
         },
       );
@@ -136,7 +137,7 @@ void main() {
             message: 'Provider changed final filename',
           );
         }
-        return (mediaId: '99', title: name, relativePath: 'Pictures/EasySave/');
+        return (mediaId: '99', title: name, relativePath: 'Pictures/EasySave/', thread: 'bg');
       },
     );
     expect(savedNames, ['post_1.mp4', 'post-copy2_1.mp4']);

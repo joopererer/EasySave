@@ -470,6 +470,29 @@ class HttpWorkerTest {
         // 验证 .part 文件未被删除
         assertTrue("Part file must remain after cancellation", partFile.exists())
     }
+
+    @Test
+    fun testIsNetworkExceptionMatchesAllNetworkErrors() {
+        // SocketException (Software caused connection abort)
+        assertTrue(HttpWorker.isNetworkException(java.net.SocketException("Software caused connection abort")))
+        assertTrue(HttpWorker.isNetworkException(java.net.SocketException("ECONNRESET")))
+        assertTrue(HttpWorker.isNetworkException(java.net.SocketException("ECONNABORTED")))
+        assertTrue(HttpWorker.isNetworkException(java.net.SocketException("Broken pipe")))
+        assertTrue(HttpWorker.isNetworkException(java.net.ConnectException("Failed to connect")))
+        assertTrue(HttpWorker.isNetworkException(java.net.UnknownHostException("Unable to resolve host")))
+        assertTrue(HttpWorker.isNetworkException(java.net.SocketTimeoutException("timeout")))
+        assertTrue(HttpWorker.isNetworkException(javax.net.ssl.SSLException("SSL handshake aborted")))
+        assertTrue(HttpWorker.isNetworkException(javax.net.ssl.SSLHandshakeException("handshake failed")))
+        assertTrue(HttpWorker.isNetworkException(javax.net.ssl.SSLProtocolException("protocol error")))
+
+        // 嵌套原因包装
+        val wrapped = java.io.IOException("wrapped", java.net.SocketException("Software caused connection abort"))
+        assertTrue(HttpWorker.isNetworkException(wrapped))
+
+        // 非网络错误
+        org.junit.Assert.assertFalse(HttpWorker.isNetworkException(java.io.FileNotFoundException("file not found")))
+        org.junit.Assert.assertFalse(HttpWorker.isNetworkException(IllegalStateException("invalid state")))
+    }
 }
 
 object BufferUtil {

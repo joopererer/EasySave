@@ -52,6 +52,30 @@ class HttpWorker(
         const val PROGRESS_REPORT_INTERVAL_MS = 1000L
         const val EXTRA_STORAGE_MARGIN_BYTES = 50 * 1024 * 1024L
 
+        fun isNetworkException(t: Throwable): Boolean {
+            var curr: Throwable? = t
+            while (curr != null) {
+                if (curr is java.net.SocketException ||
+                    curr is java.net.ConnectException ||
+                    curr is java.net.UnknownHostException ||
+                    curr is java.net.SocketTimeoutException ||
+                    curr is javax.net.ssl.SSLException) {
+                    return true
+                }
+                val msg = curr.message ?: ""
+                if (msg.contains("ECONNABORTED", ignoreCase = true) ||
+                    msg.contains("ECONNRESET", ignoreCase = true) ||
+                    msg.contains("connection abort", ignoreCase = true) ||
+                    msg.contains("Software caused connection abort", ignoreCase = true) ||
+                    msg.contains("Connection reset", ignoreCase = true) ||
+                    msg.contains("Broken pipe", ignoreCase = true)) {
+                    return true
+                }
+                curr = curr.cause
+            }
+            return false
+        }
+
         fun defaultClient(): OkHttpClient {
             return OkHttpClient.Builder()
                 .followRedirects(false)
@@ -137,9 +161,20 @@ class HttpWorker(
             )
         } catch (ce: CancellationException) {
             activeCall?.cancel()
+            val stoppedAt = partFile.length()
+            TransferLog.i("job=${TransferLog.shortId(job.jobId)} stopped_at=$stoppedAt")
             throw ce
         } catch (t: Throwable) {
             val msg = t.message ?: "unknown"
+            if (activeCall?.isCanceled() == true) {
+                val stoppedAt = partFile.length()
+                TransferLog.i("job=${TransferLog.shortId(job.jobId)} stopped_at=$stoppedAt")
+                throw CancellationException("stopped_at=$stoppedAt")
+            }
+            if (isNetworkException(t)) {
+                TransferLog.w("job=${TransferLog.shortId(job.jobId)} network error: $msg")
+                return WorkerResult.NetworkError(msg)
+            }
             if (msg.contains("ENOSPC", ignoreCase = true) || msg.contains("No space left", ignoreCase = true)) {
                 TransferLog.w("job=${TransferLog.shortId(job.jobId)} storage_full: $msg")
                 return WorkerResult.StorageFull("storage_full")
@@ -247,7 +282,9 @@ class HttpWorker(
                 resp = call.execute()
             } catch (e: IOException) {
                 if (call.isCanceled() || !coroutineContext.isActive) {
-                    throw CancellationException("cancelled")
+                    val stoppedAt = partFile.length()
+                    TransferLog.i("job=${TransferLog.shortId(job.jobId)} stopped_at=$stoppedAt")
+                    throw CancellationException("stopped_at=$stoppedAt")
                 }
                 TransferLog.w("job=${TransferLog.shortId(job.jobId)} network error: ${e.message}")
                 return WorkerResult.NetworkError(e.message ?: "network_error")
@@ -431,7 +468,20 @@ class HttpWorker(
                     activeCall?.cancel()
                     break
                 }
-                val read = inputStream.read(buffer)
+                val read: Int
+                try {
+                    read = inputStream.read(buffer)
+                } catch (ioe: IOException) {
+                    if (activeCall?.isCanceled() == true || !coroutineContext.isActive) {
+                        TransferLog.i("job=${TransferLog.shortId(job.jobId)} stopped_at=$currentBytes")
+                        throw CancellationException("stopped_at=$currentBytes")
+                    }
+                    if (isNetworkException(ioe)) {
+                        TransferLog.w("job=${TransferLog.shortId(job.jobId)} network error: ${ioe.message}")
+                        return WorkerResult.NetworkError(ioe.message ?: "network_error")
+                    }
+                    throw ioe
+                }
                 if (read == -1) break
 
                 try {
@@ -467,6 +517,11 @@ class HttpWorker(
         // 7. 收尾：比对文件大小
         val finalLength = partFile.length()
         onProgress(finalLength, if (total > 0) total else finalLength)
+
+        if (!coroutineContext.isActive || activeCall?.isCanceled() == true) {
+            TransferLog.i("job=${TransferLog.shortId(job.jobId)} stopped_at=$finalLength")
+            throw CancellationException("stopped_at=$finalLength")
+        }
 
         if (total > 0 && finalLength != total) {
             TransferLog.w("job=${TransferLog.shortId(job.jobId)} length_mismatch: got $finalLength expected $total")

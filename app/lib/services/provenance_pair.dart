@@ -12,7 +12,7 @@ const _channel = MethodChannel('easysave/provenance_pair');
 const c2paRelativePath = 'Download/EasySave/';
 const c2paSavedNotice = '该图片带有内容凭证，已保存到 Download/EasySave';
 
-Future<({String? mediaId, String? title, String? relativePath})>
+Future<({String? mediaId, String? title, String? relativePath, String? thread})>
 saveProvenancePair(String path, {String? expectedAssetId, String? finalName}) async {
   // Gal requests legacy WRITE_EXTERNAL_STORAGE only where Android requires it.
   if (!await Gal.hasAccess(toAlbum: true))
@@ -67,6 +67,7 @@ saveProvenancePair(String path, {String? expectedAssetId, String? finalName}) as
     mediaId: result!['mediaId'],
     title: result['title'],
     relativePath: result['relativePath'],
+    thread: result['thread'] ?? 'bg',
   );
 }
 

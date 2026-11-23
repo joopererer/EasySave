@@ -578,6 +578,7 @@ class DownloadJob {
   int? provenanceBytesWritten;
   int? importCopyMs;
   int? importBytes;
+  String? importThread;
 
   /// 3a: True when the bytes are fully downloaded and the job is in the finishing
   /// stage (embedding provenance, gallery import, history writing). During this
@@ -4612,6 +4613,7 @@ class DownloadManager extends ChangeNotifier {
             job.importCopyMs = copySw.elapsedMilliseconds;
             job.importBytes = job.fileBytes ?? 0;
             final saved = outcome.saved;
+            job.importThread = saved.thread ?? 'bg';
             _log('gallery import done: ${saved.title ?? job.filename} mime=${content?.mime ?? '-'} -> ${saved.mediaId}');
             job.mediaId = saved.mediaId;
             job.savedTitle = saved.title;
@@ -5669,6 +5671,7 @@ class DownloadManager extends ChangeNotifier {
           'provenance_bytes_written=${j.provenanceBytesWritten ?? 0} '
           'import_copy_ms=${j.importCopyMs ?? 0} '
           'import_bytes=${j.importBytes ?? 0} '
+          'thread=${j.importThread ?? 'bg'} '
           'history_ms=$histMs',
         ));
       }
