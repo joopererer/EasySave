@@ -94,5 +94,44 @@ sealed class TransferEvent {
             "totalBytes" to totalBytes,
         )
     }
+
+    data class ReresolveRequired(
+        val jobId: String,
+    ) : TransferEvent() {
+        fun toMap(): Map<String, Any?> = mapOf(
+            "type" to "reresolve_required",
+            "jobId" to jobId,
+        )
+    }
+}
+
+/**
+ * 传输下载参数（仅保留在内存中，严格不写入 Store、.meta 和日志）。
+ */
+data class TransferDownloadParams(
+    val url: String,
+    val headers: Map<String, String> = emptyMap(),
+    val cookie: String? = null,
+    val allowedCookieDomains: List<String> = emptyList(),
+    val policyHosts: List<com.james.easysave.policy.MediaPolicyRedirects.HostRule> = emptyList(),
+    val mime: String? = null,
+    val policyKey: String? = null,
+)
+
+/**
+ * 传输参数内存注册表。
+ */
+object TransferParamsRegistry {
+    private val paramsMap = java.util.concurrent.ConcurrentHashMap<String, TransferDownloadParams>()
+
+    fun set(jobId: String, params: TransferDownloadParams) {
+        paramsMap[jobId] = params
+    }
+
+    fun get(jobId: String): TransferDownloadParams? = paramsMap[jobId]
+
+    fun remove(jobId: String): TransferDownloadParams? = paramsMap.remove(jobId)
+
+    fun clear() = paramsMap.clear()
 }
 

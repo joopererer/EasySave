@@ -25,6 +25,7 @@ import 'backup_restore_page.dart';
 import 'failure_log_page.dart';
 import 'login_page.dart';
 import 'transfer_self_check_page.dart';
+import 'transfer_new_pipeline_page.dart';
 
 class MinePage extends StatefulWidget {
   const MinePage({super.key, this.xhsSessionProbe = probeXhsSessions});
@@ -1153,6 +1154,19 @@ class _MinePageState extends State<MinePage> with WidgetsBindingObserver {
                       Navigator.of(context).push(
                         MaterialPageRoute(
                           builder: (_) => const TransferSelfCheckPage(),
+                        ),
+                      );
+                    },
+                  ),
+                  ListTile(
+                    key: const Key('transfer_new_pipeline_test'),
+                    title: const Text('新链路下载测试'),
+                    subtitle: const Text('使用 OkHttp 与续传协议下载小红书或 IG 媒体到 transfers/'),
+                    trailing: const Icon(Icons.chevron_right),
+                    onTap: () {
+                      Navigator.of(context).push(
+                        MaterialPageRoute(
+                          builder: (_) => const TransferNewPipelinePage(),
                         ),
                       );
                     },

@@ -63,7 +63,13 @@ class TransferService : Service() {
             }
             val scheduler = TransferScheduler(
                 store = store,
-                workerFactory = { job -> FakeWorker() },
+                workerFactory = { job ->
+                    if (job.fakePlan != null) {
+                        FakeWorker()
+                    } else {
+                        HttpWorker(context = appContext)
+                    }
+                },
                 scope = scope,
                 networkChecker = networkChecker,
                 eventListener = { event ->
@@ -71,7 +77,8 @@ class TransferService : Service() {
                 },
                 onIdleChanged = { isIdle ->
                     instance?.onIdleChanged(isIdle)
-                }
+                },
+                transfersDir = java.io.File(appContext.filesDir, "transfers")
             )
             // 启动时恢复
             scheduler.handleRestoreFromStore()
@@ -177,6 +184,7 @@ class TransferService : Service() {
     fun onIdleChanged(isIdle: Boolean) {
         mainHandler.post {
             if (isIdle) {
+                MainThreadLagMonitor.stop()
                 if (idleRunnable == null) {
                     TransferLog.i("No active transfer tasks, 60s idle countdown started")
                     val runnable = Runnable {
@@ -189,6 +197,7 @@ class TransferService : Service() {
                     mainHandler.postDelayed(runnable, IDLE_STOP_DELAY_MS)
                 }
             } else {
+                MainThreadLagMonitor.start(serviceScope)
                 idleRunnable?.let {
                     mainHandler.removeCallbacks(it)
                     idleRunnable = null

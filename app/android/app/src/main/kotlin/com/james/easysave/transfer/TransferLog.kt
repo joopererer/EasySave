@@ -20,7 +20,15 @@ object TransferLog {
     var logListener: ((String) -> Unit)? = null
 
     fun shortId(jobId: String): String {
-        return if (jobId.length <= 8) jobId else jobId.take(8)
+        return if (jobId.length <= 8) jobId else jobId.takeLast(8)
+    }
+
+    private fun formatLine(message: String): String {
+        var cleaned = message.trim()
+        while (cleaned.startsWith("[XFER]")) {
+            cleaned = cleaned.removePrefix("[XFER]").trim()
+        }
+        return "[XFER] $cleaned"
     }
 
     fun logTransition(
@@ -30,8 +38,8 @@ object TransferLog {
         reason: String?,
         retryCount: Int = 0,
     ) {
-        val line = "[XFER] job=${shortId(jobId)} state=${from.value}->${to.value} reason=${reason ?: "none"} retry=$retryCount"
-        NativeLog.i(TAG, line)
+        val line = formatLine("job=${shortId(jobId)} state=${from.value}->${to.value} reason=${reason ?: "none"} retry=$retryCount")
+        runCatching { NativeLog.i(TAG, line) }
         logListener?.invoke(line)
     }
 
@@ -41,26 +49,26 @@ object TransferLog {
         to: JobState,
         reason: String?,
     ) {
-        val line = "[XFER] job=${shortId(jobId)} illegal_transition ${from.value}->${to.value} rejected reason=${reason ?: "none"}"
-        NativeLog.w(TAG, line)
+        val line = formatLine("job=${shortId(jobId)} illegal_transition ${from.value}->${to.value} rejected reason=${reason ?: "none"}")
+        runCatching { NativeLog.w(TAG, line) }
         logListener?.invoke(line)
     }
 
     fun i(message: String) {
-        val line = "[XFER] $message"
-        NativeLog.i(TAG, line)
+        val line = formatLine(message)
+        runCatching { NativeLog.i(TAG, line) }
         logListener?.invoke(line)
     }
 
     fun w(message: String) {
-        val line = "[XFER] $message"
-        NativeLog.w(TAG, line)
+        val line = formatLine(message)
+        runCatching { NativeLog.w(TAG, line) }
         logListener?.invoke(line)
     }
 
     fun e(message: String, throwable: Throwable? = null) {
-        val line = "[XFER] $message"
-        NativeLog.e(TAG, line, throwable)
+        val line = formatLine(message)
+        runCatching { NativeLog.e(TAG, line, throwable) }
         logListener?.invoke(line)
     }
 }

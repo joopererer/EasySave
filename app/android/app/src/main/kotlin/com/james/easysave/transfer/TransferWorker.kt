@@ -11,6 +11,8 @@ sealed class WorkerResult {
     data class NetworkError(val error: String = "network_error") : WorkerResult()
     data class OtherError(val error: String = "other_error") : WorkerResult()
     data class StorageFull(val error: String = "storage_full") : WorkerResult()
+    data class PolicyRejected(val error: String = "policy_rejected") : WorkerResult()
+    data class UrlExpired(val code: Int = 403, val error: String = "url_expired") : WorkerResult()
 }
 
 /**

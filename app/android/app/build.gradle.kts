@@ -70,13 +70,18 @@ android {
         testImplementation("junit:junit:4.13.2")
         testImplementation("org.json:json:20240303")
         testImplementation("org.robolectric:robolectric:4.14.1")
+        testImplementation("com.squareup.okhttp3:mockwebserver:5.5.1")
+        testImplementation("com.squareup.okhttp3:okhttp-tls:5.5.1")
     }
 
     kotlinOptions {
         jvmTarget = JavaVersion.VERSION_17.toString()
     }
 
-    testOptions { unitTests.isIncludeAndroidResources = true }
+    testOptions {
+        unitTests.isIncludeAndroidResources = true
+        unitTests.isReturnDefaultValues = true
+    }
 
     defaultConfig {
         // TODO: Specify your own unique Application ID (https://developer.android.com/studio/build/application-id.html).

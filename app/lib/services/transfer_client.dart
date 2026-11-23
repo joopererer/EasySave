@@ -67,7 +67,7 @@ class TransferStateChangeEvent extends TransferEvent {
   final String? reason;
   final int retryCount;
 
-  String get shortId => jobId.length <= 8 ? jobId : jobId.substring(0, 8);
+  String get shortId => jobId.length <= 8 ? jobId : jobId.substring(jobId.length - 8);
 
   String toLogString() {
     return '[XFER] job=$shortId state=$from->$to reason=${reason ?? "none"} retry=$retryCount';
@@ -84,6 +84,11 @@ class TransferProgressEvent extends TransferEvent {
 
   final int bytesRead;
   final int totalBytes;
+}
+
+/// 需要重新解析地址事件 (HTTP 403/410)
+class TransferReresolveRequiredEvent extends TransferEvent {
+  const TransferReresolveRequiredEvent({required super.jobId});
 }
 
 /// 传输客户端（薄封装）
@@ -111,6 +116,8 @@ class TransferClient {
           bytesRead: (map['bytesRead'] as num?)?.toInt() ?? 0,
           totalBytes: (map['totalBytes'] as num?)?.toInt() ?? 0,
         );
+      } else if (type == 'reresolve_required') {
+        return TransferReresolveRequiredEvent(jobId: jobId);
       } else {
         return TransferStateChangeEvent(
           jobId: jobId,
@@ -130,6 +137,13 @@ class TransferClient {
     String category = 'image',
     String? batchId,
     String? fakePlan,
+    String? url,
+    Map<String, String>? headers,
+    String? cookie,
+    List<String>? allowedCookieDomains,
+    List<Map<String, dynamic>>? policyHosts,
+    String? mime,
+    String? policyKey,
   }) async {
     final result = await _methodChannel.invokeMethod<String>('enqueue', {
       if (jobId != null) 'jobId': jobId,
@@ -137,6 +151,13 @@ class TransferClient {
       'category': category,
       if (batchId != null) 'batchId': batchId,
       if (fakePlan != null) 'fakePlan': fakePlan,
+      if (url != null) 'url': url,
+      if (headers != null) 'headers': headers,
+      if (cookie != null) 'cookie': cookie,
+      if (allowedCookieDomains != null) 'allowedCookieDomains': allowedCookieDomains,
+      if (policyHosts != null) 'policyHosts': policyHosts,
+      if (mime != null) 'mime': mime,
+      if (policyKey != null) 'policyKey': policyKey,
     });
     return result ?? jobId ?? '';
   }
@@ -168,6 +189,16 @@ class TransferClient {
         .whereType<Map<dynamic, dynamic>>()
         .map((m) => TransferJobSnapshot.fromMap(m))
         .toList();
+  }
+
+  Future<Map<String, dynamic>> getJobFileInfo(String jobId) async {
+    final res = await _methodChannel.invokeMethod<Map<dynamic, dynamic>>('getJobFileInfo', {'jobId': jobId});
+    return res?.cast<String, dynamic>() ?? {'exists': false};
+  }
+
+  Future<bool> deleteJobFile(String jobId) async {
+    final res = await _methodChannel.invokeMethod<bool>('deleteJobFile', {'jobId': jobId});
+    return res ?? false;
   }
 
   Future<bool> simulateNetwork(bool isAvailable) async {

@@ -104,6 +104,7 @@ class TransferScheduler(
     },
     val eventListener: ((TransferEvent) -> Unit)? = null,
     val onIdleChanged: ((isIdle: Boolean) -> Unit)? = null,
+    val transfersDir: java.io.File? = null,
 ) {
     companion object {
         const val MAX_CONCURRENT_IMAGES = 3
@@ -255,6 +256,12 @@ class TransferScheduler(
                 job.updatedAt = clock.currentTimeMillis()
                 store.updateJobState(jobId, JobState.CANCELED, job.retryCount, job.updatedAt)
                 emitStateChange(jobId, fromState, JobState.CANCELED, "user_cancel", job.retryCount)
+                // 仅用户取消才删除 .part 与 .meta
+                transfersDir?.let { dir ->
+                    java.io.File(dir, "$jobId.part").delete()
+                    java.io.File(dir, "$jobId.meta").delete()
+                }
+                TransferParamsRegistry.remove(jobId)
                 dispatchNext()
             }
         }
@@ -360,6 +367,23 @@ class TransferScheduler(
                     job.updatedAt = clock.currentTimeMillis()
                     store.updateJobState(jobId, JobState.STORAGE_FULL, job.retryCount, job.updatedAt)
                     emitStateChange(jobId, JobState.RUNNING, JobState.STORAGE_FULL, "storage_full", job.retryCount)
+                }
+            }
+            is WorkerResult.PolicyRejected -> {
+                if (JobState.validateAndLog(jobId, JobState.RUNNING, JobState.FAILED, result.error, job.retryCount)) {
+                    job.state = JobState.FAILED
+                    job.updatedAt = clock.currentTimeMillis()
+                    store.updateJobState(jobId, JobState.FAILED, job.retryCount, job.updatedAt)
+                    emitStateChange(jobId, JobState.RUNNING, JobState.FAILED, result.error, job.retryCount)
+                }
+            }
+            is WorkerResult.UrlExpired -> {
+                if (JobState.validateAndLog(jobId, JobState.RUNNING, JobState.INTERRUPTED, result.error, job.retryCount)) {
+                    job.state = JobState.INTERRUPTED
+                    job.updatedAt = clock.currentTimeMillis()
+                    store.updateJobState(jobId, JobState.INTERRUPTED, job.retryCount, job.updatedAt)
+                    emitStateChange(jobId, JobState.RUNNING, JobState.INTERRUPTED, result.error, job.retryCount)
+                    eventListener?.invoke(TransferEvent.ReresolveRequired(jobId))
                 }
             }
             is WorkerResult.OtherError -> {

@@ -114,10 +114,10 @@ void main() {
       reason: 'network_error',
       retryCount: 0,
     );
-    expect(event.shortId, '01234567');
+    expect(event.shortId, '89abcdef');
     expect(
       event.toLogString(),
-      '[XFER] job=01234567 state=running->waiting_network reason=network_error retry=0',
+      '[XFER] job=89abcdef state=running->waiting_network reason=network_error retry=0',
     );
   });
 }

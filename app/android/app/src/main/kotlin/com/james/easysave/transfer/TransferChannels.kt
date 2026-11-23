@@ -73,6 +73,35 @@ object TransferChannels {
                     fakePlan = fakePlan
                 )
 
+                val url = args["url"] as? String
+                val headersRaw = (args["headers"] as? Map<*, *>) ?: emptyMap<Any?, Any?>()
+                val headers = headersRaw.entries.associate { it.key.toString() to it.value.toString() }
+                val cookie = args["cookie"] as? String
+                val allowedCookieDomains = (args["allowedCookieDomains"] as? List<*>)?.mapNotNull { it as? String } ?: emptyList()
+                val policyHostsRaw = (args["policyHosts"] as? List<*>)?.mapNotNull { it as? Map<*, *> } ?: emptyList()
+                val policyHosts = policyHostsRaw.mapNotNull {
+                    val domain = it["domain"] as? String ?: return@mapNotNull null
+                    val includeSubdomains = (it["includeSubdomains"] as? Boolean) ?: false
+                    com.james.easysave.policy.MediaPolicyRedirects.HostRule(domain, includeSubdomains)
+                }
+                val mime = args["mime"] as? String
+                val policyKey = args["policyKey"] as? String
+
+                if (!url.isNullOrBlank()) {
+                    TransferParamsRegistry.set(
+                        jobId,
+                        TransferDownloadParams(
+                            url = url,
+                            headers = headers,
+                            cookie = cookie,
+                            allowedCookieDomains = allowedCookieDomains,
+                            policyHosts = policyHosts,
+                            mime = mime,
+                            policyKey = policyKey,
+                        )
+                    )
+                }
+
                 // 启动前台服务保活
                 TransferService.startService(context)
                 scheduler.send(SchedulerEvent.Enqueue(job))
@@ -143,6 +172,49 @@ object TransferChannels {
                 scheduler.send(SchedulerEvent.NetworkChanged(isAvailable = isAvailable, wasOffline = true))
                 result.success(true)
             }
+            "getJobFileInfo" -> {
+                val args = call.arguments as? Map<*, *> ?: emptyMap<String, Any?>()
+                val jobId = args["jobId"] as? String ?: ""
+                val transfersDir = java.io.File(context.filesDir, "transfers")
+                val partFile = java.io.File(transfersDir, "$jobId.part")
+                if (!partFile.exists()) {
+                    result.success(mapOf("exists" to false))
+                } else {
+                    val size = partFile.length()
+                    val sha256 = try {
+                        val md = java.security.MessageDigest.getInstance("SHA-256")
+                        partFile.inputStream().use { stream ->
+                            val buf = ByteArray(8192)
+                            var read: Int
+                            while (stream.read(buf).also { read = it } > 0) {
+                                md.update(buf, 0, read)
+                            }
+                        }
+                        md.digest().joinToString("") { "%02x".format(it) }
+                    } catch (t: Throwable) {
+                        "error: ${t.message}"
+                    }
+                    result.success(
+                        mapOf(
+                            "exists" to true,
+                            "size" to size,
+                            "sha256" to sha256,
+                            "path" to partFile.absolutePath,
+                        )
+                    )
+                }
+            }
+            "deleteJobFile" -> {
+                val args = call.arguments as? Map<*, *> ?: emptyMap<String, Any?>()
+                val jobId = args["jobId"] as? String ?: ""
+                val transfersDir = java.io.File(context.filesDir, "transfers")
+                val partFile = java.io.File(transfersDir, "$jobId.part")
+                val metaFile = java.io.File(transfersDir, "$jobId.meta")
+                val d1 = partFile.delete()
+                val d2 = metaFile.delete()
+                TransferParamsRegistry.remove(jobId)
+                result.success(d1 || d2 || !partFile.exists())
+            }
             else -> result.notImplemented()
         }
     }
@@ -151,6 +223,7 @@ object TransferChannels {
         val payload = when (event) {
             is TransferEvent.StateChanged -> event.toMap()
             is TransferEvent.Progress -> event.toMap()
+            is TransferEvent.ReresolveRequired -> event.toMap()
         }
         mainHandler.post {
             for (sink in eventSinks) {
