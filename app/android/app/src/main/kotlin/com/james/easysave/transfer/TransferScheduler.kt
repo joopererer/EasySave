@@ -86,10 +86,11 @@ sealed class SchedulerEvent {
  * - 图片类（IMAGE）：3
  * - 大文件类（LARGE_FILE）：1
  *
- * 重试策略（2026-11-23 修订）：
- * - Worker 报网络错误时，先查当前默认网络是否有 NET_CAPABILITY_VALIDATED：
+ * 重试策略（2026-11-24 修订）：
+ * - Worker 报网络错误时，先等待 2 秒再查当前默认网络是否有 NET_CAPABILITY_VALIDATED：
  *   * 无可用网络：进入 waiting_network，不计次；
- *   * 网络可用：按「其他错误」处理，计次，按 5/15/30/60/120 秒退避，用完转 interrupted；
+ *   * 网络可用，但距离最近一次网络变化（断开、恢复或默认网络切换）在 15 秒内：不计次，按 5 秒后重新排队处理；
+ *   * 网络可用，且距离最近一次网络变化已超过 15 秒：按「其他错误」处理，计次，按 5/15/30/60/120 秒退避，用完转 interrupted；
  * - waiting_network 的任务只在网络从「无可用」变为「可用并稳定 3 秒」时重新排队；初次注册时系统立即回调的 onAvailable 若之前并没有断网，不算恢复；
  * - 其他错误：按 5/15/30/60/120 秒重试 5 次，用完进 interrupted；
  * - 空间不足：storage_full。
@@ -112,6 +113,8 @@ class TransferScheduler(
         const val MAX_CONCURRENT_LARGE_FILES = 1
         const val NETWORK_STABILIZATION_MS = 3_000L
         const val NETWORK_ERROR_EVAL_DELAY_MS = 2_000L
+        const val NETWORK_CHANGE_GRACE_MS = 15_000L
+        const val NETWORK_GRACE_RETRY_DELAY_MS = 5_000L
         val RETRY_DELAYS_MS = longArrayOf(5_000L, 15_000L, 30_000L, 60_000L, 120_000L)
         const val MAX_RETRIES = 5
     }
@@ -139,6 +142,9 @@ class TransferScheduler(
 
     // 网络稳定定时器
     private var networkStabilizeTimer: CancellableTimer? = null
+
+    // 最近一次网络变化（断开、恢复、默认网络切换）的时间戳
+    private var lastNetworkChangeAtMs: Long? = null
 
     // 串行性与并发检查（用于测试验证）
     val activeProcessors = AtomicInteger(0)
@@ -292,13 +298,14 @@ class TransferScheduler(
     }
 
     private fun handleNetworkChanged(isAvailable: Boolean, wasOffline: Boolean) {
+        lastNetworkChangeAtMs = clock.currentTimeMillis()
         if (!isAvailable) {
             networkStabilizeTimer?.cancel()
             networkStabilizeTimer = null
             TransferLog.i("network disconnected")
         } else {
             if (!wasOffline) {
-                // 初次注册或未断网时的可用事件，不算恢复
+                // 初次注册或未断网时的可用事件（如默认网络切换），不算恢复，仅刷新 15s 宽限窗口
                 TransferLog.i("network available but not recovered from offline -> ignore")
                 return
             }
@@ -311,6 +318,7 @@ class TransferScheduler(
     }
 
     private fun handleNetworkStabilized() {
+        lastNetworkChangeAtMs = clock.currentTimeMillis()
         TransferLog.i("network stabilized, requeuing waiting_network jobs")
         networkStabilizeTimer = null
         var requeuedCount = 0
@@ -409,8 +417,22 @@ class TransferScheduler(
                 emitStateChange(jobId, JobState.RUNNING, JobState.WAITING_NETWORK, "network_error", job.retryCount)
             }
         } else {
-            // 网络可用但出现网络类错误：按「其他错误」处理，计次，退避
-            handleOtherError(jobId, job, "network_error_while_validated")
+            val now = clock.currentTimeMillis()
+            val lastChange = lastNetworkChangeAtMs
+            val withinGraceWindow = lastChange != null && (now - lastChange) <= NETWORK_CHANGE_GRACE_MS
+            if (withinGraceWindow) {
+                // 任何网络变化后 15 秒内出现的网络类错误：不计次，5 秒后重新排队处理
+                job.updatedAt = now
+                store.updateJobState(jobId, job.state, job.retryCount, job.updatedAt)
+                TransferLog.i("job=${TransferLog.shortId(jobId)} network error within 15s of network change -> retry in ${NETWORK_GRACE_RETRY_DELAY_MS / 1000}s without counting (retry=${job.retryCount})")
+                val timer = clock.schedule(NETWORK_GRACE_RETRY_DELAY_MS) {
+                    send(SchedulerEvent.RetryTimerFired(jobId, job.retryCount))
+                }
+                pendingTimers[jobId] = timer
+            } else {
+                // 超过 15 秒，网络可用但出现网络类错误：按「其他错误」处理，计次，退避
+                handleOtherError(jobId, job, "network_error_while_validated")
+            }
         }
         dispatchNext()
     }

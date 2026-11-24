@@ -787,4 +787,95 @@ class TransferSchedulerTest {
 
         scheduler.shutdown()
     }
+
+    // 16. 连续 6 次「断网→恢复→立刻 DNS 失败（网络已 VALIDATED）」，retry 始终为 0，任务不进 interrupted
+    @Test
+    fun testSixConsecutiveDisconnectRestoreImmediateDnsFailure_retryAlwaysZeroAndNeverInterrupted() = runBlocking {
+        val clock = TestTransferClock()
+        val networkChecker = TestNetworkChecker(isValidated = true)
+
+        val scheduler = TransferScheduler(
+            store = store,
+            workerFactory = { _ -> FakeWorker() },
+            networkChecker = networkChecker,
+            scope = testScope,
+            clock = clock,
+        )
+
+        val targetJobId = "dns_after_restore_6_cycles"
+        val job = TransferJob(jobId = targetJobId, category = JobCategory.IMAGE, fakePlan = "network_always")
+        scheduler.send(SchedulerEvent.Enqueue(job))
+
+        for (cycle in 1..6) {
+            // Worker 运行并报网络错误，调度 2000ms 判定定时器
+            pollUntil { clock.scheduledTasks.any { !it.isCancelled && it.delayMs == 2000L } }
+
+            // 1. 断网
+            networkChecker.isValidated = false
+            scheduler.send(SchedulerEvent.NetworkChanged(isAvailable = false, wasOffline = true))
+            clock.advanceTimeBy(2000L)
+            pollUntil { scheduler.jobs[targetJobId]?.state == JobState.WAITING_NETWORK }
+            assertEquals(0, scheduler.jobs[targetJobId]?.retryCount)
+
+            // 2. 恢复网络，3 秒稳定后立刻 dispatch
+            networkChecker.isValidated = true
+            scheduler.send(SchedulerEvent.NetworkChanged(isAvailable = true, wasOffline = true))
+            pollUntil { clock.scheduledTasks.any { !it.isCancelled && it.delayMs == 3000L } }
+            clock.advanceTimeBy(3000L)
+
+            // 3. dispatch 后立刻 DNS 失败（此时网络已 VALIDATED，但距 network_restored 仅 2 秒 <= 15 秒）
+            pollUntil { clock.scheduledTasks.any { !it.isCancelled && it.delayMs == 2000L } }
+            clock.advanceTimeBy(2000L)
+
+            // 应不计次（retry 仍为 0），调度 5 秒后重试
+            pollUntil { clock.scheduledTasks.any { !it.isCancelled && it.delayMs == 5000L } }
+            assertEquals(0, scheduler.jobs[targetJobId]?.retryCount)
+            assertEquals(JobState.RUNNING, scheduler.jobs[targetJobId]?.state)
+
+            // 推进 5 秒定时器，重新触发 Worker 进入下一轮
+            clock.advanceTimeBy(5000L)
+        }
+
+        assertFalse(scheduler.jobs[targetJobId]?.state == JobState.INTERRUPTED)
+        assertEquals(0, scheduler.jobs[targetJobId]?.retryCount)
+
+        scheduler.shutdown()
+    }
+
+    // 17. 超过 15 秒后的网络错误（网络已 VALIDATED）仍按现有规则计次
+    @Test
+    fun testNetworkErrorAfter15sGraceWindow_incrementsRetry() = runBlocking {
+        val clock = TestTransferClock()
+        val networkChecker = TestNetworkChecker(isValidated = true)
+
+        val scheduler = TransferScheduler(
+            store = store,
+            workerFactory = { _ -> FakeWorker() },
+            networkChecker = networkChecker,
+            scope = testScope,
+            clock = clock,
+        )
+
+        // 先触发一次网络变化并等待 actor 处理完毕，然后推进时间超过 15 秒
+        val netApplied = CompletableDeferred<Unit>()
+        scheduler.send(SchedulerEvent.NetworkChanged(isAvailable = true, wasOffline = false))
+        scheduler.send(SchedulerEvent.CustomEvent(1) { netApplied.complete(Unit) })
+        netApplied.await()
+        clock.advanceTimeBy(16_000L)
+
+        val targetJobId = "after_grace_window_job"
+        val job = TransferJob(jobId = targetJobId, category = JobCategory.IMAGE, fakePlan = "network_always")
+        scheduler.send(SchedulerEvent.Enqueue(job))
+
+        // Worker 报网络错误并等待 2000ms 判定
+        pollUntil { clock.scheduledTasks.any { !it.isCancelled && it.delayMs == 2000L } }
+        clock.advanceTimeBy(2000L)
+
+        // 超过 15 秒，应计次为 retry #1 并调度 5 秒退避
+        pollUntil { scheduler.jobs[targetJobId]?.retryCount == 1 }
+        assertEquals(1, scheduler.jobs[targetJobId]?.retryCount)
+        assertEquals(JobState.RUNNING, scheduler.jobs[targetJobId]?.state)
+
+        scheduler.shutdown()
+    }
 }

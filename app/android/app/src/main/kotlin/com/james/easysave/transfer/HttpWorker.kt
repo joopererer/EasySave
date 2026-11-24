@@ -283,7 +283,6 @@ class HttpWorker(
             } catch (e: IOException) {
                 if (call.isCanceled() || !coroutineContext.isActive) {
                     val stoppedAt = partFile.length()
-                    TransferLog.i("job=${TransferLog.shortId(job.jobId)} stopped_at=$stoppedAt")
                     throw CancellationException("stopped_at=$stoppedAt")
                 }
                 TransferLog.w("job=${TransferLog.shortId(job.jobId)} network error: ${e.message}")
@@ -473,7 +472,6 @@ class HttpWorker(
                     read = inputStream.read(buffer)
                 } catch (ioe: IOException) {
                     if (activeCall?.isCanceled() == true || !coroutineContext.isActive) {
-                        TransferLog.i("job=${TransferLog.shortId(job.jobId)} stopped_at=$currentBytes")
                         throw CancellationException("stopped_at=$currentBytes")
                     }
                     if (isNetworkException(ioe)) {
@@ -519,7 +517,6 @@ class HttpWorker(
         onProgress(finalLength, if (total > 0) total else finalLength)
 
         if (!coroutineContext.isActive || activeCall?.isCanceled() == true) {
-            TransferLog.i("job=${TransferLog.shortId(job.jobId)} stopped_at=$finalLength")
             throw CancellationException("stopped_at=$finalLength")
         }
 

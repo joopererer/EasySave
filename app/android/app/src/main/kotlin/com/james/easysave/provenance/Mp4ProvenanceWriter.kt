@@ -176,6 +176,10 @@ object Mp4ProvenanceWriter {
                     oldXmpBoxes.add(box)
                     val xmpLen = (box.dataStop - box.dataStart).toInt()
                     if (xmpLen in 1..MAX_MP4_XMP_BYTES) {
+                        // 注意：box.dataStart 位于 8/16 字节 box header 之后，尚未跳过 16 字节 MP4 XMP UUID。
+                        // provenance_dart 当前同样从 dataStart 读取并做 UTF-8 allowMalformed 解码，
+                        // 导致 golden mp4_2_xmp_uuid 输出中带有前导 U+FFFD 替换字符。
+                        // 在 provenance_dart 修复前，Kotlin 刻意保持该行为以确保与当前 golden 逐字节一致。
                         inRaf.seek(box.dataStart)
                         val xmpBytes = ByteArray(xmpLen)
                         inRaf.readFully(xmpBytes)

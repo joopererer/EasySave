@@ -20,6 +20,15 @@ object ProvenancePairWriter {
     private val mainHandler = Handler(Looper.getMainLooper())
     private class StepFailure(message: String) : Exception(message)
 
+    internal fun dispatchBackgroundWork(
+        onMain: (() -> Unit) -> Unit = { block -> mainHandler.post(block) },
+        work: () -> Unit,
+    ) {
+        Thread({
+            work()
+        }, "EasySave-MediaIO").start()
+    }
+
     private inline fun <T> step(name: String, action: () -> T): T {
         try { return action() } catch (e: Exception) {
             if (e is StepFailure) throw e
@@ -42,7 +51,7 @@ object ProvenancePairWriter {
                 result.notImplemented()
                 return@setMethodCallHandler
             }
-            Thread {
+            dispatchBackgroundWork {
                 check(Looper.myLooper() != Looper.getMainLooper()) { "Native media import must execute on background thread" }
                 try {
                     val value = if (call.method == "repairLegacyNames") {
@@ -90,7 +99,7 @@ object ProvenancePairWriter {
                     if (e !is StepFailure) NativeLog.w("EasySavePair", message)
                     mainHandler.post { result.error("provenance_pair", message, null) }
                 }
-            }.start()
+            }
         }
     }
 

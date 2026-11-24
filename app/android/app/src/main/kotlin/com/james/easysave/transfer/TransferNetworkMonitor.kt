@@ -37,6 +37,9 @@ class TransferNetworkMonitor(
     @Volatile
     var wasOffline: Boolean = false
 
+    @Volatile
+    private var lastNetwork: Network? = null
+
     @Synchronized
     fun start() {
         if (callback != null) {
@@ -49,11 +52,14 @@ class TransferNetworkMonitor(
 
         val initiallyValidated = networkChecker.isDefaultNetworkValidated()
         wasOffline = !initiallyValidated
+        lastNetwork = null
         TransferLog.i("net_callback initial_validated=$initiallyValidated was_offline=$wasOffline")
 
         val cb = object : ConnectivityManager.NetworkCallback() {
             override fun onAvailable(network: Network) {
-                checkAndDispatch()
+                val switched = lastNetwork != null && lastNetwork != network
+                lastNetwork = network
+                checkAndDispatch(networkSwitched = switched)
             }
 
             override fun onLost(network: Network) {
@@ -75,7 +81,7 @@ class TransferNetworkMonitor(
         }
     }
 
-    fun checkAndDispatch() {
+    fun checkAndDispatch(networkSwitched: Boolean = false) {
         val isValidated = networkChecker.isDefaultNetworkValidated()
         if (!isValidated) {
             wasOffline = true
@@ -83,7 +89,11 @@ class TransferNetworkMonitor(
         } else {
             if (wasOffline) {
                 // 从「无可用」变为「可用」：通知调度器网络恢复（需稳定 3 秒后重排）
+                wasOffline = false
                 scheduler.send(SchedulerEvent.NetworkChanged(isAvailable = true, wasOffline = true))
+            } else if (networkSwitched) {
+                // 默认网络切换（如 Wi-Fi <-> 蜂窝）：通知调度器刷新 15 秒宽限窗口，不触发恢复重排
+                scheduler.send(SchedulerEvent.NetworkChanged(isAvailable = true, wasOffline = false))
             } else {
                 // 原来就可用，初次回调或未断网变动：不算恢复，不唤醒
                 TransferLog.i("net_callback online without disconnect -> no recovery needed")

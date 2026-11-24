@@ -472,13 +472,14 @@ Future<void> _handleSubmit(
     final started = DateTime.now();
     final sw = Stopwatch()..start();
     try {
-      await _log(
-        channel,
-        'step=parse begin source=${mode == 'select' ? 'bubble_select' : 'bubble_background'}',
-      );
+      final parseSource = mode == 'select'
+          ? 'bubble_select'
+          : 'bubble_background';
+      await _log(channel, 'step=parse begin source=$parseSource');
+      await _invoke(channel, 'parseStarted', {'source': parseSource});
       final post = await _parsePost(
         url,
-        source: mode == 'select' ? 'bubble_select' : 'bubble_background',
+        source: parseSource,
         onCacheMiss: () async {
           await _notify(channel, '正在解析…');
           await _tile(channel, true, '解析中…');
@@ -486,6 +487,10 @@ Future<void> _handleSubmit(
         },
       ).timeout(_parseTimeout);
       await _log(channel, 'step=parse done ${sw.elapsedMilliseconds}ms');
+      await _invoke(channel, 'parseFinished', {
+        'result': 'ok',
+        'elapsedMs': sw.elapsedMilliseconds,
+      });
       if (mode == 'caption') {
         final cap = _captionText(post);
         // The headless engine has no PlatformPlugin, so Clipboard.setData would
