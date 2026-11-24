@@ -86,6 +86,22 @@ class TransferProgressEvent extends TransferEvent {
   final int totalBytes;
 }
 
+/// 传输完成事件（带相册 mediaId、md5、文件名等）
+class TransferCompletedEvent extends TransferEvent {
+  const TransferCompletedEvent({
+    required super.jobId,
+    this.mediaId,
+    this.md5,
+    this.title,
+    this.fileSize = 0,
+  });
+
+  final String? mediaId;
+  final String? md5;
+  final String? title;
+  final int fileSize;
+}
+
 /// 需要重新解析地址事件 (HTTP 403/410)
 class TransferReresolveRequiredEvent extends TransferEvent {
   const TransferReresolveRequiredEvent({required super.jobId});
@@ -116,6 +132,14 @@ class TransferClient {
           bytesRead: (map['bytesRead'] as num?)?.toInt() ?? 0,
           totalBytes: (map['totalBytes'] as num?)?.toInt() ?? 0,
         );
+      } else if (type == 'completed') {
+        return TransferCompletedEvent(
+          jobId: jobId,
+          mediaId: map['mediaId'] as String?,
+          md5: map['md5'] as String?,
+          title: map['title'] as String?,
+          fileSize: (map['fileSize'] as num?)?.toInt() ?? 0,
+        );
       } else if (type == 'reresolve_required') {
         return TransferReresolveRequiredEvent(jobId: jobId);
       } else {
@@ -144,6 +168,7 @@ class TransferClient {
     List<Map<String, dynamic>>? policyHosts,
     String? mime,
     String? policyKey,
+    Map<String, dynamic>? provenance,
   }) async {
     final result = await _methodChannel.invokeMethod<String>('enqueue', {
       if (jobId != null) 'jobId': jobId,
@@ -158,6 +183,7 @@ class TransferClient {
       if (policyHosts != null) 'policyHosts': policyHosts,
       if (mime != null) 'mime': mime,
       if (policyKey != null) 'policyKey': policyKey,
+      if (provenance != null) 'provenance': provenance,
     });
     return result ?? jobId ?? '';
   }
@@ -208,6 +234,14 @@ class TransferClient {
 
   Future<bool> clearSelfCheckJobs() async {
     final res = await _methodChannel.invokeMethod<bool>('clearSelfCheckJobs');
+    return res ?? false;
+  }
+
+  Future<bool> openInGallery(String mediaId, {String? mime}) async {
+    final res = await _methodChannel.invokeMethod<bool>('openInGallery', {
+      'mediaId': mediaId,
+      if (mime != null) 'mime': mime,
+    });
     return res ?? false;
   }
 }

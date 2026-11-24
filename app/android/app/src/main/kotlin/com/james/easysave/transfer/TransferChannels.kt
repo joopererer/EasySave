@@ -86,6 +86,19 @@ object TransferChannels {
                 }
                 val mime = args["mime"] as? String
                 val policyKey = args["policyKey"] as? String
+                val provenanceRaw = args["provenance"] as? Map<*, *>
+                val provenance = provenanceRaw?.let { raw ->
+                    fun convert(m: Map<*, *>): Map<String, Any?> {
+                        return m.entries.associate { (k, v) ->
+                            k.toString() to when (v) {
+                                is Map<*, *> -> convert(v)
+                                is List<*> -> v.map { item -> if (item is Map<*, *>) convert(item) else item }
+                                else -> v
+                            }
+                        }
+                    }
+                    convert(raw)
+                }
 
                 if (!url.isNullOrBlank()) {
                     TransferParamsRegistry.set(
@@ -98,6 +111,18 @@ object TransferChannels {
                             policyHosts = policyHosts,
                             mime = mime,
                             policyKey = policyKey,
+                            provenance = provenance,
+                        )
+                    )
+                    val transfersDir = java.io.File(context.filesDir, "transfers")
+                    val metaFile = java.io.File(transfersDir, "$jobId.meta")
+                    TransferMeta.write(
+                        metaFile,
+                        TransferMeta(
+                            url = url,
+                            mime = mime,
+                            policyKey = policyKey,
+                            provenance = provenance,
                         )
                     )
                 }
@@ -177,7 +202,23 @@ object TransferChannels {
                 val jobId = args["jobId"] as? String ?: ""
                 val transfersDir = java.io.File(context.filesDir, "transfers")
                 val partFile = java.io.File(transfersDir, "$jobId.part")
-                if (!partFile.exists()) {
+                val job = scheduler.store.getJob(jobId)
+
+                if (job != null && job.state == JobState.DONE) {
+                    result.success(
+                        mapOf(
+                            "exists" to true,
+                            "mediaId" to job.mediaId,
+                            "title" to job.title,
+                            "size" to job.fileSize,
+                            "md5" to job.md5,
+                            "partSha256" to job.partSha256,
+                            "sha256" to (job.partSha256 ?: ""),
+                            "provenanceStatus" to job.provenanceStatus,
+                            "readbackMatch" to job.readbackMatch,
+                        )
+                    )
+                } else if (!partFile.exists()) {
                     result.success(mapOf("exists" to false))
                 } else {
                     val size = partFile.length()
@@ -199,9 +240,39 @@ object TransferChannels {
                             "exists" to true,
                             "size" to size,
                             "sha256" to sha256,
+                            "partSha256" to sha256,
                             "path" to partFile.absolutePath,
                         )
                     )
+                }
+            }
+            "openInGallery" -> {
+                val args = call.arguments as? Map<*, *> ?: emptyMap<String, Any?>()
+                val mediaId = args["mediaId"] as? String ?: ""
+                val mime = args["mime"] as? String ?: "*/*"
+                if (mediaId.isBlank()) {
+                    result.error("INVALID_ARGUMENT", "mediaId is blank", null)
+                } else {
+                    try {
+                        val uri = if (mediaId.startsWith("content://")) {
+                            android.net.Uri.parse(mediaId)
+                        } else {
+                            val collection = if (mime.startsWith("video/")) {
+                                android.provider.MediaStore.Video.Media.EXTERNAL_CONTENT_URI
+                            } else {
+                                android.provider.MediaStore.Images.Media.EXTERNAL_CONTENT_URI
+                            }
+                            android.net.Uri.withAppendedPath(collection, mediaId)
+                        }
+                        val intent = android.content.Intent(android.content.Intent.ACTION_VIEW).apply {
+                            setDataAndType(uri, mime)
+                            addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK or android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                        }
+                        context.startActivity(intent)
+                        result.success(true)
+                    } catch (t: Throwable) {
+                        result.error("OPEN_FAILED", t.message, null)
+                    }
                 }
             }
             "deleteJobFile" -> {
@@ -223,6 +294,7 @@ object TransferChannels {
         val payload = when (event) {
             is TransferEvent.StateChanged -> event.toMap()
             is TransferEvent.Progress -> event.toMap()
+            is TransferEvent.Completed -> event.toMap()
             is TransferEvent.ReresolveRequired -> event.toMap()
         }
         mainHandler.post {

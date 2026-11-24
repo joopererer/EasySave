@@ -245,6 +245,24 @@ class XmpPackage private constructor(private var _text: String) {
         _root = XmlScanner.parseXmlTree(_text)
     }
 
+    fun getField(field: XmpFieldSpec): String? {
+        val attr = _findAttribute(field)
+        if (attr != null) return attr.value
+        val elem = _findElement(field)
+        if (elem != null) return elem.text
+        return null
+    }
+
+    fun getField(namespaceUri: String, localName: String): String? {
+        for (desc in descriptions) {
+            val attr = desc.attribute(namespaceUri, localName)
+            if (attr != null) return attr.value
+            val elem = desc.find(namespaceUri, localName)
+            if (elem != null) return elem.text
+        }
+        return null
+    }
+
     private fun _findAttribute(field: XmpFieldSpec): XmlAttr? {
         for (desc in descriptions) {
             val attr = desc.attribute(field.namespaceUri, field.localName)

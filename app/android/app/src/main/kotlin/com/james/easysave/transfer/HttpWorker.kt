@@ -157,6 +157,7 @@ class HttpWorker(
                 storedMeta = storedMeta,
                 mime = mime,
                 policyKey = policyKey,
+                provenance = memoryParams?.provenance ?: storedMeta?.provenance,
                 onProgress = onProgress,
             )
         } catch (ce: CancellationException) {
@@ -205,10 +206,14 @@ class HttpWorker(
         storedMeta: TransferMeta?,
         mime: String?,
         policyKey: String?,
+        provenance: Map<String, Any?>? = null,
         onProgress: suspend (bytesRead: Long, totalBytes: Long) -> Unit,
     ): WorkerResult {
         var startOffset = partFile.length()
-        var currentMeta = storedMeta ?: TransferMeta(url = targetUrl, total = -1L, mime = mime, policyKey = policyKey)
+        val prov = storedMeta?.provenance ?: provenance
+        var currentMeta = (storedMeta ?: TransferMeta(url = targetUrl, total = -1L, mime = mime, policyKey = policyKey, provenance = prov)).let {
+            if (it.provenance == null && prov != null) it.copy(provenance = prov) else it
+        }
         var total = currentMeta.total
         var etag = currentMeta.etag
         var lastModified = currentMeta.lastModified
@@ -352,6 +357,7 @@ class HttpWorker(
                     storedMeta = currentMeta.copy(total = -1L),
                     mime = mime,
                     policyKey = policyKey,
+                    provenance = provenance,
                     onProgress = onProgress,
                 )
             }
@@ -392,6 +398,7 @@ class HttpWorker(
                     storedMeta = currentMeta.copy(total = -1L),
                     mime = mime,
                     policyKey = policyKey,
+                    provenance = provenance,
                     onProgress = onProgress,
                 )
             }

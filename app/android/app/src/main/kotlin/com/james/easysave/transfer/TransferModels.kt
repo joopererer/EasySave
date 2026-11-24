@@ -45,6 +45,19 @@ data class TransferJob(
     val fakePlan: String? = null,
     var bytesRead: Long = 0L,
     var totalBytes: Long = 0L,
+    var finalizeStep: String? = null,
+    var mediaId: String? = null,
+    var title: String? = null,
+    var md5: String? = null,
+    var fileSize: Long = 0L,
+    var partSha256: String? = null,
+    var verifyMs: Long = 0L,
+    var provenanceMs: Long = 0L,
+    var importMs: Long = 0L,
+    var readbackMs: Long = 0L,
+    var provenanceStatus: String? = null,
+    var readbackMatch: Boolean? = null,
+    var historyPending: Boolean = false,
 ) {
     fun toMap(): Map<String, Any?> = mapOf(
         "jobId" to jobId,
@@ -58,6 +71,19 @@ data class TransferJob(
         "bytesRead" to bytesRead,
         "totalBytes" to totalBytes,
         "fakePlan" to fakePlan,
+        "finalizeStep" to finalizeStep,
+        "mediaId" to mediaId,
+        "title" to title,
+        "md5" to md5,
+        "fileSize" to fileSize,
+        "partSha256" to partSha256,
+        "verifyMs" to verifyMs,
+        "provenanceMs" to provenanceMs,
+        "importMs" to importMs,
+        "readbackMs" to readbackMs,
+        "provenanceStatus" to provenanceStatus,
+        "readbackMatch" to readbackMatch,
+        "historyPending" to historyPending,
     )
 }
 
@@ -95,6 +121,23 @@ sealed class TransferEvent {
         )
     }
 
+    data class Completed(
+        val jobId: String,
+        val mediaId: String?,
+        val md5: String?,
+        val title: String? = null,
+        val fileSize: Long = 0L,
+    ) : TransferEvent() {
+        fun toMap(): Map<String, Any?> = mapOf(
+            "type" to "completed",
+            "jobId" to jobId,
+            "mediaId" to mediaId,
+            "md5" to md5,
+            "title" to title,
+            "fileSize" to fileSize,
+        )
+    }
+
     data class ReresolveRequired(
         val jobId: String,
     ) : TransferEvent() {
@@ -116,6 +159,7 @@ data class TransferDownloadParams(
     val policyHosts: List<com.james.easysave.policy.MediaPolicyRedirects.HostRule> = emptyList(),
     val mime: String? = null,
     val policyKey: String? = null,
+    val provenance: Map<String, Any?>? = null,
 )
 
 /**

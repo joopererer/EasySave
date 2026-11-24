@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import '../core/models.dart';
+import '../metadata/site_provenance.dart';
 import '../services/media_request_policy.dart';
 import '../services/parse_service.dart';
 import '../services/site_registry.dart';
@@ -173,6 +174,20 @@ class _TransferNewPipelinePageState extends State<TransferNewPipelinePage> {
         _logs.add('[XFER] 准备入队 jobId=$jobId category=$category');
       });
 
+      final prov = buildSiteProvenance(
+        platform: post.platform,
+        capturedBy: 'EasySave/1.13.0',
+        sourceId: post.id,
+        sourceUrl: rawUrl,
+        authorName: post.author.name,
+        title: post.title,
+        caption: post.caption,
+        aiLabel: post.aiLabel?.text,
+        aiLabelSource: post.aiLabel?.source,
+        itemIndex: 1,
+        itemCount: post.items.isNotEmpty ? post.items.length : 1,
+      );
+
       await _client.enqueue(
         jobId: jobId,
         direction: 'download',
@@ -185,6 +200,7 @@ class _TransferNewPipelinePageState extends State<TransferNewPipelinePage> {
         policyHosts: mediaHosts,
         mime: mime,
         policyKey: site.data['id'] as String?,
+        provenance: prov.toJson(),
       );
     } catch (e) {
       if (!mounted) return;
@@ -360,29 +376,63 @@ class _TransferNewPipelinePageState extends State<TransferNewPipelinePage> {
                       style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
                     ),
                     const Divider(),
+                    if (_fileInfo!['title'] != null) ...[
+                      Text('相册文件名: ${_fileInfo!['title']}'),
+                      const SizedBox(height: 4),
+                    ],
                     Text('文件大小: ${_formatBytes((_fileInfo!['size'] as num?)?.toInt() ?? 0)} (${_fileInfo!['size']} 字节)'),
                     const SizedBox(height: 4),
-                    SelectableText('SHA-256: ${_fileInfo!['sha256']}'),
-                    const SizedBox(height: 12),
-                    ElevatedButton.icon(
-                      key: const Key('pipeline_delete_file_btn'),
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: Colors.red[50],
-                        foregroundColor: Colors.red,
+                    if (_fileInfo!['md5'] != null) ...[
+                      SelectableText('MD5: ${_fileInfo!['md5']}'),
+                      const SizedBox(height: 4),
+                    ],
+                    SelectableText('.part SHA-256 (写入来源信息前): ${_fileInfo!['partSha256'] ?? _fileInfo!['sha256'] ?? '未知'}'),
+                    const SizedBox(height: 4),
+                    Text(
+                      '来源信息回读结果: ${_fileInfo!['readbackMatch'] == true ? '字段一致 (embedded and verified)' : (_fileInfo!['provenanceStatus'] == 'skipped_unsupported' ? '跳过不支持格式 (skipped_unsupported)' : '未注入 / 不一致')}',
+                      style: TextStyle(
+                        color: _fileInfo!['readbackMatch'] == true
+                            ? Colors.green[800]
+                            : Colors.black87,
+                        fontWeight: FontWeight.bold,
                       ),
-                      onPressed: () async {
-                        final jid = _jobId;
-                        if (jid != null) {
-                          final messenger = ScaffoldMessenger.of(context);
-                          await _client.deleteJobFile(jid);
-                          await _fetchFileInfo();
-                          messenger.showSnackBar(
-                            const SnackBar(content: Text('已删除测试文件')),
-                          );
-                        }
-                      },
-                      icon: const Icon(Icons.delete_forever),
-                      label: const Text('删除测试文件'),
+                    ),
+                    const SizedBox(height: 12),
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 8,
+                      children: [
+                        if (_fileInfo!['mediaId'] != null)
+                          ElevatedButton.icon(
+                            key: const Key('pipeline_open_gallery_btn'),
+                            onPressed: () async {
+                              final mid = _fileInfo!['mediaId'].toString();
+                              await _client.openInGallery(mid);
+                            },
+                            icon: const Icon(Icons.photo_library),
+                            label: const Text('在相册中打开'),
+                          ),
+                        ElevatedButton.icon(
+                          key: const Key('pipeline_delete_file_btn'),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: Colors.red[50],
+                            foregroundColor: Colors.red,
+                          ),
+                          onPressed: () async {
+                            final jid = _jobId;
+                            if (jid != null) {
+                              final messenger = ScaffoldMessenger.of(context);
+                              await _client.deleteJobFile(jid);
+                              await _fetchFileInfo();
+                              messenger.showSnackBar(
+                                const SnackBar(content: Text('已删除测试文件')),
+                              );
+                            }
+                          },
+                          icon: const Icon(Icons.delete_forever),
+                          label: const Text('删除测试文件'),
+                        ),
+                      ],
                     ),
                   ],
                 ),

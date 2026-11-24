@@ -67,6 +67,7 @@ sealed class SchedulerEvent {
     data class GetSnapshot(val callback: (List<TransferJob>) -> Unit) : SchedulerEvent()
     data class ClearJobsByBatch(val batchId: String, val callback: () -> Unit) : SchedulerEvent()
     data class CustomEvent(val id: Int, val onHandled: (Int) -> Unit) : SchedulerEvent()
+    data class FinalizeResultEvent(val jobId: String, val outcome: FinalizeOutcome) : SchedulerEvent()
 }
 
 /**
@@ -107,7 +108,14 @@ class TransferScheduler(
     val eventListener: ((TransferEvent) -> Unit)? = null,
     val onIdleChanged: ((isIdle: Boolean) -> Unit)? = null,
     val transfersDir: java.io.File? = null,
+    val publisher: MediaPublisher? = null,
+    finalizer: TransferFinalizer? = null,
 ) {
+    val finalizer: TransferFinalizer = finalizer ?: TransferFinalizer(
+        transfersDir = transfersDir ?: java.io.File("."),
+        store = store,
+        publisher = publisher ?: NoOpMediaPublisher()
+    )
     companion object {
         const val MAX_CONCURRENT_IMAGES = 3
         const val MAX_CONCURRENT_LARGE_FILES = 1
@@ -200,6 +208,7 @@ class TransferScheduler(
             is SchedulerEvent.GetSnapshot -> event.callback(jobs.values.map { it.copy() })
             is SchedulerEvent.ClearJobsByBatch -> handleClearJobsByBatch(event.batchId, event.callback)
             is SchedulerEvent.CustomEvent -> event.onHandled(event.id)
+            is SchedulerEvent.FinalizeResultEvent -> handleFinalizeResult(event.jobId, event.outcome)
         }
     }
 
@@ -261,6 +270,11 @@ class TransferScheduler(
     private fun handleCancel(jobId: String) {
         val job = jobs[jobId] ?: return
         val fromState = job.state
+        if (fromState.isTerminal) return
+        if (fromState == JobState.FINISHING) {
+            TransferLog.w("job=${TransferLog.shortId(jobId)} cancel rejected: job is in finishing state")
+            return
+        }
         if (!fromState.isTerminal) {
             cancelWorker(jobId)
             pendingTimers.remove(jobId)?.cancel()
@@ -353,12 +367,7 @@ class TransferScheduler(
                     store.updateJobState(jobId, JobState.FINISHING, job.retryCount, job.updatedAt)
                     emitStateChange(jobId, JobState.RUNNING, JobState.FINISHING, "transfer_complete", job.retryCount)
 
-                    if (JobState.validateAndLog(jobId, JobState.FINISHING, JobState.DONE, "finalized", job.retryCount)) {
-                        job.state = JobState.DONE
-                        job.updatedAt = clock.currentTimeMillis()
-                        store.updateJobState(jobId, JobState.DONE, job.retryCount, job.updatedAt)
-                        emitStateChange(jobId, JobState.FINISHING, JobState.DONE, "finalized", job.retryCount)
-                    }
+                    launchFinalizer(job)
                 }
             }
             is WorkerResult.NetworkError -> {
@@ -486,6 +495,80 @@ class TransferScheduler(
         for (job in recovered) {
             TransferLog.i("job=${TransferLog.shortId(job.jobId)} recovered from running to queued")
             emitStateChange(job.jobId, JobState.RUNNING, JobState.QUEUED, "process_kill_recovery", job.retryCount)
+        }
+        // 被杀恢复：检查处于 FINISHING 状态的任务并恢复收尾
+        for (stJob in allStored) {
+            if (stJob.state == JobState.FINISHING) {
+                TransferLog.i("job=${TransferLog.shortId(stJob.jobId)} recovered in FINISHING state -> resume finalizer (step=${stJob.finalizeStep})")
+                launchFinalizer(stJob)
+            }
+        }
+        dispatchNext()
+    }
+
+    private fun launchFinalizer(job: TransferJob) {
+        val tDir = transfersDir ?: java.io.File(".")
+        val metaFile = java.io.File(tDir, "${job.jobId}.meta")
+        val partFile = java.io.File(tDir, "${job.jobId}.part")
+        val params = TransferParamsRegistry.get(job.jobId)
+        val meta = TransferMeta.read(metaFile) ?: TransferMeta(
+            url = params?.url ?: "",
+            total = job.totalBytes,
+            mime = params?.mime,
+            policyKey = params?.policyKey,
+            provenance = params?.provenance,
+        )
+
+        scope.launch(Dispatchers.IO) {
+            val outcome = finalizer.execute(job, meta, partFile)
+            send(SchedulerEvent.FinalizeResultEvent(job.jobId, outcome))
+        }
+    }
+
+    private fun handleFinalizeResult(jobId: String, outcome: FinalizeOutcome) {
+        val job = jobs[jobId] ?: return
+        if (job.state != JobState.FINISHING) return
+
+        when (outcome) {
+            is FinalizeOutcome.Success -> {
+                job.mediaId = outcome.publishedMedia.mediaId
+                job.title = outcome.publishedMedia.title
+                job.md5 = outcome.publishedMedia.md5
+                job.fileSize = outcome.publishedMedia.size
+                job.partSha256 = outcome.partSha256
+                job.provenanceStatus = outcome.provenanceStatus
+                job.readbackMatch = outcome.readbackMatch
+                job.verifyMs = outcome.verifyMs
+                job.provenanceMs = outcome.provenanceMs
+                job.importMs = outcome.importMs
+                job.readbackMs = outcome.readbackMs
+                job.historyPending = true
+
+                if (JobState.validateAndLog(jobId, JobState.FINISHING, JobState.DONE, "finalized", job.retryCount)) {
+                    job.state = JobState.DONE
+                    job.updatedAt = clock.currentTimeMillis()
+                    store.updateJobState(jobId, JobState.DONE, job.retryCount, job.updatedAt)
+                    emitStateChange(jobId, JobState.FINISHING, JobState.DONE, "finalized", job.retryCount)
+
+                    eventListener?.invoke(
+                        TransferEvent.Completed(
+                            jobId = jobId,
+                            mediaId = job.mediaId,
+                            md5 = job.md5,
+                            title = job.title,
+                            fileSize = job.fileSize,
+                        )
+                    )
+                }
+            }
+            is FinalizeOutcome.Failed -> {
+                if (JobState.validateAndLog(jobId, JobState.FINISHING, JobState.FAILED, outcome.reason, job.retryCount)) {
+                    job.state = JobState.FAILED
+                    job.updatedAt = clock.currentTimeMillis()
+                    store.updateJobState(jobId, JobState.FAILED, job.retryCount, job.updatedAt)
+                    emitStateChange(jobId, JobState.FINISHING, JobState.FAILED, outcome.reason, job.retryCount)
+                }
+            }
         }
         dispatchNext()
     }

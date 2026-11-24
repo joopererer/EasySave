@@ -78,7 +78,8 @@ class TransferService : Service() {
                 onIdleChanged = { isIdle ->
                     instance?.onIdleChanged(isIdle)
                 },
-                transfersDir = java.io.File(appContext.filesDir, "transfers")
+                transfersDir = java.io.File(appContext.filesDir, "transfers"),
+                publisher = MediaStorePublisher(appContext),
             )
             // 启动时恢复
             scheduler.handleRestoreFromStore()

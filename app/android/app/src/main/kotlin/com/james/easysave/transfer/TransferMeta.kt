@@ -19,6 +19,7 @@ data class TransferMeta(
     val mime: String? = null,
     val sniff: String? = null,
     val policyKey: String? = null,
+    val provenance: Map<String, Any?>? = null,
 ) {
     fun toJson(): String {
         val obj = JSONObject()
@@ -29,6 +30,7 @@ data class TransferMeta(
         if (mime != null) obj.put("mime", mime)
         if (sniff != null) obj.put("sniff", sniff)
         if (policyKey != null) obj.put("policyKey", policyKey)
+        if (provenance != null) obj.put("provenance", JSONObject(provenance))
         return obj.toString()
     }
 
@@ -36,6 +38,10 @@ data class TransferMeta(
         fun fromJson(jsonStr: String): TransferMeta? {
             return runCatching {
                 val obj = JSONObject(jsonStr)
+                val provMap = if (obj.has("provenance")) {
+                    val pObj = obj.optJSONObject("provenance")
+                    pObj?.let { jsonToMap(it) }
+                } else null
                 TransferMeta(
                     url = obj.optString("url", ""),
                     total = obj.optLong("total", -1L),
@@ -44,8 +50,30 @@ data class TransferMeta(
                     mime = if (obj.has("mime")) obj.optString("mime") else null,
                     sniff = if (obj.has("sniff")) obj.optString("sniff") else null,
                     policyKey = if (obj.has("policyKey")) obj.optString("policyKey") else null,
+                    provenance = provMap,
                 )
             }.getOrNull()
+        }
+
+        private fun jsonToMap(obj: JSONObject): Map<String, Any?> {
+            val map = mutableMapOf<String, Any?>()
+            val keys = obj.keys()
+            while (keys.hasNext()) {
+                val key = keys.next()
+                val value = obj.opt(key)
+                map[key] = when (value) {
+                    is JSONObject -> jsonToMap(value)
+                    is org.json.JSONArray -> {
+                        List(value.length()) { i ->
+                            val item = value.opt(i)
+                            if (item is JSONObject) jsonToMap(item) else item
+                        }
+                    }
+                    JSONObject.NULL -> null
+                    else -> value
+                }
+            }
+            return map
         }
 
         fun read(file: File): TransferMeta? {
