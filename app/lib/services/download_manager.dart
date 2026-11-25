@@ -1687,32 +1687,70 @@ class DownloadManager extends ChangeNotifier {
   Future<void> init() async {
     if (_ready) return;
     _ready = true;
-    if (downloaderStartForTesting != null) {
-      await downloaderStartForTesting!();
-    } else {
-      await FileDownloader().start();
-    }
-    try {
-      await _notifications.initialize(
-        settings: const InitializationSettings(
-          android: AndroidInitializationSettings('@drawable/ic_stat_easysave'),
-        ),
-      );
-      await _notifications
-          .resolvePlatformSpecificImplementation<
-            AndroidFlutterLocalNotificationsPlugin
-          >()
-          ?.createNotificationChannel(
-            const AndroidNotificationChannel(
-              _channelId,
-              '下载进度',
-              importance: Importance.low,
+    final sw = Stopwatch()..start();
+    final settings = await AppSettings.load();
+    final useNew =
+        useNewTransferPipelineForTesting ?? settings.useNewTransferPipeline;
+
+    if (useNew) {
+      _subscribeTransferEvents();
+      // Defer legacy plugin & notification init off the critical cold-start path.
+      unawaited(Future<void>(() async {
+        try {
+          if (downloaderStartForTesting != null) {
+            await downloaderStartForTesting!();
+          } else {
+            await FileDownloader().start();
+          }
+          _updatesSub ??= FileDownloader().updates.listen(_onUpdate);
+        } catch (_) {}
+        try {
+          await _notifications.initialize(
+            settings: const InitializationSettings(
+              android: AndroidInitializationSettings('@drawable/ic_stat_easysave'),
             ),
           );
-    } catch (_) {
-      // Notifications are best effort; downloads run regardless.
+          await _notifications
+              .resolvePlatformSpecificImplementation<
+                AndroidFlutterLocalNotificationsPlugin
+              >()
+              ?.createNotificationChannel(
+                const AndroidNotificationChannel(
+                  _channelId,
+                  '下载进度',
+                  importance: Importance.low,
+                ),
+              );
+        } catch (_) {}
+      }));
+    } else {
+      if (downloaderStartForTesting != null) {
+        await downloaderStartForTesting!();
+      } else {
+        await FileDownloader().start();
+      }
+      try {
+        await _notifications.initialize(
+          settings: const InitializationSettings(
+            android: AndroidInitializationSettings('@drawable/ic_stat_easysave'),
+          ),
+        );
+        await _notifications
+            .resolvePlatformSpecificImplementation<
+              AndroidFlutterLocalNotificationsPlugin
+            >()
+            ?.createNotificationChannel(
+              const AndroidNotificationChannel(
+                _channelId,
+                '下载进度',
+                importance: Importance.low,
+              ),
+            );
+      } catch (_) {
+        // Notifications are best effort; downloads run regardless.
+      }
+      _updatesSub ??= FileDownloader().updates.listen(_onUpdate);
     }
-    _updatesSub ??= FileDownloader().updates.listen(_onUpdate);
     // Connectivity is display only (progress text, notification body). The
     // downloader's queueing/retry/resume logic never reads it.
     unawaited(NetworkStatus.instance.start());
@@ -1732,11 +1770,16 @@ class DownloadManager extends ChangeNotifier {
       // A file parked waiting for the connection in an earlier run continues as
       // soon as there is one (v1.11 batch 3).
       unawaited(_resumeWaitingJobs());
-      if (owner == DownloadBatch.sourceMain) {
-        _subscribeTransferEvents();
-        unawaited(reconcileTransferHistoryPending());
-      }
+      _subscribeTransferEvents();
+      unawaited(_syncTransferBatchesFromSnapshot());
+      unawaited(reconcileTransferHistoryPending());
     });
+    unawaited(
+      DevLog.write(
+        'V16DL',
+        'downloads_init_ms=${sw.elapsedMilliseconds} new_pipeline=$useNew owner=$owner',
+      ),
+    );
   }
 
   static const List<Duration> kAutoResumeBackoff = [
@@ -2607,7 +2650,13 @@ class DownloadManager extends ChangeNotifier {
     DownloadBatch batch, {
     bool recovered = false,
     String? reason,
-  }) => _afterTerminal(batch, recovered: recovered, reason: reason);
+    bool fromTransferPipeline = false,
+  }) => _afterTerminal(
+    batch,
+    recovered: recovered,
+    reason: reason,
+    fromTransferPipeline: fromTransferPipeline,
+  );
 
   /// The drop step [_afterTerminal] performs once a batch finished without a
   /// failure. Exposed so the failure-state rule can be tested without the
@@ -2684,9 +2733,8 @@ class DownloadManager extends ChangeNotifier {
     ];
     final settingsForPipeline = await AppSettings.load();
     final useNewPipeline =
-        owner == DownloadBatch.sourceMain &&
-        (useNewTransferPipelineForTesting ??
-            settingsForPipeline.useNewTransferPipeline);
+        useNewTransferPipelineForTesting ??
+        settingsForPipeline.useNewTransferPipeline;
 
     final batch = DownloadBatch(
       batchId: batchId,
@@ -2786,19 +2834,30 @@ class DownloadManager extends ChangeNotifier {
       (db) => writePlaceholderHistory(db, batch),
       stage: 'placeholder',
     );
-    for (final job in batch.jobs) {
-      // One failing enqueue must not strand the remaining jobs in `queued`
-      // (that kept the batch non-terminal forever, e.g. stuck at ~50%).
-      try {
-        if (batch.usesNewTransferPipeline) {
-          await _enqueueViaTransferService(batch, job);
-        } else {
+    if (batch.usesNewTransferPipeline) {
+      await Future.wait([
+        for (final job in batch.jobs)
+          () async {
+            try {
+              await _enqueueViaTransferService(batch, job);
+            } catch (e) {
+              _log('enqueue failed ${job.key}: $e');
+              job.state = JobState.failed;
+              job.error = '加入下载队列失败';
+            }
+          }(),
+      ]);
+    } else {
+      for (final job in batch.jobs) {
+        // One failing enqueue must not strand the remaining jobs in `queued`
+        // (that kept the batch non-terminal forever, e.g. stuck at ~50%).
+        try {
           await _enqueueAttempt(batch, job, source: 'start');
+        } catch (e) {
+          _log('enqueue failed ${job.key}: $e');
+          job.state = JobState.failed;
+          job.error = '加入下载队列失败';
         }
-      } catch (e) {
-        _log('enqueue failed ${job.key}: $e');
-        job.state = JobState.failed;
-        job.error = '加入下载队列失败';
       }
     }
     await _persist(batch);
@@ -3837,8 +3896,9 @@ class DownloadManager extends ChangeNotifier {
               activeJobSubdirs.add(job.currentTaskId!);
               activeJobSubdirs.add(Uri.encodeComponent(job.currentTaskId!));
             }
-            if (job.resumeTempPath != null)
+            if (job.resumeTempPath != null) {
               activeTempPaths.add(job.resumeTempPath!);
+            }
           }
         }
       }
@@ -4829,8 +4889,9 @@ class DownloadManager extends ChangeNotifier {
       await _enqueueAttempt(batch, job, source: 'wrong_content');
       return;
     }
-    if (await _importBestSetAside(batch, job, reason: 'content_rejected'))
+    if (await _importBestSetAside(batch, job, reason: 'content_rejected')) {
       return;
+    }
     await _failReadable(batch, job);
   }
 
@@ -5124,6 +5185,8 @@ class DownloadManager extends ChangeNotifier {
         ..errorCode = null
         ..progress = 1;
       batch.historyWritten = false;
+      batch.settledBy = null;
+      _settledBatchIds.remove(batch.batchId);
       await _persist(batch);
       notifyListeners();
       await _afterTerminal(batch, recovered: false);
@@ -5848,8 +5911,9 @@ class DownloadManager extends ChangeNotifier {
       await _enqueueAttempt(batch, job, source: 'next_candidate');
       return;
     }
-    if (await _importBestSetAside(batch, job, reason: 'transfer_failed'))
+    if (await _importBestSetAside(batch, job, reason: 'transfer_failed')) {
       return;
+    }
     _log(
       'transfer gave up index=${job.itemIndex} role=${roleOf(job)} '
       'reason=${_transferReason(update, userCancelRequested: job.userCancelRequested)} '
@@ -6235,6 +6299,13 @@ class DownloadManager extends ChangeNotifier {
       return;
     }
     if (!batch.historyWritten) {
+      if (batch.usesNewTransferPipeline) {
+        final claimed = await _transferClient.claimHistoryWrite(batch.batchId);
+        if (!claimed) {
+          _settledBatchIds.remove(batch.batchId);
+          return;
+        }
+      }
       batch.historyWritten = true;
       final histSw = Stopwatch()..start();
       final written = await _writeHistoryWithRetry(
@@ -6252,6 +6323,7 @@ class DownloadManager extends ChangeNotifier {
       final histMs = histSw.elapsedMilliseconds;
       if (!written) {
         // Keep the batch owing its history row; try again later.
+        _settledBatchIds.remove(batch.batchId);
         batch.historyWritten = false;
         await _persist(batch);
         _scheduleHistoryRetry(batch);
@@ -6376,8 +6448,9 @@ class DownloadManager extends ChangeNotifier {
   /// are refreshed; fall back to the stored URLs when parsing fails.
   Future<void> retryJob(DownloadBatch batch, DownloadJob job) async {
     if (batch.usesNewTransferPipeline && job.transferJobId != null) {
-      if (job.state != JobState.failed && job.state != JobState.canceled)
+      if (job.state != JobState.failed && job.state != JobState.canceled) {
         return;
+      }
       job.state = JobState.queued;
       job.transferState = 'queued';
       job.error = null;
@@ -6670,8 +6743,9 @@ class DownloadManager extends ChangeNotifier {
     batch = await _ownedOrAdopt(batch);
     if (batch.usesNewTransferPipeline) {
       for (final job in batch.jobs) {
-        if (job.state != JobState.queued && job.state != JobState.active)
+        if (job.state != JobState.queued && job.state != JobState.active) {
           continue;
+        }
         job.state = JobState.paused;
         job.transferState = 'paused';
         job.userPaused = true;
@@ -6935,8 +7009,9 @@ class DownloadManager extends ChangeNotifier {
     }
     batch = await _ownedOrAdopt(batch);
     job = batch.jobs.firstWhere((j) => j.key == job.key, orElse: () => job);
-    if (job.saved || job.state == JobState.done)
+    if (job.saved || job.state == JobState.done) {
       return; // The album write won the race; keep it completed.
+    }
     if (job.isTerminal) return;
     job.userCancelRequested = true;
     _inFlightResumes.remove(job.key);
@@ -7827,12 +7902,77 @@ class DownloadManager extends ChangeNotifier {
     }
   }
 
+  Future<void> syncTransferBatchesFromSnapshot() =>
+      _syncTransferBatchesFromSnapshot();
+
+  @visibleForTesting
+  Future<void> syncTransferBatchesFromSnapshotForTesting() =>
+      _syncTransferBatchesFromSnapshot();
+
+  Future<void> _syncTransferBatchesFromSnapshot() async {
+    try {
+      final snapshots = await _transferClient.snapshot();
+      if (snapshots.isEmpty) return;
+      final byJobId = {for (final s in snapshots) s.jobId: s};
+      var changed = false;
+      for (final batch in _batches.values) {
+        if (!batch.usesNewTransferPipeline || batch.isTerminal) continue;
+        for (final job in batch.jobs) {
+          final tId = job.transferJobId;
+          if (tId == null) continue;
+          final snap = byJobId[tId];
+          if (snap == null) continue;
+          job.transferState = snap.state;
+          if (snap.totalBytes > 0) {
+            job.expectedBytes = snap.totalBytes;
+            job.progress = (snap.bytesRead / snap.totalBytes).clamp(0.0, 1.0);
+          }
+          switch (snap.state) {
+            case 'queued':
+              job.state = JobState.queued;
+            case 'running':
+            case 'finishing':
+            case 'waiting_pair':
+              job.state = JobState.active;
+              job.isFinishing = snap.state == 'finishing' || snap.state == 'waiting_pair';
+            case 'waiting_network':
+              job.state = JobState.waitingNetwork;
+            case 'paused':
+              job.state = JobState.paused;
+              job.userPaused = true;
+            case 'interrupted':
+            case 'storage_full':
+              job.state = JobState.paused;
+              job.userPaused = false;
+            case 'canceled':
+              job.state = JobState.canceled;
+            case 'failed':
+              job.state = JobState.failed;
+            case 'done':
+              job.state = JobState.done;
+              job.saved = true;
+              job.progress = 1.0;
+              job.mediaId = snap.mediaId ?? job.mediaId;
+              job.savedTitle = snap.title ?? job.savedTitle;
+              job.relativePath = snap.relativePath ?? job.relativePath;
+              job.md5 = snap.md5 ?? job.md5;
+              if (snap.fileSize > 0) job.fileBytes = snap.fileSize;
+          }
+          changed = true;
+        }
+        if (batch.isTerminal && !batch.historyWritten) {
+          await _afterTerminal(batch, recovered: true, fromTransferPipeline: true);
+        }
+      }
+      if (changed) notifyListeners();
+    } catch (_) {}
+  }
+
   /// 启动补写：查询服务中 history_pending=1 的已完成任务，写入历史库后回执清除标记（幂等）。
   Future<void> reconcileTransferHistoryPending({HistoryDb? db}) async {
     try {
       final pending = await _transferClient.queryHistoryPending();
       if (pending.isEmpty) return;
-      final historyDb = db ?? await HistoryDb.instance();
       final byBatch = <String, List<TransferJobSnapshot>>{};
       final ackIds = <String>[];
 

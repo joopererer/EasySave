@@ -20,6 +20,7 @@ data class TransferMeta(
     val sniff: String? = null,
     val policyKey: String? = null,
     val provenance: Map<String, Any?>? = null,
+    val requiresCookie: Boolean = false,
 ) {
     fun toJson(): String {
         val obj = JSONObject()
@@ -31,6 +32,7 @@ data class TransferMeta(
         if (sniff != null) obj.put("sniff", sniff)
         if (policyKey != null) obj.put("policyKey", policyKey)
         if (provenance != null) obj.put("provenance", JSONObject(provenance))
+        if (requiresCookie) obj.put("requiresCookie", true)
         return obj.toString()
     }
 
@@ -51,6 +53,7 @@ data class TransferMeta(
                     sniff = if (obj.has("sniff")) obj.optString("sniff") else null,
                     policyKey = if (obj.has("policyKey")) obj.optString("policyKey") else null,
                     provenance = provMap,
+                    requiresCookie = obj.optBoolean("requiresCookie", false),
                 )
             }.getOrNull()
         }

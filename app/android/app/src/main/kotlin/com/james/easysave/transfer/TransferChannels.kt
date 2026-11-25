@@ -36,16 +36,20 @@ object TransferChannels {
             handleMethodCall(appContext, call, result)
         }
 
-        // 2. EventChannel
+        // 2. EventChannel (multi-engine safe: each engine removes only its own sink on cancel)
         EventChannel(messenger, EVENT_CHANNEL_NAME).setStreamHandler(object : EventChannel.StreamHandler {
+            private var registeredSink: EventChannel.EventSink? = null
+
             override fun onListen(arguments: Any?, events: EventChannel.EventSink?) {
                 if (events != null) {
+                    registeredSink = events
                     eventSinks.add(events)
                 }
             }
 
             override fun onCancel(arguments: Any?) {
-                eventSinks.clear()
+                registeredSink?.let { eventSinks.remove(it) }
+                registeredSink = null
             }
         })
     }
@@ -126,6 +130,7 @@ object TransferChannels {
                             mime = mime,
                             policyKey = policyKey,
                             provenance = provenance,
+                            requiresCookie = !cookie.isNullOrBlank() || allowedCookieDomains.isNotEmpty(),
                         )
                     )
                 }
@@ -231,7 +236,12 @@ object TransferChannels {
                 val oldMeta = TransferMeta.read(metaFile)
                 TransferMeta.write(
                     metaFile,
-                    (oldMeta ?: TransferMeta(url = newUrl)).copy(url = newUrl)
+                    (oldMeta ?: TransferMeta(url = newUrl)).copy(
+                        url = newUrl,
+                        requiresCookie = !cookie.isNullOrBlank() ||
+                            !allowedCookieDomains.isNullOrEmpty() ||
+                            (oldMeta?.requiresCookie == true),
+                    )
                 )
                 TransferService.startService(context)
                 scheduler.send(SchedulerEvent.Resume(jobId))
@@ -242,6 +252,16 @@ object TransferChannels {
                     val pending = scheduler.store.getHistoryPendingJobs().map { it.toMap() }
                     mainHandler.post { result.success(pending) }
                 }
+            }
+            "claimHistoryWrite" -> {
+                val args = call.arguments as? Map<*, *> ?: emptyMap<String, Any?>()
+                val batchId = args["batchId"] as? String
+                if (batchId.isNullOrBlank()) {
+                    result.success(false)
+                    return
+                }
+                val claimed = scheduler.store.claimHistoryWrite(batchId)
+                result.success(claimed)
             }
             "ackHistoryWritten" -> {
                 val args = call.arguments as? Map<*, *> ?: emptyMap<String, Any?>()

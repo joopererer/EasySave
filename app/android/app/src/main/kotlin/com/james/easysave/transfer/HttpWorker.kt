@@ -126,6 +126,11 @@ class HttpWorker(
         val mime = memoryParams?.mime ?: storedMeta?.mime
         val policyKey = memoryParams?.policyKey ?: storedMeta?.policyKey
 
+        if (cookie.isNullOrBlank() && storedMeta?.requiresCookie == true) {
+            TransferLog.w("job=${TransferLog.shortId(job.jobId)} cookie missing after restart -> url_expired/reresolve")
+            return WorkerResult.UrlExpired(401, "cookie_missing_after_restart")
+        }
+
         // 2. 文件加锁（tryLock）
         var raf: RandomAccessFile? = null
         var fileLock: FileLock? = null

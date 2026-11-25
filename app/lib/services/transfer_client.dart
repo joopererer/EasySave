@@ -320,6 +320,17 @@ class TransferClient {
         .toList();
   }
 
+  Future<bool> claimHistoryWrite(String batchId) async {
+    try {
+      final res = await _methodChannel.invokeMethod<bool>('claimHistoryWrite', {
+        'batchId': batchId,
+      });
+      return res ?? true;
+    } catch (_) {
+      return true;
+    }
+  }
+
   Future<bool> ackHistoryWritten(List<String> jobIds) async {
     if (jobIds.isEmpty) return true;
     final res = await _methodChannel.invokeMethod<bool>('ackHistoryWritten', {

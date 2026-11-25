@@ -322,6 +322,14 @@ Future<void> _beginBatch(
     'step=batch-start ok ${watch.elapsedMilliseconds}ms '
     'files=${queued?.jobs.length ?? 0}',
   );
+  if (queued?.usesNewTransferPipeline == true) {
+    unawaited(
+      DevLog.write(
+        'V16HOST',
+        'transfer_enqueue_ms=${watch.elapsedMilliseconds} files=${queued?.jobs.length ?? 0}',
+      ),
+    );
+  }
 }
 
 /// The report of a batch that is queued: the tile and bubble switch to real
@@ -801,6 +809,9 @@ Future<void> _awaitBatchAndNotify(
   var failed = 0;
   try {
     while (!batch.isTerminal) {
+      if (batch.usesNewTransferPipeline) {
+        await DownloadManager.instance.syncTransferBatchesFromSnapshot();
+      }
       final updated = await DownloadManager.instance.reloadBatchSnapshot(batch.batchId);
       if (updated != null) {
         batch = updated;

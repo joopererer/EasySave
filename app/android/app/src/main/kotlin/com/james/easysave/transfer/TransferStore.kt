@@ -320,6 +320,22 @@ class TransferStore(context: Context, dbName: String = DB_NAME) :
         )
     }
 
+    private val historyClaims = mutableMapOf<String, Long>()
+
+    @Synchronized
+    fun claimHistoryWrite(
+        batchId: String,
+        nowMs: Long = System.currentTimeMillis(),
+        timeoutMs: Long = 60_000L,
+    ): Boolean {
+        val claimedAt = historyClaims[batchId]
+        if (claimedAt != null && (nowMs - claimedAt) < timeoutMs) {
+            return false
+        }
+        historyClaims[batchId] = nowMs
+        return true
+    }
+
     @Synchronized
     fun clearAll() {
         writableDatabase.delete(TABLE_JOBS, null, null)
