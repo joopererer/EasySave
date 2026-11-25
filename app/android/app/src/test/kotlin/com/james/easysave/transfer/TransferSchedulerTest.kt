@@ -478,7 +478,10 @@ class TransferSchedulerTest {
         val targetJobId = "pause_resume_job_888"
         scheduler.send(SchedulerEvent.Enqueue(TransferJob(jobId = targetJobId, category = JobCategory.IMAGE)))
 
-        pollUntil { scheduler.jobs[targetJobId]?.state == JobState.RUNNING }
+        pollUntil {
+            scheduler.jobs[targetJobId]?.state == JobState.RUNNING &&
+                FakeWorkerRegistry.peekAttempt(targetJobId) >= 1
+        }
 
         scheduler.send(SchedulerEvent.Pause(targetJobId))
         pollUntil { scheduler.jobs[targetJobId]?.state == JobState.PAUSED }
@@ -486,7 +489,10 @@ class TransferSchedulerTest {
         pauseGate.complete(Unit)
 
         scheduler.send(SchedulerEvent.Resume(targetJobId))
-        pollUntil { scheduler.jobs[targetJobId]?.state == JobState.RUNNING }
+        pollUntil {
+            scheduler.jobs[targetJobId]?.state == JobState.RUNNING &&
+                FakeWorkerRegistry.peekAttempt(targetJobId) >= 1
+        }
 
         resumeGate.complete(Unit)
         pollUntil { scheduler.jobs[targetJobId]?.state == JobState.DONE }
@@ -782,7 +788,10 @@ class TransferSchedulerTest {
             clock.advanceTimeBy(3000L)
 
             // 任务恢复到 RUNNING，准备进入下一轮
-            pollUntil { scheduler.jobs[targetJobId]?.state == JobState.RUNNING }
+            pollUntil {
+            scheduler.jobs[targetJobId]?.state == JobState.RUNNING &&
+                FakeWorkerRegistry.peekAttempt(targetJobId) >= 1
+        }
             assertEquals(JobState.RUNNING, scheduler.jobs[targetJobId]?.state)
             assertEquals(0, scheduler.jobs[targetJobId]?.retryCount)
         }

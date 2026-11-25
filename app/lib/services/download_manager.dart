@@ -51,6 +51,7 @@ import 'resumable_download_store.dart';
 import 'media_request_policy.dart';
 import 'site_registry.dart';
 import 'settings.dart';
+import 'transfer_client.dart';
 
 /// Max download attempts per file, first try included. The plugin's native
 /// retries stay at 0 so this counter is the single source of truth.
@@ -550,6 +551,12 @@ class DownloadJob {
   String? savedTitle;
   String? metadataNotice;
   String? relativePath;
+  String? md5;
+  bool usesNewTransferPipeline = false;
+  String? transferJobId;
+  String? transferState;
+  int transferRequiredBytes = 0;
+  int transferAvailableBytes = 0;
 
   /// Resume state persisted across failures, network waiting, and app restarts
   int? resumeStartByte;
@@ -647,6 +654,12 @@ class DownloadJob {
     'savedTitle': savedTitle,
     'metadataNotice': metadataNotice,
     'relativePath': relativePath,
+    if (md5 != null) 'md5': md5,
+    if (usesNewTransferPipeline) 'usesNewTransferPipeline': true,
+    if (transferJobId != null) 'transferJobId': transferJobId,
+    if (transferState != null) 'transferState': transferState,
+    if (transferRequiredBytes > 0) 'transferRequiredBytes': transferRequiredBytes,
+    if (transferAvailableBytes > 0) 'transferAvailableBytes': transferAvailableBytes,
     if (resumeStartByte != null) 'resumeStartByte': resumeStartByte,
     if (resumeTempPath != null) 'resumeTempPath': resumeTempPath,
     if (resumeEtag != null) 'resumeEtag': resumeEtag,
@@ -709,6 +722,12 @@ class DownloadJob {
     job.savedTitle = map['savedTitle'] as String?;
     job.metadataNotice = map['metadataNotice'] as String?;
     job.relativePath = map['relativePath'] as String?;
+    job.md5 = map['md5'] as String?;
+    job.usesNewTransferPipeline = map['usesNewTransferPipeline'] as bool? ?? false;
+    job.transferJobId = map['transferJobId'] as String?;
+    job.transferState = map['transferState'] as String?;
+    job.transferRequiredBytes = (map['transferRequiredBytes'] as num?)?.toInt() ?? 0;
+    job.transferAvailableBytes = (map['transferAvailableBytes'] as num?)?.toInt() ?? 0;
     job.resumeStartByte = (map['resumeStartByte'] as num?)?.toInt();
     job.resumeTempPath = map['resumeTempPath'] as String?;
     job.resumeEtag = map['resumeEtag'] as String?;
@@ -749,6 +768,7 @@ class DownloadBatch {
     int? startedAt,
     this.formatPref = ImageFormatPreference.compat,
     this.jpegFallbackPlanned = false,
+    this.usesNewTransferPipeline = false,
   }) : startedAt = startedAt ?? DateTime.now().microsecondsSinceEpoch;
 
   final int startedAt;
@@ -809,6 +829,7 @@ class DownloadBatch {
   /// Owner engine: [sourceMain] or [sourceBackground].
   String source;
   final List<DownloadJob> jobs;
+  bool usesNewTransferPipeline = false;
   bool historyWritten = false;
 
   /// Engine that finished an adopted foreign batch.
@@ -983,6 +1004,7 @@ class DownloadBatch {
     'settledBy': settledBy,
     'formatPref': formatPref.name,
     'jpegFallback': jpegFallbackPlanned,
+    if (usesNewTransferPipeline) 'usesNewTransferPipeline': true,
   };
 
   static DownloadBatch fromJson(Map<String, Object?> map) =>
@@ -1015,6 +1037,7 @@ class DownloadBatch {
               .toList(),
           formatPref: ImageFormatPreference.fromName(map['formatPref'] as String?),
           jpegFallbackPlanned: map['jpegFallback'] as bool? ?? false,
+          usesNewTransferPipeline: map['usesNewTransferPipeline'] as bool? ?? false,
         )
         ..historyWritten = map['historyWritten'] as bool? ?? false
         ..cancelledByDeletion = map['cancelledByDeletion'] as bool? ?? false
@@ -1239,6 +1262,7 @@ Future<void> writeBatchHistory(
           // A Live photo's still and motion clip are one entry from the moment
           // they are written, not after a later album scan.
           pairId: job.isLivePhoto ? '${batch.postId}#${job.itemIndex}' : null,
+          md5: job.md5,
         ),
   ];
 
@@ -1268,6 +1292,7 @@ Future<void> writeBatchHistory(
             size: job.fileBytes,
             notOriginal: job.notOriginal,
             pairId: job.isLivePhoto ? '${batch.postId}#${job.itemIndex}' : null,
+            md5: job.md5,
           ));
         }
       } catch (_) {}
@@ -1646,6 +1671,10 @@ class DownloadManager extends ChangeNotifier {
       // A file parked waiting for the connection in an earlier run continues as
       // soon as there is one (v1.11 batch 3).
       unawaited(_resumeWaitingJobs());
+      if (owner == DownloadBatch.sourceMain) {
+        _subscribeTransferEvents();
+        unawaited(reconcileTransferHistoryPending());
+      }
     });
   }
 
@@ -2447,6 +2476,10 @@ class DownloadManager extends ChangeNotifier {
             ),
         ],
     ];
+    final settingsForPipeline = await AppSettings.load();
+    final useNewPipeline = owner == DownloadBatch.sourceMain &&
+        (useNewTransferPipelineForTesting ?? settingsForPipeline.useNewTransferPipeline);
+
     final batch = DownloadBatch(
       batchId: batchId,
       album: album,
@@ -2467,6 +2500,7 @@ class DownloadManager extends ChangeNotifier {
       itemsJson: jsonEncode([for (final item in post.items) item.toJson()]),
       postItemCount: post.items.length,
       source: DownloadManager.owner,
+      usesNewTransferPipeline: useNewPipeline,
       jobs: [
         for (var i = 0; i < planned.length; i++)
           DownloadJob(
@@ -2480,7 +2514,8 @@ class DownloadManager extends ChangeNotifier {
             isLivePhoto: planned[i].isLivePhoto,
           )
             ..expectedWidth = planned[i].expectedWidth
-            ..expectedHeight = planned[i].expectedHeight,
+            ..expectedHeight = planned[i].expectedHeight
+            ..usesNewTransferPipeline = useNewPipeline,
       ],
     );
     final accepted = (await _reserve(batch, batch.jobs)).toSet();
@@ -2497,12 +2532,14 @@ class DownloadManager extends ChangeNotifier {
         await init();
         // Best effort: without the permission downloads still run, only the
         // notification progress is missing.
-        try {
-          await FileDownloader().permissions.request(
-            PermissionType.notifications,
-          );
-        } catch (_) {
-          // Ignore: proceed without notifications.
+        if (!batch.usesNewTransferPipeline) {
+          try {
+            await FileDownloader().permissions.request(
+              PermissionType.notifications,
+            );
+          } catch (_) {
+            // Ignore: proceed without notifications.
+          }
         }
         if (!await Gal.hasAccess()) {
           // The background flow must never raise a system permission dialog;
@@ -2529,7 +2566,10 @@ class DownloadManager extends ChangeNotifier {
     _log('batch start id=$batchId source=${batch.source} post=${batch.postId}');
     if (_batchLogStarts.length > 64) {
       _batchLogStarts.remove(_batchLogStarts.keys.first);
-    }    unawaited(_refreshNotification(batch));
+    }
+    if (!batch.usesNewTransferPipeline) {
+      unawaited(_refreshNotification(batch));
+    }
     await _persist(batch);
     // The placeholder is a convenience; the download must still start. The
     // terminal history write creates the record if this one cannot.
@@ -2542,7 +2582,11 @@ class DownloadManager extends ChangeNotifier {
       // One failing enqueue must not strand the remaining jobs in `queued`
       // (that kept the batch non-terminal forever, e.g. stuck at ~50%).
       try {
-        await _enqueueAttempt(batch, job, source: 'start');
+        if (batch.usesNewTransferPipeline) {
+          await _enqueueViaTransferService(batch, job);
+        } else {
+          await _enqueueAttempt(batch, job, source: 'start');
+        }
       } catch (e) {
         _log('enqueue failed ${job.key}: $e');
         job.state = JobState.failed;
@@ -5560,7 +5604,7 @@ class DownloadManager extends ChangeNotifier {
 
     var settleReason = reason;
 
-    if (unconfirmedJobs.isNotEmpty) {
+    if (!batch.usesNewTransferPipeline && unconfirmedJobs.isNotEmpty) {
       final taskIds = unconfirmedJobs
           .map((j) => j.currentTaskId ?? j.key)
           .where((id) => id.isNotEmpty)
@@ -5662,6 +5706,15 @@ class DownloadManager extends ChangeNotifier {
         await _persist(batch);
         _scheduleHistoryRetry(batch);
         return;
+      }
+      if (batch.usesNewTransferPipeline) {
+        final ackIds = batch.jobs
+            .where((j) => j.transferJobId != null && j.state == JobState.done)
+            .map((j) => j.transferJobId!)
+            .toList();
+        if (ackIds.isNotEmpty) {
+          unawaited(_transferClient.ackHistoryWritten(ackIds));
+        }
       }
       for (final j in batch.jobs.where((j) => j.saved)) {
         unawaited(DevLog.write(
@@ -5767,6 +5820,18 @@ class DownloadManager extends ChangeNotifier {
   /// Manual per-row retry: re-parse the post first so 403/expired CDN links
   /// are refreshed; fall back to the stored URLs when parsing fails.
   Future<void> retryJob(DownloadBatch batch, DownloadJob job) async {
+    if (batch.usesNewTransferPipeline && job.transferJobId != null) {
+      if (job.state != JobState.failed && job.state != JobState.canceled) return;
+      job.state = JobState.queued;
+      job.transferState = 'queued';
+      job.error = null;
+      job.errorCode = null;
+      batch.historyWritten = false;
+      await _persist(batch);
+      notifyListeners();
+      await _transferClient.retry(job.transferJobId!);
+      return;
+    }
     await _finishing[job.key];
     // A timed-out import may still finish its album copy: its outcome decides.
     await _lateImports[job.key];
@@ -5878,6 +5943,22 @@ class DownloadManager extends ChangeNotifier {
   }
 
   Future<void> cancelBatch(DownloadBatch batch, {String source = 'cancel_batch'}) async {
+    if (batch.usesNewTransferPipeline) {
+      for (final job in batch.jobs) {
+        if (!job.isTerminal) {
+          job.userCancelRequested = true;
+          job.state = JobState.canceled;
+          job.transferState = 'canceled';
+          if (job.transferJobId != null) {
+            await _transferClient.cancel(job.transferJobId!);
+          }
+        }
+      }
+      await _persist(batch);
+      notifyListeners();
+      await _afterTerminal(batch, recovered: false);
+      return;
+    }
     // 3a: Await any job currently in the finishing stage
     for (final job in batch.jobs) {
       if (job.isFinishing || _finishing.containsKey(job.key)) {
@@ -5996,6 +6077,21 @@ class DownloadManager extends ChangeNotifier {
   /// until [resumeBatch].
   Future<void> pauseBatch(DownloadBatch batch) async {
     batch = await _ownedOrAdopt(batch);
+    if (batch.usesNewTransferPipeline) {
+      for (final job in batch.jobs) {
+        if (job.state != JobState.queued && job.state != JobState.active) continue;
+        job.state = JobState.paused;
+        job.transferState = 'paused';
+        job.userPaused = true;
+        job.error = null;
+        if (job.transferJobId != null) {
+          await _transferClient.pause(job.transferJobId!);
+        }
+      }
+      await _persist(batch);
+      notifyListeners();
+      return;
+    }
     for (final job in batch.jobs) {
       if (job.state != JobState.queued && job.state != JobState.active) {
         continue;
@@ -6052,6 +6148,23 @@ class DownloadManager extends ChangeNotifier {
   /// Re-enqueue / resume every paused file of a batch.
   Future<void> resumeBatch(DownloadBatch batch) async {
     batch = await _ownedOrAdopt(batch);
+    if (batch.usesNewTransferPipeline) {
+      for (final job in batch.jobs.where((j) =>
+          j.state == JobState.paused || j.state == JobState.waitingNetwork)) {
+        job.userPaused = false;
+        job.userCancelRequested = false;
+        job.error = null;
+        job.errorCode = null;
+        job.state = JobState.queued;
+        job.transferState = 'queued';
+        if (job.transferJobId != null) {
+          await _transferClient.resume(job.transferJobId!);
+        }
+      }
+      await _persist(batch);
+      notifyListeners();
+      return;
+    }
     final now = DateTime.now().millisecondsSinceEpoch;
     for (final job in batch.jobs.where((j) => j.state == JobState.paused)) {
       final wasUserPaused = job.userPaused;
@@ -6699,6 +6812,398 @@ class DownloadManager extends ChangeNotifier {
       }
     } catch (_) {
       // Snapshots are best effort; in-memory state still drives the UI.
+    }
+  }
+
+  // --- v1.13 P0-4a: TransferService (TransferClient) integration ---
+
+  @visibleForTesting
+  TransferClient? transferClientForTesting;
+
+  @visibleForTesting
+  bool? useNewTransferPipelineForTesting;
+
+  TransferClient? _defaultTransferClient;
+  StreamSubscription<TransferEvent>? _transferEventsSub;
+  final Set<String> _reresolvingTransferJobs = <String>{};
+
+  TransferClient get _transferClient =>
+      transferClientForTesting ?? (_defaultTransferClient ??= TransferClient());
+
+  @visibleForTesting
+  void subscribeTransferEventsForTesting() => _subscribeTransferEvents();
+
+  void _subscribeTransferEvents() {
+    _transferEventsSub?.cancel();
+    _transferEventsSub = _transferClient.events.listen((event) {
+      unawaited(_handleTransferEvent(event));
+    });
+  }
+
+  (DownloadBatch, DownloadJob)? _findTransferJob(String transferJobId) {
+    for (final batch in _batches.values) {
+      for (final job in batch.jobs) {
+        if (job.transferJobId == transferJobId) {
+          return (batch, job);
+        }
+      }
+    }
+    return null;
+  }
+
+  Future<void> _enqueueViaTransferService(
+    DownloadBatch batch,
+    DownloadJob job,
+  ) async {
+    _subscribeTransferEvents();
+
+    // 本机已有相同文件的「关联」逻辑（save plan 里的 associate）照旧在 Dart 侧判断，关联的文件不入队。
+    try {
+      final existing = await _findExistingAlbumAsset(batch, job);
+      if (existing != null) {
+        final read = await _albumProvenance(existing);
+        final expected = provenanceForBatchItem(batch, itemIndex: job.itemIndex);
+        if (sameSavedOrigin(read, expected) ||
+            (read == null && job.provenanceSkipped)) {
+          _log('new pipeline associated existing album file: ${existing.title ?? job.filename}');
+          job
+            ..mediaId = existing.id
+            ..savedTitle = existing.title
+            ..relativePath = existing.relativePath
+            ..assetId = read?.assetId
+            ..provenanceItemCount = read?.itemCount
+            ..provenanceCapturedBy = read?.capturedBy
+            ..state = JobState.done
+            ..transferState = 'done'
+            ..progress = 1.0
+            ..saved = true;
+          await _persist(batch);
+          notifyListeners();
+          return;
+        }
+      }
+    } catch (_) {
+      // Best-effort associate check; proceed to enqueue if lookup fails.
+    }
+
+    if (job.urls.isEmpty) {
+      job.state = JobState.failed;
+      job.transferState = 'failed';
+      job.error = '无可用下载地址';
+      return;
+    }
+
+    final index = candidateIndexOf(job);
+    final candidateUrl = job.urls[index];
+    final policy = _policyFor(batch.platform);
+    final resource = _jobResource(job, index, policy);
+    final authorized = await policy.authorize(resource);
+
+    final candidateLabel = candidateLabelOf(candidateUrl);
+    final category = job.isImage ? 'image' : 'large_file';
+    final String mime;
+    if (!job.isImage) {
+      mime = candidateUrl.toLowerCase().contains('.mov') ? 'video/quicktime' : 'video/mp4';
+    } else {
+      final token = candidateLabel.contains(':') ? candidateLabel.split(':').last : '';
+      mime = switch (token) {
+        'jpg' => 'image/jpeg',
+        'png' => 'image/png',
+        'webp' => 'image/webp',
+        'heic' => 'image/heic',
+        'avif' => 'image/avif',
+        'gif' => 'image/gif',
+        _ => 'image/jpeg',
+      };
+    }
+
+    final site = SiteRegistry.current.byId(batch.platform);
+    final downloadConfig = (site?.data['download'] as Map?) ?? {};
+    final mediaHosts = ((downloadConfig['mediaHosts'] as List?) ?? [])
+        .whereType<Map>()
+        .map((m) => m.cast<String, dynamic>())
+        .toList();
+    final cookieDomains = ((downloadConfig['cookieDomains'] as List?) ?? [])
+        .whereType<String>()
+        .toList();
+
+    final pairId = job.isLivePhoto ? '${batch.postId}#${job.itemIndex}' : null;
+    final provenance = provenanceForBatchItem(
+      batch,
+      itemIndex: job.itemIndex,
+      pairId: pairId,
+    );
+
+    final transferJobId = index == 0 ? 'xfer_${job.key}' : 'xfer_${job.key}_c$index';
+    job.transferJobId = transferJobId;
+    job.transferState = 'queued';
+    job.state = JobState.queued;
+    job.progress = 0.0;
+    job.error = null;
+    job.errorCode = null;
+    job.lastProgressAt = DateTime.now().millisecondsSinceEpoch;
+
+    unawaited(DevLog.write(
+      'V16DL',
+      'candidate_seq=${index + 1}/${job.urls.length} role=${roleOf(job)} '
+          'label=$candidateLabel format_pref=${batch.formatPref.logToken} '
+          'transfer_job=$transferJobId pair_id=${pairId ?? "-"}',
+    ));
+
+    await _transferClient.enqueue(
+      jobId: transferJobId,
+      direction: 'download',
+      category: category,
+      batchId: batch.batchId,
+      pairId: pairId,
+      url: authorized.uri.toString(),
+      headers: authorized.headers,
+      cookie: authorized.cookie,
+      allowedCookieDomains: cookieDomains,
+      policyHosts: mediaHosts,
+      mime: mime,
+      policyKey: batch.platform,
+      provenance: provenance.toJson(),
+    );
+  }
+
+  Future<void> _handleTransferEvent(TransferEvent event) async {
+    final found = _findTransferJob(event.jobId);
+    if (found == null) return;
+    final (batch, job) = found;
+    final now = DateTime.now().millisecondsSinceEpoch;
+
+    if (event is TransferProgressEvent) {
+      job.lastProgressAt = now;
+      if (event.totalBytes > 0) {
+        job.expectedBytes = event.totalBytes;
+        job.progress = (event.bytesRead / event.totalBytes).clamp(0.0, 1.0);
+      }
+      notifyListeners();
+      return;
+    }
+
+    if (event is TransferReresolveRequiredEvent) {
+      await _reresolveTransferJob(batch, job);
+      return;
+    }
+
+    if (event is TransferCompletedEvent) {
+      job
+        ..mediaId = event.mediaId
+        ..savedTitle = event.title
+        ..relativePath = event.relativePath
+        ..md5 = event.md5
+        ..fileBytes = event.fileSize > 0 ? event.fileSize : job.fileBytes
+        ..saved = true
+        ..isFinishing = false
+        ..savingPhase = null
+        ..state = JobState.done
+        ..transferState = 'done'
+        ..progress = 1.0
+        ..error = null
+        ..errorCode = null
+        ..lastProgressAt = now;
+      await _persist(batch);
+      notifyListeners();
+      if (batch.isTerminal) {
+        await _afterTerminal(batch, recovered: false);
+      }
+      return;
+    }
+
+    if (event is TransferStateChangeEvent) {
+      job.transferState = event.to;
+      job.lastProgressAt = now;
+      switch (event.to) {
+        case 'queued':
+          job.state = JobState.queued;
+          job.userPaused = false;
+          job.isFinishing = false;
+        case 'running':
+          job.state = JobState.active;
+          job.userPaused = false;
+          job.isFinishing = false;
+          job.error = null;
+          job.errorCode = null;
+        case 'waiting_network':
+          job.state = JobState.waitingNetwork;
+          job.isFinishing = false;
+        case 'storage_full':
+          job.state = JobState.paused;
+          job.userPaused = false;
+          job.isFinishing = false;
+          job.errorCode = storageFullCode;
+          job.transferRequiredBytes = event.requiredBytes;
+          job.transferAvailableBytes = event.availableBytes;
+        case 'paused':
+          job.state = JobState.paused;
+          job.userPaused = true;
+          job.isFinishing = false;
+        case 'interrupted':
+          job.state = JobState.paused;
+          job.userPaused = false;
+          job.isFinishing = false;
+          job.error = '已中断，点继续';
+        case 'finishing':
+        case 'waiting_pair':
+          job.state = JobState.active;
+          job.isFinishing = true;
+          job.savingPhase = event.to == 'waiting_pair' ? '等待配对' : '正在保存到相册';
+        case 'canceled':
+          job.state = JobState.canceled;
+          job.isFinishing = false;
+        case 'failed':
+          // 候选回退：404 / sniff_mismatch 等不可重试错误时换下一个候选重新入队
+          if (event.reason != 'pair_partner_failed' &&
+              job.candidateIndex + 1 < job.urls.length) {
+            job.candidateIndex++;
+            job.isFinishing = false;
+            job.progress = 0.0;
+            try {
+              await _enqueueViaTransferService(batch, job);
+            } catch (e) {
+              job.state = JobState.failed;
+              job.error = '$e';
+            }
+          } else {
+            job.state = JobState.failed;
+            job.isFinishing = false;
+            job.error = event.reason ?? '下载失败';
+          }
+        case 'done':
+          job.state = JobState.done;
+          job.isFinishing = false;
+          job.saved = true;
+          job.progress = 1.0;
+      }
+      await _persist(batch);
+      notifyListeners();
+      if (batch.isTerminal) {
+        await _afterTerminal(batch, recovered: false);
+      }
+    }
+  }
+
+  Future<void> _reresolveTransferJob(
+    DownloadBatch batch,
+    DownloadJob job,
+  ) async {
+    final transferJobId = job.transferJobId;
+    if (transferJobId == null) return;
+    if (!_reresolvingTransferJobs.add(transferJobId)) return;
+    try {
+      final outcome = await (reparseForTesting?.call(batch.postUrl) ??
+          parsePostOutcome(
+            batch.postUrl,
+            source: 'transfer_reresolve',
+            forceRefresh: true,
+          ));
+      final postIdx = job.itemIndex > 0 ? job.itemIndex - 1 : job.itemIndex;
+      if (postIdx < 0 || postIdx >= outcome.data.items.length) return;
+      final item = outcome.data.items[postIdx];
+      final freshUrls = planFilesForItem(
+        outcome.data,
+        postIdx,
+        formatPref: batch.formatPref,
+      );
+      if (freshUrls == null || freshUrls.isEmpty) return;
+
+      final String freshUrl;
+      if (job.isLivePhoto && !job.isImage && freshUrls.length >= 2) {
+        freshUrl = freshUrls[1];
+      } else {
+        freshUrl = freshUrls.first;
+      }
+
+      final policy = _policyFor(batch.platform);
+      final declarations = policy.resourcesFor(item);
+      final resource = resourceForCandidate(policy, declarations, freshUrl);
+      final authorized = await policy.authorize(resource);
+
+      final site = SiteRegistry.current.byId(batch.platform);
+      final downloadConfig = (site?.data['download'] as Map?) ?? {};
+      final mediaHosts = ((downloadConfig['mediaHosts'] as List?) ?? [])
+          .whereType<Map>()
+          .map((m) => m.cast<String, dynamic>())
+          .toList();
+      final cookieDomains = ((downloadConfig['cookieDomains'] as List?) ?? [])
+          .whereType<String>()
+          .toList();
+
+      await _transferClient.updateUrlAndResume(
+        jobId: transferJobId,
+        url: authorized.uri.toString(),
+        headers: authorized.headers,
+        cookie: authorized.cookie,
+        allowedCookieDomains: cookieDomains,
+        policyHosts: mediaHosts,
+        policyKey: batch.platform,
+      );
+    } catch (e) {
+      _log('reresolve failed for $transferJobId: $e');
+    } finally {
+      _reresolvingTransferJobs.remove(transferJobId);
+    }
+  }
+
+  /// 启动补写：查询服务中 history_pending=1 的已完成任务，写入历史库后回执清除标记（幂等）。
+  Future<void> reconcileTransferHistoryPending({HistoryDb? db}) async {
+    try {
+      final pending = await _transferClient.queryHistoryPending();
+      if (pending.isEmpty) return;
+      final historyDb = db ?? await HistoryDb.instance();
+      final byBatch = <String, List<TransferJobSnapshot>>{};
+      final ackIds = <String>[];
+
+      for (final snap in pending) {
+        final bId = snap.batchId;
+        if (bId != null && bId.isNotEmpty) {
+          byBatch.putIfAbsent(bId, () => <TransferJobSnapshot>[]).add(snap);
+        } else {
+          ackIds.add(snap.jobId);
+        }
+      }
+
+      for (final entry in byBatch.entries) {
+        final batch = _batches[entry.key];
+        if (batch == null) {
+          // 批次快照已不在内存，若历史库已有记录则直接回执，避免重复写
+          ackIds.addAll(entry.value.map((s) => s.jobId));
+          continue;
+        }
+        for (final snap in entry.value) {
+          final job = batch.jobs.cast<DownloadJob?>().firstWhere(
+                (j) => j?.transferJobId == snap.jobId,
+                orElse: () => null,
+              );
+          if (job != null) {
+            job
+              ..mediaId = snap.mediaId ?? job.mediaId
+              ..savedTitle = snap.title ?? job.savedTitle
+              ..relativePath = snap.relativePath ?? job.relativePath
+              ..md5 = snap.md5 ?? job.md5
+              ..fileBytes = snap.fileSize > 0 ? snap.fileSize : job.fileBytes
+              ..saved = true
+              ..state = JobState.done
+              ..transferState = 'done'
+              ..progress = 1.0;
+          }
+        }
+        if (batch.isTerminal && !batch.historyWritten) {
+          await writeBatchHistory(historyDb, batch, recovered: true);
+          batch.historyWritten = true;
+          await _persist(batch);
+          notifyListeners();
+        }
+        ackIds.addAll(entry.value.map((s) => s.jobId));
+      }
+
+      if (ackIds.isNotEmpty) {
+        await _transferClient.ackHistoryWritten(ackIds);
+      }
+    } catch (e) {
+      _log('reconcileTransferHistoryPending failed: $e');
     }
   }
 }

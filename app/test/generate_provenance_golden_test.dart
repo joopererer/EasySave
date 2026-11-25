@@ -3,6 +3,7 @@
 
 import 'dart:convert';
 import 'dart:io';
+import 'package:flutter/foundation.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:easysave/metadata/metadata_service.dart';
 
@@ -65,7 +66,7 @@ void main() {
       );
 
       expect(result.success, isTrue, reason: 'Failed embedding ${outputFile.path}: ${result.errorCode} ${result.errorMessage}');
-      print('Generated: ${outputFile.path} (${outputFile.lengthSync()} bytes)');
+      debugPrint('Generated: ${outputFile.path} (${outputFile.lengthSync()} bytes)');
     }
   });
 }

@@ -193,6 +193,64 @@ object TransferChannels {
                     }
                 })
             }
+            "updateUrlAndResume" -> {
+                val args = call.arguments as? Map<*, *> ?: emptyMap<String, Any?>()
+                val jobId = args["jobId"] as? String
+                val newUrl = args["url"] as? String
+                if (jobId.isNullOrBlank() || newUrl.isNullOrBlank()) {
+                    result.error("INVALID_ARGUMENT", "Missing jobId or url", null)
+                    return
+                }
+                val headersRaw = (args["headers"] as? Map<*, *>) ?: emptyMap<Any?, Any?>()
+                val headers = headersRaw.entries.associate { it.key.toString() to it.value.toString() }
+                val cookie = args["cookie"] as? String
+                val allowedCookieDomains = (args["allowedCookieDomains"] as? List<*>)?.mapNotNull { it as? String }
+                val policyHostsRaw = (args["policyHosts"] as? List<*>)?.mapNotNull { it as? Map<*, *> }
+                val policyHosts = policyHostsRaw?.mapNotNull {
+                    val domain = it["domain"] as? String ?: return@mapNotNull null
+                    val includeSubdomains = (it["includeSubdomains"] as? Boolean) ?: false
+                    com.james.easysave.policy.MediaPolicyRedirects.HostRule(domain, includeSubdomains)
+                }
+
+                val existingParams = TransferParamsRegistry.get(jobId)
+                TransferParamsRegistry.set(
+                    jobId,
+                    TransferDownloadParams(
+                        url = newUrl,
+                        headers = if (headers.isNotEmpty()) headers else (existingParams?.headers ?: emptyMap()),
+                        cookie = cookie ?: existingParams?.cookie,
+                        allowedCookieDomains = allowedCookieDomains ?: (existingParams?.allowedCookieDomains ?: emptyList()),
+                        policyHosts = policyHosts ?: (existingParams?.policyHosts ?: emptyList()),
+                        mime = (args["mime"] as? String) ?: existingParams?.mime,
+                        policyKey = (args["policyKey"] as? String) ?: existingParams?.policyKey,
+                        provenance = existingParams?.provenance,
+                    )
+                )
+                val transfersDir = java.io.File(context.filesDir, "transfers")
+                val metaFile = java.io.File(transfersDir, "$jobId.meta")
+                val oldMeta = TransferMeta.read(metaFile)
+                TransferMeta.write(
+                    metaFile,
+                    (oldMeta ?: TransferMeta(url = newUrl)).copy(url = newUrl)
+                )
+                TransferService.startService(context)
+                scheduler.send(SchedulerEvent.Resume(jobId))
+                result.success(true)
+            }
+            "queryHistoryPending" -> {
+                channelScope.launch(Dispatchers.IO) {
+                    val pending = scheduler.store.getHistoryPendingJobs().map { it.toMap() }
+                    mainHandler.post { result.success(pending) }
+                }
+            }
+            "ackHistoryWritten" -> {
+                val args = call.arguments as? Map<*, *> ?: emptyMap<String, Any?>()
+                val jobIds = (args["jobIds"] as? List<*>)?.mapNotNull { it as? String } ?: emptyList()
+                channelScope.launch(Dispatchers.IO) {
+                    scheduler.store.clearHistoryPending(jobIds)
+                    mainHandler.post { result.success(true) }
+                }
+            }
             "simulateNetwork" -> {
                 val args = call.arguments as? Map<*, *> ?: emptyMap<String, Any?>()
                 val isAvailable = args["isAvailable"] as? Boolean ?: true

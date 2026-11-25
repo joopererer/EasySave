@@ -10,7 +10,11 @@ sealed class WorkerResult {
     data class Success(val message: String = "ok") : WorkerResult()
     data class NetworkError(val error: String = "network_error") : WorkerResult()
     data class OtherError(val error: String = "other_error") : WorkerResult()
-    data class StorageFull(val error: String = "storage_full") : WorkerResult()
+    data class StorageFull(
+        val error: String = "storage_full",
+        val requiredBytes: Long = 0L,
+        val availableBytes: Long = 0L,
+    ) : WorkerResult()
     data class PolicyRejected(val error: String = "policy_rejected") : WorkerResult()
     data class UrlExpired(val code: Int = 403, val error: String = "url_expired") : WorkerResult()
 }

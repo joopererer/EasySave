@@ -8,9 +8,11 @@ import android.os.Build
 import android.os.Environment
 import android.os.Looper
 import android.provider.MediaStore
+import com.james.easysave.C2paStoragePolicy
 import com.james.easysave.ExportNames
 import com.james.easysave.MediaImportPolicy
 import com.james.easysave.MediaMetadataProbe
+import com.james.easysave.PairSavePolicy
 import com.james.easysave.provenance.ChannelSeekableInput
 import com.james.easysave.provenance.RafSeekableInput
 import com.james.easysave.provenance.SeekableInput
@@ -44,8 +46,14 @@ class MediaStorePublisher(private val context: Context) : MediaPublisher {
         mime: String,
         sourceFile: File,
     ): PublishedHandle {
-        ExportNames.requireClean(displayName)
-        MediaImportPolicy.requireAllowed(mime)
+        val isSidecar = displayName.endsWith(".xmp")
+        if (isSidecar) {
+            ExportNames.requireClean(displayName.removeSuffix(".xmp"))
+            require(mime == PairSavePolicy.SIDECAR_MIME) { "Invalid sidecar MIME: $mime" }
+        } else {
+            ExportNames.requireClean(displayName)
+            MediaImportPolicy.requireAllowed(mime)
+        }
         check(!exists(relativePath, displayName)) { "Target filename already exists: $displayName" }
 
         if (Build.VERSION.SDK_INT < 29) {
@@ -60,13 +68,14 @@ class MediaStorePublisher(private val context: Context) : MediaPublisher {
         }
 
         val resolver = context.contentResolver
-        val video = !mime.startsWith("image/")
-        val collection = if (mime.startsWith("image/")) {
-            MediaStore.Images.Media.EXTERNAL_CONTENT_URI
-        } else {
-            MediaStore.Video.Media.EXTERNAL_CONTENT_URI
+        val isDownloads = relativePath == C2paStoragePolicy.RELATIVE_PATH
+        val video = !isSidecar && !mime.startsWith("image/")
+        val collection = when {
+            isDownloads -> MediaStore.Downloads.EXTERNAL_CONTENT_URI
+            mime.startsWith("image/") -> MediaStore.Images.Media.EXTERNAL_CONTENT_URI
+            else -> MediaStore.Video.Media.EXTERNAL_CONTENT_URI
         }
-        val meta = if (video) MediaMetadataProbe.probeFile(sourceFile) else null
+        val meta = if (video && sourceFile.exists()) MediaMetadataProbe.probeFile(sourceFile) else null
         val values = ContentValues().apply {
             put(MediaStore.MediaColumns.DISPLAY_NAME, displayName)
             put(MediaStore.MediaColumns.MIME_TYPE, mime)

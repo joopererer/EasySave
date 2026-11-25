@@ -1,12 +1,18 @@
 package com.james.easysave.transfer
 
 import android.os.Looper
+import com.james.easysave.C2paStoragePolicy
 import com.james.easysave.ExportNames
 import com.james.easysave.MediaImportPolicy
+import com.james.easysave.PairSavePolicy
+import com.james.easysave.provenance.C2paDetector
 import com.james.easysave.provenance.ProvenanceEmbedder
 import com.james.easysave.provenance.ProvenanceReader
 import com.james.easysave.provenance.ProvenanceRecord
 import com.james.easysave.provenance.StreamingFileRewriter
+import com.james.easysave.provenance.XmpCore
+import com.james.easysave.provenance.XmpFields
+import com.james.easysave.provenance.XmpPackage
 import java.io.File
 
 sealed class FinalizeOutcome {
@@ -141,12 +147,19 @@ class TransferFinalizer(
         val publishedMedia: PublishedMedia
         val mimeToUse = sniffedMime ?: "image/jpeg"
         val isEmbeddable = MediaImportPolicy.provenanceEmbeddable(mimeToUse)
-        var provenanceStatus = job.provenanceStatus ?: if (!isEmbeddable) "skipped_unsupported" else "none"
+        val hasC2pa = isEmbeddable && meta.provenance != null && C2paDetector.hasC2pa(partFile)
+        var provenanceStatus = job.provenanceStatus ?: when {
+            !isEmbeddable -> "skipped_unsupported"
+            hasC2pa -> "sidecar"
+            else -> "none"
+        }
+
+        var sidecarHandleForReadback: PublishedHandle? = null
 
         if (job.finalizeStep != "published") {
             val ext = extensionForMime(mimeToUse, partFile)
-            val targetName = resolveTargetName(jobId, meta, ext, ExportNames.albumPath("EasySave"))
-            val relativePath = ExportNames.albumPath("EasySave")
+            val relativePath = if (hasC2pa) C2paStoragePolicy.RELATIVE_PATH else ExportNames.albumPath("EasySave")
+            val targetName = resolveTargetName(jobId, meta, ext, relativePath)
 
             val handle = try {
                 publisher.insertPending(relativePath, targetName, mimeToUse, partFile)
@@ -166,20 +179,44 @@ class TransferFinalizer(
             )
 
             val writeResult: StreamingFileRewriter.WriteResult
+            var sidecarHandle: PublishedHandle? = null
             try {
-                publisher.openOutputStream(handle).use { outStream ->
-                    if (isEmbeddable && meta.provenance != null) {
-                        val record = ProvenanceRecord.fromMap(meta.provenance)
-                        provenanceStatus = "embedded"
-                        writeResult = ProvenanceEmbedder.embedToStream(partFile, outStream, record)
-                    } else {
-                        provenanceStatus = if (!isEmbeddable) "skipped_unsupported" else "none"
+                if (hasC2pa) {
+                    // C2PA 媒体：原字节不变，生成 .xmp 边车成对写入 Download/EasySave/
+                    val record = ProvenanceRecord.fromMap(meta.provenance!!)
+                    val xmpBytes = XmpCore.buildXmpXml(record).toByteArray(Charsets.UTF_8)
+                    provenanceStatus = "sidecar"
+                    publisher.openOutputStream(handle).use { outStream ->
                         writeResult = StreamingFileRewriter.copyToStream(partFile, outStream)
+                    }
+                    val sHandle = publisher.insertPending(
+                        relativePath,
+                        "${handle.displayName}.xmp",
+                        PairSavePolicy.SIDECAR_MIME,
+                        partFile,
+                    )
+                    sidecarHandle = sHandle
+                    sidecarHandleForReadback = sHandle
+                    publisher.openOutputStream(sHandle).use { outStream ->
+                        outStream.write(xmpBytes)
+                    }
+                    publisher.publish(sHandle, "", xmpBytes.size.toLong(), PairSavePolicy.SIDECAR_MIME)
+                } else {
+                    publisher.openOutputStream(handle).use { outStream ->
+                        if (isEmbeddable && meta.provenance != null) {
+                            val record = ProvenanceRecord.fromMap(meta.provenance)
+                            provenanceStatus = "embedded"
+                            writeResult = ProvenanceEmbedder.embedToStream(partFile, outStream, record)
+                        } else {
+                            provenanceStatus = if (!isEmbeddable) "skipped_unsupported" else "none"
+                            writeResult = StreamingFileRewriter.copyToStream(partFile, outStream)
+                        }
                     }
                 }
             } catch (t: Throwable) {
                 TransferLog.e("job=${TransferLog.shortId(jobId)} single-pass write failed: ${t.message}", t)
                 publisher.deletePending(handle.mediaId)
+                sidecarHandle?.let { runCatching { publisher.deletePending(it.mediaId) } }
                 return FinalizeOutcome.Failed("write_failed", t)
             }
 
@@ -188,6 +225,7 @@ class TransferFinalizer(
             } catch (t: Throwable) {
                 TransferLog.e("job=${TransferLog.shortId(jobId)} publish failed: ${t.message}", t)
                 publisher.deletePending(handle.mediaId)
+                sidecarHandle?.let { runCatching { publisher.deletePending(it.mediaId) } }
                 return FinalizeOutcome.Failed("publish_failed", t)
             }
 
@@ -226,7 +264,26 @@ class TransferFinalizer(
         val rStart = System.currentTimeMillis()
         var readbackOk = true
         var readbackBytes = 0L
-        if (provenanceStatus == "embedded" && meta.provenance != null) {
+        if (provenanceStatus == "sidecar" && sidecarHandleForReadback != null && meta.provenance != null) {
+            val record = ProvenanceRecord.fromMap(meta.provenance)
+            try {
+                publisher.openSeekableInput(sidecarHandleForReadback!!.mediaId).use { seekable ->
+                    val bytes = ByteArray(seekable.length.toInt())
+                    seekable.seek(0)
+                    seekable.readFully(bytes, 0, bytes.size)
+                    readbackBytes = seekable.bytesRead
+                    val pkg = XmpPackage.parse(String(bytes, Charsets.UTF_8))
+                    readbackOk = pkg.getField(XmpFields.ASSET_ID) == record.assetId
+                }
+                if (!readbackOk) {
+                    TransferLog.e("job=${TransferLog.shortId(jobId)} sidecar readback failed for assetId=${record.assetId}")
+                    return FinalizeOutcome.Failed("readback_mismatch")
+                }
+            } catch (t: Throwable) {
+                TransferLog.e("job=${TransferLog.shortId(jobId)} sidecar readback error: ${t.message}", t)
+                return FinalizeOutcome.Failed("readback_error", t)
+            }
+        } else if (provenanceStatus == "embedded" && meta.provenance != null) {
             val record = ProvenanceRecord.fromMap(meta.provenance)
             try {
                 publisher.openSeekableInput(publishedMedia.mediaId).use { seekable ->

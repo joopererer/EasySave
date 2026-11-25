@@ -16,6 +16,13 @@ class TransferJobSnapshot {
     this.bytesRead = 0,
     this.totalBytes = 0,
     this.fakePlan,
+    this.mediaId,
+    this.title,
+    this.relativePath,
+    this.md5,
+    this.fileSize = 0,
+    this.provenanceStatus,
+    this.historyPending = false,
   });
 
   factory TransferJobSnapshot.fromMap(Map<dynamic, dynamic> map) {
@@ -32,6 +39,13 @@ class TransferJobSnapshot {
       bytesRead: (map['bytesRead'] as num?)?.toInt() ?? 0,
       totalBytes: (map['totalBytes'] as num?)?.toInt() ?? 0,
       fakePlan: map['fakePlan'] as String?,
+      mediaId: map['mediaId'] as String?,
+      title: map['title'] as String?,
+      relativePath: map['relativePath'] as String?,
+      md5: map['md5'] as String?,
+      fileSize: (map['fileSize'] as num?)?.toInt() ?? 0,
+      provenanceStatus: map['provenanceStatus'] as String?,
+      historyPending: (map['historyPending'] as bool?) ?? false,
     );
   }
 
@@ -47,6 +61,13 @@ class TransferJobSnapshot {
   final int bytesRead;
   final int totalBytes;
   final String? fakePlan;
+  final String? mediaId;
+  final String? title;
+  final String? relativePath;
+  final String? md5;
+  final int fileSize;
+  final String? provenanceStatus;
+  final bool historyPending;
 }
 
 /// 传输事件基类
@@ -63,12 +84,16 @@ class TransferStateChangeEvent extends TransferEvent {
     required this.to,
     this.reason,
     required this.retryCount,
+    this.requiredBytes = 0,
+    this.availableBytes = 0,
   });
 
   final String from;
   final String to;
   final String? reason;
   final int retryCount;
+  final int requiredBytes;
+  final int availableBytes;
 
   String get shortId => jobId.length <= 8 ? jobId : jobId.substring(jobId.length - 8);
 
@@ -97,12 +122,14 @@ class TransferCompletedEvent extends TransferEvent {
     this.md5,
     this.title,
     this.fileSize = 0,
+    this.relativePath,
   });
 
   final String? mediaId;
   final String? md5;
   final String? title;
   final int fileSize;
+  final String? relativePath;
 }
 
 /// 需要重新解析地址事件 (HTTP 403/410)
@@ -142,6 +169,7 @@ class TransferClient {
           md5: map['md5'] as String?,
           title: map['title'] as String?,
           fileSize: (map['fileSize'] as num?)?.toInt() ?? 0,
+          relativePath: map['relativePath'] as String?,
         );
       } else if (type == 'reresolve_required') {
         return TransferReresolveRequiredEvent(jobId: jobId);
@@ -152,6 +180,8 @@ class TransferClient {
           to: (map['to'] as String?) ?? '',
           reason: map['reason'] as String?,
           retryCount: (map['retryCount'] as num?)?.toInt() ?? 0,
+          requiredBytes: (map['requiredBytes'] as num?)?.toInt() ?? 0,
+          availableBytes: (map['availableBytes'] as num?)?.toInt() ?? 0,
         );
       }
     });
@@ -254,6 +284,46 @@ class TransferClient {
     final res = await _methodChannel.invokeMethod<bool>('openInGallery', {
       'mediaId': mediaId,
       if (mime != null) 'mime': mime,
+    });
+    return res ?? false;
+  }
+
+  Future<bool> updateUrlAndResume({
+    required String jobId,
+    required String url,
+    Map<String, String>? headers,
+    String? cookie,
+    List<String>? allowedCookieDomains,
+    List<Map<String, dynamic>>? policyHosts,
+    String? mime,
+    String? policyKey,
+  }) async {
+    final res = await _methodChannel.invokeMethod<bool>('updateUrlAndResume', {
+      'jobId': jobId,
+      'url': url,
+      if (headers != null) 'headers': headers,
+      if (cookie != null) 'cookie': cookie,
+      if (allowedCookieDomains != null) 'allowedCookieDomains': allowedCookieDomains,
+      if (policyHosts != null) 'policyHosts': policyHosts,
+      if (mime != null) 'mime': mime,
+      if (policyKey != null) 'policyKey': policyKey,
+    });
+    return res ?? false;
+  }
+
+  Future<List<TransferJobSnapshot>> queryHistoryPending() async {
+    final res = await _methodChannel.invokeMethod<List<dynamic>>('queryHistoryPending');
+    if (res == null) return const [];
+    return res
+        .whereType<Map<dynamic, dynamic>>()
+        .map((m) => TransferJobSnapshot.fromMap(m))
+        .toList();
+  }
+
+  Future<bool> ackHistoryWritten(List<String> jobIds) async {
+    if (jobIds.isEmpty) return true;
+    final res = await _methodChannel.invokeMethod<bool>('ackHistoryWritten', {
+      'jobIds': jobIds,
     });
     return res ?? false;
   }

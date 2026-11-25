@@ -117,6 +117,9 @@ class AppSettings {
   /// do not auto-resume on disconnect, but stop at "已中断，点继续" for manual resume.
   bool manualResumeOnlyOnDisconnect = kDefaultManualResumeOnlyOnDisconnect;
 
+  /// Developer option (v1.13 P0-4a): route main-UI downloads through TransferService.
+  bool useNewTransferPipeline = false;
+
   /// Set only by [clearBackupFolder]: a regular [save] must keep the folder.
   bool _forgetBackupFolder = false;
 
@@ -173,6 +176,7 @@ class AppSettings {
       ..backupFolderHintDismissed = prefs.getBool('backupFolderHintDismissed') ?? false
       ..developerOptionsVisible = prefs.getBool('developerOptionsVisible') ?? false
       ..manualResumeOnlyOnDisconnect = prefs.getBool('manualResumeOnlyOnDisconnect') ?? kDefaultManualResumeOnlyOnDisconnect
+      ..useNewTransferPipeline = prefs.getBool('useNewTransferPipeline') ?? false
       ..videoBackfillHintDismissed = prefs.getBool('videoBackfillHintDismissed') ?? false;
   }
 
@@ -222,6 +226,7 @@ class AppSettings {
     await prefs.setBool('backupFolderHintDismissed', backupFolderHintDismissed);
     await prefs.setBool('developerOptionsVisible', developerOptionsVisible);
     await prefs.setBool('manualResumeOnlyOnDisconnect', manualResumeOnlyOnDisconnect);
+    await prefs.setBool('useNewTransferPipeline', useNewTransferPipeline);
     await prefs.setBool('videoBackfillHintDismissed', videoBackfillHintDismissed);
   }
 

@@ -74,6 +74,7 @@ class TransferService : Service() {
                 networkChecker = networkChecker,
                 eventListener = { event ->
                     TransferChannels.broadcastEvent(event)
+                    instance?.onTransferEvent(event)
                 },
                 onIdleChanged = { isIdle ->
                     instance?.onIdleChanged(isIdle)
@@ -103,6 +104,7 @@ class TransferService : Service() {
     private val mainHandler = Handler(Looper.getMainLooper())
     private var idleRunnable: Runnable? = null
     private var isForegroundStarted = false
+    private var lastNotifyMs = 0L
 
     lateinit var scheduler: TransferScheduler
     private var networkMonitor: TransferNetworkMonitor? = null
@@ -151,22 +153,60 @@ class TransferService : Service() {
         }
     }
 
-    private fun buildNotification(): Notification {
+    private fun buildNotification(
+        contentTitle: String = "EasySave 传输服务",
+        contentText: String = "后台传输服务运行中",
+        progressPct: Int? = null,
+    ): Notification {
         val launchIntent = Intent(this, MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
         }
         val flags = PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         val pendingIntent = PendingIntent.getActivity(this, 0, launchIntent, flags)
 
-        return NotificationCompat.Builder(this, NOTIFICATION_CHANNEL_ID)
+        val builder = NotificationCompat.Builder(this, NOTIFICATION_CHANNEL_ID)
             .setSmallIcon(R.mipmap.ic_launcher)
-            .setContentTitle("EasySave 传输服务")
-            .setContentText("后台传输服务运行中")
+            .setContentTitle(contentTitle)
+            .setContentText(contentText)
             .setOngoing(true)
             .setOnlyAlertOnce(true)
             .setContentIntent(pendingIntent)
             .setPriority(NotificationCompat.PRIORITY_LOW)
-            .build()
+        if (progressPct != null) {
+            builder.setProgress(100, progressPct.coerceIn(0, 100), false)
+        }
+        return builder.build()
+    }
+
+    fun onTransferEvent(event: TransferEvent) {
+        val now = System.currentTimeMillis()
+        if (event is TransferEvent.Progress && now - lastNotifyMs < 800L) return
+        lastNotifyMs = now
+        mainHandler.post {
+            val all = scheduler.jobs.values
+            val active = all.filter { !it.state.isTerminal }
+            if (active.isEmpty() && all.isEmpty()) return@post
+            val batchJobs = active.firstOrNull()?.batchId?.let { bId ->
+                all.filter { it.batchId == bId }
+            } ?: all.toList()
+            val totalCount = batchJobs.size
+            val doneCount = batchJobs.count { it.state == JobState.DONE }
+            val totalBytes = batchJobs.sumOf { if (it.totalBytes > 0) it.totalBytes else 0L }
+            val readBytes = batchJobs.sumOf {
+                if (it.state == JobState.DONE && it.fileSize > 0) it.fileSize else it.bytesRead
+            }
+            val pct = if (totalBytes > 0) ((readBytes * 100) / totalBytes).toInt().coerceIn(0, 100) else null
+            val title = if (active.isEmpty()) "EasySave 传输完成" else "EasySave 下载中 ($doneCount/$totalCount)"
+            val text = if (active.isEmpty()) {
+                "已完成 $doneCount/$totalCount 项"
+            } else if (pct != null) {
+                "当前进度 $pct% · 已完成 $doneCount/$totalCount"
+            } else {
+                "正在传输 ($doneCount/$totalCount)"
+            }
+            val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            nm.notify(NOTIFICATION_ID, buildNotification(title, text, if (active.isEmpty()) null else pct))
+        }
     }
 
     private fun startForegroundNotification() {

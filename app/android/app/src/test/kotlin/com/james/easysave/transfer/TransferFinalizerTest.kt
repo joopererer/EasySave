@@ -8,6 +8,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
@@ -570,5 +571,60 @@ class TransferFinalizerTest {
         val outcome = runOnBg { finalizer.executePair(brokenItems) }
         assertTrue(outcome is PairFinalizeOutcome.Failed)
         assertEquals(0, publisher.entries.size)
+    }
+
+    @Test
+    fun testC2paJpeg_writesUnchangedMediaAndXmpSidecarToDownloadEasySave() {
+        val testJpeg = findTestVector("no-metadata.jpg")
+        val raw = testJpeg.readBytes()
+        // 构造含 APP11 (0xFF 0xEB) C2PA 标记的 JPEG
+        val c2paBytes = ByteArray(raw.size + 20)
+        c2paBytes[0] = raw[0]
+        c2paBytes[1] = raw[1]
+        c2paBytes[2] = 0xFF.toByte()
+        c2paBytes[3] = 0xEB.toByte()
+        c2paBytes[4] = 0x00
+        c2paBytes[5] = 18
+        System.arraycopy(raw, 2, c2paBytes, 22, raw.size - 2)
+
+        val partFile = File(transfersDir, "job_c2pa.part").apply { writeBytes(c2paBytes) }
+        val job = TransferJob(jobId = "job_c2pa", totalBytes = c2paBytes.size.toLong())
+        store.insertOrReplace(job)
+        val recordMap = mapOf(
+            "schema" to "0.1",
+            "assetId" to "01960000-0000-7000-8000-c2pa00000001",
+            "capturedAt" to "2026-11-25T10:00:00Z",
+            "capturedBy" to "EasySave/1.13.0",
+            "metadataDate" to "2026-11-25T10:00:00Z",
+            "platform" to "xhs",
+            "sourceId" to "c2pa_post_1",
+            "itemIndex" to 1,
+            "itemCount" to 1,
+        )
+        val meta = TransferMeta(
+            url = "https://example.com/c2pa.jpg",
+            total = c2paBytes.size.toLong(),
+            mime = "image/jpeg",
+            provenance = recordMap,
+        )
+
+        val outcome = runOnBg { finalizer.execute(job, meta, partFile) }
+        assertTrue(outcome is FinalizeOutcome.Success)
+        val success = outcome as FinalizeOutcome.Success
+        assertEquals("sidecar", success.provenanceStatus)
+        assertTrue(success.readbackMatch)
+        assertEquals("Download/EasySave/", success.publishedMedia.relativePath)
+
+        // 应有 2 个已发布条目：原图（字节未变）+ .xmp 边车
+        assertEquals(2, publisher.entries.size)
+        val mediaEntry = publisher.entries.values.first { it.displayName == "c2pa_post_1_1.jpg" }
+        val sidecarEntry = publisher.entries.values.first { it.displayName == "c2pa_post_1_1.jpg.xmp" }
+        assertFalse(mediaEntry.isPending)
+        assertFalse(sidecarEntry.isPending)
+        assertEquals("Download/EasySave/", mediaEntry.relativePath)
+        assertEquals("Download/EasySave/", sidecarEntry.relativePath)
+        assertArrayEquals(c2paBytes, mediaEntry.data)
+        val sidecarXml = String(sidecarEntry.data!!, Charsets.UTF_8)
+        assertTrue(sidecarXml.contains("01960000-0000-7000-8000-c2pa00000001"))
     }
 }

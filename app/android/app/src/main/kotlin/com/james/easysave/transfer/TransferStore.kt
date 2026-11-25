@@ -26,7 +26,7 @@ class TransferStore(context: Context, dbName: String = DB_NAME) :
 
     companion object {
         const val DB_NAME = "transfer.db"
-        const val DB_VERSION = 3
+        const val DB_VERSION = 4
         const val TABLE_JOBS = "transfer_jobs"
 
         const val COL_JOB_ID = "job_id"
@@ -43,6 +43,7 @@ class TransferStore(context: Context, dbName: String = DB_NAME) :
         const val COL_FINALIZE_STEP = "finalize_step"
         const val COL_MEDIA_ID = "media_id"
         const val COL_TITLE = "title"
+        const val COL_RELATIVE_PATH = "relative_path"
         const val COL_MD5 = "md5"
         const val COL_FILE_SIZE = "file_size"
         const val COL_PART_SHA256 = "part_sha256"
@@ -72,6 +73,7 @@ class TransferStore(context: Context, dbName: String = DB_NAME) :
                 $COL_FINALIZE_STEP TEXT,
                 $COL_MEDIA_ID TEXT,
                 $COL_TITLE TEXT,
+                $COL_RELATIVE_PATH TEXT,
                 $COL_MD5 TEXT,
                 $COL_FILE_SIZE INTEGER NOT NULL DEFAULT 0,
                 $COL_PART_SHA256 TEXT,
@@ -106,6 +108,9 @@ class TransferStore(context: Context, dbName: String = DB_NAME) :
         if (oldVersion < 3) {
             db.execSQL("ALTER TABLE $TABLE_JOBS ADD COLUMN $COL_PAIR_ID TEXT")
         }
+        if (oldVersion < 4) {
+            db.execSQL("ALTER TABLE $TABLE_JOBS ADD COLUMN $COL_RELATIVE_PATH TEXT")
+        }
     }
 
     @Synchronized
@@ -124,6 +129,7 @@ class TransferStore(context: Context, dbName: String = DB_NAME) :
             put(COL_FINALIZE_STEP, job.finalizeStep)
             put(COL_MEDIA_ID, job.mediaId)
             put(COL_TITLE, job.title)
+            put(COL_RELATIVE_PATH, job.relativePath)
             put(COL_MD5, job.md5)
             put(COL_FILE_SIZE, job.fileSize)
             put(COL_PART_SHA256, job.partSha256)
@@ -280,6 +286,41 @@ class TransferStore(context: Context, dbName: String = DB_NAME) :
     }
 
     @Synchronized
+    fun getHistoryPendingJobs(): List<TransferJob> {
+        val list = mutableListOf<TransferJob>()
+        readableDatabase.query(
+            TABLE_JOBS,
+            null,
+            "$COL_STATE = ? AND $COL_HISTORY_PENDING = 1",
+            arrayOf(JobState.DONE.value),
+            null,
+            null,
+            "$COL_CREATED_AT ASC"
+        ).use { cursor ->
+            while (cursor.moveToNext()) {
+                list.add(cursorToJob(cursor))
+            }
+        }
+        return list
+    }
+
+    @Synchronized
+    fun clearHistoryPending(jobIds: List<String>) {
+        if (jobIds.isEmpty()) return
+        val values = ContentValues().apply {
+            put(COL_HISTORY_PENDING, 0)
+            put(COL_UPDATED_AT, System.currentTimeMillis())
+        }
+        val placeholders = jobIds.joinToString(",") { "?" }
+        writableDatabase.update(
+            TABLE_JOBS,
+            values,
+            "$COL_JOB_ID IN ($placeholders)",
+            jobIds.toTypedArray()
+        )
+    }
+
+    @Synchronized
     fun clearAll() {
         writableDatabase.delete(TABLE_JOBS, null, null)
     }
@@ -290,6 +331,7 @@ class TransferStore(context: Context, dbName: String = DB_NAME) :
         finalizeStep: String? = null,
         mediaId: String? = null,
         title: String? = null,
+        relativePath: String? = null,
         md5: String? = null,
         fileSize: Long? = null,
         partSha256: String? = null,
@@ -307,6 +349,7 @@ class TransferStore(context: Context, dbName: String = DB_NAME) :
             if (finalizeStep != null) put(COL_FINALIZE_STEP, finalizeStep)
             if (mediaId != null) put(COL_MEDIA_ID, mediaId)
             if (title != null) put(COL_TITLE, title)
+            if (relativePath != null) put(COL_RELATIVE_PATH, relativePath)
             if (md5 != null) put(COL_MD5, md5)
             if (fileSize != null) put(COL_FILE_SIZE, fileSize)
             if (partSha256 != null) put(COL_PART_SHA256, partSha256)
@@ -382,6 +425,7 @@ class TransferStore(context: Context, dbName: String = DB_NAME) :
             finalizeStep = optString(COL_FINALIZE_STEP),
             mediaId = optString(COL_MEDIA_ID),
             title = optString(COL_TITLE),
+            relativePath = optString(COL_RELATIVE_PATH),
             md5 = optString(COL_MD5),
             fileSize = optLong(COL_FILE_SIZE),
             partSha256 = optString(COL_PART_SHA256),

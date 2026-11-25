@@ -2,6 +2,7 @@ package com.james.easysave.transfer
 
 import com.james.easysave.ExportNames
 import com.james.easysave.MediaImportPolicy
+import com.james.easysave.PairSavePolicy
 import com.james.easysave.provenance.ByteArraySeekableInput
 import com.james.easysave.provenance.SeekableInput
 import java.io.ByteArrayInputStream
@@ -40,8 +41,14 @@ class FakeMediaPublisher : MediaPublisher {
         mime: String,
         sourceFile: File,
     ): PublishedHandle {
-        ExportNames.requireClean(displayName)
-        MediaImportPolicy.requireAllowed(mime)
+        val isSidecar = displayName.endsWith(".xmp")
+        if (isSidecar) {
+            ExportNames.requireClean(displayName.removeSuffix(".xmp"))
+            require(mime == PairSavePolicy.SIDECAR_MIME) { "Invalid sidecar MIME: $mime" }
+        } else {
+            ExportNames.requireClean(displayName)
+            MediaImportPolicy.requireAllowed(mime)
+        }
         check(!exists(relativePath, displayName)) { "Target filename already exists: $displayName" }
 
         val id = (idCounter++).toString()

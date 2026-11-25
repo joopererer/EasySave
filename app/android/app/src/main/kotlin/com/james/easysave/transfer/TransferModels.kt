@@ -49,6 +49,7 @@ data class TransferJob(
     var finalizeStep: String? = null,
     var mediaId: String? = null,
     var title: String? = null,
+    var relativePath: String? = null,
     var md5: String? = null,
     var fileSize: Long = 0L,
     var partSha256: String? = null,
@@ -76,6 +77,7 @@ data class TransferJob(
         "finalizeStep" to finalizeStep,
         "mediaId" to mediaId,
         "title" to title,
+        "relativePath" to relativePath,
         "md5" to md5,
         "fileSize" to fileSize,
         "partSha256" to partSha256,
@@ -99,6 +101,8 @@ sealed class TransferEvent {
         val to: JobState,
         val reason: String?,
         val retryCount: Int,
+        val requiredBytes: Long = 0L,
+        val availableBytes: Long = 0L,
     ) : TransferEvent() {
         fun toMap(): Map<String, Any?> = mapOf(
             "type" to "state_change",
@@ -107,6 +111,8 @@ sealed class TransferEvent {
             "to" to to.value,
             "reason" to reason,
             "retryCount" to retryCount,
+            if (requiredBytes > 0) "requiredBytes" to requiredBytes else "requiredBytes" to 0L,
+            if (availableBytes > 0) "availableBytes" to availableBytes else "availableBytes" to 0L,
         )
     }
 
@@ -129,6 +135,7 @@ sealed class TransferEvent {
         val md5: String?,
         val title: String? = null,
         val fileSize: Long = 0L,
+        val relativePath: String? = null,
     ) : TransferEvent() {
         fun toMap(): Map<String, Any?> = mapOf(
             "type" to "completed",
@@ -137,6 +144,7 @@ sealed class TransferEvent {
             "md5" to md5,
             "title" to title,
             "fileSize" to fileSize,
+            "relativePath" to relativePath,
         )
     }
 

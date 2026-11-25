@@ -47,6 +47,7 @@ class HistoryFile {
     this.notOriginal = false,
     this.pairId,
     this.undecodable,
+    this.md5,
   });
 
   final String filename;
@@ -96,6 +97,10 @@ class HistoryFile {
   /// v1.10.3 and containers no device has to decode stay null.
   final bool? undecodable;
 
+  /// MD5 hex digest computed during single-pass album copy (v1.13 P0-4a).
+  /// Null for legacy rows until backfilled.
+  final String? md5;
+
   Map<String, Object?> toMap() => {
     'filename': filename,
     'saved_at': savedAt,
@@ -111,6 +116,7 @@ class HistoryFile {
     if (notOriginal) 'not_original': 1,
     if (pairId != null) 'pair_id': pairId,
     if (undecodable != null) 'undecodable': undecodable == true ? 1 : 0,
+    if (md5 != null) 'md5': md5,
   };
 
   factory HistoryFile.fromMap(Map<String, Object?> map) => HistoryFile(
@@ -133,6 +139,7 @@ class HistoryFile {
     undecodable: map['undecodable'] == null
         ? null
         : (map['undecodable'] as num?)?.toInt() == 1,
+    md5: map['md5'] as String?,
   );
 
   HistoryFile copyWith({
@@ -150,6 +157,7 @@ class HistoryFile {
     bool? notOriginal,
     String? pairId,
     bool? undecodable,
+    String? md5,
   }) => HistoryFile(
     filename: filename ?? this.filename,
     savedAt: savedAt ?? this.savedAt,
@@ -165,6 +173,7 @@ class HistoryFile {
     notOriginal: notOriginal ?? this.notOriginal,
     pairId: pairId ?? this.pairId,
     undecodable: undecodable ?? this.undecodable,
+    md5: md5 ?? this.md5,
   );
 }
 
@@ -393,6 +402,32 @@ Future<void> _cleanResidualFileRows(Database db) async {
       'file rows cleaned source=migration post=${row['post_id']} '
           'deleted=1 from=${files.length} kept=0',
     );
+  }
+}
+
+/// Idempotent v8 migration: ensures existing `files_json` entries remain valid
+/// when the `md5` field is introduced on [HistoryFile] (older rows keep `md5: null`
+/// without altering any existing fields).
+Future<void> _ensureFilesJsonMd5SchemaV8(DatabaseExecutor db) async {
+  final rows = await db.query(
+    'history_records',
+    columns: ['id', 'files_json'],
+  );
+  for (final row in rows) {
+    final raw = row['files_json'] as String?;
+    if (raw == null || raw.isEmpty) continue;
+    try {
+      final decoded = jsonDecode(raw);
+      if (decoded is! List) continue;
+      // Round-trip validation only; preserves all existing keys and omits null md5.
+      final files = [
+        for (final item in decoded)
+          if (item is Map) HistoryFile.fromMap(item.cast<String, Object?>()),
+      ];
+      if (files.isEmpty) continue;
+    } catch (_) {
+      continue;
+    }
   }
 }
 
@@ -963,7 +998,7 @@ class HistoryDb {
     final path = dbPath ?? '${await getDatabasesPath()}/easysave_history.db';
     final db = await openDatabase(
       path,
-      version: 7,
+      version: 8,
       // Two engines (main UI isolate + background isolate) can hold a
       // connection to the same file. WAL lets readers work while a writer is
       // active, and busy_timeout makes a writer wait for the lock instead of
@@ -1065,6 +1100,9 @@ class HistoryDb {
         }
         if (oldVersion < 7) {
           await _cleanResidualFileRows(db);
+        }
+        if (oldVersion < 8) {
+          await _ensureFilesJsonMd5SchemaV8(db);
         }
       },
     );

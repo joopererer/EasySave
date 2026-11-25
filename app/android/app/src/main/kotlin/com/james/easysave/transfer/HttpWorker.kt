@@ -453,7 +453,7 @@ class HttpWorker(
         if (usableSpace < requiredSpace) {
             TransferLog.w("job=${TransferLog.shortId(job.jobId)} storage_full: usable=$usableSpace required=$requiredSpace")
             finalResp.close()
-            return WorkerResult.StorageFull("storage_full")
+            return WorkerResult.StorageFull("storage_full", requiredSpace, usableSpace)
         }
 
         // 6. 流式写入 .part 并定期上报进度（每 256KB 或 1 秒）

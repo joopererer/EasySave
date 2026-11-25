@@ -444,7 +444,17 @@ class TransferScheduler(
                     job.state = JobState.STORAGE_FULL
                     job.updatedAt = clock.currentTimeMillis()
                     store.updateJobState(jobId, JobState.STORAGE_FULL, job.retryCount, job.updatedAt)
-                    emitStateChange(jobId, JobState.RUNNING, JobState.STORAGE_FULL, "storage_full", job.retryCount)
+                    eventListener?.invoke(
+                        TransferEvent.StateChanged(
+                            jobId = jobId,
+                            from = JobState.RUNNING,
+                            to = JobState.STORAGE_FULL,
+                            reason = "storage_full",
+                            retryCount = job.retryCount,
+                            requiredBytes = result.requiredBytes,
+                            availableBytes = result.availableBytes,
+                        )
+                    )
                 }
             }
             is WorkerResult.PolicyRejected -> {
@@ -696,6 +706,7 @@ class TransferScheduler(
                     val res = outcome.outcomes[jobId] ?: continue
                     job.mediaId = res.publishedMedia.mediaId
                     job.title = res.publishedMedia.title
+                    job.relativePath = res.publishedMedia.relativePath
                     job.md5 = res.publishedMedia.md5
                     job.fileSize = res.publishedMedia.size
                     job.partSha256 = res.partSha256
@@ -706,6 +717,7 @@ class TransferScheduler(
                     job.importMs = res.importMs
                     job.readbackMs = res.readbackMs
                     job.historyPending = true
+                    store.updateJobFinalizeProgress(jobId, relativePath = job.relativePath)
 
                     if (JobState.validateAndLog(jobId, JobState.FINISHING, JobState.DONE, "finalized", job.retryCount)) {
                         job.state = JobState.DONE
@@ -719,6 +731,7 @@ class TransferScheduler(
                                 md5 = job.md5,
                                 title = job.title,
                                 fileSize = job.fileSize,
+                                relativePath = job.relativePath,
                             )
                         )
                     }
@@ -748,6 +761,7 @@ class TransferScheduler(
             is FinalizeOutcome.Success -> {
                 job.mediaId = outcome.publishedMedia.mediaId
                 job.title = outcome.publishedMedia.title
+                job.relativePath = outcome.publishedMedia.relativePath
                 job.md5 = outcome.publishedMedia.md5
                 job.fileSize = outcome.publishedMedia.size
                 job.partSha256 = outcome.partSha256
@@ -758,6 +772,7 @@ class TransferScheduler(
                 job.importMs = outcome.importMs
                 job.readbackMs = outcome.readbackMs
                 job.historyPending = true
+                store.updateJobFinalizeProgress(jobId, relativePath = job.relativePath)
 
                 if (JobState.validateAndLog(jobId, JobState.FINISHING, JobState.DONE, "finalized", job.retryCount)) {
                     job.state = JobState.DONE
@@ -772,6 +787,7 @@ class TransferScheduler(
                             md5 = job.md5,
                             title = job.title,
                             fileSize = job.fileSize,
+                            relativePath = job.relativePath,
                         )
                     )
                 }
@@ -880,13 +896,19 @@ class TransferScheduler(
         val workerJob = scope.launch(Dispatchers.IO) {
             try {
                 val result = worker.execute(job) { bytesRead, totalBytes ->
-                    send(SchedulerEvent.WorkerProgressEvent(job.jobId, bytesRead, totalBytes))
+                    if (isActive) {
+                        send(SchedulerEvent.WorkerProgressEvent(job.jobId, bytesRead, totalBytes))
+                    }
                 }
-                send(SchedulerEvent.WorkerResultEvent(job.jobId, result))
+                if (isActive) {
+                    send(SchedulerEvent.WorkerResultEvent(job.jobId, result))
+                }
             } catch (ce: CancellationException) {
                 TransferLog.i("job=${TransferLog.shortId(job.jobId)} worker cancelled")
             } catch (t: Throwable) {
-                send(SchedulerEvent.WorkerResultEvent(job.jobId, WorkerResult.OtherError(t.message ?: "unknown_error")))
+                if (isActive) {
+                    send(SchedulerEvent.WorkerResultEvent(job.jobId, WorkerResult.OtherError(t.message ?: "unknown_error")))
+                }
             }
         }
         runningWorkers[job.jobId] = workerJob
