@@ -768,8 +768,17 @@ class DownloadBatch {
     int? startedAt,
     this.formatPref = ImageFormatPreference.compat,
     this.jpegFallbackPlanned = false,
-    this.usesNewTransferPipeline = false,
-  }) : startedAt = startedAt ?? DateTime.now().microsecondsSinceEpoch;
+    String? pipeline,
+    bool usesNewTransferPipeline = false,
+  }) : startedAt = startedAt ?? DateTime.now().microsecondsSinceEpoch,
+       pipeline = pipeline ??
+           (usesNewTransferPipeline ? pipelineTransfer : pipelineLegacy);
+
+  static const String pipelineLegacy = 'legacy';
+  static const String pipelineTransfer = 'transfer';
+
+  final String pipeline;
+  bool get usesNewTransferPipeline => pipeline == pipelineTransfer;
 
   final int startedAt;
   bool cancelledByDeletion = false;
@@ -829,7 +838,6 @@ class DownloadBatch {
   /// Owner engine: [sourceMain] or [sourceBackground].
   String source;
   final List<DownloadJob> jobs;
-  bool usesNewTransferPipeline = false;
   bool historyWritten = false;
 
   /// Engine that finished an adopted foreign batch.
@@ -1004,11 +1012,18 @@ class DownloadBatch {
     'settledBy': settledBy,
     'formatPref': formatPref.name,
     'jpegFallback': jpegFallbackPlanned,
+    'pipeline': pipeline,
     if (usesNewTransferPipeline) 'usesNewTransferPipeline': true,
   };
 
-  static DownloadBatch fromJson(Map<String, Object?> map) =>
-      DownloadBatch(
+  static DownloadBatch fromJson(Map<String, Object?> map) {
+    final rawPipeline = map['pipeline'] as String?;
+    final resolvedPipeline = (rawPipeline == pipelineTransfer || rawPipeline == pipelineLegacy)
+        ? rawPipeline
+        : ((map['usesNewTransferPipeline'] as bool? ?? false)
+            ? pipelineTransfer
+            : pipelineLegacy);
+    return DownloadBatch(
           batchId: map['batchId'] as String,
           startedAt: (map['startedAt'] as num?)?.toInt() ?? 0,
           album: map['album'] as String,
@@ -1037,11 +1052,12 @@ class DownloadBatch {
               .toList(),
           formatPref: ImageFormatPreference.fromName(map['formatPref'] as String?),
           jpegFallbackPlanned: map['jpegFallback'] as bool? ?? false,
-          usesNewTransferPipeline: map['usesNewTransferPipeline'] as bool? ?? false,
+          pipeline: resolvedPipeline,
         )
         ..historyWritten = map['historyWritten'] as bool? ?? false
         ..cancelledByDeletion = map['cancelledByDeletion'] as bool? ?? false
         ..settledBy = map['settledBy'] as String?;
+  }
 }
 
 /// One downloadable file derived from the selection. Pure function so the
@@ -1743,6 +1759,7 @@ class DownloadManager extends ChangeNotifier {
       _networkStabilityTimer = null;
       for (final batch in _batches.values) {
         if (batch.source != DownloadManager.owner) continue;
+        if (batch.usesNewTransferPipeline) continue;
         for (final job in batch.jobs) {
           if (!job.isTerminal && !job.userPaused) {
             if (job.state == JobState.queued) {
@@ -1775,6 +1792,7 @@ class DownloadManager extends ChangeNotifier {
     if (settings.manualResumeOnlyOnDisconnect) return;
     for (final batch in _batches.values.toList()) {
       if (batch.source != DownloadManager.owner) continue;
+      if (batch.usesNewTransferPipeline) continue;
       for (final job in batch.jobs.toList()) {
         if (job.state == JobState.paused && (job.resumeStartByte ?? 0) > 0) {
           if (job.userPaused) continue;
@@ -1832,6 +1850,7 @@ class DownloadManager extends ChangeNotifier {
   Future<void> _resumeWaitingJobs() async {
     for (final batch in _batches.values.toList()) {
       if (batch.source != owner) continue;
+      if (batch.usesNewTransferPipeline) continue;
       var changed = false;
       for (final job in batch.jobs.toList()) {
         if (!job.isWaitingForNetwork) continue;
@@ -1931,6 +1950,7 @@ class DownloadManager extends ChangeNotifier {
       // Only batches this engine owns are driven here; a foreign batch is
       // left to its owner until it is adopted or force-adopted.
       if (batch.source == DownloadManager.owner) {
+        if (batch.usesNewTransferPipeline) continue;
         try {
           await _watchdog(batch);
         } catch (e) {
@@ -1948,6 +1968,7 @@ class DownloadManager extends ChangeNotifier {
   /// task database what really happened and import, retry or fail the job so
   /// the batch can reach a terminal state.
   Future<void> _watchdog(DownloadBatch batch) async {
+    if (batch.usesNewTransferPipeline) return;
     final now = DateTime.now().millisecondsSinceEpoch;
     for (final job in batch.jobs.toList()) {
       if (await _isAlreadySaved(batch, job)) {
@@ -2217,7 +2238,64 @@ class DownloadManager extends ChangeNotifier {
     } catch (_) {}
   }
 
-  Future<bool> _resumeTask(DownloadTask task) async {
+  DownloadBatch? _findBatchForTaskId(String? taskId) {
+    if (taskId == null || taskId.isEmpty) return null;
+    for (final b in _batches.values) {
+      for (final j in b.jobs) {
+        if (j.currentTaskId == taskId ||
+            j.previousTaskIds.contains(taskId) ||
+            taskId.startsWith('${j.key}-r') ||
+            taskId.startsWith('${j.key}-try') ||
+            taskId == j.key) {
+          return b;
+        }
+      }
+    }
+    return null;
+  }
+
+  /// Single gate for every legacy `background_downloader` mutation
+  /// (enqueue, resume, pause, cancel, retry). Any batch owned by the new
+  /// `transfer` pipeline is rejected and logged.
+  bool _guardLegacyPluginCall(
+    DownloadBatch? batch, {
+    String? taskId,
+    String? groupId,
+    required String action,
+    required String source,
+  }) {
+    final resolved = batch ??
+        (groupId != null ? _batches[groupId] : null) ??
+        _findBatchForTaskId(taskId);
+    if (resolved != null && resolved.usesNewTransferPipeline) {
+      unawaited(DevLog.write(
+        'V16DL',
+        'legacy_call_blocked batch=${resolved.batchId} action=$action source=$source',
+      ));
+      return false;
+    }
+    return true;
+  }
+
+  Future<bool> _enqueueLegacyTask(
+    DownloadBatch batch,
+    DownloadTask task, {
+    required String source,
+  }) async {
+    if (!_guardLegacyPluginCall(batch, taskId: task.taskId, groupId: task.group, action: 'enqueue', source: source)) {
+      return false;
+    }
+    return await FileDownloader().enqueue(task);
+  }
+
+  Future<bool> _resumeTask(
+    DownloadTask task, {
+    DownloadBatch? batch,
+    String source = 'resume',
+  }) async {
+    if (!_guardLegacyPluginCall(batch, taskId: task.taskId, groupId: task.group, action: 'resume', source: source)) {
+      return false;
+    }
     final hook = resumeForTesting;
     if (hook != null) return await hook(task);
     return await FileDownloader().resume(task);
@@ -2243,7 +2321,10 @@ class DownloadManager extends ChangeNotifier {
     }
   }
 
-  Future<bool> _pauseTask(DownloadTask task, {String source = 'pause'}) async {
+  Future<bool> _pauseTask(DownloadTask task, {DownloadBatch? batch, String source = 'pause'}) async {
+    if (!_guardLegacyPluginCall(batch, taskId: task.taskId, groupId: task.group, action: 'pause', source: source)) {
+      return false;
+    }
     unawaited(DevLog.write('V16DL', 'cancel_call taskId=${task.taskId} source=$source'));
     final hook = pauseForTesting;
     if (hook != null) return await hook(task);
@@ -2257,7 +2338,10 @@ class DownloadManager extends ChangeNotifier {
     }
   }
 
-  Future<void> _cancelTaskWithId(String taskId, {required String source}) async {
+  Future<void> _cancelTaskWithId(String taskId, {DownloadBatch? batch, required String source}) async {
+    if (!_guardLegacyPluginCall(batch, taskId: taskId, action: 'cancel', source: source)) {
+      return;
+    }
     unawaited(DevLog.write('V16DL', 'cancel_call taskId=$taskId source=$source'));
     final hook = cancelTaskForTesting;
     if (hook != null) {
@@ -2269,19 +2353,26 @@ class DownloadManager extends ChangeNotifier {
     } catch (_) {}
   }
 
-  Future<void> _cancelTasksWithIds(List<String> taskIds, {required String source}) async {
+  Future<void> _cancelTasksWithIds(List<String> taskIds, {DownloadBatch? batch, required String source}) async {
+    final filtered = <String>[];
     for (final id in taskIds) {
+      if (_guardLegacyPluginCall(batch, taskId: id, action: 'cancel', source: source)) {
+        filtered.add(id);
+      }
+    }
+    if (filtered.isEmpty) return;
+    for (final id in filtered) {
       unawaited(DevLog.write('V16DL', 'cancel_call taskId=$id source=$source'));
     }
     final hook = cancelTaskForTesting;
     if (hook != null) {
-      for (final id in taskIds) {
+      for (final id in filtered) {
         await hook(id);
       }
       return;
     }
     try {
-      await FileDownloader().cancelTasksWithIds(taskIds);
+      await FileDownloader().cancelTasksWithIds(filtered);
     } catch (_) {}
   }
 
@@ -2830,6 +2921,9 @@ class DownloadManager extends ChangeNotifier {
 
   final _enqueuePending = <String>{};
   Future<void> _enqueueAttempt(DownloadBatch batch, DownloadJob job, {String source = 'unknown'}) async {
+    if (!_guardLegacyPluginCall(batch, taskId: job.currentTaskId ?? job.key, groupId: batch.batchId, action: 'enqueue', source: source)) {
+      return;
+    }
     if (job.isFinishing || _finishing.containsKey(job.key)) {
       unawaited(DevLog.write(
         'V16DL',
@@ -3069,7 +3163,7 @@ class DownloadManager extends ChangeNotifier {
         if (total > 0 && fromBytes < total) {
           job.progress = (fromBytes / total).clamp(0.0, 1.0);
         }
-        accepted = await _resumeTask(task);
+        accepted = await _resumeTask(task, batch: batch, source: source);
         if (!accepted) {
           unawaited(DevLog.write(
             'V16DL',
@@ -3093,7 +3187,7 @@ class DownloadManager extends ChangeNotifier {
       }
     }
     if (!accepted) {
-      accepted = await FileDownloader().enqueue(task);
+      accepted = await _enqueueLegacyTask(batch, task, source: source);
     }
     if (!accepted) {
       throw StateError('enqueue rejected for ${job.key}');
@@ -3504,7 +3598,7 @@ class DownloadManager extends ChangeNotifier {
       final activeTempPaths = <String>{};
       final activeJobSubdirs = <String>{};
       for (final batch in _batches.values) {
-        if (!batch.isTerminal) {
+        if (!batch.isTerminal && !batch.usesNewTransferPipeline) {
           activeBatchIds.add(batch.batchId);
           activeBatchIds.add(Uri.encodeComponent(batch.batchId));
           for (final job in batch.jobs) {
@@ -3845,6 +3939,9 @@ class DownloadManager extends ChangeNotifier {
     }
     if (batch.source != DownloadManager.owner) {
       _log('ignore update of foreign batch ${batch.batchId}');
+      return;
+    }
+    if (batch.usesNewTransferPipeline) {
       return;
     }
     DownloadJob? job;
@@ -5258,6 +5355,7 @@ class DownloadManager extends ChangeNotifier {
         _autoResumeTimers[job.key]?.cancel();
         _autoResumeTimers[job.key] = Timer(backoff, () async {
           _autoResumeTimers.remove(job.key);
+          if (batch.usesNewTransferPipeline) return;
           if (job.state != JobState.paused) return;
           if (_isResumeInFlight(job)) {
             unawaited(DevLog.write(
@@ -5591,12 +5689,16 @@ class DownloadManager extends ChangeNotifier {
     }
   }
 
+  final Set<String> _settledBatchIds = <String>{};
+
   Future<void> _afterTerminal(
     DownloadBatch batch, {
     required bool recovered,
     String? reason,
+    bool fromTransferPipeline = false,
   }) async {
     if (!batch.isTerminal) return;
+    if (batch.usesNewTransferPipeline && !fromTransferPipeline) return;
 
     final unconfirmedJobs = batch.jobs.where(
       (j) => !j.saved && j.state != JobState.done && j.state != JobState.canceled,
@@ -5653,6 +5755,10 @@ class DownloadManager extends ChangeNotifier {
     // repeat work.
     if (batch.historyWritten &&
         (batch.source == DownloadManager.owner || batch.settledBy != null)) {
+      return;
+    }
+    if (batch.usesNewTransferPipeline &&
+        (batch.settledBy != null || !_settledBatchIds.add(batch.batchId))) {
       return;
     }
 
@@ -6603,6 +6709,9 @@ class DownloadManager extends ChangeNotifier {
           continue;
         }
         _batches[batchId] = batch;
+        if (batch.usesNewTransferPipeline) {
+          continue;
+        }
         if (batch.isTerminal && batch.historyWritten) {
           // Settled terminal batches already wrote history: skip re-reconciling.
           continue;
@@ -6611,6 +6720,7 @@ class DownloadManager extends ChangeNotifier {
       }
       // One line per start makes two launches directly comparable in the log.
       _log('reconcile done batches=${index.length} adopted=$adopted');
+      unawaited(_cleanupTransferOrphanLegacyTasks());
       unawaited(tempSweep());
       if (changed) notifyListeners();
     } catch (_) {
@@ -6637,6 +6747,9 @@ class DownloadManager extends ChangeNotifier {
   }
 
   Future<bool> _allTasksTerminal(DownloadBatch batch) async {
+    if (batch.usesNewTransferPipeline) {
+      return batch.jobs.every((j) => j.isTerminal);
+    }
     if (batch.jobs.every(
       (j) => j.isTerminal || needsSessionDownload(batch, j),
     )) {
@@ -6675,6 +6788,7 @@ class DownloadManager extends ChangeNotifier {
 
   /// Returns true when the batch snapshot changed.
   Future<bool> _reconcileBatch(DownloadBatch batch) async {
+    if (batch.usesNewTransferPipeline) return false;
     var changed = false;
     for (final job in batch.jobs) {
       if (recoverSessionJob(batch, job)) {
@@ -7007,7 +7121,7 @@ class DownloadManager extends ChangeNotifier {
       await _persist(batch);
       notifyListeners();
       if (batch.isTerminal) {
-        await _afterTerminal(batch, recovered: false);
+        await _afterTerminal(batch, recovered: false, fromTransferPipeline: true);
       }
       return;
     }
@@ -7080,7 +7194,7 @@ class DownloadManager extends ChangeNotifier {
       await _persist(batch);
       notifyListeners();
       if (batch.isTerminal) {
-        await _afterTerminal(batch, recovered: false);
+        await _afterTerminal(batch, recovered: false, fromTransferPipeline: true);
       }
     }
   }
@@ -7152,7 +7266,6 @@ class DownloadManager extends ChangeNotifier {
     try {
       final pending = await _transferClient.queryHistoryPending();
       if (pending.isEmpty) return;
-      final historyDb = db ?? await HistoryDb.instance();
       final byBatch = <String, List<TransferJobSnapshot>>{};
       final ackIds = <String>[];
 
@@ -7191,12 +7304,10 @@ class DownloadManager extends ChangeNotifier {
           }
         }
         if (batch.isTerminal && !batch.historyWritten) {
-          await writeBatchHistory(historyDb, batch, recovered: true);
-          batch.historyWritten = true;
-          await _persist(batch);
-          notifyListeners();
+          await _afterTerminal(batch, recovered: true, fromTransferPipeline: true);
+        } else {
+          ackIds.addAll(entry.value.map((s) => s.jobId));
         }
-        ackIds.addAll(entry.value.map((s) => s.jobId));
       }
 
       if (ackIds.isNotEmpty) {
@@ -7205,6 +7316,137 @@ class DownloadManager extends ChangeNotifier {
     } catch (e) {
       _log('reconcileTransferHistoryPending failed: $e');
     }
+  }
+
+  @visibleForTesting
+  Future<void> Function(List<String> taskIds)? deleteLegacyRecordsForTesting;
+
+  @visibleForTesting
+  Future<({int tasks, int files, int bytes})> cleanupTransferOrphanLegacyTasksForTesting() =>
+      _cleanupTransferOrphanLegacyTasks();
+
+  @visibleForTesting
+  Future<void> runWatchdogForTesting(DownloadBatch batch) => _watchdog(batch);
+
+  @visibleForTesting
+  void triggerNetworkRecoveryForTesting() => _triggerNetworkRecoveryResume();
+
+  @visibleForTesting
+  Future<void> resumeWaitingJobsForTesting() => _resumeWaitingJobs();
+
+  @visibleForTesting
+  Future<bool> resumeTaskForTesting(DownloadTask task, {DownloadBatch? batch, String source = 'testing'}) =>
+      _resumeTask(task, batch: batch, source: source);
+
+  @visibleForTesting
+  Future<bool> pauseTaskForTesting(DownloadTask task, {DownloadBatch? batch, String source = 'testing'}) =>
+      _pauseTask(task, batch: batch, source: source);
+
+  @visibleForTesting
+  Future<void> cancelTaskWithIdForTesting(String taskId, {DownloadBatch? batch, String source = 'testing'}) =>
+      _cancelTaskWithId(taskId, batch: batch, source: source);
+
+  /// Cancels and deletes any legacy `background_downloader` tasks and temp
+  /// files belonging to batches owned by the `transfer` pipeline.
+  Future<({int tasks, int files, int bytes})> _cleanupTransferOrphanLegacyTasks() async {
+    final transferBatches = _batches.values.where((b) => b.usesNewTransferPipeline).toList();
+    if (transferBatches.isEmpty) return (tasks: 0, files: 0, bytes: 0);
+
+    var orphanTasks = 0;
+    var deletedFiles = 0;
+    var deletedBytes = 0;
+    final idsToCancel = <String>[];
+
+    for (final batch in transferBatches) {
+      try {
+        final records = allRecordsForTesting != null
+            ? await allRecordsForTesting!(batch.batchId)
+            : await FileDownloader().database.allRecords(group: batch.batchId);
+        for (final r in records) {
+          idsToCancel.add(r.taskId);
+          orphanTasks++;
+          try {
+            final path = await r.task.filePath();
+            final f = File(path);
+            if (await f.exists()) {
+              deletedBytes += await f.length();
+              deletedFiles++;
+              await f.delete();
+            }
+          } catch (_) {}
+        }
+      } catch (_) {}
+
+      for (final job in batch.jobs) {
+        final resumePath = job.resumeTempPath;
+        if (resumePath != null && resumePath.isNotEmpty) {
+          try {
+            final f = File(resumePath);
+            if (await f.exists()) {
+              deletedBytes += await f.length();
+              deletedFiles++;
+              await f.delete();
+            }
+          } catch (_) {}
+        }
+      }
+
+      try {
+        final root = await (tempRootForTesting?.call() ?? getTemporaryDirectory());
+        for (final dirName in {batch.batchId, Uri.encodeComponent(batch.batchId)}) {
+          final dir = Directory('${root.path}/easysave/$dirName');
+          if (await dir.exists()) {
+            await for (final child in dir.list(recursive: true)) {
+              if (child is File) {
+                try {
+                  deletedBytes += await child.length();
+                  deletedFiles++;
+                } catch (_) {}
+              }
+            }
+            try {
+              await dir.delete(recursive: true);
+            } catch (_) {}
+          }
+        }
+      } catch (_) {}
+    }
+
+    if (idsToCancel.isNotEmpty) {
+      final cancelHook = cancelTaskForTesting;
+      if (cancelHook != null) {
+        for (final id in idsToCancel) {
+          try {
+            await cancelHook(id);
+          } catch (_) {}
+        }
+      } else {
+        try {
+          await FileDownloader().cancelTasksWithIds(idsToCancel);
+        } catch (_) {}
+      }
+      final delHook = deleteLegacyRecordsForTesting;
+      if (delHook != null) {
+        try {
+          await delHook(idsToCancel);
+        } catch (_) {}
+      } else {
+        try {
+          await FileDownloader().database.deleteRecordsWithIds(idsToCancel);
+        } catch (_) {}
+      }
+      for (final id in idsToCancel) {
+        await _removeResumeData(id);
+      }
+    }
+
+    if (orphanTasks > 0 || deletedFiles > 0 || deletedBytes > 0) {
+      unawaited(DevLog.write(
+        'V16DL',
+        'legacy_orphan_cleaned count=${orphanTasks + deletedFiles} tasks=$orphanTasks files=$deletedFiles bytes=$deletedBytes',
+      ));
+    }
+    return (tasks: orphanTasks, files: deletedFiles, bytes: deletedBytes);
   }
 }
 
