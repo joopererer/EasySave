@@ -143,7 +143,13 @@ class _DownloadSheetState extends State<DownloadSheet> {
         } else if (batchStatus.isFinishing) {
           headlineText = batchStatus.label;
         } else if (running) {
-          headlineText = '正在保存 $doneCount/${batch.itemTotal}';
+          if (batch.usesNewTransferPipeline &&
+              batchStatus.kind == DownloadStatusKind.downloading) {
+            headlineText =
+                '${batchStatus.label} · $doneCount/${batch.itemTotal} 项';
+          } else {
+            headlineText = '正在保存 $doneCount/${batch.itemTotal}';
+          }
         } else if (failed == 0) {
           headlineText = '全部完成 ✓';
         } else {

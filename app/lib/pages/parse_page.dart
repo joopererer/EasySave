@@ -71,7 +71,20 @@ class ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
   final _inputFocus = FocusNode();
   bool _busy = false;
   bool _resolving = false;
+  DateTime? _resolveStartedAt;
+  Timer? _resolveTimer;
   int _resolveEpoch = 0;
+
+  static const Duration resolveTimeout = Duration(seconds: 30);
+
+  @visibleForTesting
+  Future<ParseOutcome> Function(
+    String url, {
+    String source,
+    bool forceRefresh,
+    void Function()? onCacheHit,
+    void Function(String step)? onStep,
+  })? parsePostOutcomeForTesting;
   bool _cancelRequested = false;
   String? _errorCode;
   String? _errorMessage;
@@ -166,6 +179,7 @@ class ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
     HostBridge.historyRevision.removeListener(_onHistoryChanged);
     _historyDb?.removeListener(_onHistoryChanged);
     _shareSub?.cancel();
+    _resolveTimer?.cancel();
     _linkController.dispose();
     _inputFocus.dispose();
     super.dispose();
@@ -682,12 +696,15 @@ class ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
       log('previewShown', dedup: true);
       return;
     }
-    if (_busy || _resolving) {
+    final timedOut = _resolveStartedAt != null &&
+        DateTime.now().difference(_resolveStartedAt!) >= resolveTimeout;
+    if ((_busy || _resolving) && !timedOut) {
       log('start', dedup: true);
       widget.onShowSelf?.call();
       return;
     }
     final resolveToken = ++_resolveEpoch;
+    _resolveStartedAt = DateTime.now();
     if (_linkController.text != normalized) {
       _linkController.value = TextEditingValue(text: normalized,
           selection: TextSelection.collapsed(offset: normalized.length));
@@ -717,22 +734,60 @@ class ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
       if (decision.action == PreviewOpenAction.skipAlreadyOnPreview) return;
       ParseOutcome outcome;
       if (decision.cachedRecord != null && entry != 'refresh') {
+        log('cache');
         log('cacheHit');
         outcome = ParseOutcome(data: PreviewPage.postFromRecord(decision.cachedRecord!),
             rawImages: const []);
       } else {
-        outcome = await parsePostOutcome(normalized,
-            source: entry == 'bubble' ? 'bubble_open_app' : entry,
-            forceRefresh: entry == 'refresh',
-            onCacheHit: () => log('cacheHit'));
+        final parseFn = parsePostOutcomeForTesting;
+        final future = parseFn != null
+            ? parseFn(
+                normalized,
+                source: entry == 'bubble' ? 'bubble_open_app' : entry,
+                forceRefresh: entry == 'refresh',
+                onCacheHit: () => log('cacheHit'),
+                onStep: log,
+              )
+            : parsePostOutcome(
+                normalized,
+                source: entry == 'bubble' ? 'bubble_open_app' : entry,
+                forceRefresh: entry == 'refresh',
+                onCacheHit: () => log('cacheHit'),
+                onStep: log,
+              );
+        final completer = Completer<ParseOutcome>();
+        _resolveTimer?.cancel();
+        _resolveTimer = Timer(resolveTimeout, () {
+          if (!completer.isCompleted) {
+            completer.completeError(
+              ParseFailure(ParseErrorCode.timeout, '解析超时，请重试'),
+            );
+          }
+        });
+        unawaited(
+          future.then<void>(
+            (value) {
+              if (!completer.isCompleted) completer.complete(value);
+            },
+            onError: (Object error, StackTrace stack) {
+              if (!completer.isCompleted) completer.completeError(error, stack);
+            },
+          ),
+        );
+        outcome = await completer.future;
       }
       if (!mounted || _cancelRequested || resolveToken != _resolveEpoch) return;
+      log('done');
       if (offscreen) ScaffoldMessenger.of(context).hideCurrentSnackBar();
       if (PreviewRouteObserver.instance.revealPreview(outcome.data.id)) {
         log('previewShown', dedup: true);
         return;
       }
-      setState(() => _busy = false);
+      setState(() {
+        _busy = false;
+        _resolving = false;
+        _resolveStartedAt = null;
+      });
       final shown = PreviewPage.open(context,
         post: outcome.data, rawImages: outcome.rawImages,
         onSaved: () { if (mounted) _linkController.clear(); },
@@ -741,27 +796,47 @@ class ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
       await shown;
       unawaited(_reloadRecent());
     } on ParseFailure catch (e) {
-      if (!mounted || _cancelRequested) return;
+      log(e.code == ParseErrorCode.timeout ? 'timeout' : 'fail');
+      if (!mounted || _cancelRequested || resolveToken != _resolveEpoch) return;
       _lastRawException = e.message;
       final sanitized = displayErrorMessage(e.code, e.message);
-      setState(() { _errorCode = e.code; _errorMessage = sanitized; });
+      setState(() {
+        _busy = false;
+        _resolving = false;
+        _resolveStartedAt = null;
+        _errorCode = e.code;
+        _errorMessage = sanitized;
+      });
       if (e.code == ParseErrorCode.loginRequired) {
         final platform = platformFromUrl(link);
         if (platform != null) LoginExpiredBus.markParseLoginRequired(platform);
       }
       if (offscreen) _showOffscreenError(e.code, sanitized);
     } catch (e) {
-      if (!mounted || _cancelRequested) return;
+      log('fail');
+      if (!mounted || _cancelRequested || resolveToken != _resolveEpoch) return;
       _lastRawException = e.toString();
       unawaited(DevLog.write('ParseMismatch',
           'check=UNCAUGHT site=${platformFromUrl(link) ?? "-"} post=- '
           'expected=ParseFailure actual=type=${e.runtimeType}'));
       final sanitized = displayErrorMessage(ParseErrorCode.invalidPage, null);
-      setState(() { _errorCode = ParseErrorCode.invalidPage; _errorMessage = sanitized; });
+      setState(() {
+        _busy = false;
+        _resolving = false;
+        _resolveStartedAt = null;
+        _errorCode = ParseErrorCode.invalidPage;
+        _errorMessage = sanitized;
+      });
       if (offscreen) _showOffscreenError(ParseErrorCode.invalidPage, sanitized);
     } finally {
       if (mounted && _resolveEpoch == resolveToken) {
-        setState(() { _busy = false; _resolving = false; });
+        _resolveTimer?.cancel();
+        _resolveTimer = null;
+        setState(() {
+          _busy = false;
+          _resolving = false;
+          _resolveStartedAt = null;
+        });
         if (offscreen) ScaffoldMessenger.of(context).hideCurrentSnackBar();
       }
     }

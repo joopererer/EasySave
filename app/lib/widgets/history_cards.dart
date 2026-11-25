@@ -10,6 +10,7 @@ import 'package:photo_manager/photo_manager.dart';
 
 import '../core/models.dart';
 import '../pages/download_queue_page.dart';
+import '../services/download_manager.dart';
 import '../services/download_status_display.dart';
 import '../services/gallery_locator_service.dart';
 import '../services/history_db.dart';
@@ -362,6 +363,7 @@ class DownloadingOverlay extends StatelessWidget {
   const DownloadingOverlay({
     super.key,
     required this.progress,
+    this.batch,
     this.compact = false,
     this.paused = false,
     this.userPaused,
@@ -379,6 +381,7 @@ class DownloadingOverlay extends StatelessWidget {
   });
 
   final double progress;
+  final DownloadBatch? batch;
   final bool compact;
 
   /// The user paused the download: shows a play icon and "已暂停".
@@ -423,6 +426,7 @@ class DownloadingOverlay extends StatelessWidget {
   Widget build(BuildContext context) {
     final pct = (progress.clamp(0.0, 1.0) * 100).round();
     final status = resolveDownloadStatus(
+      batch: batch,
       progress: progress,
       statusText: statusText,
       failureReason: failureReason,
@@ -880,6 +884,7 @@ class WaterfallPostCard extends StatelessWidget {
     this.onLongPress,
     this.onToggleSelect,
     this.downloadProgress,
+    this.downloadBatch,
     this.downloadPaused = false,
     this.downloadUserPaused = false,
     this.downloadStatusText,
@@ -903,6 +908,7 @@ class WaterfallPostCard extends StatelessWidget {
 
   /// 0..1 while a download of this post is running, null otherwise.
   final double? downloadProgress;
+  final DownloadBatch? downloadBatch;
   final bool downloadPaused;
   final bool downloadUserPaused;
   final String? downloadStatusText;
@@ -1022,6 +1028,7 @@ class WaterfallPostCard extends StatelessWidget {
                         bottom: 0,
                         child: DownloadingOverlay(
                           progress: downloadProgress!,
+                          batch: downloadBatch,
                           paused: downloadPaused,
                           userPaused: downloadUserPaused,
                           statusText: downloadStatusText,
@@ -1142,6 +1149,7 @@ class ListPostRow extends StatelessWidget {
     this.onLongPress,
     this.onToggleSelect,
     this.downloadProgress,
+    this.downloadBatch,
     this.downloadPaused = false,
     this.downloadUserPaused = false,
     this.downloadStatusText,
@@ -1166,6 +1174,7 @@ class ListPostRow extends StatelessWidget {
 
   /// 0..1 while a download of this post is running, null otherwise.
   final double? downloadProgress;
+  final DownloadBatch? downloadBatch;
   final bool downloadPaused;
   final bool downloadUserPaused;
   final String? downloadStatusText;
@@ -1217,6 +1226,7 @@ class ListPostRow extends StatelessWidget {
                           bottom: 0,
                           child: DownloadingOverlay(
                             progress: downloadProgress!,
+                            batch: downloadBatch,
                             compact: true,
                             paused: downloadPaused,
                             userPaused: downloadUserPaused,

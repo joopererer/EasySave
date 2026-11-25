@@ -333,10 +333,14 @@ class TransferClient {
 
   Future<bool> ackHistoryWritten(List<String> jobIds) async {
     if (jobIds.isEmpty) return true;
-    final res = await _methodChannel.invokeMethod<bool>('ackHistoryWritten', {
-      'jobIds': jobIds,
-    });
-    return res ?? false;
+    try {
+      final res = await _methodChannel.invokeMethod<bool>('ackHistoryWritten', {
+        'jobIds': jobIds,
+      });
+      return res ?? false;
+    } catch (_) {
+      return false;
+    }
   }
 }
 
