@@ -2,6 +2,7 @@ package com.james.easysave.transfer
 
 import android.content.Context
 import com.james.easysave.provenance.ProvenanceEmbedder
+import com.james.easysave.provenance.ProvenanceReader
 import com.james.easysave.provenance.ProvenanceRecord
 import org.json.JSONArray
 import org.json.JSONObject
@@ -9,6 +10,7 @@ import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
+import org.junit.Assert.fail
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -389,5 +391,184 @@ class TransferFinalizerTest {
         }
         assertNotNull("Must throw IllegalStateException on main thread", caught)
         assertTrue(caught!!.message!!.contains("background thread"))
+    }
+
+    private fun buildLivePairItems(pairName: String): Pair<List<PairFinalizeItem>, List<String>> {
+        val goldenRoot = findGoldenRoot()
+        val photoDir = File(goldenRoot, "${pairName}_photo")
+        val videoDir = File(goldenRoot, "${pairName}_video")
+        assertTrue("Missing ${photoDir.absolutePath}", photoDir.exists())
+        assertTrue("Missing ${videoDir.absolutePath}", videoDir.exists())
+
+        fun makeItem(dir: File, jobId: String, mime: String, category: JobCategory): Pair<PairFinalizeItem, String> {
+            val inputFile = dir.listFiles()?.firstOrNull { it.name.startsWith("input.") }
+                ?: error("Missing input file in ${dir.name}")
+            val goldenFile = dir.listFiles()?.firstOrNull { it.name.startsWith("golden_output.") }
+                ?: error("Missing golden_output file in ${dir.name}")
+            val recordMap = JSONObject(File(dir, "provenance.json").readText()).toMap()
+            val partFile = File(transfersDir, "$jobId.part").apply { writeBytes(inputFile.readBytes()) }
+            val pairId = recordMap["pairId"] as? String ?: pairName
+            val job = TransferJob(
+                jobId = jobId,
+                pairId = pairId,
+                category = category,
+                totalBytes = inputFile.length(),
+            )
+            store.insertOrReplace(job)
+            val meta = TransferMeta(
+                url = "https://example.com/${inputFile.name}",
+                total = inputFile.length(),
+                mime = mime,
+                provenance = recordMap,
+            )
+            return PairFinalizeItem(job, meta, partFile) to sha256(goldenFile)
+        }
+
+        val (photoItem, photoSha) = makeItem(photoDir, "${pairName}_photo_job", "image/jpeg", JobCategory.IMAGE)
+        val (videoItem, videoSha) = makeItem(videoDir, "${pairName}_video_job", "video/mp4", JobCategory.LARGE_FILE)
+        return listOf(photoItem, videoItem) to listOf(photoSha, videoSha)
+    }
+
+    @Test
+    fun testLivePairGoldenSamplesConsistencyWithFakeMediaPublisher() {
+        for (pairName in listOf("live_1", "live_2")) {
+            val samplePublisher = FakeMediaPublisher()
+            val sampleFinalizer = TransferFinalizer(transfersDir, store, samplePublisher)
+            val (items, goldenShas) = buildLivePairItems(pairName)
+
+            val outcome = runOnBg { sampleFinalizer.executePair(items) }
+            assertTrue("Live pair $pairName must succeed", outcome is PairFinalizeOutcome.Success)
+            val success = outcome as PairFinalizeOutcome.Success
+            assertEquals(2, samplePublisher.entries.size)
+            assertTrue(samplePublisher.entries.values.none { it.isPending })
+
+            val photoOut = success.outcomes[items[0].job.jobId]!!
+            val videoOut = success.outcomes[items[1].job.jobId]!!
+            val expectedSourceId = items[0].meta.provenance!!["sourceId"] as String
+            val expectedItemIdx = (items[0].meta.provenance!!["itemIndex"] as Number).toInt()
+            val expectedPairId = items[0].meta.provenance!!["pairId"] as String
+
+            assertEquals("${expectedSourceId}_${expectedItemIdx}.jpg", photoOut.publishedMedia.title)
+            assertEquals("${expectedSourceId}_${expectedItemIdx}.mp4", videoOut.publishedMedia.title)
+
+            val photoEntry = samplePublisher.entries[photoOut.publishedMedia.mediaId]!!
+            val videoEntry = samplePublisher.entries[videoOut.publishedMedia.mediaId]!!
+            assertEquals(goldenShas[0], sha256(photoEntry.data!!))
+            assertEquals(goldenShas[1], sha256(videoEntry.data!!))
+
+            val photoRead = ProvenanceReader.readProvenance(samplePublisher.openSeekableInput(photoOut.publishedMedia.mediaId))
+            val videoRead = ProvenanceReader.readProvenance(samplePublisher.openSeekableInput(videoOut.publishedMedia.mediaId))
+            assertEquals(expectedPairId, photoRead?.pairId)
+            assertEquals(expectedPairId, videoRead?.pairId)
+        }
+    }
+
+    @Test
+    fun testLivePair_killAfterFirstInsert_recoversToCleanPair() {
+        val (items, goldenShas) = buildLivePairItems("live_1")
+        finalizer.onStageForTesting = { jobId, stage ->
+            if (jobId == items[0].job.jobId && stage == "after_insert") {
+                throw SimulatedKillException("kill_after_1st_insert")
+            }
+        }
+        try {
+            runOnBg { finalizer.executePair(items) }
+            fail("Expected SimulatedKillException")
+        } catch (_: SimulatedKillException) {
+            // expected kill
+        }
+
+        // 此时仅第一个已插入(pending)，第二个未插入，已发布数为 0
+        assertEquals(1, publisher.entries.size)
+        assertEquals(0, publisher.entries.values.count { !it.isPending })
+
+        // 模拟重启恢复
+        val recoveredJobs = items.map { store.getJob(it.job.jobId)!! }
+        val recoveredItems = items.mapIndexed { idx, it -> it.copy(job = recoveredJobs[idx]) }
+        val freshFinalizer = TransferFinalizer(transfersDir, store, publisher)
+        val outcome = runOnBg { freshFinalizer.executePair(recoveredItems) }
+        assertTrue(outcome is PairFinalizeOutcome.Success)
+
+        val success = outcome as PairFinalizeOutcome.Success
+        assertEquals(2, publisher.entries.size)
+        assertTrue(publisher.entries.values.none { it.isPending })
+        assertEquals(goldenShas[0], sha256(publisher.entries[success.outcomes[items[0].job.jobId]!!.publishedMedia.mediaId]!!.data!!))
+        assertEquals(goldenShas[1], sha256(publisher.entries[success.outcomes[items[1].job.jobId]!!.publishedMedia.mediaId]!!.data!!))
+    }
+
+    @Test
+    fun testLivePair_killAfterSecondInsert_recoversToCleanPair() {
+        val (items, goldenShas) = buildLivePairItems("live_1")
+        finalizer.onStageForTesting = { jobId, stage ->
+            if (jobId == items[1].job.jobId && stage == "after_insert") {
+                throw SimulatedKillException("kill_after_2nd_insert")
+            }
+        }
+        try {
+            runOnBg { finalizer.executePair(items) }
+            fail("Expected SimulatedKillException")
+        } catch (_: SimulatedKillException) {
+            // expected kill
+        }
+
+        // 两个都已插入但均未发布
+        assertEquals(2, publisher.entries.size)
+        assertEquals(0, publisher.entries.values.count { !it.isPending })
+
+        val recoveredJobs = items.map { store.getJob(it.job.jobId)!! }
+        val recoveredItems = items.mapIndexed { idx, it -> it.copy(job = recoveredJobs[idx]) }
+        val freshFinalizer = TransferFinalizer(transfersDir, store, publisher)
+        val outcome = runOnBg { freshFinalizer.executePair(recoveredItems) }
+        assertTrue(outcome is PairFinalizeOutcome.Success)
+
+        val success = outcome as PairFinalizeOutcome.Success
+        assertEquals(2, publisher.entries.size)
+        assertTrue(publisher.entries.values.none { it.isPending })
+        assertEquals(goldenShas[0], sha256(publisher.entries[success.outcomes[items[0].job.jobId]!!.publishedMedia.mediaId]!!.data!!))
+        assertEquals(goldenShas[1], sha256(publisher.entries[success.outcomes[items[1].job.jobId]!!.publishedMedia.mediaId]!!.data!!))
+    }
+
+    @Test
+    fun testLivePair_killDuringPublish_recoversToCleanPairWithoutDuplicates() {
+        val (items, goldenShas) = buildLivePairItems("live_2")
+        finalizer.onStageForTesting = { jobId, stage ->
+            if (jobId == items[0].job.jobId && stage == "after_publish") {
+                throw SimulatedKillException("kill_during_publish")
+            }
+        }
+        try {
+            runOnBg { finalizer.executePair(items) }
+            fail("Expected SimulatedKillException")
+        } catch (_: SimulatedKillException) {
+            // expected kill
+        }
+
+        // 第一个已发布，第二个仍为 pending
+        assertEquals(2, publisher.entries.size)
+        assertEquals(1, publisher.entries.values.count { !it.isPending })
+
+        val recoveredJobs = items.map { store.getJob(it.job.jobId)!! }
+        val recoveredItems = items.mapIndexed { idx, it -> it.copy(job = recoveredJobs[idx]) }
+        val freshFinalizer = TransferFinalizer(transfersDir, store, publisher)
+        val outcome = runOnBg { freshFinalizer.executePair(recoveredItems) }
+        assertTrue(outcome is PairFinalizeOutcome.Success)
+
+        val success = outcome as PairFinalizeOutcome.Success
+        assertEquals(2, publisher.entries.size)
+        assertTrue(publisher.entries.values.none { it.isPending })
+        assertEquals(goldenShas[0], sha256(publisher.entries[success.outcomes[items[0].job.jobId]!!.publishedMedia.mediaId]!!.data!!))
+        assertEquals(goldenShas[1], sha256(publisher.entries[success.outcomes[items[1].job.jobId]!!.publishedMedia.mediaId]!!.data!!))
+    }
+
+    @Test
+    fun testLivePair_secondFailsValidation_neitherEntersAlbum() {
+        val (items, _) = buildLivePairItems("live_1")
+        // 破坏第二个视频文件长度使其校验失败
+        val brokenVideoMeta = items[1].meta.copy(total = items[1].partFile.length() + 999)
+        val brokenItems = listOf(items[0], items[1].copy(meta = brokenVideoMeta))
+
+        val outcome = runOnBg { finalizer.executePair(brokenItems) }
+        assertTrue(outcome is PairFinalizeOutcome.Failed)
+        assertEquals(0, publisher.entries.size)
     }
 }

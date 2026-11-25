@@ -60,6 +60,7 @@ object TransferChannels {
                 val direction = Direction.fromValue(args["direction"] as? String ?: "download")
                 val category = JobCategory.fromValue(args["category"] as? String ?: "image")
                 val batchId = args["batchId"] as? String
+                val pairId = args["pairId"] as? String
                 val fakePlan = args["fakePlan"] as? String
 
                 if (batchId == "self_check_batch") {
@@ -71,6 +72,7 @@ object TransferChannels {
                     direction = direction,
                     category = category,
                     batchId = batchId,
+                    pairId = pairId,
                     fakePlan = fakePlan
                 )
 
@@ -206,8 +208,16 @@ object TransferChannels {
                 val job = scheduler.store.getJob(jobId)
 
                 if (job != null && job.state == JobState.DONE) {
-                    result.success(
-                        mapOf(
+                    val mId = job.mediaId
+                    channelScope.launch(Dispatchers.IO) {
+                        val readProv = if (mId != null && job.provenanceStatus == "embedded") {
+                            runCatching {
+                                MediaStorePublisher(context).openSeekableInput(mId).use { seekable ->
+                                    com.james.easysave.provenance.ProvenanceReader.readProvenance(seekable)
+                                }
+                            }.getOrNull()
+                        } else null
+                        val info = mapOf(
                             "exists" to true,
                             "mediaId" to job.mediaId,
                             "title" to job.title,
@@ -217,8 +227,15 @@ object TransferChannels {
                             "sha256" to (job.partSha256 ?: ""),
                             "provenanceStatus" to job.provenanceStatus,
                             "readbackMatch" to job.readbackMatch,
+                            "pairId" to job.pairId,
+                            "readbackAssetId" to readProv?.assetId,
+                            "readbackPlatform" to readProv?.platform,
+                            "readbackPairId" to readProv?.pairId,
+                            "readbackSourceId" to readProv?.sourceId,
+                            "readbackItemIndex" to readProv?.itemIndex,
                         )
-                    )
+                        mainHandler.post { result.success(info) }
+                    }
                 } else if (!partFile.exists()) {
                     result.success(mapOf("exists" to false))
                 } else {

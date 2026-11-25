@@ -118,6 +118,7 @@ class TransferSchedulerTest {
             JobState.RUNNING to setOf(
                 JobState.PAUSED,
                 JobState.WAITING_NETWORK,
+                JobState.WAITING_PAIR,
                 JobState.INTERRUPTED,
                 JobState.STORAGE_FULL,
                 JobState.FINISHING,
@@ -126,6 +127,7 @@ class TransferSchedulerTest {
             ),
             JobState.PAUSED to setOf(JobState.QUEUED, JobState.CANCELED),
             JobState.WAITING_NETWORK to setOf(JobState.QUEUED, JobState.CANCELED),
+            JobState.WAITING_PAIR to setOf(JobState.FINISHING, JobState.FAILED, JobState.CANCELED),
             JobState.INTERRUPTED to setOf(JobState.QUEUED, JobState.CANCELED),
             JobState.STORAGE_FULL to setOf(JobState.QUEUED, JobState.CANCELED),
             JobState.FINISHING to setOf(JobState.DONE, JobState.FAILED, JobState.CANCELED),
@@ -154,6 +156,7 @@ class TransferSchedulerTest {
             JobState.RUNNING to setOf(
                 JobState.PAUSED,
                 JobState.WAITING_NETWORK,
+                JobState.WAITING_PAIR,
                 JobState.INTERRUPTED,
                 JobState.STORAGE_FULL,
                 JobState.FINISHING,
@@ -162,6 +165,7 @@ class TransferSchedulerTest {
             ),
             JobState.PAUSED to setOf(JobState.QUEUED, JobState.CANCELED),
             JobState.WAITING_NETWORK to setOf(JobState.QUEUED, JobState.CANCELED),
+            JobState.WAITING_PAIR to setOf(JobState.FINISHING, JobState.FAILED, JobState.CANCELED),
             JobState.INTERRUPTED to setOf(JobState.QUEUED, JobState.CANCELED),
             JobState.STORAGE_FULL to setOf(JobState.QUEUED, JobState.CANCELED),
             JobState.FINISHING to setOf(JobState.DONE, JobState.FAILED, JobState.CANCELED),
@@ -227,6 +231,7 @@ class TransferSchedulerTest {
         }
 
         allDone.await()
+        pollUntil { scheduler.activeProcessors.get() == 0 }
 
         assertEquals(totalEvents, handledList.size)
         assertEquals(1, scheduler.maxObservedConcurrency)
@@ -478,6 +483,7 @@ class TransferSchedulerTest {
         scheduler.send(SchedulerEvent.Pause(targetJobId))
         pollUntil { scheduler.jobs[targetJobId]?.state == JobState.PAUSED }
         assertEquals(JobState.PAUSED, store.getJob(targetJobId)?.state)
+        pauseGate.complete(Unit)
 
         scheduler.send(SchedulerEvent.Resume(targetJobId))
         pollUntil { scheduler.jobs[targetJobId]?.state == JobState.RUNNING }
@@ -877,5 +883,158 @@ class TransferSchedulerTest {
         assertEquals(JobState.RUNNING, scheduler.jobs[targetJobId]?.state)
 
         scheduler.shutdown()
+    }
+
+    // 18. Live 图成对收尾：两个都完成才一起进入收尾
+    @Test
+    fun testLivePair_bothCompleteBeforeFinalizing() = runBlocking {
+        val publisher = FakeMediaPublisher()
+        val transfersDir = java.io.File(context.filesDir, "transfers_pair_test1").apply { mkdirs() }
+        val finalizer = TransferFinalizer(transfersDir, store, publisher)
+        val pairId = "post123#1"
+
+        val imgGate = CompletableDeferred<Unit>()
+        val vidGate = CompletableDeferred<Unit>()
+
+        val scheduler = TransferScheduler(
+            store = store,
+            workerFactory = { job ->
+                object : TransferWorker {
+                    override suspend fun execute(job: TransferJob, onProgress: suspend (Long, Long) -> Unit): WorkerResult {
+                        if (job.jobId == "live_img_1") imgGate.await() else vidGate.await()
+                        return WorkerResult.Success()
+                    }
+                }
+            },
+            scope = testScope,
+            transfersDir = transfersDir,
+            finalizer = finalizer,
+        )
+
+        scheduler.send(SchedulerEvent.Enqueue(TransferJob(jobId = "live_img_1", pairId = pairId, category = JobCategory.IMAGE)))
+        scheduler.send(SchedulerEvent.Enqueue(TransferJob(jobId = "live_vid_1", pairId = pairId, category = JobCategory.LARGE_FILE)))
+
+        pollUntil { scheduler.jobs["live_img_1"]?.state == JobState.RUNNING && scheduler.jobs["live_vid_1"]?.state == JobState.RUNNING }
+
+        // 先完成图片：应进入 WAITING_PAIR，不触发收尾
+        imgGate.complete(Unit)
+        pollUntil { scheduler.jobs["live_img_1"]?.state == JobState.WAITING_PAIR }
+        assertEquals(0, publisher.entries.size)
+
+        // 再完成视频：两者一起进入 FINISHING 并完成 DONE
+        vidGate.complete(Unit)
+        pollUntil {
+            scheduler.jobs["live_img_1"]?.state == JobState.DONE &&
+                scheduler.jobs["live_vid_1"]?.state == JobState.DONE
+        }
+        assertEquals(2, publisher.entries.size)
+        scheduler.shutdown()
+        transfersDir.deleteRecursively()
+        Unit
+    }
+
+    // 19. Live 图成对收尾：一个失败，另一个不进相册
+    @Test
+    fun testLivePair_oneFails_otherDoesNotEnterAlbum() = runBlocking {
+        val publisher = FakeMediaPublisher()
+        val transfersDir = java.io.File(context.filesDir, "transfers_pair_test2").apply { mkdirs() }
+        val finalizer = TransferFinalizer(transfersDir, store, publisher)
+        val pairId = "post123#2"
+
+        val imgGate = CompletableDeferred<Unit>()
+        val vidGate = CompletableDeferred<Unit>()
+
+        val scheduler = TransferScheduler(
+            store = store,
+            workerFactory = { job ->
+                object : TransferWorker {
+                    override suspend fun execute(job: TransferJob, onProgress: suspend (Long, Long) -> Unit): WorkerResult {
+                        if (job.jobId == "live_img_2") {
+                            imgGate.await()
+                            return WorkerResult.Success()
+                        } else {
+                            vidGate.await()
+                            return WorkerResult.PolicyRejected("403_forbidden")
+                        }
+                    }
+                }
+            },
+            scope = testScope,
+            transfersDir = transfersDir,
+            finalizer = finalizer,
+        )
+
+        scheduler.send(SchedulerEvent.Enqueue(TransferJob(jobId = "live_img_2", pairId = pairId, category = JobCategory.IMAGE)))
+        scheduler.send(SchedulerEvent.Enqueue(TransferJob(jobId = "live_vid_2", pairId = pairId, category = JobCategory.LARGE_FILE)))
+
+        pollUntil { scheduler.jobs["live_img_2"]?.state == JobState.RUNNING && scheduler.jobs["live_vid_2"]?.state == JobState.RUNNING }
+
+        imgGate.complete(Unit)
+        pollUntil { scheduler.jobs["live_img_2"]?.state == JobState.WAITING_PAIR }
+        assertEquals(0, publisher.entries.size)
+
+        vidGate.complete(Unit)
+        pollUntil {
+            scheduler.jobs["live_img_2"]?.state == JobState.FAILED &&
+                scheduler.jobs["live_vid_2"]?.state == JobState.FAILED
+        }
+        assertEquals(0, publisher.entries.size)
+        scheduler.shutdown()
+        transfersDir.deleteRecursively()
+        Unit
+    }
+
+    // 20. Live 图成对收尾：暂停其中一个，另一个下载完成后等待配对，不单独收尾
+    @Test
+    fun testLivePair_pauseOne_otherWaitsForPair_thenCompletesOnResume() = runBlocking {
+        val publisher = FakeMediaPublisher()
+        val transfersDir = java.io.File(context.filesDir, "transfers_pair_test3").apply { mkdirs() }
+        val finalizer = TransferFinalizer(transfersDir, store, publisher)
+        val pairId = "post123#3"
+
+        val imgGate = CompletableDeferred<Unit>()
+        val vidGate = CompletableDeferred<Unit>()
+
+        val scheduler = TransferScheduler(
+            store = store,
+            workerFactory = { job ->
+                object : TransferWorker {
+                    override suspend fun execute(job: TransferJob, onProgress: suspend (Long, Long) -> Unit): WorkerResult {
+                        if (job.jobId == "live_img_3") imgGate.await() else vidGate.await()
+                        return WorkerResult.Success()
+                    }
+                }
+            },
+            scope = testScope,
+            transfersDir = transfersDir,
+            finalizer = finalizer,
+        )
+
+        scheduler.send(SchedulerEvent.Enqueue(TransferJob(jobId = "live_img_3", pairId = pairId, category = JobCategory.IMAGE)))
+        scheduler.send(SchedulerEvent.Enqueue(TransferJob(jobId = "live_vid_3", pairId = pairId, category = JobCategory.LARGE_FILE)))
+
+        pollUntil { scheduler.jobs["live_img_3"]?.state == JobState.RUNNING && scheduler.jobs["live_vid_3"]?.state == JobState.RUNNING }
+
+        // 暂停视频
+        scheduler.send(SchedulerEvent.Pause("live_vid_3"))
+        pollUntil { scheduler.jobs["live_vid_3"]?.state == JobState.PAUSED }
+
+        // 图片完成：应停在 WAITING_PAIR，不单独收尾
+        imgGate.complete(Unit)
+        pollUntil { scheduler.jobs["live_img_3"]?.state == JobState.WAITING_PAIR }
+        assertEquals(0, publisher.entries.size)
+
+        // 恢复视频并完成：两者一起收尾成功
+        scheduler.send(SchedulerEvent.Resume("live_vid_3"))
+        pollUntil { scheduler.jobs["live_vid_3"]?.state == JobState.RUNNING }
+        vidGate.complete(Unit)
+        pollUntil {
+            scheduler.jobs["live_img_3"]?.state == JobState.DONE &&
+                scheduler.jobs["live_vid_3"]?.state == JobState.DONE
+        }
+        assertEquals(2, publisher.entries.size)
+        scheduler.shutdown()
+        transfersDir.deleteRecursively()
+        Unit
     }
 }

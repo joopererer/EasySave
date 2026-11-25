@@ -26,7 +26,7 @@ class TransferStore(context: Context, dbName: String = DB_NAME) :
 
     companion object {
         const val DB_NAME = "transfer.db"
-        const val DB_VERSION = 2
+        const val DB_VERSION = 3
         const val TABLE_JOBS = "transfer_jobs"
 
         const val COL_JOB_ID = "job_id"
@@ -34,6 +34,7 @@ class TransferStore(context: Context, dbName: String = DB_NAME) :
         const val COL_STATE = "state"
         const val COL_RETRY_COUNT = "retry_count"
         const val COL_BATCH_ID = "batch_id"
+        const val COL_PAIR_ID = "pair_id"
         const val COL_CATEGORY = "category"
         const val COL_CREATED_AT = "created_at"
         const val COL_UPDATED_AT = "updated_at"
@@ -63,6 +64,7 @@ class TransferStore(context: Context, dbName: String = DB_NAME) :
                 $COL_STATE TEXT NOT NULL,
                 $COL_RETRY_COUNT INTEGER NOT NULL DEFAULT 0,
                 $COL_BATCH_ID TEXT,
+                $COL_PAIR_ID TEXT,
                 $COL_CATEGORY TEXT NOT NULL,
                 $COL_CREATED_AT INTEGER NOT NULL,
                 $COL_UPDATED_AT INTEGER NOT NULL,
@@ -101,6 +103,9 @@ class TransferStore(context: Context, dbName: String = DB_NAME) :
             db.execSQL("ALTER TABLE $TABLE_JOBS ADD COLUMN $COL_READBACK_MATCH INTEGER")
             db.execSQL("ALTER TABLE $TABLE_JOBS ADD COLUMN $COL_HISTORY_PENDING INTEGER NOT NULL DEFAULT 0")
         }
+        if (oldVersion < 3) {
+            db.execSQL("ALTER TABLE $TABLE_JOBS ADD COLUMN $COL_PAIR_ID TEXT")
+        }
     }
 
     @Synchronized
@@ -111,6 +116,7 @@ class TransferStore(context: Context, dbName: String = DB_NAME) :
             put(COL_STATE, job.state.value)
             put(COL_RETRY_COUNT, job.retryCount)
             put(COL_BATCH_ID, job.batchId)
+            put(COL_PAIR_ID, job.pairId)
             put(COL_CATEGORY, job.category.value)
             put(COL_CREATED_AT, job.createdAt)
             put(COL_UPDATED_AT, job.updatedAt)
@@ -320,6 +326,24 @@ class TransferStore(context: Context, dbName: String = DB_NAME) :
         )
     }
 
+    @Synchronized
+    fun clearFinalizeProgress(jobId: String, updatedAt: Long = System.currentTimeMillis()) {
+        val values = ContentValues().apply {
+            put(COL_UPDATED_AT, updatedAt)
+            putNull(COL_FINALIZE_STEP)
+            putNull(COL_MEDIA_ID)
+            putNull(COL_TITLE)
+            putNull(COL_MD5)
+            put(COL_FILE_SIZE, 0L)
+        }
+        writableDatabase.update(
+            TABLE_JOBS,
+            values,
+            "$COL_JOB_ID = ?",
+            arrayOf(jobId)
+        )
+    }
+
     private fun cursorToJob(cursor: android.database.Cursor): TransferJob {
         val jobId = cursor.getString(cursor.getColumnIndexOrThrow(COL_JOB_ID))
         val direction = Direction.fromValue(cursor.getString(cursor.getColumnIndexOrThrow(COL_DIRECTION)))
@@ -350,6 +374,7 @@ class TransferStore(context: Context, dbName: String = DB_NAME) :
             state = state,
             retryCount = retryCount,
             batchId = batchId,
+            pairId = optString(COL_PAIR_ID),
             category = category,
             createdAt = createdAt,
             updatedAt = updatedAt,

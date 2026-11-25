@@ -31,6 +31,7 @@ enum class JobState(val value: String) {
     RUNNING("running"),
     WAITING_NETWORK("waiting_network"),
     PAUSED("paused"),
+    WAITING_PAIR("waiting_pair"),
     INTERRUPTED("interrupted"),
     STORAGE_FULL("storage_full"),
     FINISHING("finishing"),
@@ -49,9 +50,10 @@ enum class JobState(val value: String) {
 
         private val ALLOWED_TRANSITIONS: Map<JobState, Set<JobState>> = mapOf(
             QUEUED to setOf(RUNNING, CANCELED),
-            RUNNING to setOf(PAUSED, WAITING_NETWORK, INTERRUPTED, STORAGE_FULL, FINISHING, FAILED, CANCELED),
+            RUNNING to setOf(PAUSED, WAITING_NETWORK, WAITING_PAIR, INTERRUPTED, STORAGE_FULL, FINISHING, FAILED, CANCELED),
             PAUSED to setOf(QUEUED, CANCELED),
             WAITING_NETWORK to setOf(QUEUED, CANCELED),
+            WAITING_PAIR to setOf(FINISHING, FAILED, CANCELED),
             INTERRUPTED to setOf(QUEUED, CANCELED),
             STORAGE_FULL to setOf(QUEUED, CANCELED),
             FINISHING to setOf(DONE, FAILED, CANCELED),

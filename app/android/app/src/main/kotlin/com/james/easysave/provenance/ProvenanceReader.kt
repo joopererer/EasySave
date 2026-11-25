@@ -9,6 +9,9 @@ import java.nio.charset.StandardCharsets
 data class ReadbackProvenance(
     val assetId: String?,
     val platform: String?,
+    val pairId: String? = null,
+    val sourceId: String? = null,
+    val itemIndex: String? = null,
 )
 
 object ProvenanceReader {
@@ -50,6 +53,9 @@ object ProvenanceReader {
             ReadbackProvenance(
                 assetId = pkg.getField(XmpFields.ASSET_ID),
                 platform = pkg.getField(XmpFields.PLATFORM),
+                pairId = pkg.getField(XmpFields.PAIR_ID),
+                sourceId = pkg.getField(XmpFields.SOURCE_ID),
+                itemIndex = pkg.getField(XmpFields.ITEM_INDEX),
             )
         } catch (_: Throwable) {
             null
@@ -63,6 +69,9 @@ object ProvenanceReader {
             ReadbackProvenance(
                 assetId = pkg.getField(XmpFields.ASSET_ID),
                 platform = pkg.getField(XmpFields.PLATFORM),
+                pairId = pkg.getField(XmpFields.PAIR_ID),
+                sourceId = pkg.getField(XmpFields.SOURCE_ID),
+                itemIndex = pkg.getField(XmpFields.ITEM_INDEX),
             )
         } catch (_: Throwable) {
             null
@@ -76,6 +85,9 @@ object ProvenanceReader {
             ReadbackProvenance(
                 assetId = pkg.getField(XmpFields.ASSET_ID),
                 platform = pkg.getField(XmpFields.PLATFORM),
+                pairId = pkg.getField(XmpFields.PAIR_ID),
+                sourceId = pkg.getField(XmpFields.SOURCE_ID),
+                itemIndex = pkg.getField(XmpFields.ITEM_INDEX),
             )
         } catch (_: Throwable) {
             null

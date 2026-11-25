@@ -24,9 +24,11 @@ void main() {
       );
       final extension = inputFile.path.split('.').last;
       final outputFile = File('${dir.path}/golden_output.$extension');
+      if (outputFile.existsSync()) {
+        continue; // 只增不改：已有 golden_output 不覆盖
+      }
 
       // Copy input to output, then embed in place
-      if (outputFile.existsSync()) outputFile.deleteSync();
       inputFile.copySync(outputFile.path);
 
       final fixedCapturedAt = DateTime.parse(jsonMap['capturedAt'] as String);
@@ -46,6 +48,7 @@ void main() {
         itemCount: jsonMap['itemCount'] as int?,
         authorId: jsonMap['authorId'] as String?,
         publishedAt: fixedPublishedAt,
+        pairId: jsonMap['pairId'] as String?,
         title: jsonMap['title'] as String?,
         creators: (jsonMap['creator'] as List?)?.cast<String>(),
         description: jsonMap['description'] as String?,

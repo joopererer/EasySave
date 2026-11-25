@@ -20,7 +20,7 @@ void main() {
     final subdirs = goldenDir.listSync().whereType<Directory>().toList()
       ..sort((a, b) => a.path.compareTo(b.path));
 
-    expect(subdirs.length, equals(12));
+    expect(subdirs.length, greaterThanOrEqualTo(16));
 
     for (final dir in subdirs) {
       final goldenOutputFile = dir.listSync().whereType<File>().firstWhere(

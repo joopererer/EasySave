@@ -30,11 +30,28 @@ sealed class FinalizeOutcome {
     ) : FinalizeOutcome()
 }
 
+data class PairFinalizeItem(
+    val job: TransferJob,
+    val meta: TransferMeta,
+    val partFile: File,
+)
+
+sealed class PairFinalizeOutcome {
+    data class Success(val outcomes: Map<String, FinalizeOutcome.Success>) : PairFinalizeOutcome()
+    data class Failed(
+        val reason: String,
+        val cause: Throwable? = null,
+    ) : PairFinalizeOutcome()
+}
+
+class SimulatedKillException(message: String = "simulated_kill") : RuntimeException(message)
+
 class TransferFinalizer(
     private val transfersDir: File,
     private val store: TransferStore,
     private val publisher: MediaPublisher,
 ) {
+    internal var onStageForTesting: ((jobId: String, stage: String) -> Unit)? = null
 
     fun execute(
         job: TransferJob,
@@ -127,30 +144,9 @@ class TransferFinalizer(
         var provenanceStatus = job.provenanceStatus ?: if (!isEmbeddable) "skipped_unsupported" else "none"
 
         if (job.finalizeStep != "published") {
-            val ext = when (mimeToUse) {
-                "image/jpeg" -> "jpg"
-                "image/png" -> "png"
-                "image/webp" -> "webp"
-                "image/gif" -> "gif"
-                "image/heic", "image/heif" -> "heic"
-                "image/avif" -> "avif"
-                "video/mp4" -> "mp4"
-                "video/quicktime" -> "mov"
-                else -> partFile.extension.ifEmpty { "jpg" }
-            }
-
-            val sanitizedId = jobId.replace(Regex("[^A-Za-z0-9_-]"), "_")
-            val baseName = "${sanitizedId}_1.$ext"
+            val ext = extensionForMime(mimeToUse, partFile)
+            val targetName = resolveTargetName(jobId, meta, ext, ExportNames.albumPath("EasySave"))
             val relativePath = ExportNames.albumPath("EasySave")
-
-            var targetName = baseName
-            var attempt = 1
-            while (publisher.exists(relativePath, targetName) && attempt <= 20) {
-                attempt++
-                val dot = baseName.lastIndexOf('.')
-                val indexSep = baseName.lastIndexOf('_', dot)
-                targetName = "${baseName.substring(0, indexSep)}-copy$attempt${baseName.substring(indexSep)}"
-            }
 
             val handle = try {
                 publisher.insertPending(relativePath, targetName, mimeToUse, partFile)
@@ -279,5 +275,323 @@ class TransferFinalizer(
             bytesWritten = bytesWritten,
             readbackBytes = readbackBytes,
         )
+    }
+
+    private fun extensionForMime(mime: String, partFile: File): String = when (mime) {
+        "image/jpeg" -> "jpg"
+        "image/png" -> "png"
+        "image/webp" -> "webp"
+        "image/gif" -> "gif"
+        "image/heic", "image/heif" -> "heic"
+        "image/avif" -> "avif"
+        "video/mp4" -> "mp4"
+        "video/quicktime" -> "mov"
+        else -> partFile.extension.ifEmpty { "jpg" }
+    }
+
+    private fun resolveTargetName(jobId: String, meta: TransferMeta, ext: String, relativePath: String): String {
+        val record = meta.provenance?.let { runCatching { ProvenanceRecord.fromMap(it) }.getOrNull() }
+        val sourceId = record?.sourceId?.takeIf { it.isNotBlank() && Regex("^[A-Za-z0-9_-]+$").matches(it) }
+        val itemIndex = record?.itemIndex?.takeIf { it >= 1 } ?: 1
+        val baseName = if (sourceId != null) {
+            "${sourceId}_${itemIndex}.$ext"
+        } else {
+            val sanitizedId = jobId.replace(Regex("[^A-Za-z0-9_-]"), "_")
+            "${sanitizedId}_1.$ext"
+        }
+
+        var targetName = baseName
+        var attempt = 1
+        while (publisher.exists(relativePath, targetName) && attempt <= 20) {
+            attempt++
+            val dot = baseName.lastIndexOf('.')
+            val indexSep = baseName.lastIndexOf('_', dot)
+            targetName = "${baseName.substring(0, indexSep)}-copy$attempt${baseName.substring(indexSep)}"
+        }
+        return targetName
+    }
+
+    private data class PairPendingEntry(
+        val item: PairFinalizeItem,
+        val handle: PublishedHandle,
+        val writeResult: StreamingFileRewriter.WriteResult,
+        val mimeToUse: String,
+        val provenanceStatus: String,
+        val importStartMs: Long,
+    )
+
+    fun executePair(items: List<PairFinalizeItem>): PairFinalizeOutcome {
+        val isMain = try {
+            Looper.myLooper() == Looper.getMainLooper()
+        } catch (_: Throwable) {
+            false
+        }
+        check(!isMain) { "TransferFinalizer must run on background thread" }
+        require(items.isNotEmpty()) { "Pair items must not be empty" }
+
+        val relativePath = ExportNames.albumPath("EasySave")
+        val sniffedMimes = mutableMapOf<String, String>()
+        val verifyMsMap = mutableMapOf<String, Long>()
+
+        // 1. 校验全部成员（stat 长度 + 魔数）
+        for (item in items) {
+            val jobId = item.job.jobId
+            val vStart = System.currentTimeMillis()
+            if (item.partFile.exists()) {
+                if (item.meta.total > 0 && item.partFile.length() != item.meta.total) {
+                    TransferLog.e("job=${TransferLog.shortId(jobId)} pair length_mismatch expected=${item.meta.total} actual=${item.partFile.length()}")
+                    return PairFinalizeOutcome.Failed("length_mismatch")
+                }
+                val sniffedMime = MediaSniffer.sniff(item.partFile)
+                val expectedMime = item.meta.mime ?: item.meta.sniff
+                if (!MediaSniffer.matches(expectedMime, sniffedMime)) {
+                    TransferLog.e("job=${TransferLog.shortId(jobId)} pair sniff_mismatch expected=$expectedMime sniffed=$sniffedMime")
+                    return PairFinalizeOutcome.Failed("sniff_mismatch")
+                }
+                sniffedMimes[jobId] = sniffedMime ?: "image/jpeg"
+            } else {
+                sniffedMimes[jobId] = item.meta.mime ?: "image/jpeg"
+            }
+            val vMs = System.currentTimeMillis() - vStart
+            verifyMsMap[jobId] = vMs
+            item.job.verifyMs = vMs
+            store.updateJobFinalizeProgress(jobId, verifyMs = vMs)
+        }
+
+        // 2. 被杀恢复检查：未发布的（inserted:*）全部删除并重置后重做；已发布的保留等待同伴
+        for (item in items) {
+            val job = item.job
+            val step = job.finalizeStep
+            if (step?.startsWith("inserted:") == true) {
+                val pendingMediaId = step.substringAfter("inserted:")
+                TransferLog.i("job=${TransferLog.shortId(job.jobId)} pair kill_recovery: deleting pending mediaId=$pendingMediaId")
+                publisher.deletePending(pendingMediaId)
+                job.finalizeStep = null
+                job.mediaId = null
+                job.title = null
+                store.clearFinalizeProgress(job.jobId)
+            }
+        }
+
+        val pendingEntries = mutableMapOf<String, PairPendingEntry>()
+        val publishedMap = mutableMapOf<String, PublishedMedia>()
+        val provenanceStatusMap = mutableMapOf<String, String>()
+
+        for (item in items) {
+            val job = item.job
+            if (job.finalizeStep == "published") {
+                val prevId = job.mediaId ?: "recovered_${job.jobId}"
+                publishedMap[job.jobId] = PublishedMedia(
+                    mediaId = prevId,
+                    title = job.title ?: "recovered_${job.jobId}",
+                    relativePath = relativePath,
+                    md5 = job.md5 ?: "",
+                    size = job.fileSize,
+                    thread = "bg"
+                )
+                provenanceStatusMap[job.jobId] = job.provenanceStatus ?: "none"
+            }
+        }
+
+        fun rollbackAll() {
+            for ((jobId, entry) in pendingEntries) {
+                runCatching { publisher.deletePending(entry.handle.mediaId) }
+                items.firstOrNull { it.job.jobId == jobId }?.job?.let {
+                    it.finalizeStep = null
+                    it.mediaId = null
+                    it.title = null
+                }
+                store.clearFinalizeProgress(jobId)
+            }
+            for ((jobId, pub) in publishedMap) {
+                runCatching { publisher.deletePending(pub.mediaId) }
+                items.firstOrNull { it.job.jobId == jobId }?.job?.let {
+                    it.finalizeStep = null
+                    it.mediaId = null
+                    it.title = null
+                }
+                store.clearFinalizeProgress(jobId)
+            }
+        }
+
+        // 3. 对未发布成员执行 IS_PENDING 插入 + 一遍流式写入（全部写完前不 publish）
+        for (item in items) {
+            val job = item.job
+            if (job.finalizeStep == "published") continue
+
+            val mimeToUse = sniffedMimes[job.jobId] ?: "image/jpeg"
+            val isEmbeddable = MediaImportPolicy.provenanceEmbeddable(mimeToUse)
+            val importStartMs = System.currentTimeMillis()
+            val ext = extensionForMime(mimeToUse, item.partFile)
+            val targetName = resolveTargetName(job.jobId, item.meta, ext, relativePath)
+
+            val handle = try {
+                publisher.insertPending(relativePath, targetName, mimeToUse, item.partFile)
+            } catch (t: Throwable) {
+                TransferLog.e("job=${TransferLog.shortId(job.jobId)} pair insertPending failed: ${t.message}", t)
+                rollbackAll()
+                return PairFinalizeOutcome.Failed("insert_failed", t)
+            }
+
+            job.finalizeStep = "inserted:${handle.mediaId}"
+            job.mediaId = handle.mediaId
+            job.title = handle.displayName
+            store.updateJobFinalizeProgress(
+                job.jobId,
+                finalizeStep = "inserted:${handle.mediaId}",
+                mediaId = handle.mediaId,
+                title = handle.displayName,
+            )
+            onStageForTesting?.invoke(job.jobId, "after_insert")
+
+            val provStatus: String
+            val writeResult: StreamingFileRewriter.WriteResult
+            try {
+                if (!item.partFile.exists()) {
+                    provStatus = "none"
+                    writeResult = StreamingFileRewriter.WriteResult(0L, "d41d8cd98f00b204e9800998ecf8427e")
+                } else {
+                    publisher.openOutputStream(handle).use { outStream ->
+                        if (isEmbeddable && item.meta.provenance != null) {
+                            val record = ProvenanceRecord.fromMap(item.meta.provenance)
+                            provStatus = "embedded"
+                            writeResult = ProvenanceEmbedder.embedToStream(item.partFile, outStream, record)
+                        } else {
+                            provStatus = if (!isEmbeddable) "skipped_unsupported" else "none"
+                            writeResult = StreamingFileRewriter.copyToStream(item.partFile, outStream)
+                        }
+                    }
+                }
+            } catch (t: SimulatedKillException) {
+                throw t
+            } catch (t: Throwable) {
+                TransferLog.e("job=${TransferLog.shortId(job.jobId)} pair single-pass write failed: ${t.message}", t)
+                runCatching { publisher.deletePending(handle.mediaId) }
+                job.finalizeStep = null
+                job.mediaId = null
+                job.title = null
+                store.clearFinalizeProgress(job.jobId)
+                rollbackAll()
+                return PairFinalizeOutcome.Failed("write_failed", t)
+            }
+
+            provenanceStatusMap[job.jobId] = provStatus
+            pendingEntries[job.jobId] = PairPendingEntry(
+                item = item,
+                handle = handle,
+                writeResult = writeResult,
+                mimeToUse = mimeToUse,
+                provenanceStatus = provStatus,
+                importStartMs = importStartMs,
+            )
+        }
+
+        // 4. 全部写完后，一起发布（IS_PENDING = 0）
+        for (item in items) {
+            val job = item.job
+            if (job.finalizeStep == "published") continue
+            val entry = pendingEntries.getValue(job.jobId)
+
+            val published = try {
+                publisher.publish(entry.handle, entry.writeResult.md5Hex, entry.writeResult.bytesWritten, entry.mimeToUse)
+            } catch (t: SimulatedKillException) {
+                throw t
+            } catch (t: Throwable) {
+                TransferLog.e("job=${TransferLog.shortId(job.jobId)} pair publish failed: ${t.message}", t)
+                rollbackAll()
+                return PairFinalizeOutcome.Failed("publish_failed", t)
+            }
+
+            val importMs = System.currentTimeMillis() - entry.importStartMs
+            job.finalizeStep = "published"
+            job.md5 = published.md5
+            job.fileSize = published.size
+            job.provenanceStatus = entry.provenanceStatus
+            job.importMs = importMs
+            job.provenanceMs = 0L
+            store.updateJobFinalizeProgress(
+                job.jobId,
+                finalizeStep = "published",
+                md5 = published.md5,
+                fileSize = published.size,
+                provenanceStatus = entry.provenanceStatus,
+                importMs = importMs,
+                provenanceMs = 0L,
+            )
+            publishedMap[job.jobId] = published
+            pendingEntries.remove(job.jobId)
+            onStageForTesting?.invoke(job.jobId, "after_publish")
+        }
+
+        // 5. 回读校验（全部成员）
+        val outcomes = mutableMapOf<String, FinalizeOutcome.Success>()
+        for (item in items) {
+            val job = item.job
+            val published = publishedMap.getValue(job.jobId)
+            val provStatus = provenanceStatusMap[job.jobId] ?: "none"
+            val rStart = System.currentTimeMillis()
+            var readbackOk = true
+            var readbackBytes = 0L
+
+            if (provStatus == "embedded" && item.meta.provenance != null && item.partFile.exists()) {
+                val record = ProvenanceRecord.fromMap(item.meta.provenance)
+                try {
+                    publisher.openSeekableInput(published.mediaId).use { seekable ->
+                        readbackOk = ProvenanceReader.verify(seekable, record.assetId, record.platform)
+                        readbackBytes = seekable.bytesRead
+                    }
+                    if (!readbackOk) {
+                        TransferLog.e("job=${TransferLog.shortId(job.jobId)} pair readback verification failed")
+                        rollbackAll()
+                        return PairFinalizeOutcome.Failed("readback_mismatch")
+                    }
+                } catch (t: Throwable) {
+                    TransferLog.e("job=${TransferLog.shortId(job.jobId)} pair readback error: ${t.message}", t)
+                    rollbackAll()
+                    return PairFinalizeOutcome.Failed("readback_error", t)
+                }
+            }
+
+            val readbackMs = System.currentTimeMillis() - rStart
+            job.readbackMs = readbackMs
+            job.readbackMatch = readbackOk
+            job.historyPending = true
+            store.updateJobFinalizeProgress(
+                job.jobId,
+                readbackMs = readbackMs,
+                readbackMatch = readbackOk,
+                historyPending = true,
+            )
+
+            val bytesRead = if (item.partFile.exists()) item.partFile.length() else published.size
+            val bytesWritten = published.size
+
+            outcomes[job.jobId] = FinalizeOutcome.Success(
+                publishedMedia = published,
+                partSha256 = job.partSha256,
+                provenanceStatus = provStatus,
+                readbackMatch = readbackOk,
+                verifyMs = verifyMsMap[job.jobId] ?: 0L,
+                provenanceMs = 0L,
+                importMs = job.importMs,
+                readbackMs = readbackMs,
+                bytesRead = bytesRead,
+                bytesWritten = bytesWritten,
+                readbackBytes = readbackBytes,
+            )
+        }
+
+        // 6. 清理临时文件并打印耗时日志
+        for (item in items) {
+            val job = item.job
+            val outcome = outcomes.getValue(job.jobId)
+            try { item.partFile.delete() } catch (_: Throwable) {}
+            try { File(transfersDir, "${job.jobId}.final").delete() } catch (_: Throwable) {}
+            try { File(transfersDir, "${job.jobId}.meta").delete() } catch (_: Throwable) {}
+            val md5Prefix = outcome.publishedMedia.md5.take(8)
+            TransferLog.i("[XFER] finish_timing pairId=${job.pairId} job=${TransferLog.shortId(job.jobId)} verify_ms=${outcome.verifyMs} provenance_ms=0 import_ms=${outcome.importMs} readback_ms=${outcome.readbackMs} bytes_read=${outcome.bytesRead} bytes_written=${outcome.bytesWritten} readback_bytes=${outcome.readbackBytes} md5=$md5Prefix provenance=${outcome.provenanceStatus} thread=bg")
+        }
+
+        return PairFinalizeOutcome.Success(outcomes)
     }
 }

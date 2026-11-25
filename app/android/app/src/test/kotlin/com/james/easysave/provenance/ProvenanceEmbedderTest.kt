@@ -60,6 +60,7 @@ class ProvenanceEmbedderTest {
             itemCount = if (json.has("itemCount")) json.getInt("itemCount") else null,
             authorId = json.optString("authorId").ifEmpty { null },
             publishedAt = json.optString("publishedAt").ifEmpty { null },
+            pairId = json.optString("pairId").ifEmpty { null },
             title = json.optString("title").ifEmpty { null },
             creator = creatorsList,
             description = json.optString("description").ifEmpty { null },

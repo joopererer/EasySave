@@ -9,6 +9,7 @@ class TransferJobSnapshot {
     required this.state,
     required this.retryCount,
     this.batchId,
+    this.pairId,
     required this.category,
     required this.createdAt,
     required this.updatedAt,
@@ -24,6 +25,7 @@ class TransferJobSnapshot {
       state: (map['state'] as String?) ?? 'queued',
       retryCount: (map['retryCount'] as num?)?.toInt() ?? 0,
       batchId: map['batchId'] as String?,
+      pairId: map['pairId'] as String?,
       category: (map['category'] as String?) ?? 'image',
       createdAt: (map['createdAt'] as num?)?.toInt() ?? 0,
       updatedAt: (map['updatedAt'] as num?)?.toInt() ?? 0,
@@ -38,6 +40,7 @@ class TransferJobSnapshot {
   final String state;
   final int retryCount;
   final String? batchId;
+  final String? pairId;
   final String category;
   final int createdAt;
   final int updatedAt;
@@ -160,6 +163,7 @@ class TransferClient {
     String direction = 'download',
     String category = 'image',
     String? batchId,
+    String? pairId,
     String? fakePlan,
     String? url,
     Map<String, String>? headers,
@@ -175,6 +179,7 @@ class TransferClient {
       'direction': direction,
       'category': category,
       if (batchId != null) 'batchId': batchId,
+      if (pairId != null) 'pairId': pairId,
       if (fakePlan != null) 'fakePlan': fakePlan,
       if (url != null) 'url': url,
       if (headers != null) 'headers': headers,

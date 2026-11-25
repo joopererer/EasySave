@@ -68,6 +68,11 @@ sealed class SchedulerEvent {
     data class ClearJobsByBatch(val batchId: String, val callback: () -> Unit) : SchedulerEvent()
     data class CustomEvent(val id: Int, val onHandled: (Int) -> Unit) : SchedulerEvent()
     data class FinalizeResultEvent(val jobId: String, val outcome: FinalizeOutcome) : SchedulerEvent()
+    data class PairFinalizeResultEvent(
+        val pairId: String,
+        val jobIds: List<String>,
+        val outcome: PairFinalizeOutcome,
+    ) : SchedulerEvent()
 }
 
 /**
@@ -209,6 +214,7 @@ class TransferScheduler(
             is SchedulerEvent.ClearJobsByBatch -> handleClearJobsByBatch(event.batchId, event.callback)
             is SchedulerEvent.CustomEvent -> event.onHandled(event.id)
             is SchedulerEvent.FinalizeResultEvent -> handleFinalizeResult(event.jobId, event.outcome)
+            is SchedulerEvent.PairFinalizeResultEvent -> handlePairFinalizeResult(event.pairId, event.jobIds, event.outcome)
         }
     }
 
@@ -290,6 +296,9 @@ class TransferScheduler(
                     java.io.File(dir, "$jobId.meta").delete()
                 }
                 TransferParamsRegistry.remove(jobId)
+                if (!job.pairId.isNullOrBlank()) {
+                    cancelPairPartners(job, "pair_partner_canceled")
+                }
                 dispatchNext()
             }
         }
@@ -361,13 +370,65 @@ class TransferScheduler(
 
         when (result) {
             is WorkerResult.Success -> {
-                if (JobState.validateAndLog(jobId, JobState.RUNNING, JobState.FINISHING, "transfer_complete", job.retryCount)) {
-                    job.state = JobState.FINISHING
-                    job.updatedAt = clock.currentTimeMillis()
-                    store.updateJobState(jobId, JobState.FINISHING, job.retryCount, job.updatedAt)
-                    emitStateChange(jobId, JobState.RUNNING, JobState.FINISHING, "transfer_complete", job.retryCount)
+                val pId = job.pairId
+                if (pId.isNullOrBlank()) {
+                    if (JobState.validateAndLog(jobId, JobState.RUNNING, JobState.FINISHING, "transfer_complete", job.retryCount)) {
+                        job.state = JobState.FINISHING
+                        job.updatedAt = clock.currentTimeMillis()
+                        store.updateJobState(jobId, JobState.FINISHING, job.retryCount, job.updatedAt)
+                        emitStateChange(jobId, JobState.RUNNING, JobState.FINISHING, "transfer_complete", job.retryCount)
 
-                    launchFinalizer(job)
+                        launchFinalizer(job)
+                    }
+                } else {
+                    val partners = findPairPartners(job)
+                    val failedPartner = partners.firstOrNull { it.state == JobState.FAILED }
+                    val canceledPartner = partners.firstOrNull { it.state == JobState.CANCELED }
+                    val waitingPartner = partners.firstOrNull { it.state == JobState.WAITING_PAIR }
+
+                    when {
+                        failedPartner != null -> {
+                            if (JobState.validateAndLog(jobId, JobState.RUNNING, JobState.FAILED, "pair_partner_failed", job.retryCount)) {
+                                job.state = JobState.FAILED
+                                job.updatedAt = clock.currentTimeMillis()
+                                store.updateJobState(jobId, JobState.FAILED, job.retryCount, job.updatedAt)
+                                emitStateChange(jobId, JobState.RUNNING, JobState.FAILED, "pair_partner_failed", job.retryCount)
+                            }
+                        }
+                        canceledPartner != null -> {
+                            if (JobState.validateAndLog(jobId, JobState.RUNNING, JobState.CANCELED, "pair_partner_canceled", job.retryCount)) {
+                                job.state = JobState.CANCELED
+                                job.updatedAt = clock.currentTimeMillis()
+                                store.updateJobState(jobId, JobState.CANCELED, job.retryCount, job.updatedAt)
+                                emitStateChange(jobId, JobState.RUNNING, JobState.CANCELED, "pair_partner_canceled", job.retryCount)
+                            }
+                        }
+                        waitingPartner != null -> {
+                            val now = clock.currentTimeMillis()
+                            if (JobState.validateAndLog(waitingPartner.jobId, JobState.WAITING_PAIR, JobState.FINISHING, "pair_ready", waitingPartner.retryCount)) {
+                                waitingPartner.state = JobState.FINISHING
+                                waitingPartner.updatedAt = now
+                                store.updateJobState(waitingPartner.jobId, JobState.FINISHING, waitingPartner.retryCount, now)
+                                emitStateChange(waitingPartner.jobId, JobState.WAITING_PAIR, JobState.FINISHING, "pair_ready", waitingPartner.retryCount)
+                            }
+                            if (JobState.validateAndLog(jobId, JobState.RUNNING, JobState.FINISHING, "pair_ready", job.retryCount)) {
+                                job.state = JobState.FINISHING
+                                job.updatedAt = now
+                                store.updateJobState(jobId, JobState.FINISHING, job.retryCount, now)
+                                emitStateChange(jobId, JobState.RUNNING, JobState.FINISHING, "pair_ready", job.retryCount)
+                            }
+                            val pairList = (listOf(waitingPartner, job)).sortedWith(compareBy({ it.category != JobCategory.IMAGE }, { it.createdAt }, { it.jobId }))
+                            launchPairFinalizer(pId, pairList)
+                        }
+                        else -> {
+                            if (JobState.validateAndLog(jobId, JobState.RUNNING, JobState.WAITING_PAIR, "waiting_pair", job.retryCount)) {
+                                job.state = JobState.WAITING_PAIR
+                                job.updatedAt = clock.currentTimeMillis()
+                                store.updateJobState(jobId, JobState.WAITING_PAIR, job.retryCount, job.updatedAt)
+                                emitStateChange(jobId, JobState.RUNNING, JobState.WAITING_PAIR, "waiting_pair", job.retryCount)
+                            }
+                        }
+                    }
                 }
             }
             is WorkerResult.NetworkError -> {
@@ -392,6 +453,9 @@ class TransferScheduler(
                     job.updatedAt = clock.currentTimeMillis()
                     store.updateJobState(jobId, JobState.FAILED, job.retryCount, job.updatedAt)
                     emitStateChange(jobId, JobState.RUNNING, JobState.FAILED, result.error, job.retryCount)
+                    if (!job.pairId.isNullOrBlank()) {
+                        failPairPartners(job, "pair_partner_failed")
+                    }
                 }
             }
             is WorkerResult.UrlExpired -> {
@@ -497,10 +561,40 @@ class TransferScheduler(
             emitStateChange(job.jobId, JobState.RUNNING, JobState.QUEUED, "process_kill_recovery", job.retryCount)
         }
         // 被杀恢复：检查处于 FINISHING 状态的任务并恢复收尾
-        for (stJob in allStored) {
-            if (stJob.state == JobState.FINISHING) {
-                TransferLog.i("job=${TransferLog.shortId(stJob.jobId)} recovered in FINISHING state -> resume finalizer (step=${stJob.finalizeStep})")
-                launchFinalizer(stJob)
+        val finishingSingles = allStored.filter { it.state == JobState.FINISHING && it.pairId.isNullOrBlank() }
+        for (stJob in finishingSingles) {
+            TransferLog.i("job=${TransferLog.shortId(stJob.jobId)} recovered in FINISHING state -> resume finalizer (step=${stJob.finalizeStep})")
+            launchFinalizer(stJob)
+        }
+        val finishingPairs = allStored.filter { it.state == JobState.FINISHING && !it.pairId.isNullOrBlank() }.groupBy { it.pairId!! }
+        for ((pairId, pairJobs) in finishingPairs) {
+            val allInPair = allStored.filter { it.pairId == pairId }
+            val anyFailed = allInPair.any { it.state == JobState.FAILED || it.state == JobState.CANCELED }
+            if (anyFailed) {
+                for (stJob in pairJobs) {
+                    if (JobState.validateAndLog(stJob.jobId, JobState.FINISHING, JobState.FAILED, "pair_partner_failed", stJob.retryCount)) {
+                        stJob.state = JobState.FAILED
+                        stJob.updatedAt = clock.currentTimeMillis()
+                        store.updateJobState(stJob.jobId, JobState.FAILED, stJob.retryCount, stJob.updatedAt)
+                        emitStateChange(stJob.jobId, JobState.FINISHING, JobState.FAILED, "pair_partner_failed", stJob.retryCount)
+                    }
+                }
+            } else {
+                // 若有同伴停留在 WAITING_PAIR，补转至 FINISHING 后一起收尾
+                for (wJob in allInPair.filter { it.state == JobState.WAITING_PAIR }) {
+                    if (JobState.validateAndLog(wJob.jobId, JobState.WAITING_PAIR, JobState.FINISHING, "pair_ready", wJob.retryCount)) {
+                        wJob.state = JobState.FINISHING
+                        wJob.updatedAt = clock.currentTimeMillis()
+                        store.updateJobState(wJob.jobId, JobState.FINISHING, wJob.retryCount, wJob.updatedAt)
+                        emitStateChange(wJob.jobId, JobState.WAITING_PAIR, JobState.FINISHING, "pair_ready", wJob.retryCount)
+                    }
+                }
+                val readyList = allInPair.filter { it.state == JobState.FINISHING }
+                    .sortedWith(compareBy({ it.category != JobCategory.IMAGE }, { it.createdAt }, { it.jobId }))
+                if (readyList.size >= 2) {
+                    TransferLog.i("pairId=$pairId recovered in FINISHING state -> resume pair finalizer")
+                    launchPairFinalizer(pairId, readyList)
+                }
             }
         }
         dispatchNext()
@@ -523,6 +617,127 @@ class TransferScheduler(
             val outcome = finalizer.execute(job, meta, partFile)
             send(SchedulerEvent.FinalizeResultEvent(job.jobId, outcome))
         }
+    }
+
+    private fun findPairPartners(job: TransferJob): List<TransferJob> {
+        val pId = job.pairId ?: return emptyList()
+        return jobs.values.filter { it.pairId == pId && it.jobId != job.jobId }
+    }
+
+    private fun failPairPartners(sourceJob: TransferJob, reason: String) {
+        val now = clock.currentTimeMillis()
+        for (partner in findPairPartners(sourceJob)) {
+            val from = partner.state
+            if (!from.isTerminal && from != JobState.FINISHING) {
+                cancelWorker(partner.jobId)
+                pendingTimers.remove(partner.jobId)?.cancel()
+                networkErrorTimers.remove(partner.jobId)?.cancel()
+                if (JobState.validateAndLog(partner.jobId, from, JobState.FAILED, reason, partner.retryCount)) {
+                    partner.state = JobState.FAILED
+                    partner.updatedAt = now
+                    store.updateJobState(partner.jobId, JobState.FAILED, partner.retryCount, now)
+                    emitStateChange(partner.jobId, from, JobState.FAILED, reason, partner.retryCount)
+                }
+            }
+        }
+    }
+
+    private fun cancelPairPartners(sourceJob: TransferJob, reason: String) {
+        val now = clock.currentTimeMillis()
+        for (partner in findPairPartners(sourceJob)) {
+            val from = partner.state
+            if (!from.isTerminal && from != JobState.FINISHING) {
+                cancelWorker(partner.jobId)
+                pendingTimers.remove(partner.jobId)?.cancel()
+                networkErrorTimers.remove(partner.jobId)?.cancel()
+                if (JobState.validateAndLog(partner.jobId, from, JobState.CANCELED, reason, partner.retryCount)) {
+                    partner.state = JobState.CANCELED
+                    partner.updatedAt = now
+                    store.updateJobState(partner.jobId, JobState.CANCELED, partner.retryCount, now)
+                    emitStateChange(partner.jobId, from, JobState.CANCELED, reason, partner.retryCount)
+                    transfersDir?.let { dir ->
+                        java.io.File(dir, "${partner.jobId}.part").delete()
+                        java.io.File(dir, "${partner.jobId}.meta").delete()
+                    }
+                    TransferParamsRegistry.remove(partner.jobId)
+                }
+            }
+        }
+    }
+
+    private fun launchPairFinalizer(pairId: String, pairJobs: List<TransferJob>) {
+        val tDir = transfersDir ?: java.io.File(".")
+        val items = pairJobs.map { job ->
+            val metaFile = java.io.File(tDir, "${job.jobId}.meta")
+            val partFile = java.io.File(tDir, "${job.jobId}.part")
+            val params = TransferParamsRegistry.get(job.jobId)
+            val meta = TransferMeta.read(metaFile) ?: TransferMeta(
+                url = params?.url ?: "",
+                total = job.totalBytes,
+                mime = params?.mime,
+                policyKey = params?.policyKey,
+                provenance = params?.provenance,
+            )
+            PairFinalizeItem(job, meta, partFile)
+        }
+
+        scope.launch(Dispatchers.IO) {
+            val outcome = finalizer.executePair(items)
+            send(SchedulerEvent.PairFinalizeResultEvent(pairId, pairJobs.map { it.jobId }, outcome))
+        }
+    }
+
+    private fun handlePairFinalizeResult(pairId: String, jobIds: List<String>, outcome: PairFinalizeOutcome) {
+        when (outcome) {
+            is PairFinalizeOutcome.Success -> {
+                for (jobId in jobIds) {
+                    val job = jobs[jobId] ?: continue
+                    if (job.state != JobState.FINISHING) continue
+                    val res = outcome.outcomes[jobId] ?: continue
+                    job.mediaId = res.publishedMedia.mediaId
+                    job.title = res.publishedMedia.title
+                    job.md5 = res.publishedMedia.md5
+                    job.fileSize = res.publishedMedia.size
+                    job.partSha256 = res.partSha256
+                    job.provenanceStatus = res.provenanceStatus
+                    job.readbackMatch = res.readbackMatch
+                    job.verifyMs = res.verifyMs
+                    job.provenanceMs = res.provenanceMs
+                    job.importMs = res.importMs
+                    job.readbackMs = res.readbackMs
+                    job.historyPending = true
+
+                    if (JobState.validateAndLog(jobId, JobState.FINISHING, JobState.DONE, "finalized", job.retryCount)) {
+                        job.state = JobState.DONE
+                        job.updatedAt = clock.currentTimeMillis()
+                        store.updateJobState(jobId, JobState.DONE, job.retryCount, job.updatedAt)
+                        emitStateChange(jobId, JobState.FINISHING, JobState.DONE, "finalized", job.retryCount)
+                        eventListener?.invoke(
+                            TransferEvent.Completed(
+                                jobId = jobId,
+                                mediaId = job.mediaId,
+                                md5 = job.md5,
+                                title = job.title,
+                                fileSize = job.fileSize,
+                            )
+                        )
+                    }
+                }
+            }
+            is PairFinalizeOutcome.Failed -> {
+                for (jobId in jobIds) {
+                    val job = jobs[jobId] ?: continue
+                    if (job.state != JobState.FINISHING) continue
+                    if (JobState.validateAndLog(jobId, JobState.FINISHING, JobState.FAILED, outcome.reason, job.retryCount)) {
+                        job.state = JobState.FAILED
+                        job.updatedAt = clock.currentTimeMillis()
+                        store.updateJobState(jobId, JobState.FAILED, job.retryCount, job.updatedAt)
+                        emitStateChange(jobId, JobState.FINISHING, JobState.FAILED, outcome.reason, job.retryCount)
+                    }
+                }
+            }
+        }
+        dispatchNext()
     }
 
     private fun handleFinalizeResult(jobId: String, outcome: FinalizeOutcome) {
