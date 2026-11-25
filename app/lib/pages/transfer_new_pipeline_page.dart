@@ -1,9 +1,11 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
-import '../core/models.dart';
 import '../metadata/site_provenance.dart';
+import '../services/download_manager.dart';
+import '../services/media_content_type.dart';
 import '../services/media_request_policy.dart';
 import '../services/parse_service.dart';
+import '../services/settings.dart';
 import '../services/site_registry.dart';
 import '../services/transfer_client.dart';
 
@@ -32,6 +34,8 @@ class _TransferNewPipelinePageState extends State<TransferNewPipelinePage> {
   DateTime _lastTime = DateTime.now();
 
   Map<String, dynamic>? _fileInfo;
+  String? _computedSha256;
+  bool _isComputingSha256 = false;
   String? _errorMessage;
 
   @override
@@ -92,6 +96,7 @@ class _TransferNewPipelinePageState extends State<TransferNewPipelinePage> {
     if (!mounted) return;
     setState(() {
       _fileInfo = info;
+      _computedSha256 = info['partSha256'] as String?;
     });
   }
 
@@ -108,6 +113,8 @@ class _TransferNewPipelinePageState extends State<TransferNewPipelinePage> {
       _isParsing = true;
       _errorMessage = null;
       _fileInfo = null;
+      _computedSha256 = null;
+      _isComputingSha256 = false;
       _logs.clear();
       _bytesRead = 0;
       _totalBytes = 0;
@@ -122,16 +129,6 @@ class _TransferNewPipelinePageState extends State<TransferNewPipelinePage> {
         throw Exception('未解析到任何媒体项');
       }
 
-      // 找最大的视频；若无视频则取第一张图
-      final videoItems = post.items.where((i) => i.type == 'video' || i.videoUrl != null).toList();
-      final MediaItem targetItem;
-      if (videoItems.isNotEmpty) {
-        videoItems.sort((a, b) => (b.duration ?? 0).compareTo(a.duration ?? 0));
-        targetItem = videoItems.first;
-      } else {
-        targetItem = post.items.first;
-      }
-
       final site = SiteRegistry.current.byId(post.platform) ??
           SiteRegistry.current.match(rawUrl) ??
           SiteRegistry.builtinById('xhs');
@@ -141,13 +138,61 @@ class _TransferNewPipelinePageState extends State<TransferNewPipelinePage> {
       }
 
       final policy = MediaRequestPolicy(site);
-      final resources = policy.resourcesFor(targetItem);
-      if (resources.isEmpty) {
+
+      // 复用旧链路候选选择与请求头构造逻辑 (Requirement 5)
+      final settings = await AppSettings.load();
+      final formatPref = settings.imageFormat;
+
+      final plannedFiles = planFiles(
+        post,
+        List.generate(post.items.length, (i) => i),
+        (label, seq, ext) => 'test_${post.platform}_$seq',
+        formatPref: formatPref,
+      );
+
+      if (plannedFiles.isEmpty) {
+        throw Exception('未规划出任何下载文件');
+      }
+
+      // 找最大的视频；若无视频则取第一张图
+      final plannedVideos = plannedFiles.where((f) => !f.isImage).toList();
+      final PlannedFile targetPlanned;
+      if (plannedVideos.isNotEmpty) {
+        targetPlanned = plannedVideos.first;
+      } else {
+        targetPlanned = plannedFiles.first;
+      }
+
+      if (targetPlanned.urls.isEmpty) {
         throw Exception('未生成媒体资源候选');
       }
 
-      final primaryResource = resources.first;
-      final authorized = await policy.authorize(primaryResource);
+      final targetCandidateUrl = targetPlanned.urls.first;
+      final targetItem = post.items[targetPlanned.itemIndex - 1];
+      final declaredResources = policy.resourcesFor(targetItem);
+      final resource = resourceForCandidate(policy, declaredResources, targetCandidateUrl);
+      final authorized = await policy.authorize(resource);
+
+      final candidateLabel = candidateLabelOf(targetCandidateUrl);
+      final isVideo = !targetPlanned.isImage;
+      final category = isVideo ? 'large_file' : 'image';
+
+      // 预期类型和分类必须来自所选候选本身 (Requirement 7)
+      final String mime;
+      if (isVideo) {
+        mime = targetCandidateUrl.toLowerCase().contains('.mov') ? 'video/quicktime' : 'video/mp4';
+      } else {
+        final token = candidateLabel.contains(':') ? candidateLabel.split(':').last : '';
+        mime = switch (token) {
+          'jpg' => 'image/jpeg',
+          'png' => 'image/png',
+          'webp' => 'image/webp',
+          'heic' => 'image/heic',
+          'avif' => 'image/avif',
+          'gif' => 'image/gif',
+          _ => 'image/jpeg',
+        };
+      }
 
       final downloadConfig = (site.data['download'] as Map?) ?? {};
       final mediaHosts = ((downloadConfig['mediaHosts'] as List?) ?? [])
@@ -156,10 +201,6 @@ class _TransferNewPipelinePageState extends State<TransferNewPipelinePage> {
           .toList();
       final cookieDomains = ((downloadConfig['cookieDomains'] as List?) ?? [])
           .cast<String>();
-
-      final isVideo = targetItem.type == 'video' || targetItem.videoUrl != null;
-      final category = isVideo ? 'large_file' : 'image';
-      final mime = isVideo ? 'video/mp4' : 'image/jpeg';
 
       final ts = DateTime.now().millisecondsSinceEpoch.toRadixString(36);
       final jobId = 'pipe_${post.platform}_$ts';
@@ -171,7 +212,7 @@ class _TransferNewPipelinePageState extends State<TransferNewPipelinePage> {
       setState(() {
         _isParsing = false;
         _state = 'queued';
-        _logs.add('[XFER] 准备入队 jobId=$jobId category=$category');
+        _logs.add('[XFER] 准备入队 jobId=$jobId candidate=$candidateLabel format_pref=${formatPref.logToken} category=$category mime=$mime');
       });
 
       final prov = buildSiteProvenance(
@@ -184,7 +225,7 @@ class _TransferNewPipelinePageState extends State<TransferNewPipelinePage> {
         caption: post.caption,
         aiLabel: post.aiLabel?.text,
         aiLabelSource: post.aiLabel?.source,
-        itemIndex: 1,
+        itemIndex: targetPlanned.itemIndex,
         itemCount: post.items.isNotEmpty ? post.items.length : 1,
       );
 
@@ -386,8 +427,39 @@ class _TransferNewPipelinePageState extends State<TransferNewPipelinePage> {
                       SelectableText('MD5: ${_fileInfo!['md5']}'),
                       const SizedBox(height: 4),
                     ],
-                    SelectableText('.part SHA-256 (写入来源信息前): ${_fileInfo!['partSha256'] ?? _fileInfo!['sha256'] ?? '未知'}'),
-                    const SizedBox(height: 4),
+                    if (_computedSha256 != null && _computedSha256!.isNotEmpty) ...[
+                      SelectableText('SHA-256: $_computedSha256'),
+                      const SizedBox(height: 4),
+                    ] else ...[
+                      Row(
+                        children: [
+                          Text('SHA-256: ${_isComputingSha256 ? "计算中..." : "未计算"}'),
+                          const SizedBox(width: 8),
+                          ElevatedButton(
+                            key: const Key('pipeline_compute_sha256_btn'),
+                            onPressed: _isComputingSha256
+                                ? null
+                                : () async {
+                                    setState(() {
+                                      _isComputingSha256 = true;
+                                    });
+                                    final sha = await _client.computeMediaSha256(
+                                      jobId: _jobId,
+                                      mediaId: _fileInfo?['mediaId'] as String?,
+                                    );
+                                    if (mounted) {
+                                      setState(() {
+                                        _computedSha256 = sha.isNotEmpty ? sha : '计算失败';
+                                        _isComputingSha256 = false;
+                                      });
+                                    }
+                                  },
+                            child: const Text('计算 SHA-256'),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 4),
+                    ],
                     Text(
                       '来源信息回读结果: ${_fileInfo!['readbackMatch'] == true ? '字段一致 (embedded and verified)' : (_fileInfo!['provenanceStatus'] == 'skipped_unsupported' ? '跳过不支持格式 (skipped_unsupported)' : '未注入 / 不一致')}',
                       style: TextStyle(

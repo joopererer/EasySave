@@ -1,6 +1,7 @@
 package com.james.easysave.provenance
 
 import java.io.File
+import java.io.OutputStream
 import java.io.RandomAccessFile
 import java.nio.charset.StandardCharsets
 
@@ -19,11 +20,11 @@ object WebpProvenanceWriter {
         val dataStop: Long,
     )
 
-    fun scanChunks(file: RandomAccessFile): List<WebpChunk> {
-        val length = file.length()
-        file.seek(0)
+    fun scanChunks(input: SeekableInput): List<WebpChunk> {
+        val length = input.length
+        input.seek(0)
         val header = ByteArray(12)
-        if (file.read(header) < 12) throw IllegalArgumentException("Not a WebP file")
+        if (input.read(header, 0, 12) < 12) throw IllegalArgumentException("Not a WebP file")
         if (String(header, 0, 4, StandardCharsets.US_ASCII) != "RIFF" ||
             String(header, 8, 4, StandardCharsets.US_ASCII) != "WEBP"
         ) {
@@ -35,8 +36,8 @@ object WebpProvenanceWriter {
         val head = ByteArray(8)
 
         while (offset + 8 <= length) {
-            file.seek(offset)
-            file.readFully(head)
+            input.seek(offset)
+            input.readFully(head)
             val fourCc = String(head, 0, 4, StandardCharsets.US_ASCII)
             val dataLen = ((head[4].toInt() and 0xFF).toLong()) or
                     ((head[5].toInt() and 0xFF).toLong() shl 8) or
@@ -51,6 +52,8 @@ object WebpProvenanceWriter {
         }
         return chunks
     }
+
+    fun scanChunks(file: RandomAccessFile): List<WebpChunk> = scanChunks(RafSeekableInput(file))
 
     private fun readDimensions(file: RandomAccessFile, chunks: List<WebpChunk>): Pair<Int, Int> {
         val vp8 = chunks.firstOrNull { it.fourCc == "VP8 " }
@@ -106,7 +109,7 @@ object WebpProvenanceWriter {
         return encodeChunk("VP8X", data)
     }
 
-    fun embed(input: File, output: File, record: ProvenanceRecord) {
+    fun embedToStream(input: File, outputStream: OutputStream, record: ProvenanceRecord): StreamingFileRewriter.WriteResult {
         val inRaf = RandomAccessFile(input, "r")
         val fileLength = inRaf.length()
         val chunks: List<WebpChunk>
@@ -169,11 +172,14 @@ object WebpProvenanceWriter {
         )
         regions.add(StreamingFileRewriter.ReplacementRegion(4L, 8L, riffLenBytes))
 
-        StreamingFileRewriter.rewrite(
+        return StreamingFileRewriter.rewriteToStream(
             input = input,
-            output = output,
+            outStream = outputStream,
             regions = regions
         )
     }
-}
 
+    fun embed(input: File, output: File, record: ProvenanceRecord) {
+        output.outputStream().use { embedToStream(input, it, record) }
+    }
+}

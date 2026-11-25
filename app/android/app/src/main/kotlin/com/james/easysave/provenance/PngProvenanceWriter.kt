@@ -1,6 +1,7 @@
 package com.james.easysave.provenance
 
 import java.io.File
+import java.io.OutputStream
 import java.io.RandomAccessFile
 import java.nio.charset.StandardCharsets
 import java.util.zip.CRC32
@@ -23,11 +24,11 @@ object PngProvenanceWriter {
         val dataStop: Long,
     )
 
-    fun scanChunks(file: RandomAccessFile): List<PngChunk> {
-        val length = file.length()
-        file.seek(0)
+    fun scanChunks(input: SeekableInput): List<PngChunk> {
+        val length = input.length
+        input.seek(0)
         val sig = ByteArray(8)
-        if (file.read(sig) < 8 || !sig.contentEquals(PNG_SIGNATURE)) {
+        if (input.read(sig, 0, 8) < 8 || !sig.contentEquals(PNG_SIGNATURE)) {
             throw IllegalArgumentException("Not a PNG file")
         }
 
@@ -36,8 +37,8 @@ object PngProvenanceWriter {
         val head = ByteArray(8)
 
         while (offset + 12 <= length) {
-            file.seek(offset)
-            file.readFully(head)
+            input.seek(offset)
+            input.readFully(head)
             val dataLen = (((head[0].toInt() and 0xFF).toLong() shl 24) or
                     ((head[1].toInt() and 0xFF).toLong() shl 16) or
                     ((head[2].toInt() and 0xFF).toLong() shl 8) or
@@ -52,6 +53,8 @@ object PngProvenanceWriter {
         }
         return chunks
     }
+
+    fun scanChunks(file: RandomAccessFile): List<PngChunk> = scanChunks(RafSeekableInput(file))
 
     private fun encodeChunk(type: String, data: ByteArray): ByteArray {
         val typeBytes = type.toByteArray(StandardCharsets.US_ASCII)
@@ -75,7 +78,7 @@ object PngProvenanceWriter {
         return chunk
     }
 
-    fun embed(input: File, output: File, record: ProvenanceRecord) {
+    fun embedToStream(input: File, outputStream: OutputStream, record: ProvenanceRecord): StreamingFileRewriter.WriteResult {
         val inRaf = RandomAccessFile(input, "r")
         val chunks: List<PngChunk>
         var existing: PngChunk? = null
@@ -90,16 +93,14 @@ object PngProvenanceWriter {
                         inRaf.seek(chunk.dataStart)
                         val data = ByteArray(dLen)
                         inRaf.readFully(data)
-                        // Verify keyword
                         val kwBytes = PNG_XMP_KEYWORD.toByteArray(StandardCharsets.UTF_8)
                         var match = true
                         for (i in kwBytes.indices) {
                             if (data[i] != kwBytes[i]) { match = false; break }
                         }
                         if (match && data[kwBytes.size] == 0.toByte()) {
-                            // null + compressionFlag(1) + compressionMethod(1) + null + null -> 5 bytes
                             val textStart = kwBytes.size + 5
-                            if (data[kwBytes.size + 1] == 0.toByte()) { // uncompressed
+                            if (data[kwBytes.size + 1] == 0.toByte()) {
                                 existing = chunk
                                 currentXml = String(data, textStart, dLen - textStart, StandardCharsets.UTF_8)
                                 break
@@ -117,11 +118,11 @@ object PngProvenanceWriter {
         val kwBytes = PNG_XMP_KEYWORD.toByteArray(StandardCharsets.UTF_8)
         val chunkData = ByteArray(kwBytes.size + 5 + xmlBytes.size)
         System.arraycopy(kwBytes, 0, chunkData, 0, kwBytes.size)
-        chunkData[kwBytes.size] = 0 // keyword terminator
-        chunkData[kwBytes.size + 1] = 0 // compression flag: uncompressed
-        chunkData[kwBytes.size + 2] = 0 // compression method
-        chunkData[kwBytes.size + 3] = 0 // language tag terminator
-        chunkData[kwBytes.size + 4] = 0 // translated keyword terminator
+        chunkData[kwBytes.size] = 0
+        chunkData[kwBytes.size + 1] = 0
+        chunkData[kwBytes.size + 2] = 0
+        chunkData[kwBytes.size + 3] = 0
+        chunkData[kwBytes.size + 4] = 0
         System.arraycopy(xmlBytes, 0, chunkData, kwBytes.size + 5, xmlBytes.size)
 
         val chunkBytes = encodeChunk("iTXt", chunkData)
@@ -143,11 +144,14 @@ object PngProvenanceWriter {
             replaceStop = insertAt
         }
 
-        StreamingFileRewriter.rewrite(
+        return StreamingFileRewriter.rewriteToStream(
             input = input,
-            output = output,
+            outStream = outputStream,
             regions = listOf(StreamingFileRewriter.ReplacementRegion(replaceStart, replaceStop, chunkBytes))
         )
     }
-}
 
+    fun embed(input: File, output: File, record: ProvenanceRecord) {
+        output.outputStream().use { embedToStream(input, it, record) }
+    }
+}

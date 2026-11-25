@@ -2,10 +2,13 @@ package com.james.easysave.transfer
 
 import com.james.easysave.ExportNames
 import com.james.easysave.MediaImportPolicy
+import com.james.easysave.provenance.ByteArraySeekableInput
+import com.james.easysave.provenance.SeekableInput
 import java.io.ByteArrayInputStream
+import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.InputStream
-import java.security.MessageDigest
+import java.io.OutputStream
 
 class FakeMediaPublisher : MediaPublisher {
 
@@ -16,6 +19,8 @@ class FakeMediaPublisher : MediaPublisher {
         val mime: String,
         var data: ByteArray?,
         var isPending: Boolean,
+        var md5: String? = null,
+        var outputStream: ByteArrayOutputStream? = null,
     )
 
     val entries = mutableMapOf<String, Entry>()
@@ -40,7 +45,7 @@ class FakeMediaPublisher : MediaPublisher {
         check(!exists(relativePath, displayName)) { "Target filename already exists: $displayName" }
 
         val id = (idCounter++).toString()
-        entries[id] = Entry(
+        val entry = Entry(
             mediaId = id,
             relativePath = relativePath,
             displayName = displayName,
@@ -48,6 +53,7 @@ class FakeMediaPublisher : MediaPublisher {
             data = null,
             isPending = true,
         )
+        entries[id] = entry
         return PublishedHandle(
             mediaId = id,
             uriString = "fake://$id",
@@ -56,24 +62,32 @@ class FakeMediaPublisher : MediaPublisher {
         )
     }
 
-    override fun copyAndPublish(
+    override fun openOutputStream(handle: PublishedHandle): OutputStream {
+        val entry = entries[handle.mediaId] ?: error("Pending entry not found: ${handle.mediaId}")
+        val baos = ByteArrayOutputStream()
+        entry.outputStream = baos
+        return baos
+    }
+
+    override fun publish(
         handle: PublishedHandle,
-        sourceFile: File,
+        md5: String,
+        size: Long,
         mime: String,
     ): PublishedMedia {
         val entry = entries[handle.mediaId] ?: error("Pending entry not found: ${handle.mediaId}")
-        val bytes = sourceFile.readBytes()
-        val md = MessageDigest.getInstance("MD5")
-        val md5Hex = md.digest(bytes).joinToString("") { "%02x".format(it) }
+        val bytes = entry.outputStream?.toByteArray() ?: entry.data ?: ByteArray(0)
         entry.data = bytes
         entry.isPending = false
+        entry.md5 = md5
+        entry.outputStream = null
 
         return PublishedMedia(
             mediaId = handle.mediaId,
             title = handle.displayName,
             relativePath = handle.relativePath,
-            md5 = md5Hex,
-            size = bytes.size.toLong(),
+            md5 = md5,
+            size = size,
             thread = "bg",
         )
     }
@@ -85,10 +99,15 @@ class FakeMediaPublisher : MediaPublisher {
         }
     }
 
+    override fun openSeekableInput(mediaId: String): SeekableInput {
+        val entry = entries[mediaId] ?: error("Entry not found: $mediaId")
+        val data = entry.data ?: error("No data in entry: $mediaId")
+        return ByteArraySeekableInput(data)
+    }
+
     override fun openInputStream(mediaId: String): InputStream {
         val entry = entries[mediaId] ?: error("Entry not found: $mediaId")
         val data = entry.data ?: error("No data in entry: $mediaId")
         return ByteArrayInputStream(data)
     }
 }
-

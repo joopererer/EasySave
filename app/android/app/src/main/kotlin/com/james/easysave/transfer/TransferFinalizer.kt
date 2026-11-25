@@ -6,8 +6,8 @@ import com.james.easysave.MediaImportPolicy
 import com.james.easysave.provenance.ProvenanceEmbedder
 import com.james.easysave.provenance.ProvenanceReader
 import com.james.easysave.provenance.ProvenanceRecord
+import com.james.easysave.provenance.StreamingFileRewriter
 import java.io.File
-import java.security.MessageDigest
 
 sealed class FinalizeOutcome {
     data class Success(
@@ -19,6 +19,9 @@ sealed class FinalizeOutcome {
         val provenanceMs: Long,
         val importMs: Long,
         val readbackMs: Long,
+        val bytesRead: Long = 0L,
+        val bytesWritten: Long = 0L,
+        val readbackBytes: Long = 0L,
     ) : FinalizeOutcome()
 
     data class Failed(
@@ -83,10 +86,13 @@ class TransferFinalizer(
                 provenanceMs = 0L,
                 importMs = 0L,
                 readbackMs = 0L,
+                bytesRead = 0L,
+                bytesWritten = 0L,
+                readbackBytes = 0L,
             )
         }
 
-        // 1. 校验 (Validation)
+        // 1. 校验 (Validation: 长度 stat + 魔数 sniff，不读全文件)
         if (meta.total > 0 && partFile.exists() && partFile.length() != meta.total) {
             TransferLog.e("job=${TransferLog.shortId(jobId)} length_mismatch expected=${meta.total} actual=${partFile.length()}")
             return FinalizeOutcome.Failed("length_mismatch")
@@ -99,25 +105,9 @@ class TransferFinalizer(
             return FinalizeOutcome.Failed("sniff_mismatch")
         }
 
-        // 计算 .part 原始文件的 SHA-256（在嵌入来源信息前）
-        val partSha256 = job.partSha256 ?: try {
-            if (partFile.exists()) {
-                val md = MessageDigest.getInstance("SHA-256")
-                partFile.inputStream().use { stream ->
-                    val buf = ByteArray(65536)
-                    var read: Int
-                    while (stream.read(buf).also { read = it } > 0) {
-                        md.update(buf, 0, read)
-                    }
-                }
-                md.digest().joinToString("") { "%02x".format(it) }
-            } else null
-        } catch (_: Throwable) { null }
-
         val verifyMs = System.currentTimeMillis() - vStart
-        job.partSha256 = partSha256
         job.verifyMs = verifyMs
-        store.updateJobFinalizeProgress(jobId, partSha256 = partSha256, verifyMs = verifyMs)
+        store.updateJobFinalizeProgress(jobId, verifyMs = verifyMs)
 
         // 2. 检查被杀恢复状态
         val currentStep = job.finalizeStep
@@ -125,48 +115,16 @@ class TransferFinalizer(
             val pendingMediaId = currentStep.substringAfter("inserted:")
             TransferLog.i("job=${TransferLog.shortId(jobId)} kill_recovery: deleting pending mediaId=$pendingMediaId")
             publisher.deletePending(pendingMediaId)
-            job.finalizeStep = "embedded"
-            store.updateJobFinalizeProgress(jobId, finalizeStep = "embedded", mediaId = null)
+            job.finalizeStep = null
+            store.updateJobFinalizeProgress(jobId, finalizeStep = null, mediaId = null)
         }
 
-        val finalFile = File(transfersDir, "$jobId.final")
-        var sourceForImport = partFile
-        var provenanceStatus = job.provenanceStatus ?: "skipped_unsupported"
-
-        // 3. 写来源信息 (Provenance Embedding)
+        // 3. 一遍写入：相册插入与流式写入（同时嵌入来源信息与计算 MD5，无 .final 文件）
         val pStart = System.currentTimeMillis()
-        if (job.finalizeStep != "published") {
-            val isEmbeddable = MediaImportPolicy.provenanceEmbeddable(sniffedMime ?: "")
-            if (isEmbeddable && meta.provenance != null) {
-                try {
-                    val record = ProvenanceRecord.fromMap(meta.provenance)
-                    ProvenanceEmbedder.embed(partFile, finalFile, record)
-                    sourceForImport = finalFile
-                    provenanceStatus = "embedded"
-                } catch (t: Throwable) {
-                    TransferLog.e("job=${TransferLog.shortId(jobId)} provenance embedding failed: ${t.message}", t)
-                    return FinalizeOutcome.Failed("provenance_failed", t)
-                }
-            } else {
-                provenanceStatus = if (!isEmbeddable) "skipped_unsupported" else "none"
-                sourceForImport = partFile
-            }
-            job.finalizeStep = "embedded"
-            job.provenanceStatus = provenanceStatus
-            store.updateJobFinalizeProgress(
-                jobId,
-                finalizeStep = "embedded",
-                provenanceStatus = provenanceStatus
-            )
-        }
-        val provenanceMs = System.currentTimeMillis() - pStart
-        job.provenanceMs = provenanceMs
-        store.updateJobFinalizeProgress(jobId, provenanceMs = provenanceMs)
-
-        // 4. 写入相册 (Publish to Gallery)
-        val iStart = System.currentTimeMillis()
         val publishedMedia: PublishedMedia
         val mimeToUse = sniffedMime ?: "image/jpeg"
+        val isEmbeddable = MediaImportPolicy.provenanceEmbeddable(mimeToUse)
+        var provenanceStatus = job.provenanceStatus ?: if (!isEmbeddable) "skipped_unsupported" else "none"
 
         if (job.finalizeStep != "published") {
             val ext = when (mimeToUse) {
@@ -178,7 +136,7 @@ class TransferFinalizer(
                 "image/avif" -> "avif"
                 "video/mp4" -> "mp4"
                 "video/quicktime" -> "mov"
-                else -> sourceForImport.extension.ifEmpty { "jpg" }
+                else -> partFile.extension.ifEmpty { "jpg" }
             }
 
             val sanitizedId = jobId.replace(Regex("[^A-Za-z0-9_-]"), "_")
@@ -195,7 +153,7 @@ class TransferFinalizer(
             }
 
             val handle = try {
-                publisher.insertPending(relativePath, targetName, mimeToUse, sourceForImport)
+                publisher.insertPending(relativePath, targetName, mimeToUse, partFile)
             } catch (t: Throwable) {
                 TransferLog.e("job=${TransferLog.shortId(jobId)} insertPending failed: ${t.message}", t)
                 return FinalizeOutcome.Failed("insert_failed", t)
@@ -211,22 +169,49 @@ class TransferFinalizer(
                 title = handle.displayName
             )
 
-            publishedMedia = try {
-                publisher.copyAndPublish(handle, sourceForImport, mimeToUse)
+            val writeResult: StreamingFileRewriter.WriteResult
+            try {
+                publisher.openOutputStream(handle).use { outStream ->
+                    if (isEmbeddable && meta.provenance != null) {
+                        val record = ProvenanceRecord.fromMap(meta.provenance)
+                        provenanceStatus = "embedded"
+                        writeResult = ProvenanceEmbedder.embedToStream(partFile, outStream, record)
+                    } else {
+                        provenanceStatus = if (!isEmbeddable) "skipped_unsupported" else "none"
+                        writeResult = StreamingFileRewriter.copyToStream(partFile, outStream)
+                    }
+                }
             } catch (t: Throwable) {
-                TransferLog.e("job=${TransferLog.shortId(jobId)} copyAndPublish failed: ${t.message}", t)
+                TransferLog.e("job=${TransferLog.shortId(jobId)} single-pass write failed: ${t.message}", t)
+                publisher.deletePending(handle.mediaId)
+                return FinalizeOutcome.Failed("write_failed", t)
+            }
+
+            publishedMedia = try {
+                publisher.publish(handle, writeResult.md5Hex, writeResult.bytesWritten, mimeToUse)
+            } catch (t: Throwable) {
+                TransferLog.e("job=${TransferLog.shortId(jobId)} publish failed: ${t.message}", t)
                 publisher.deletePending(handle.mediaId)
                 return FinalizeOutcome.Failed("publish_failed", t)
             }
 
+            val importMs = System.currentTimeMillis() - pStart
+            val provenanceMs = 0L // 一遍写入，无独立来源信息中间文件重写耗时
+
             job.finalizeStep = "published"
             job.md5 = publishedMedia.md5
             job.fileSize = publishedMedia.size
+            job.provenanceStatus = provenanceStatus
+            job.importMs = importMs
+            job.provenanceMs = provenanceMs
             store.updateJobFinalizeProgress(
                 jobId,
                 finalizeStep = "published",
                 md5 = publishedMedia.md5,
-                fileSize = publishedMedia.size
+                fileSize = publishedMedia.size,
+                provenanceStatus = provenanceStatus,
+                importMs = importMs,
+                provenanceMs = provenanceMs,
             )
         } else {
             // 已发布状态被杀恢复
@@ -240,18 +225,17 @@ class TransferFinalizer(
                 thread = "bg"
             )
         }
-        val importMs = System.currentTimeMillis() - iStart
-        job.importMs = importMs
-        store.updateJobFinalizeProgress(jobId, importMs = importMs)
 
-        // 5. 回读校验 (Readback Verification)
+        // 4. 回读校验 (Readback Verification: 按 MP4 box / segment / chunk 定位，跳过数据块)
         val rStart = System.currentTimeMillis()
         var readbackOk = true
+        var readbackBytes = 0L
         if (provenanceStatus == "embedded" && meta.provenance != null) {
             val record = ProvenanceRecord.fromMap(meta.provenance)
             try {
-                publisher.openInputStream(publishedMedia.mediaId).use { stream ->
-                    readbackOk = ProvenanceReader.verify(stream, record.assetId, record.platform)
+                publisher.openSeekableInput(publishedMedia.mediaId).use { seekable ->
+                    readbackOk = ProvenanceReader.verify(seekable, record.assetId, record.platform)
+                    readbackBytes = seekable.bytesRead
                 }
                 if (!readbackOk) {
                     TransferLog.e("job=${TransferLog.shortId(jobId)} readback verification failed for assetId=${record.assetId}")
@@ -267,27 +251,33 @@ class TransferFinalizer(
         job.readbackMatch = readbackOk
         store.updateJobFinalizeProgress(jobId, readbackMs = readbackMs, readbackMatch = readbackOk)
 
-        // 6. 结果写入 Store，清理临时文件
+        // 5. 结果写入 Store，清理临时文件
         job.historyPending = true
         store.updateJobFinalizeProgress(jobId, historyPending = true)
 
+        val bytesRead = if (partFile.exists()) partFile.length() else publishedMedia.size
+        val bytesWritten = publishedMedia.size
+
         try { partFile.delete() } catch (_: Throwable) {}
-        try { if (finalFile.exists()) finalFile.delete() } catch (_: Throwable) {}
+        try { File(transfersDir, "$jobId.final").delete() } catch (_: Throwable) {}
         try { File(transfersDir, "$jobId.meta").delete() } catch (_: Throwable) {}
 
-        // 7. 日志输出
+        // 6. 日志输出（包含 bytes_read、bytes_written、readback_bytes 字段）
         val md5Prefix = publishedMedia.md5.take(8)
-        TransferLog.i("[XFER] finish_timing job=${TransferLog.shortId(jobId)} verify_ms=$verifyMs provenance_ms=$provenanceMs import_ms=$importMs readback_ms=$readbackMs md5=$md5Prefix provenance=$provenanceStatus thread=bg")
+        TransferLog.i("[XFER] finish_timing job=${TransferLog.shortId(jobId)} verify_ms=$verifyMs provenance_ms=${job.provenanceMs} import_ms=${job.importMs} readback_ms=$readbackMs bytes_read=$bytesRead bytes_written=$bytesWritten readback_bytes=$readbackBytes md5=$md5Prefix provenance=$provenanceStatus thread=bg")
 
         return FinalizeOutcome.Success(
             publishedMedia = publishedMedia,
-            partSha256 = partSha256,
+            partSha256 = job.partSha256,
             provenanceStatus = provenanceStatus,
             readbackMatch = readbackOk,
             verifyMs = verifyMs,
-            provenanceMs = provenanceMs,
-            importMs = importMs,
+            provenanceMs = job.provenanceMs,
+            importMs = job.importMs,
             readbackMs = readbackMs,
+            bytesRead = bytesRead,
+            bytesWritten = bytesWritten,
+            readbackBytes = readbackBytes,
         )
     }
 }

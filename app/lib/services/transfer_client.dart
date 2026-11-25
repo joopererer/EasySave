@@ -222,6 +222,14 @@ class TransferClient {
     return res?.cast<String, dynamic>() ?? {'exists': false};
   }
 
+  Future<String> computeMediaSha256({String? jobId, String? mediaId}) async {
+    final res = await _methodChannel.invokeMethod<String>('computeMediaSha256', {
+      if (jobId != null) 'jobId': jobId,
+      if (mediaId != null) 'mediaId': mediaId,
+    });
+    return res ?? '';
+  }
+
   Future<bool> deleteJobFile(String jobId) async {
     final res = await _methodChannel.invokeMethod<bool>('deleteJobFile', {'jobId': jobId});
     return res ?? false;

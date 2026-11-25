@@ -10,6 +10,7 @@ import io.flutter.plugin.common.MethodChannel
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 import java.util.UUID
 import java.util.concurrent.CopyOnWriteArrayList
 
@@ -244,6 +245,52 @@ object TransferChannels {
                             "path" to partFile.absolutePath,
                         )
                     )
+                }
+            }
+            "computeMediaSha256" -> {
+                val args = call.arguments as? Map<*, *> ?: emptyMap<String, Any?>()
+                val jobId = args["jobId"] as? String ?: ""
+                val mediaId = args["mediaId"] as? String
+                channelScope.launch(Dispatchers.IO) {
+                    try {
+                        val sha256 = if (!mediaId.isNullOrBlank()) {
+                            val publisher = scheduler.publisher ?: MediaStorePublisher(context)
+                            val md = java.security.MessageDigest.getInstance("SHA-256")
+                            val buf = ByteArray(65536)
+                            publisher.openSeekableInput(mediaId).use { input ->
+                                input.seek(0)
+                                while (true) {
+                                    val n = input.read(buf, 0, buf.size)
+                                    if (n <= 0) break
+                                    md.update(buf, 0, n)
+                                }
+                            }
+                            md.digest().joinToString("") { "%02x".format(it) }
+                        } else {
+                            val transfersDir = java.io.File(context.filesDir, "transfers")
+                            val partFile = java.io.File(transfersDir, "$jobId.part")
+                            if (!partFile.exists()) {
+                                null
+                            } else {
+                                val md = java.security.MessageDigest.getInstance("SHA-256")
+                                val buf = ByteArray(65536)
+                                partFile.inputStream().use { stream ->
+                                    var read: Int
+                                    while (stream.read(buf).also { read = it } > 0) {
+                                        md.update(buf, 0, read)
+                                    }
+                                }
+                                md.digest().joinToString("") { "%02x".format(it) }
+                            }
+                        }
+                        mainHandler.post {
+                            result.success(sha256 ?: "")
+                        }
+                    } catch (t: Throwable) {
+                        mainHandler.post {
+                            result.error("COMPUTE_FAILED", t.message, null)
+                        }
+                    }
                 }
             }
             "openInGallery" -> {

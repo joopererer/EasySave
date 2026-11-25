@@ -1,6 +1,7 @@
 package com.james.easysave.provenance
 
 import java.io.File
+import java.io.OutputStream
 import java.io.RandomAccessFile
 import java.nio.charset.StandardCharsets
 
@@ -19,11 +20,11 @@ object JpegProvenanceWriter {
         val payloadStop: Long,
     )
 
-    fun scanSegments(file: RandomAccessFile): List<JpegSegment> {
-        val length = file.length()
-        file.seek(0)
+    fun scanSegments(input: SeekableInput): List<JpegSegment> {
+        val length = input.length
+        input.seek(0)
         val soi = ByteArray(2)
-        if (file.read(soi) < 2 || (soi[0].toInt() and 0xFF) != 0xFF || (soi[1].toInt() and 0xFF) != 0xD8) {
+        if (input.read(soi, 0, 2) < 2 || (soi[0].toInt() and 0xFF) != 0xFF || (soi[1].toInt() and 0xFF) != 0xD8) {
             throw IllegalArgumentException("Not a JPEG file")
         }
 
@@ -32,8 +33,8 @@ object JpegProvenanceWriter {
 
         val head = ByteArray(4)
         while (offset + 1 < length) {
-            file.seek(offset)
-            val read = file.read(head, 0, 4)
+            input.seek(offset)
+            val read = input.read(head, 0, 4)
             if (read < 2) break
             if ((head[0].toInt() and 0xFF) != 0xFF) break
             val marker = head[1].toInt() and 0xFF
@@ -58,7 +59,9 @@ object JpegProvenanceWriter {
         return segments
     }
 
-    fun embed(input: File, output: File, record: ProvenanceRecord) {
+    fun scanSegments(file: RandomAccessFile): List<JpegSegment> = scanSegments(RafSeekableInput(file))
+
+    fun embedToStream(input: File, outputStream: OutputStream, record: ProvenanceRecord): StreamingFileRewriter.WriteResult {
         val inRaf = RandomAccessFile(input, "r")
         val segments: List<JpegSegment>
         var existing: JpegSegment? = null
@@ -118,11 +121,14 @@ object JpegProvenanceWriter {
             replaceStop = insertAt
         }
 
-        StreamingFileRewriter.rewrite(
+        return StreamingFileRewriter.rewriteToStream(
             input = input,
-            output = output,
+            outStream = outputStream,
             regions = listOf(StreamingFileRewriter.ReplacementRegion(replaceStart, replaceStop, segmentBytes))
         )
     }
-}
 
+    fun embed(input: File, output: File, record: ProvenanceRecord) {
+        output.outputStream().use { embedToStream(input, it, record) }
+    }
+}

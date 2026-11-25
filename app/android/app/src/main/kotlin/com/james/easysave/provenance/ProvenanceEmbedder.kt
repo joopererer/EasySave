@@ -1,7 +1,7 @@
 package com.james.easysave.provenance
 
 import java.io.File
-import java.io.RandomAccessFile
+import java.io.OutputStream
 
 /**
  * Public entry point for embedding provenance records into media files.
@@ -9,14 +9,14 @@ import java.io.RandomAccessFile
  */
 object ProvenanceEmbedder {
 
-    fun embed(input: File, output: File, record: ProvenanceRecord) {
+    fun embedToStream(input: File, outputStream: OutputStream, record: ProvenanceRecord): StreamingFileRewriter.WriteResult {
         require(input.exists()) { "Input file does not exist: ${input.path}" }
         val format = detectFormat(input)
-        when (format) {
-            MediaFormat.JPEG -> JpegProvenanceWriter.embed(input, output, record)
-            MediaFormat.PNG -> PngProvenanceWriter.embed(input, output, record)
-            MediaFormat.WEBP -> WebpProvenanceWriter.embed(input, output, record)
-            MediaFormat.MP4 -> Mp4ProvenanceWriter.embed(input, output, record)
+        return when (format) {
+            MediaFormat.JPEG -> JpegProvenanceWriter.embedToStream(input, outputStream, record)
+            MediaFormat.PNG -> PngProvenanceWriter.embedToStream(input, outputStream, record)
+            MediaFormat.WEBP -> WebpProvenanceWriter.embedToStream(input, outputStream, record)
+            MediaFormat.MP4 -> Mp4ProvenanceWriter.embedToStream(input, outputStream, record)
             MediaFormat.UNSUPPORTED -> {
                 throw UnsupportedOperationException(
                     "Cannot embed XMP in this container: ${input.name}. Still containers like HEIC/AVIF/GIF are skipped by design."
@@ -25,15 +25,19 @@ object ProvenanceEmbedder {
         }
     }
 
+    fun embed(input: File, output: File, record: ProvenanceRecord) {
+        output.outputStream().use { embedToStream(input, it, record) }
+    }
+
     enum class MediaFormat {
         JPEG, PNG, WEBP, MP4, UNSUPPORTED
     }
 
-    fun detectFormat(file: File): MediaFormat {
-        val ext = file.extension.lowercase()
-        // Check magic bytes first
+    fun detectFormat(input: SeekableInput): MediaFormat {
+        if (input.length < 4) return MediaFormat.UNSUPPORTED
+        input.seek(0)
         val header = ByteArray(16)
-        val readCount = RandomAccessFile(file, "r").use { raf -> raf.read(header) }
+        val readCount = input.read(header, 0, 16)
         if (readCount < 4) return MediaFormat.UNSUPPORTED
 
         // JPEG: 0xFF 0xD8 0xFF
@@ -74,6 +78,18 @@ object ProvenanceEmbedder {
             }
         }
 
+        return MediaFormat.UNSUPPORTED
+    }
+
+    fun detectFormat(file: File): MediaFormat {
+        val ext = file.extension.lowercase()
+        val format = try {
+            RafSeekableInput(file).use { detectFormat(it) }
+        } catch (_: Throwable) {
+            MediaFormat.UNSUPPORTED
+        }
+        if (format != MediaFormat.UNSUPPORTED) return format
+
         return when (ext) {
             "jpg", "jpeg" -> MediaFormat.JPEG
             "png" -> MediaFormat.PNG
@@ -83,4 +99,3 @@ object ProvenanceEmbedder {
         }
     }
 }
-

@@ -3,6 +3,8 @@ package com.james.easysave.transfer
 import android.content.Context
 import com.james.easysave.provenance.ProvenanceEmbedder
 import com.james.easysave.provenance.ProvenanceRecord
+import org.json.JSONArray
+import org.json.JSONObject
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
@@ -14,7 +16,7 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
 import java.io.File
-import java.nio.charset.StandardCharsets
+import java.security.MessageDigest
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [30])
@@ -27,6 +29,19 @@ class TransferFinalizerTest {
     private lateinit var publisher: FakeMediaPublisher
     private lateinit var finalizer: TransferFinalizer
 
+    private fun findGoldenRoot(): File {
+        val candidates = listOf(
+            File("../../../../../spec/fixtures/provenance_golden"),
+            File("../../../../spec/fixtures/provenance_golden"),
+            File("../../../spec/fixtures/provenance_golden"),
+            File("../../spec/fixtures/provenance_golden"),
+            File("../spec/fixtures/provenance_golden"),
+            File("spec/fixtures/provenance_golden"),
+        )
+        return candidates.firstOrNull { it.exists() }
+            ?: error("Golden root not found. Checked: ${candidates.map { it.canonicalPath }}")
+    }
+
     private fun findTestVector(name: String): File {
         val candidates = listOf(
             File("../../docs/provenance-spec/test-vectors/$name"),
@@ -37,6 +52,42 @@ class TransferFinalizerTest {
         )
         return candidates.firstOrNull { it.exists() }
             ?: error("Test vector not found: $name. Checked: ${candidates.map { it.canonicalPath }}")
+    }
+
+    private fun sha256(bytes: ByteArray): String {
+        val md = MessageDigest.getInstance("SHA-256")
+        return md.digest(bytes).joinToString("") { "%02x".format(it) }
+    }
+
+    private fun sha256(file: File): String {
+        val md = MessageDigest.getInstance("SHA-256")
+        file.inputStream().use { input ->
+            val buf = ByteArray(64 * 1024)
+            var n: Int
+            while (input.read(buf).also { n = it } != -1) {
+                md.update(buf, 0, n)
+            }
+        }
+        return md.digest().joinToString("") { "%02x".format(it) }
+    }
+
+    private fun JSONObject.toMap(): Map<String, Any?> {
+        val map = mutableMapOf<String, Any?>()
+        val keys = keys()
+        while (keys.hasNext()) {
+            val key = keys.next()
+            var value = get(key)
+            if (value is JSONObject) {
+                value = value.toMap()
+            } else if (value is JSONArray) {
+                value = List(value.length()) { idx ->
+                    val v = value.get(idx)
+                    if (v is JSONObject) v.toMap() else v
+                }
+            }
+            map[key] = value
+        }
+        return map
     }
 
     @Before
@@ -77,7 +128,7 @@ class TransferFinalizerTest {
 
     @Test
     fun testSniffMismatch_transitionsToFailed() {
-        // Expected image/jpeg, but file content is plain text / HTML
+        // Expected image/jpeg, but file content is plain text / HTML error page
         val partFile = File(transfersDir, "job2.part").apply {
             writeText("<html><body>Error 404</body></html>")
         }
@@ -122,88 +173,104 @@ class TransferFinalizerTest {
     }
 
     @Test
-    fun testByteForByteConsistencyWithDirectProvenanceEmbedder() {
-        val testJpeg = findTestVector("no-metadata.jpg")
-        val partFile = File(transfersDir, "job_canon.part").apply {
-            writeBytes(testJpeg.readBytes())
-        }
-        val recordMap = mapOf(
-            "schema" to "0.1",
-            "assetId" to "11111111-2222-3333-4444-555555555555",
-            "capturedAt" to "2026-11-24T20:00:00Z",
-            "capturedBy" to "EasySave/1.13.0",
-            "metadataDate" to "2026-11-24T20:00:00Z",
-            "source" to mapOf(
-                "url" to "https://www.tiktok.com/@user/video/12345",
-                "platform" to "tiktok",
-                "id" to "12345"
-            ),
-            "title" to "Test Title"
+    fun testSniffMismatch_heicImageWithJpegExpected_isAcceptedAndSavedAsHeic() {
+        // 模拟小红书：预期 image/jpeg，但 CDN 返回合法 HEIC 图片
+        val heicHeader = byteArrayOf(
+            0, 0, 0, 24, // 24 bytes box size
+            'f'.code.toByte(), 't'.code.toByte(), 'y'.code.toByte(), 'p'.code.toByte(),
+            'm'.code.toByte(), 'i'.code.toByte(), 'f'.code.toByte(), '1'.code.toByte(), // mif1 brand
+            0, 0, 0, 0,
+            'h'.code.toByte(), 'e'.code.toByte(), 'i'.code.toByte(), 'c'.code.toByte(), // heic brand
+            0, 0, 0, 0
         )
-        val job = TransferJob(jobId = "job_canon", totalBytes = testJpeg.length())
+        val partFile = File(transfersDir, "job_heic.part").apply {
+            writeBytes(heicHeader)
+        }
+        val job = TransferJob(jobId = "job_heic", totalBytes = heicHeader.size.toLong())
         store.insertOrReplace(job)
         val meta = TransferMeta(
-            url = "https://example.com/test.jpg",
-            total = testJpeg.length(),
-            mime = "image/jpeg",
-            provenance = recordMap
+            url = "https://sns-img-qc.xhscdn.com/test",
+            total = heicHeader.size.toLong(),
+            mime = "image/jpeg", // 预期是 jpeg
+            provenance = mapOf("assetId" to "test-heic-1", "platform" to "xhs")
         )
 
-        // Direct embed output
-        val directOutput = File(tempDir, "direct_output.jpg")
-        ProvenanceEmbedder.embed(testJpeg, directOutput, ProvenanceRecord.fromMap(recordMap))
-        val directBytes = directOutput.readBytes()
-
-        // Finalizer output
         val outcome = runOnBg { finalizer.execute(job, meta, partFile) }
         assertTrue(outcome is FinalizeOutcome.Success)
         val success = outcome as FinalizeOutcome.Success
-        assertEquals("embedded", success.provenanceStatus)
-        assertEquals(true, success.readbackMatch)
-
+        assertEquals("skipped_unsupported", success.provenanceStatus)
         assertEquals(1, publisher.entries.size)
-        val publishedEntry = publisher.entries.values.first()
-        assertEquals(false, publishedEntry.isPending)
-        assertArrayEquals(directBytes, publishedEntry.data)
+        val published = publisher.entries.values.first()
+        assertEquals(false, published.isPending)
+        assertTrue("DisplayName should end with .heic", published.displayName.endsWith(".heic"))
+        assertArrayEquals(heicHeader, published.data)
     }
 
     @Test
-    fun testKillRecovery_atEmbedded_publishesSingleFile() {
-        val testJpeg = findTestVector("no-metadata.jpg")
-        val partFile = File(transfersDir, "job_rec1.part").apply {
-            writeBytes(testJpeg.readBytes())
-        }
-        val recordMap = mapOf(
-            "schema" to "0.1",
-            "assetId" to "aaaa1111-2222-3333-4444-555555555555",
-            "capturedAt" to "2026-11-24T20:00:00Z",
-            "capturedBy" to "EasySave/1.13.0",
-            "metadataDate" to "2026-11-24T20:00:00Z",
-            "source" to mapOf(
-                "url" to "https://www.tiktok.com/@user/video/111",
-                "platform" to "tiktok",
-                "id" to "111"
+    fun test12GoldenSamplesConsistencyWithFakeMediaPublisher() {
+        val goldenRoot = findGoldenRoot()
+        assertTrue("Golden root must exist at ${goldenRoot.absolutePath}", goldenRoot.exists())
+        val subdirs = goldenRoot.listFiles()?.filter { it.isDirectory }?.sortedBy { it.name } ?: emptyList()
+        assertTrue("Must have at least 12 golden samples", subdirs.size >= 12)
+
+        for (dir in subdirs) {
+            val inputFile = dir.listFiles()?.firstOrNull { it.name.startsWith("input.") }
+                ?: error("Missing input file in ${dir.name}")
+            val goldenOutputFile = dir.listFiles()?.firstOrNull { it.name.startsWith("golden_output.") }
+                ?: error("Missing golden output file in ${dir.name}")
+            val jsonFile = File(dir, "provenance.json")
+            assertTrue("Missing provenance.json in ${dir.name}", jsonFile.exists())
+
+            val recordMap = JSONObject(jsonFile.readText()).toMap()
+            val goldenSha = sha256(goldenOutputFile)
+
+            // Setup fresh publisher and part file for this sample
+            val samplePublisher = FakeMediaPublisher()
+            val sampleFinalizer = TransferFinalizer(transfersDir, store, samplePublisher)
+
+            val partFile = File(transfersDir, "sample_${dir.name}.part").apply {
+                writeBytes(inputFile.readBytes())
+            }
+
+            val mime = when (inputFile.extension.lowercase()) {
+                "jpg", "jpeg" -> "image/jpeg"
+                "png" -> "image/png"
+                "webp" -> "image/webp"
+                "mp4", "mov" -> "video/mp4"
+                else -> "image/jpeg"
+            }
+
+            val job = TransferJob(
+                jobId = "sample_${dir.name}",
+                totalBytes = inputFile.length()
             )
-        )
-        val job = TransferJob(
-            jobId = "job_rec1",
-            totalBytes = testJpeg.length(),
-            finalizeStep = "embedded",
-            provenanceStatus = "embedded"
-        )
-        store.insertOrReplace(job)
-        val meta = TransferMeta(url = "https://example.com/1.jpg", total = testJpeg.length(), mime = "image/jpeg", provenance = recordMap)
+            store.insertOrReplace(job)
+            val meta = TransferMeta(
+                url = "https://example.com/${inputFile.name}",
+                total = inputFile.length(),
+                mime = mime,
+                provenance = recordMap
+            )
 
-        // Pre-create .final as if embed finished before kill
-        val finalFile = File(transfersDir, "job_rec1.final")
-        ProvenanceEmbedder.embed(testJpeg, finalFile, ProvenanceRecord.fromMap(recordMap))
+            val outcome = runOnBg { sampleFinalizer.execute(job, meta, partFile) }
+            assertTrue("Finalizer outcome must be success for ${dir.name}", outcome is FinalizeOutcome.Success)
+            val success = outcome as FinalizeOutcome.Success
+            assertEquals("embedded", success.provenanceStatus)
+            assertEquals("Readback must match for ${dir.name}", true, success.readbackMatch)
 
-        val outcome = runOnBg { finalizer.execute(job, meta, partFile) }
-        assertTrue(outcome is FinalizeOutcome.Success)
-        assertEquals(1, publisher.entries.size)
-        val entry = publisher.entries.values.first()
-        assertEquals(false, entry.isPending)
-        assertNotNull(entry.data)
+            // 检查字节级与 Golden 严格一致
+            assertEquals("Must have 1 published entry for ${dir.name}", 1, samplePublisher.entries.size)
+            val published = samplePublisher.entries.values.first()
+            assertEquals(false, published.isPending)
+            assertNotNull(published.data)
+            val publishedSha = sha256(published.data!!)
+            assertEquals("Byte-for-byte SHA-256 match for ${dir.name}", goldenSha, publishedSha)
+
+            // 检查 bytesRead, bytesWritten, readbackBytes
+            assertEquals(inputFile.length(), success.bytesRead)
+            assertEquals(goldenOutputFile.length(), success.bytesWritten)
+            assertTrue("Readback bytes must be > 0 and in KB level", success.readbackBytes in 1..65536)
+        }
     }
 
     @Test
@@ -324,4 +391,3 @@ class TransferFinalizerTest {
         assertTrue(caught!!.message!!.contains("background thread"))
     }
 }
-

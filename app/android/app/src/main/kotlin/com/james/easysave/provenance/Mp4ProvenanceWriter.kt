@@ -2,6 +2,7 @@ package com.james.easysave.provenance
 
 import java.io.File
 import java.io.RandomAccessFile
+import java.io.OutputStream
 import java.nio.charset.StandardCharsets
 
 /**
@@ -39,15 +40,15 @@ object Mp4ProvenanceWriter {
             get() = type == "uuid" && uuid != null && uuid.contentEquals(MP4_XMP_UUID)
     }
 
-    fun scanBoxes(file: RandomAccessFile): List<Mp4Box> {
-        val length = file.length()
+    fun scanBoxes(input: SeekableInput): List<Mp4Box> {
+        val length = input.length
         val boxes = mutableListOf<Mp4Box>()
         var offset = 0L
         val head = ByteArray(32)
 
         while (offset + 8 <= length) {
-            file.seek(offset)
-            val read = file.read(head, 0, 32)
+            input.seek(offset)
+            val read = input.read(head, 0, 32)
             if (read < 8) break
 
             val size = ((head[0].toInt() and 0xFF).toLong() shl 24) or
@@ -66,9 +67,9 @@ object Mp4ProvenanceWriter {
                 val largeSize = if (read >= 16) {
                     readU64(head, 8)
                 } else {
-                    file.seek(offset + 8)
+                    input.seek(offset + 8)
                     val ext = ByteArray(8)
-                    file.readFully(ext)
+                    input.readFully(ext)
                     readU64(ext, 0)
                 }
                 if (largeSize < 16L) break
@@ -95,8 +96,8 @@ object Mp4ProvenanceWriter {
                 if (read >= headerSize + 16) {
                     System.arraycopy(head, headerSize, uuid, 0, 16)
                 } else {
-                    file.seek(dataStart)
-                    file.readFully(uuid)
+                    input.seek(dataStart)
+                    input.readFully(uuid)
                 }
             }
 
@@ -119,6 +120,8 @@ object Mp4ProvenanceWriter {
         }
         return boxes
     }
+
+    fun scanBoxes(file: RandomAccessFile): List<Mp4Box> = scanBoxes(RafSeekableInput(file))
 
     private fun readU64(b: ByteArray, offset: Int): Long {
         return (((b[offset].toInt() and 0xFF).toLong() shl 56) or
@@ -158,7 +161,7 @@ object Mp4ProvenanceWriter {
         }
     }
 
-    fun embed(input: File, output: File, record: ProvenanceRecord) {
+    fun embedToStream(input: File, outputStream: OutputStream, record: ProvenanceRecord): StreamingFileRewriter.WriteResult {
         val inRaf = RandomAccessFile(input, "r")
         val length = inRaf.length()
         val boxes: List<Mp4Box>
@@ -176,10 +179,6 @@ object Mp4ProvenanceWriter {
                     oldXmpBoxes.add(box)
                     val xmpLen = (box.dataStop - box.dataStart).toInt()
                     if (xmpLen in 1..MAX_MP4_XMP_BYTES) {
-                        // 注意：box.dataStart 位于 8/16 字节 box header 之后，尚未跳过 16 字节 MP4 XMP UUID。
-                        // provenance_dart 当前同样从 dataStart 读取并做 UTF-8 allowMalformed 解码，
-                        // 导致 golden mp4_2_xmp_uuid 输出中带有前导 U+FFFD 替换字符。
-                        // 在 provenance_dart 修复前，Kotlin 刻意保持该行为以确保与当前 golden 逐字节一致。
                         inRaf.seek(box.dataStart)
                         val xmpBytes = ByteArray(xmpLen)
                         inRaf.readFully(xmpBytes)
@@ -235,11 +234,14 @@ object Mp4ProvenanceWriter {
         }
         regions.add(StreamingFileRewriter.ReplacementRegion(appendAt, length, newBoxBytes))
 
-        StreamingFileRewriter.rewrite(
+        return StreamingFileRewriter.rewriteToStream(
             input = input,
-            output = output,
+            outStream = outputStream,
             regions = regions
         )
     }
-}
 
+    fun embed(input: File, output: File, record: ProvenanceRecord) {
+        output.outputStream().use { embedToStream(input, it, record) }
+    }
+}

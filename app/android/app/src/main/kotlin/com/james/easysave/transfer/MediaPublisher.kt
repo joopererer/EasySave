@@ -1,7 +1,12 @@
 package com.james.easysave.transfer
 
+import com.james.easysave.provenance.ByteArraySeekableInput
+import com.james.easysave.provenance.SeekableInput
+import java.io.ByteArrayInputStream
+import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.InputStream
+import java.io.OutputStream
 
 data class PublishedHandle(
     val mediaId: String,
@@ -38,12 +43,17 @@ interface MediaPublisher {
     ): PublishedHandle
 
     /**
-     * Copies sourceFile content into the pending entry while computing MD5 in a single stream pass,
-     * then publishes the entry by setting IS_PENDING = 0.
+     * Opens an OutputStream to the pending entry to write content.
      */
-    fun copyAndPublish(
+    fun openOutputStream(handle: PublishedHandle): OutputStream
+
+    /**
+     * Publishes the pending entry (sets IS_PENDING = 0) and returns PublishedMedia.
+     */
+    fun publish(
         handle: PublishedHandle,
-        sourceFile: File,
+        md5: String,
+        size: Long,
         mime: String,
     ): PublishedMedia
 
@@ -53,7 +63,12 @@ interface MediaPublisher {
     fun deletePending(mediaId: String)
 
     /**
-     * Opens an InputStream to the published media entry for readback verification.
+     * Opens a seekable input to the published media entry for readback verification.
+     */
+    fun openSeekableInput(mediaId: String): SeekableInput
+
+    /**
+     * Opens an InputStream to the published media entry.
      */
     fun openInputStream(mediaId: String): InputStream
 }
@@ -72,21 +87,25 @@ open class NoOpMediaPublisher : MediaPublisher {
         relativePath = relativePath,
     )
 
-    override fun copyAndPublish(
+    override fun openOutputStream(handle: PublishedHandle): OutputStream = ByteArrayOutputStream()
+
+    override fun publish(
         handle: PublishedHandle,
-        sourceFile: File,
+        md5: String,
+        size: Long,
         mime: String,
     ): PublishedMedia = PublishedMedia(
         mediaId = handle.mediaId,
         title = handle.displayName,
         relativePath = handle.relativePath,
-        md5 = "00000000000000000000000000000000",
-        size = if (sourceFile.exists()) sourceFile.length() else 0L,
+        md5 = md5,
+        size = size,
         thread = "bg",
     )
 
     override fun deletePending(mediaId: String) {}
 
-    override fun openInputStream(mediaId: String): InputStream = java.io.ByteArrayInputStream(ByteArray(0))
-}
+    override fun openSeekableInput(mediaId: String): SeekableInput = ByteArraySeekableInput(ByteArray(0))
 
+    override fun openInputStream(mediaId: String): InputStream = ByteArrayInputStream(ByteArray(0))
+}

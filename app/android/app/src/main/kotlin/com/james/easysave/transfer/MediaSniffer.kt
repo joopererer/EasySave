@@ -109,15 +109,14 @@ object MediaSniffer {
         val act = sniffedMime.lowercase().trim()
         if (exp == act) return true
 
-        if (exp == "video/mp4" && act == "video/quicktime") return true
-        if (exp == "video/quicktime" && act == "video/mp4") return true
-        if (exp == "image/heic" && act == "image/heif") return true
-        if (exp == "image/heif" && act == "image/heic") return true
+        val expIsImage = exp.startsWith("image/")
+        val actIsImage = MediaImportPolicy.isImage(act)
+        val expIsVideo = exp.startsWith("video/")
+        val actIsVideo = !actIsImage && (act == "video/mp4" || act == "video/quicktime")
 
-        if (exp == "image/*" && act.startsWith("image/")) return true
-        if (exp == "video/*" && act.startsWith("video/")) return true
+        if (expIsImage && actIsImage) return true
+        if (expIsVideo && actIsVideo) return true
 
         return false
     }
 }
-
