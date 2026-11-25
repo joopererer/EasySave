@@ -10,6 +10,7 @@ import '../core/dev_log.dart';
 import '../core/models.dart';
 import '../metadata/url_normalizer.dart' show sameCanonicalUrl;
 import 'clipboard_guard.dart';
+import 'media_header_service.dart';
 import 'site_registry.dart';
 
 enum FileStatus {
@@ -1873,6 +1874,83 @@ class HistoryDb {
       conflictAlgorithm: ConflictAlgorithm.replace,
     );
     notifyChanged('reinsert ($reason) post=${record.postId} id=$id');
+  }
+
+  /// Repairs existing new-pipeline history file rows that have a [mediaId]
+  /// but are missing [relativePath], [filename], or [size]. Only fills empty
+  /// fields; leaves all other fields untouched.
+  Future<int> repairIncompleteTransferRows({
+    Future<({String? filename, String? relativePath, int? size})?> Function(
+      String mediaId,
+    )? lookup,
+  }) async {
+    final rows = await _db.query(
+      'history_records',
+      where: 'is_deleted = 0',
+    );
+    var repairedCount = 0;
+    for (final raw in rows) {
+      final record = HistoryRecord.fromMap(raw);
+      var recordChanged = false;
+      final updatedFiles = <HistoryFile>[];
+      for (final file in record.files) {
+        final mediaId = file.mediaId;
+        final needsRel = file.relativePath == null || file.relativePath!.isEmpty;
+        final needsName = file.filename.isEmpty;
+        final needsSize = file.size == null || file.size == 0;
+        if (file.status == FileStatus.found &&
+            mediaId != null &&
+            mediaId.isNotEmpty &&
+            (needsRel || needsName || needsSize)) {
+          ({String? filename, String? relativePath, int? size})? info;
+          if (lookup != null) {
+            info = await lookup(mediaId);
+          } else {
+            final albumInfo = await MediaHeaderService.queryAlbum(mediaId);
+            if (albumInfo != null) {
+              info = (
+                filename: null,
+                relativePath: albumInfo.relativePath,
+                size: null,
+              );
+            }
+          }
+          if (info != null) {
+            final newName = needsName && (info.filename?.isNotEmpty == true)
+                ? info.filename!
+                : file.filename;
+            final newRel = needsRel && (info.relativePath?.isNotEmpty == true)
+                ? info.relativePath
+                : file.relativePath;
+            final newSize = needsSize && (info.size != null && info.size! > 0)
+                ? info.size
+                : file.size;
+            if (newName != file.filename ||
+                newRel != file.relativePath ||
+                newSize != file.size) {
+              updatedFiles.add(
+                file.copyWith(
+                  filename: newName,
+                  relativePath: newRel,
+                  size: newSize,
+                ),
+              );
+              repairedCount++;
+              recordChanged = true;
+              continue;
+            }
+          }
+        }
+        updatedFiles.add(file);
+      }
+      if (recordChanged && record.id != null) {
+        await updateFiles(record.id!, updatedFiles);
+      }
+    }
+    if (repairedCount > 0) {
+      DevLog.write('HIST', 'transfer_row_repaired count=$repairedCount');
+    }
+    return repairedCount;
   }
 }
 
