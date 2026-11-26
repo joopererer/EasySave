@@ -40,6 +40,16 @@ class TransferStoreAndCookieTest {
     }
 
     @Test
+    fun testClaimMigration_atomicAndReleasesAfterTimeout() {
+        val batchId = "legacy-batch-1"
+        val t0 = 2_000_000L
+
+        assertTrue(store.claimMigration(batchId, nowMs = t0, timeoutMs = 60_000L))
+        assertFalse(store.claimMigration(batchId, nowMs = t0 + 30_000L, timeoutMs = 60_000L))
+        assertTrue(store.claimMigration(batchId, nowMs = t0 + 60_000L, timeoutMs = 60_000L))
+    }
+
+    @Test
     fun testTransferStoreJobDoesNotStoreCookie() {
         val secretCookie = "sessionid=super_secret_cookie_xyz_999"
         val job = TransferJob(

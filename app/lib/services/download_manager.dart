@@ -1738,9 +1738,17 @@ class DownloadManager extends ChangeNotifier {
     notifyListeners();
   }
 
+  @visibleForTesting
+  void resetReadyForTesting() {
+    _ready = false;
+  }
+
   Future<void> init() async {
     if (_ready) return;
     _ready = true;
+    // P0-5b: Migrate unsettled legacy batches BEFORE FileDownloader().start()
+    // so background_downloader/WorkManager cannot restart old tasks from 0.
+    await _migrateAllLegacyBatchesEarly();
     if (downloaderStartForTesting != null) {
       await downloaderStartForTesting!();
     } else {
@@ -7389,7 +7397,10 @@ class DownloadManager extends ChangeNotifier {
   }
 
   @visibleForTesting
-  Future<void> reconcileForTesting() => _loadAndReconcile();
+  Future<void> reconcileForTesting() async {
+    await _migrateAllLegacyBatchesEarly();
+    await _loadAndReconcile();
+  }
 
   Future<void> _loadAndReconcile() async {
     try {
@@ -7405,11 +7416,6 @@ class DownloadManager extends ChangeNotifier {
         final batch = DownloadBatch.fromJson(
           (jsonDecode(raw) as Map).cast<String, Object?>(),
         );
-        if (!batch.usesNewTransferPipeline) {
-          if (await _migrateLegacyBatchIfNeeded(batch, prefs)) {
-            changed = true;
-          }
-        }
         // Rule 6: transfer-pipeline batches have no engine ownership, adopt,
         // or foreign-skip logic. Every live engine loads and displays them;
         // single history write is guaranteed by claimHistoryWrite.
@@ -7779,6 +7785,42 @@ class DownloadManager extends ChangeNotifier {
     return settings.useNewTransferPipeline;
   }
 
+  Future<void> _migrateAllLegacyBatchesEarly() async {
+    try {
+      if (!await _isNewTransferPipelineEnabled()) return;
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.reload();
+      final index = prefs.getStringList(_batchIndexKey) ?? const <String>[];
+      for (final batchId in index) {
+        if (prefs.getBool('$_dismissedPrefix$batchId') == true) continue;
+        final raw = prefs.getString(_batchKey(batchId));
+        if (raw == null) continue;
+        DownloadBatch batch;
+        try {
+          batch = DownloadBatch.fromJson(
+            (jsonDecode(raw) as Map).cast<String, Object?>(),
+          );
+        } catch (_) {
+          continue;
+        }
+        if (batch.usesNewTransferPipeline) continue;
+        if (batch.historyWritten ||
+            batch.settledBy != null ||
+            batch.cancelledByDeletion) {
+          continue;
+        }
+        if (batch.jobs.every((j) => j.isTerminal)) continue;
+
+        final claimed = await _transferClient.claimMigration(batch.batchId);
+        if (!claimed) continue;
+
+        await _migrateLegacyBatchIfNeeded(batch, prefs);
+      }
+    } catch (_) {
+      // Best effort: never block startup.
+    }
+  }
+
   Future<bool> _migrateLegacyBatchIfNeeded(
     DownloadBatch batch,
     SharedPreferences prefs,
@@ -7814,12 +7856,39 @@ class DownloadManager extends ChangeNotifier {
       return false;
     }
 
+    // P0-5b: Cancel ALL legacy plugin tasks for this batch (including queued
+    // WorkManager tasks) BEFORE reading ResumeData and temp file lengths.
+    final allBatchLegacyIds = <String>{};
+    for (final job in unfinished) {
+      if (job.currentTaskId != null && job.currentTaskId!.isNotEmpty) {
+        allBatchLegacyIds.add(job.currentTaskId!);
+      }
+      allBatchLegacyIds.addAll(job.previousTaskIds.where((id) => id.isNotEmpty));
+      allBatchLegacyIds.add(job.key);
+    }
+    try {
+      final records = allRecordsForTesting != null
+          ? await allRecordsForTesting!(batch.batchId)
+          : await FileDownloader().database.allRecords(group: batch.batchId);
+      for (final r in records) {
+        if (r.taskId.isNotEmpty) allBatchLegacyIds.add(r.taskId);
+      }
+    } catch (_) {}
+    if (allBatchLegacyIds.isNotEmpty) {
+      await _cancelTasksWithIds(
+        allBatchLegacyIds.toList(),
+        batch: batch,
+        source: 'legacy_migration',
+      );
+    }
+
     final transfersDir = await _transfersDir();
     var resumed = 0;
     var fromZero = 0;
     var bytesMoved = 0;
+    var partBytesTotal = 0;
     var migratedJobs = 0;
-    final legacyIdsToClean = <String>[];
+    final legacyIdsToClean = <String>[...allBatchLegacyIds];
     final stagedMoves = <({
       DownloadJob job,
       String transferJobId,
@@ -7838,19 +7907,15 @@ class DownloadManager extends ChangeNotifier {
         ...job.previousTaskIds.where((id) => id.isNotEmpty),
         job.key,
       }.toList();
-      legacyIdsToClean.addAll(legacyIds);
-
-      // Cancel legacy plugin tasks through the unique gate first.
-      for (final id in legacyIds) {
-        await _cancelTaskWithId(id, batch: batch, source: 'legacy_migration');
-      }
 
       // Locate temp file from plugin ResumeData.
       String? tempPath;
+      var expectedStartByte = 0;
       for (final id in legacyIds) {
         final rd = await _getResumeData(id);
         if (rd != null && rd.data.isNotEmpty) {
           tempPath = rd.data;
+          expectedStartByte = rd.requiredStartByte;
           break;
         }
       }
@@ -7863,10 +7928,17 @@ class DownloadManager extends ChangeNotifier {
           final srcFile = File(tempPath);
           if (await srcFile.exists()) {
             final len = await srcFile.length();
+            if (expectedStartByte > 0 && len < expectedStartByte) {
+              await DevLog.write(
+                'V16DL',
+                'legacy_restart_before_migration expected=$expectedStartByte actual=$len',
+              );
+            }
             if (len > 0) {
               await _moveFileToPart(srcFile, partFile);
               final movedLen = await partFile.length();
               bytesMoved += movedLen;
+              partBytesTotal += movedLen;
               initialBytes = movedLen;
               resumed++;
             } else {
@@ -7875,12 +7947,14 @@ class DownloadManager extends ChangeNotifier {
           } else if (await partFile.exists() && await partFile.length() > 0) {
             // Killed mid-migration after moving temp file to .part: reuse .part.
             initialBytes = await partFile.length();
+            partBytesTotal += initialBytes;
             resumed++;
           } else {
             fromZero++;
           }
         } else if (await partFile.exists() && await partFile.length() > 0) {
           initialBytes = await partFile.length();
+          partBytesTotal += initialBytes;
           resumed++;
         } else {
           fromZero++;
@@ -7890,7 +7964,7 @@ class DownloadManager extends ChangeNotifier {
         await DevLog.write(
           'V16DL',
           'legacy_migrated batch=${batch.batchId} jobs=0 resumed=0 '
-              'from_zero=0 kept_legacy=${unfinished.length} bytes_moved=0',
+              'from_zero=0 kept_legacy=${unfinished.length} bytes_moved=0 part_bytes=0',
         );
         return false;
       }
@@ -7928,7 +8002,7 @@ class DownloadManager extends ChangeNotifier {
       await DevLog.write(
         'V16DL',
         'legacy_migrated batch=${batch.batchId} jobs=0 resumed=0 '
-            'from_zero=0 kept_legacy=${unfinished.length} bytes_moved=$bytesMoved',
+            'from_zero=0 kept_legacy=${unfinished.length} bytes_moved=$bytesMoved part_bytes=$partBytesTotal',
       );
       return false;
     }
@@ -7962,7 +8036,7 @@ class DownloadManager extends ChangeNotifier {
       'V16DL',
       'legacy_migrated batch=${batch.batchId} jobs=$migratedJobs '
           'resumed=$resumed from_zero=$fromZero kept_legacy=0 '
-          'bytes_moved=$bytesMoved',
+          'bytes_moved=$bytesMoved part_bytes=$partBytesTotal',
     );
     return true;
   }

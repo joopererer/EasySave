@@ -337,6 +337,17 @@ class TransferClient {
     }
   }
 
+  Future<bool> claimMigration(String batchId) async {
+    try {
+      final res = await _methodChannel.invokeMethod<bool>('claimMigration', {
+        'batchId': batchId,
+      });
+      return res ?? true;
+    } catch (_) {
+      return true;
+    }
+  }
+
   Future<bool> ackHistoryWritten(List<String> jobIds) async {
     if (jobIds.isEmpty) return true;
     try {

@@ -1151,10 +1151,10 @@ class _MinePageState extends State<MinePage> with WidgetsBindingObserver {
                     subtitle: const Text(
                       '主界面与悬浮球下载默认由后台 TransferService 驱动，开启则回退旧链路',
                     ),
-                    value: !_settings.useNewTransferPipeline,
+                    value: _settings.useLegacyPipeline,
                     onChanged: (useLegacy) async {
                       setState(
-                        () => _settings.useNewTransferPipeline = !useLegacy,
+                        () => _settings.useLegacyPipeline = useLegacy,
                       );
                       await _saveSettings();
                     },

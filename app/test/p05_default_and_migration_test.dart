@@ -21,7 +21,9 @@ class _FakeTransferClient extends TransferClient {
       StreamController<TransferEvent>.broadcast();
   final List<Map<String, dynamic>> enqueued = [];
   final Set<String> activeJobIds = {};
+  final Set<String> claimedMigrations = {};
   final List<List<String>> ackedHistory = [];
+  void Function(String method, String? id)? onAction;
 
   @override
   Stream<TransferEvent> get events => controller.stream;
@@ -48,6 +50,7 @@ class _FakeTransferClient extends TransferClient {
     if (!activeJobIds.add(id)) {
       return id;
     }
+    onAction?.call('enqueue', id);
     enqueued.add({
       'jobId': id,
       'direction': direction,
@@ -65,6 +68,12 @@ class _FakeTransferClient extends TransferClient {
 
   @override
   Future<bool> claimHistoryWrite(String batchId) async => true;
+
+  @override
+  Future<bool> claimMigration(String batchId) async {
+    onAction?.call('claimMigration', batchId);
+    return claimedMigrations.add(batchId);
+  }
 
   @override
   Future<bool> ackHistoryWritten(List<String> jobIds) async {
@@ -212,21 +221,30 @@ void main() {
 
   group('Default pipeline setting', () {
     test(
-      'defaults to true on fresh install and upgrade, preserves explicit false',
+      'defaults to new pipeline, ignores and removes legacy useNewTransferPipeline=false, respects useLegacyPipeline=true',
       () async {
         SharedPreferences.setMockInitialValues({});
         final fresh = await AppSettings.load();
+        expect(fresh.useLegacyPipeline, isFalse);
         expect(fresh.useNewTransferPipeline, isTrue);
 
-        SharedPreferences.setMockInitialValues({'albumName': 'EasySave'});
-        final upgraded = await AppSettings.load();
-        expect(upgraded.useNewTransferPipeline, isTrue);
-
+        // Upgrading from dev14 where useNewTransferPipeline=false was recorded:
+        // must NOT inherit false, must remove old key, and must use new pipeline.
         SharedPreferences.setMockInitialValues({
+          'albumName': 'EasySave',
           'useNewTransferPipeline': false,
         });
-        final explicitOff = await AppSettings.load();
-        expect(explicitOff.useNewTransferPipeline, isFalse);
+        final upgraded = await AppSettings.load();
+        expect(upgraded.useLegacyPipeline, isFalse);
+        expect(upgraded.useNewTransferPipeline, isTrue);
+        final prefs = await SharedPreferences.getInstance();
+        expect(prefs.containsKey('useNewTransferPipeline'), isFalse);
+
+        // Only explicit useLegacyPipeline=true in v1.13 falls back to legacy.
+        SharedPreferences.setMockInitialValues({'useLegacyPipeline': true});
+        final explicitLegacy = await AppSettings.load();
+        expect(explicitLegacy.useLegacyPipeline, isTrue);
+        expect(explicitLegacy.useNewTransferPipeline, isFalse);
       },
     );
   });
@@ -499,8 +517,123 @@ void main() {
               l.contains('[V16DL]') &&
               l.contains(
                 'legacy_migrated batch=b_move_fail jobs=0 '
-                'resumed=0 from_zero=0 kept_legacy=1 bytes_moved=0',
+                'resumed=0 from_zero=0 kept_legacy=1 bytes_moved=0 part_bytes=0',
               ),
+        ),
+        isTrue,
+      );
+    });
+
+    test('migrates background/bubble-owned legacy batch from main engine', () async {
+      DownloadManager.owner = DownloadBatch.sourceMain;
+      final legacyTemp = File('${tempDir.path}/bubble_tmp.part');
+      await legacyTemp.writeAsBytes(List<int>.filled(8192, 9));
+      resumeStore['task_legacy_0'] = ResumeData(
+        DownloadTask(
+          taskId: 'task_legacy_0',
+          url: 'https://sns-video-bd.xhscdn.com/v1.mp4',
+          filename: 'post123_1.mp4',
+        ),
+        legacyTemp.path,
+        8192,
+      );
+
+      final batch = makeLegacyBatch(
+        batchId: 'b_bubble_foreign',
+        source: DownloadBatch.sourceBackground,
+      );
+      await seedLegacyBatch(batch);
+
+      await DownloadManager.instance.reconcileForTesting();
+
+      expect(canceledTaskIds, contains('task_legacy_0'));
+      expect(fakeClient.enqueued.length, 1);
+      expect(fakeClient.enqueued.first['batchId'], 'b_bubble_foreign');
+      expect(
+        DevLog.recentLines(200).any(
+          (l) => l.contains('legacy_migrated batch=b_bubble_foreign') &&
+              l.contains('part_bytes=8192'),
+        ),
+        isTrue,
+      );
+    });
+
+    test('two engines starting concurrently migrate each batch only once via claimMigration', () async {
+      final batch = makeLegacyBatch(
+        batchId: 'b_concurrent',
+        source: DownloadBatch.sourceBackground,
+      );
+      await seedLegacyBatch(batch);
+
+      await Future.wait([
+        DownloadManager.instance.reconcileForTesting(),
+        DownloadManager.instance.reconcileForTesting(),
+      ]);
+
+      expect(fakeClient.enqueued.length, 1);
+      expect(
+        DevLog.recentLines(200)
+            .where((l) => l.contains('legacy_migrated batch=b_concurrent'))
+            .length,
+        1,
+      );
+    });
+
+    test('runs migration before FileDownloader().start() and logs truncated restart', () async {
+      final callOrder = <String>[];
+      final dm = DownloadManager.instance;
+      dm.resetReadyForTesting();
+      dm.downloaderStartForTesting = () async {
+        callOrder.add('downloader_start');
+      };
+      dm.cancelTaskForTesting = (taskId) async {
+        canceledTaskIds.add(taskId);
+        callOrder.add('cancel:$taskId');
+      };
+      fakeClient.onAction = (method, id) {
+        if (method == 'enqueue') callOrder.add('enqueue:$id');
+      };
+      addTearDown(() {
+        dm.downloaderStartForTesting = null;
+        dm.resetReadyForTesting();
+      });
+
+      final legacyTemp = File('${tempDir.path}/restarted_tmp.part');
+      // Plugin already restarted & truncated to 1024 while ResumeData expected 16384.
+      await legacyTemp.writeAsBytes(List<int>.filled(1024, 5));
+      resumeStore['task_legacy_0'] = ResumeData(
+        DownloadTask(
+          taskId: 'task_legacy_0',
+          url: 'https://sns-video-bd.xhscdn.com/v1.mp4',
+          filename: 'post123_1.mp4',
+        ),
+        legacyTemp.path,
+        16384,
+      );
+
+      final batch = makeLegacyBatch(batchId: 'b_order');
+      await seedLegacyBatch(batch);
+
+      await dm.init();
+
+      final startIdx = callOrder.indexOf('downloader_start');
+      final cancelIdx = callOrder.indexOf('cancel:task_legacy_0');
+      final enqueueIdx = callOrder.indexOf('enqueue:xfer_b_order-0_c1');
+      expect(startIdx, greaterThan(0));
+      expect(cancelIdx, lessThan(startIdx));
+      expect(enqueueIdx, lessThan(startIdx));
+      expect(cancelIdx, lessThan(enqueueIdx));
+
+      expect(
+        DevLog.recentLines(200).any(
+          (l) => l.contains('legacy_restart_before_migration expected=16384 actual=1024'),
+        ),
+        isTrue,
+      );
+      expect(
+        DevLog.recentLines(200).any(
+          (l) => l.contains('legacy_migrated batch=b_order') &&
+              l.contains('part_bytes=1024'),
         ),
         isTrue,
       );

@@ -327,6 +327,7 @@ class TransferStore(context: Context, dbName: String = DB_NAME) :
     }
 
     private val historyClaims = mutableMapOf<String, Long>()
+    private val migrationClaims = mutableMapOf<String, Long>()
 
     @Synchronized
     fun claimHistoryWrite(
@@ -339,6 +340,20 @@ class TransferStore(context: Context, dbName: String = DB_NAME) :
             return false
         }
         historyClaims[batchId] = nowMs
+        return true
+    }
+
+    @Synchronized
+    fun claimMigration(
+        batchId: String,
+        nowMs: Long = System.currentTimeMillis(),
+        timeoutMs: Long = 60_000L,
+    ): Boolean {
+        val claimedAt = migrationClaims[batchId]
+        if (claimedAt != null && (nowMs - claimedAt) < timeoutMs) {
+            return false
+        }
+        migrationClaims[batchId] = nowMs
         return true
     }
 

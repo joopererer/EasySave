@@ -265,6 +265,16 @@ object TransferChannels {
                 val claimed = scheduler.store.claimHistoryWrite(batchId)
                 result.success(claimed)
             }
+            "claimMigration" -> {
+                val args = call.arguments as? Map<*, *> ?: emptyMap<String, Any?>()
+                val batchId = args["batchId"] as? String
+                if (batchId.isNullOrBlank()) {
+                    result.success(false)
+                    return
+                }
+                val claimed = scheduler.store.claimMigration(batchId)
+                result.success(claimed)
+            }
             "ackHistoryWritten" -> {
                 val args = call.arguments as? Map<*, *> ?: emptyMap<String, Any?>()
                 val jobIds = (args["jobIds"] as? List<*>)?.mapNotNull { it as? String } ?: emptyList()
