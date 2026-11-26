@@ -49,6 +49,7 @@ class _P04cFakeTransferClient extends TransferClient {
     String? mime,
     String? policyKey,
     Map<String, dynamic>? provenance,
+    int? batchTotalCount,
   }) async {
     return jobId ?? '';
   }
@@ -432,9 +433,9 @@ void main() {
         jobs: [j1, j2],
       );
 
-      // Byte-weighted: (1000 + 1000) / (1000 + 9000) = 20%
+      // Unified overall progress: (1 + 1000 / 9000) / 2 = 55.56% -> 56%
       final batchStatus = resolveDownloadStatus(batch: batch);
-      expect(batchStatus.label, '下载中 20%');
+      expect(batchStatus.label, '下载中 56%');
       final jobStatus = resolveDownloadStatus(job: j2);
       expect(jobStatus.label, '下载中 11%');
     });

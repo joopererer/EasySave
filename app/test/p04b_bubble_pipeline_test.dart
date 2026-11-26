@@ -43,6 +43,7 @@ class _BubbleFakeTransferClient extends TransferClient {
     String? mime,
     String? policyKey,
     Map<String, dynamic>? provenance,
+    int? batchTotalCount,
   }) async {
     enqueued.add({
       'jobId': jobId,

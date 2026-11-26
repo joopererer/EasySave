@@ -66,6 +66,7 @@ object TransferChannels {
                 val batchId = args["batchId"] as? String
                 val pairId = args["pairId"] as? String
                 val fakePlan = args["fakePlan"] as? String
+                val batchTotalCount = (args["batchTotalCount"] as? Number)?.toInt() ?: 0
 
                 if (batchId == "self_check_batch") {
                     MainThreadLagMonitor.start(channelScope)
@@ -77,7 +78,8 @@ object TransferChannels {
                     category = category,
                     batchId = batchId,
                     pairId = pairId,
-                    fakePlan = fakePlan
+                    fakePlan = fakePlan,
+                    batchTotalCount = batchTotalCount,
                 )
 
                 val url = args["url"] as? String

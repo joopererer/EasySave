@@ -23,6 +23,7 @@ class TransferJobSnapshot {
     this.fileSize = 0,
     this.provenanceStatus,
     this.historyPending = false,
+    this.batchTotalCount = 0,
   });
 
   factory TransferJobSnapshot.fromMap(Map<dynamic, dynamic> map) {
@@ -46,6 +47,7 @@ class TransferJobSnapshot {
       fileSize: (map['fileSize'] as num?)?.toInt() ?? 0,
       provenanceStatus: map['provenanceStatus'] as String?,
       historyPending: (map['historyPending'] as bool?) ?? false,
+      batchTotalCount: (map['batchTotalCount'] as num?)?.toInt() ?? 0,
     );
   }
 
@@ -68,6 +70,7 @@ class TransferJobSnapshot {
   final int fileSize;
   final String? provenanceStatus;
   final bool historyPending;
+  final int batchTotalCount;
 }
 
 /// 传输事件基类
@@ -203,6 +206,7 @@ class TransferClient {
     String? mime,
     String? policyKey,
     Map<String, dynamic>? provenance,
+    int? batchTotalCount,
   }) async {
     final result = await _methodChannel.invokeMethod<String>('enqueue', {
       if (jobId != null) 'jobId': jobId,
@@ -219,6 +223,8 @@ class TransferClient {
       if (mime != null) 'mime': mime,
       if (policyKey != null) 'policyKey': policyKey,
       if (provenance != null) 'provenance': provenance,
+      if (batchTotalCount != null && batchTotalCount > 0)
+        'batchTotalCount': batchTotalCount,
     });
     return result ?? jobId ?? '';
   }

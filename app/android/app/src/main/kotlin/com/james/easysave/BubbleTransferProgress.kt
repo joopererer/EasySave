@@ -37,10 +37,9 @@ data class BubbleTransferSnapshot(
 }
 
 object BubbleTransferProgress {
-    /** Warm cream yellow adjusted from #FFE8A3 for WCAG contrast on #FC494C-#FA662E. */
-    const val INNER_RING_COLOR: Int = 0xFFFFF4BD.toInt()
-    const val INNER_TRACK_COLOR: Int = 0x55000000
-    const val TEXT_SHADOW_COLOR: Int = 0xCC000000.toInt()
+    /** Pure white inner ring (#FFFFFF) matching the outer ring, over a 24% black track. */
+    const val INNER_RING_COLOR: Int = 0xFFFFFFFF.toInt()
+    const val INNER_TRACK_COLOR: Int = 0x3D000000
 
     private fun isActiveState(state: JobState): Boolean =
         state == JobState.QUEUED ||
@@ -57,6 +56,7 @@ object BubbleTransferProgress {
     fun compute(
         jobs: Collection<TransferJob>,
         trackedBatchId: String? = null,
+        previousOverallProgress: Float = 0f,
     ): Pair<BubbleTransferSnapshot, String?> {
         val downloadJobs = jobs.filter { it.direction == Direction.DOWNLOAD && !it.batchId.isNullOrEmpty() }
         if (downloadJobs.isEmpty()) {
@@ -89,7 +89,8 @@ object BubbleTransferProgress {
             return BubbleTransferSnapshot.IDLE to null
         }
 
-        val totalCount = batchJobs.size
+        val explicitTotal = batchJobs.maxOfOrNull { it.batchTotalCount } ?: 0
+        val totalCount = maxOf(explicitTotal, batchJobs.size)
         val doneCount = batchJobs.count { it.state == JobState.DONE }
         val batchActive = batchJobs.any { isActiveState(it.state) }
 
@@ -110,31 +111,26 @@ object BubbleTransferProgress {
             ) to null
         }
 
-        // Overall progress: byte-weighted across jobs with known total, fallback to count ratio.
-        var sumTotal = 0L
-        var sumRead = 0L
+        // Unified overall progress: (doneCount + sum(inProgressRatio)) / N.
+        // Done = 1.0, not-started = 0.0, unknown-total in-progress = 0.0, monotonic non-decreasing.
+        var inProgressSum = 0.0
         for (j in batchJobs) {
-            val jobTotal = when {
-                j.totalBytes > 0L -> j.totalBytes
-                j.fileSize > 0L -> j.fileSize
-                else -> 0L
-            }
-            if (jobTotal <= 0L) continue
-            sumTotal += jobTotal
-            sumRead += if (j.state == JobState.DONE) {
-                jobTotal
-            } else {
-                j.bytesRead.coerceIn(0L, jobTotal)
+            if (j.state == JobState.DONE) continue
+            if (!isTransferringState(j.state)) continue
+            if (j.totalBytes > 0L) {
+                inProgressSum += (j.bytesRead.toDouble() / j.totalBytes.toDouble()).coerceIn(0.0, 1.0)
             }
         }
-        val overallProgress = if (sumTotal > 0L) {
-            (sumRead.toDouble() / sumTotal.toDouble()).toFloat().coerceIn(0f, 1f)
+        val rawOverall = if (totalCount > 0) {
+            ((doneCount.toDouble() + inProgressSum) / totalCount.toDouble()).toFloat().coerceIn(0f, 1f)
         } else {
-            (doneCount.toFloat() / totalCount.toFloat()).coerceIn(0f, 1f)
+            0f
         }
+        val overallProgress = maxOf(previousOverallProgress.coerceIn(0f, 1f), rawOverall)
 
         if (totalCount <= 1) {
-            val overallPct = if (sumTotal > 0L) {
+            val hasKnownTotal = doneCount > 0 || batchJobs.any { it.totalBytes > 0L || it.fileSize > 0L }
+            val overallPct = if (hasKnownTotal || overallProgress > 0f) {
                 (overallProgress * 100f).roundToInt().coerceIn(0, 100)
             } else {
                 null

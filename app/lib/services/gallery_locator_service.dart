@@ -68,7 +68,9 @@ class GalleryLocatorService extends ChangeNotifier {
 
   bool get isFullyAuthorized => _permission == PermissionState.authorized;
   bool get isLimited => _permission == PermissionState.limited;
-  bool get hasAccess => _permission.hasAccess;
+  @visibleForTesting
+  bool? hasAccessForTesting;
+  bool get hasAccess => hasAccessForTesting ?? _permission.hasAccess;
   bool get isDenied =>
       _permission == PermissionState.denied ||
       _permission == PermissionState.restricted;
@@ -118,11 +120,28 @@ class GalleryLocatorService extends ChangeNotifier {
     return _idMap[mediaId];
   }
 
+  @visibleForTesting
+  Future<AssetEntity?> Function(String mediaId)? assetByIdForTesting;
+
   /// Asynchronously retrieve AssetEntity by mediaId, querying MediaStore if not cached.
   Future<AssetEntity?> getAssetByIdAsync(String? mediaId) async {
     if (mediaId == null || mediaId.isEmpty) return null;
     if (_idMap.containsKey(mediaId)) return _idMap[mediaId];
-    if (!hasAccess) return null;
+    final hook = assetByIdForTesting;
+    if (hook != null) {
+      final asset = await hook(mediaId);
+      if (asset != null) {
+        _idMap[mediaId] = asset;
+        if (asset.title != null && asset.title!.isNotEmpty) {
+          _exactMap[asset.title!.toLowerCase()] = asset;
+        }
+      }
+      return asset;
+    }
+    if (!hasAccess) {
+      await checkPermission();
+      if (!hasAccess) return null;
+    }
     try {
       final asset = await AssetEntity.fromId(mediaId);
       if (asset != null) {
@@ -521,6 +540,8 @@ class GalleryLocatorService extends ChangeNotifier {
   @visibleForTesting
   void resetForTesting() {
     nativeIndexReaderForTesting = null;
+    hasAccessForTesting = null;
+    assetByIdForTesting = null;
     _lookupMethod = 'plugin';
     _nativeIds = null;
     _nativePermission = null;

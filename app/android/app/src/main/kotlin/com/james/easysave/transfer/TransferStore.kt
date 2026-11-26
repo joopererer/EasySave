@@ -26,7 +26,7 @@ class TransferStore(context: Context, dbName: String = DB_NAME) :
 
     companion object {
         const val DB_NAME = "transfer.db"
-        const val DB_VERSION = 4
+        const val DB_VERSION = 5
         const val TABLE_JOBS = "transfer_jobs"
 
         const val COL_JOB_ID = "job_id"
@@ -54,6 +54,7 @@ class TransferStore(context: Context, dbName: String = DB_NAME) :
         const val COL_PROVENANCE_STATUS = "provenance_status"
         const val COL_READBACK_MATCH = "readback_match"
         const val COL_HISTORY_PENDING = "history_pending"
+        const val COL_BATCH_TOTAL_COUNT = "batch_total_count"
     }
 
     override fun onCreate(db: SQLiteDatabase) {
@@ -83,7 +84,8 @@ class TransferStore(context: Context, dbName: String = DB_NAME) :
                 $COL_READBACK_MS INTEGER NOT NULL DEFAULT 0,
                 $COL_PROVENANCE_STATUS TEXT,
                 $COL_READBACK_MATCH INTEGER,
-                $COL_HISTORY_PENDING INTEGER NOT NULL DEFAULT 0
+                $COL_HISTORY_PENDING INTEGER NOT NULL DEFAULT 0,
+                $COL_BATCH_TOTAL_COUNT INTEGER NOT NULL DEFAULT 0
             )
             """.trimIndent()
         )
@@ -110,6 +112,9 @@ class TransferStore(context: Context, dbName: String = DB_NAME) :
         }
         if (oldVersion < 4) {
             db.execSQL("ALTER TABLE $TABLE_JOBS ADD COLUMN $COL_RELATIVE_PATH TEXT")
+        }
+        if (oldVersion < 5) {
+            db.execSQL("ALTER TABLE $TABLE_JOBS ADD COLUMN $COL_BATCH_TOTAL_COUNT INTEGER NOT NULL DEFAULT 0")
         }
     }
 
@@ -140,6 +145,7 @@ class TransferStore(context: Context, dbName: String = DB_NAME) :
             put(COL_PROVENANCE_STATUS, job.provenanceStatus)
             put(COL_READBACK_MATCH, job.readbackMatch?.let { if (it) 1 else 0 })
             put(COL_HISTORY_PENDING, if (job.historyPending) 1 else 0)
+            put(COL_BATCH_TOTAL_COUNT, job.batchTotalCount)
         }
         writableDatabase.insertWithOnConflict(
             TABLE_JOBS,
@@ -452,6 +458,7 @@ class TransferStore(context: Context, dbName: String = DB_NAME) :
             provenanceStatus = optString(COL_PROVENANCE_STATUS),
             readbackMatch = optBoolean(COL_READBACK_MATCH),
             historyPending = optBoolean(COL_HISTORY_PENDING) ?: false,
+            batchTotalCount = optLong(COL_BATCH_TOTAL_COUNT, 0L).toInt(),
         )
     }
 }

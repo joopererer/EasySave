@@ -878,6 +878,10 @@ class DownloadBatch {
   /// the other engine adopt the batch instead of dropping it.
   int updatedAt;
 
+  /// High-water mark for transfer pipeline overall progress so it never
+  /// decreases during sequential enqueue, concurrent completion, or retries.
+  double _maxTransferProgress = 0.0;
+
   bool get isTerminal => jobs.every(
     (j) =>
         j.state == JobState.done ||
@@ -892,31 +896,48 @@ class DownloadBatch {
     final live = jobs.where((j) => j.state != JobState.canceled).toList();
     if (live.isEmpty) return 0;
     if (usesNewTransferPipeline) {
-      var totalBytes = 0;
-      var readBytes = 0;
-      for (final j in live) {
-        final jobTotal = (j.expectedBytes != null && j.expectedBytes! > 0)
-            ? j.expectedBytes!
-            : (j.fileBytes != null && j.fileBytes! > 0 ? j.fileBytes! : 0);
-        if (jobTotal <= 0) continue;
-        totalBytes += jobTotal;
-        if (j.state == JobState.done) {
-          readBytes += jobTotal;
-        } else if (j.bytesRead > 0) {
-          readBytes += j.bytesRead.clamp(0, jobTotal);
-        } else {
-          readBytes += (jobTotal * j.progress.clamp(0.0, 1.0)).round();
-        }
+      final raw = computeTransferBatchOverallProgress(live);
+      if (raw > _maxTransferProgress) {
+        _maxTransferProgress = raw;
       }
-      if (totalBytes > 0) {
-        return (readBytes / totalBytes).clamp(0.0, 1.0);
-      }
+      return _maxTransferProgress;
     }
     var sum = 0.0;
     for (final j in live) {
       sum += j.state == JobState.done ? 1.0 : j.progress.clamp(0.0, 1.0);
     }
     return sum / live.length;
+  }
+
+  /// Unified overall progress formula for the new transfer pipeline:
+  /// `(doneCount + sum(inProgressRatio)) / N`.
+  /// Done jobs count as 1.0; not-started or unknown-total jobs count as 0.0.
+  static double computeTransferBatchOverallProgress(
+    List<DownloadJob> liveJobs, {
+    int? totalCount,
+  }) {
+    final n = (totalCount != null && totalCount > liveJobs.length)
+        ? totalCount
+        : liveJobs.length;
+    if (n <= 0) return 0.0;
+    var sum = 0.0;
+    for (final j in liveJobs) {
+      if (j.state == JobState.done) {
+        sum += 1.0;
+        continue;
+      }
+      final transferring = j.state == JobState.active ||
+          j.isFinishing ||
+          j.transferState == 'running' ||
+          j.transferState == 'finishing' ||
+          j.transferState == 'waiting_pair';
+      if (!transferring) continue;
+      final total = j.expectedBytes ?? 0;
+      if (total > 0) {
+        sum += (j.bytesRead / total).clamp(0.0, 1.0);
+      }
+    }
+    return (sum / n).clamp(0.0, 1.0);
   }
 
   /// Unfinished and every unfinished job is paused by the user.
@@ -6283,6 +6304,18 @@ class DownloadManager extends ChangeNotifier {
     }
     if (!batch.historyWritten) {
       if (batch.usesNewTransferPipeline) {
+        final needsSnapshotSync = batch.jobs.any(
+          (j) =>
+              j.state == JobState.done &&
+              ((j.mediaId == null || j.mediaId!.isEmpty) ||
+                  (j.savedTitle == null || j.savedTitle!.isEmpty) ||
+                  (j.relativePath == null || j.relativePath!.isEmpty) ||
+                  (j.md5 == null || j.md5!.isEmpty) ||
+                  ((j.fileBytes ?? 0) <= 0)),
+        );
+        if (needsSnapshotSync) {
+          await _syncTransferBatchFromServiceSnapshot(batch);
+        }
         final claimed = await _transferClient.claimHistoryWrite(batch.batchId);
         unawaited(
           DevLog.write(
@@ -6347,6 +6380,14 @@ class DownloadManager extends ChangeNotifier {
       // (discardEmptyPlaceholder is not called on terminal batches).
       final db = await HistoryDb.instance();
       final locator = GalleryLocatorService.instance;
+      if (batch.usesNewTransferPipeline) {
+        for (final j in batch.jobs) {
+          final mid = j.mediaId;
+          if (j.state == JobState.done && mid != null && mid.isNotEmpty) {
+            unawaited(locator.getAssetByIdAsync(mid));
+          }
+        }
+      }
       if (locator.hasAccess) {
         unawaited(locator.scanAlbum(force: true));
       }
@@ -7807,11 +7848,34 @@ class DownloadManager extends ChangeNotifier {
       mime: mime,
       policyKey: batch.platform,
       provenance: provenance.toJson(),
+      batchTotalCount: batch.jobs.length,
     );
   }
 
+  Future<void> _reloadMissingBatchesFromPrefs() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      for (final id in prefs.getStringList(_batchIndexKey) ?? const <String>[]) {
+        if (_batches.containsKey(id)) continue;
+        if (prefs.getBool('$_dismissedPrefix$id') == true) continue;
+        final raw = prefs.getString(_batchKey(id));
+        if (raw == null) continue;
+        try {
+          final loaded = DownloadBatch.fromJson(
+            (jsonDecode(raw) as Map).cast<String, Object?>(),
+          );
+          _batches[id] = loaded;
+        } catch (_) {}
+      }
+    } catch (_) {}
+  }
+
   Future<void> _handleTransferEvent(TransferEvent event) async {
-    final found = _findTransferJob(event.jobId);
+    var found = _findTransferJob(event.jobId);
+    if (found == null) {
+      await _reloadMissingBatchesFromPrefs();
+      found = _findTransferJob(event.jobId);
+    }
     if (found == null) return;
     final (batch, job) = found;
     final now = DateTime.now().millisecondsSinceEpoch;

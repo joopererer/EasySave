@@ -62,8 +62,8 @@ class BubbleTransferProgressTest {
         assertEquals(1, snap.doneCount)
         assertEquals(2, snap.totalCount)
         assertTrue(snap.showInnerRing)
-        // Overall byte-weighted: (1000 + 1000) / (1000 + 9000) = 0.20
-        assertEquals(0.20f, snap.overallProgress, 0.001f)
+        // Unified overall progress: (1 + 1000 / 9000) / 2 = 0.5556
+        assertEquals((1.0f + 1000f / 9000f) / 2f, snap.overallProgress, 0.001f)
         // Inner ring: j2 = 1000 / 9000 = 0.111 -> 11%
         assertEquals(1000f / 9000f, snap.innerProgress, 0.001f)
         assertEquals(11, snap.displayPercent)
@@ -182,6 +182,148 @@ class BubbleTransferProgressTest {
         } finally {
             TransferService.removeTransferListener(listener)
         }
+    }
+
+    @Test
+    fun whiteDualRingStyle_usesWhiteAnd20to25PercentBlackTrack() {
+        assertEquals(0xFFFFFFFF.toInt(), BubbleTransferProgress.INNER_RING_COLOR)
+        val alpha = (BubbleTransferProgress.INNER_TRACK_COLOR ushr 24) and 0xFF
+        val rgb = BubbleTransferProgress.INNER_TRACK_COLOR and 0x00FFFFFF
+        assertEquals(0, rgb)
+        assertTrue("Track alpha $alpha should be 20%-25% (51..64)", alpha in 51..64)
+    }
+
+    @Test
+    fun sharedVectors_matchUnifiedOverallProgressAndMonotonicity() {
+        val candidates = listOf(
+            java.io.File("spec/batch_progress_vectors.json"),
+            java.io.File("../spec/batch_progress_vectors.json"),
+            java.io.File("../../spec/batch_progress_vectors.json"),
+            java.io.File("../../../spec/batch_progress_vectors.json"),
+        )
+        val file = candidates.firstOrNull { it.exists() }
+            ?: error("Could not locate spec/batch_progress_vectors.json from ${java.io.File(".").absolutePath}")
+        val root = parseSimpleJson(file.readText()) as Map<*, *>
+        val vectors = root["vectors"] as List<*>
+        assertTrue(vectors.isNotEmpty())
+        for (raw in vectors) {
+            val v = raw as Map<*, *>
+            val name = v["name"] as String
+            val batchTotalCount = (v["batchTotalCount"] as Number).toInt()
+            val prevOverall = (v["previousOverallProgress"] as Number).toFloat()
+            val rawJobs = v["jobs"] as List<*>
+            val jobs = rawJobs.mapIndexed { idx, rj ->
+                val jm = rj as Map<*, *>
+                TransferJob(
+                    jobId = jm["jobId"] as String,
+                    direction = Direction.DOWNLOAD,
+                    state = JobState.fromValue(jm["state"] as String),
+                    batchId = "vec-$name",
+                    category = JobCategory.IMAGE,
+                    bytesRead = (jm["bytesRead"] as Number).toLong(),
+                    totalBytes = (jm["totalBytes"] as Number).toLong(),
+                    batchTotalCount = if (idx == 0) batchTotalCount else 0,
+                )
+            }
+            val (snap, _) = BubbleTransferProgress.compute(
+                jobs,
+                trackedBatchId = "vec-$name",
+                previousOverallProgress = prevOverall,
+            )
+            val expOverall = (v["expectedOverallProgress"] as Number).toFloat()
+            val expTotal = (v["expectedTotalCount"] as Number).toInt()
+            val expDone = (v["expectedDoneCount"] as Number).toInt()
+            val expInnerRing = v["expectedShowInnerRing"] as Boolean
+            val expPct = (v["expectedDisplayPercent"] as Number?)?.toInt()
+            assertEquals("[$name] overallProgress", expOverall, snap.overallProgress, 0.001f)
+            assertEquals("[$name] totalCount", expTotal, snap.totalCount)
+            assertEquals("[$name] doneCount", expDone, snap.doneCount)
+            assertEquals("[$name] showInnerRing", expInnerRing, snap.showInnerRing)
+            assertEquals("[$name] displayPercent", expPct, snap.displayPercent)
+            val expInner = (v["expectedInnerProgress"] as Number?)?.toFloat()
+            if (expInner != null) {
+                assertEquals("[$name] innerProgress", expInner, snap.innerProgress, 0.001f)
+            }
+        }
+    }
+
+    private fun parseSimpleJson(src: String): Any? {
+        var i = 0
+        fun skipWs() {
+            while (i < src.length && src[i].isWhitespace()) i++
+        }
+        fun parseString(): String {
+            i++ // skip '"'
+            val sb = StringBuilder()
+            while (i < src.length) {
+                val c = src[i++]
+                if (c == '"') return sb.toString()
+                if (c == '\\' && i < src.length) {
+                    val n = src[i++]
+                    sb.append(when (n) {
+                        '"', '\\', '/' -> n
+                        'n' -> '\n'
+                        'r' -> '\r'
+                        't' -> '\t'
+                        else -> n
+                    })
+                } else {
+                    sb.append(c)
+                }
+            }
+            return sb.toString()
+        }
+        fun parseValue(): Any? {
+            skipWs()
+            if (i >= src.length) return null
+            return when (src[i]) {
+                '{' -> {
+                    i++
+                    val map = linkedMapOf<String, Any?>()
+                    skipWs()
+                    if (i < src.length && src[i] == '}') { i++; return map }
+                    while (i < src.length) {
+                        skipWs()
+                        val key = parseString()
+                        skipWs()
+                        if (i < src.length && src[i] == ':') i++
+                        map[key] = parseValue()
+                        skipWs()
+                        if (i < src.length && src[i] == ',') { i++; continue }
+                        if (i < src.length && src[i] == '}') { i++; break }
+                    }
+                    map
+                }
+                '[' -> {
+                    i++
+                    val list = mutableListOf<Any?>()
+                    skipWs()
+                    if (i < src.length && src[i] == ']') { i++; return list }
+                    while (i < src.length) {
+                        list.add(parseValue())
+                        skipWs()
+                        if (i < src.length && src[i] == ',') { i++; continue }
+                        if (i < src.length && src[i] == ']') { i++; break }
+                    }
+                    list
+                }
+                '"' -> parseString()
+                't' -> { i += 4; true }
+                'f' -> { i += 5; false }
+                'n' -> { i += 4; null }
+                else -> {
+                    val start = i
+                    while (i < src.length && (src[i].isDigit() || src[i] in listOf('-', '+', '.', 'e', 'E'))) i++
+                    val numStr = src.substring(start, i)
+                    if (numStr.contains('.') || numStr.contains('e') || numStr.contains('E')) {
+                        numStr.toDouble()
+                    } else {
+                        numStr.toLong()
+                    }
+                }
+            }
+        }
+        return parseValue()
     }
 }
 

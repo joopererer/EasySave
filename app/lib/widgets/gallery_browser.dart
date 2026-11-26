@@ -580,13 +580,40 @@ Future<({List<GalleryBrowserItem> items, int initial})> savedBrowserItems({
         var asset =
             locator.getAssetById(file.mediaId) ??
             locator.locateAsset(file, record.postId);
-        if (asset == null && locator.hasAccess) {
+        if (asset != null) {
+          unawaited(
+            DevLog.write(
+              'HIST',
+              'viewer_locate post=${record.postId} by=cache result=ok',
+            ),
+          );
+          return asset;
+        }
+        if (file.mediaId != null && file.mediaId!.isNotEmpty) {
+          asset = await locator.getAssetByIdAsync(file.mediaId);
+          if (asset != null) {
+            unawaited(
+              DevLog.write(
+                'HIST',
+                'viewer_locate post=${record.postId} by=mediaId result=ok',
+              ),
+            );
+            return asset;
+          }
+        }
+        if (locator.hasAccess) {
           asset = await locator.locateAssetAsync(
             file,
             record.postId,
             platform: record.platform,
           );
         }
+        unawaited(
+          DevLog.write(
+            'HIST',
+            'viewer_locate post=${record.postId} by=scan result=${asset != null ? 'ok' : 'fail'}',
+          ),
+        );
         return asset;
       };
   final scanned = albumScanned ?? (locate == null && locator.scanned);

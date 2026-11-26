@@ -93,8 +93,15 @@ DownloadStatusPresentation resolveDownloadStatus({
     final pct = (effectiveProgress.clamp(0.0, 1.0) * 100).round();
     final knownTotal = totalKnown ??
         (job != null
-            ? (job.expectedBytes ?? 0) > 0
-            : (batch?.jobs.any((j) => (j.expectedBytes ?? 0) > 0) ?? false));
+            ? (job.expectedBytes ?? 0) > 0 ||
+                job.state == JobState.done ||
+                (job.fileBytes ?? 0) > 0
+            : (batch != null &&
+                (batch.succeeded > 0 ||
+                    batch.jobs.any(
+                      (j) =>
+                          (j.expectedBytes ?? 0) > 0 || (j.fileBytes ?? 0) > 0,
+                    ))));
     final reqBytes = requiredBytes ?? job?.transferRequiredBytes ?? 0;
     final availBytes = availableBytes ?? job?.transferAvailableBytes ?? 0;
 

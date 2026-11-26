@@ -60,6 +60,7 @@ data class TransferJob(
     var provenanceStatus: String? = null,
     var readbackMatch: Boolean? = null,
     var historyPending: Boolean = false,
+    val batchTotalCount: Int = 0,
 ) {
     fun toMap(): Map<String, Any?> = mapOf(
         "jobId" to jobId,
@@ -88,6 +89,7 @@ data class TransferJob(
         "provenanceStatus" to provenanceStatus,
         "readbackMatch" to readbackMatch,
         "historyPending" to historyPending,
+        "batchTotalCount" to batchTotalCount,
     )
 }
 

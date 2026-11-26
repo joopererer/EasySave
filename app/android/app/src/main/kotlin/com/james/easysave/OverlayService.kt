@@ -120,6 +120,7 @@ class OverlayService : Service() {
 
     private val mainHandler = Handler(Looper.getMainLooper())
     private var trackedTransferBatchId: String? = null
+    private val maxOverallByBatch = mutableMapOf<String, Float>()
     private var transferNativeActive = false
     private var lastLoggedTransferStateKey: String? = null
     private var lastTransferProgressDispatchMs = 0L
@@ -741,7 +742,17 @@ class OverlayService : Service() {
 
     private fun refreshFromTransferStore() {
         val jobs = TransferService.getSnapshotJobs(this)
-        val (snap, nextTracked) = BubbleTransferProgress.compute(jobs, trackedTransferBatchId)
+        val prevOverall = trackedTransferBatchId?.let { maxOverallByBatch[it] } ?: 0f
+        val (snap, nextTracked) = BubbleTransferProgress.compute(
+            jobs,
+            trackedTransferBatchId,
+            previousOverallProgress = prevOverall,
+        )
+        if (nextTracked != null && snap.state == BubbleState.BUSY) {
+            maxOverallByBatch[nextTracked] = maxOf(maxOverallByBatch[nextTracked] ?: 0f, snap.overallProgress)
+        } else if (trackedTransferBatchId != null && (snap.state == BubbleState.DONE || snap.state == BubbleState.ERROR || snap.state == BubbleState.IDLE)) {
+            maxOverallByBatch.remove(trackedTransferBatchId)
+        }
         trackedTransferBatchId = nextTracked
         transferNativeActive = snap.state == BubbleState.BUSY
 
@@ -858,13 +869,13 @@ private class BubbleView(context: Context) : FrameLayout(context) {
     private val innerTrack = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = BubbleTransferProgress.INNER_TRACK_COLOR
         style = Paint.Style.STROKE
-        strokeWidth = 3.0f * density
+        strokeWidth = 1.5f * density
         strokeCap = Paint.Cap.ROUND
     }
     private val innerFg = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = BubbleTransferProgress.INNER_RING_COLOR
         style = Paint.Style.STROKE
-        strokeWidth = 1.8f * density
+        strokeWidth = 1.5f * density
         strokeCap = Paint.Cap.ROUND
         strokeJoin = Paint.Join.ROUND
     }
@@ -875,11 +886,10 @@ private class BubbleView(context: Context) : FrameLayout(context) {
         typeface = Typeface.DEFAULT_BOLD
     }
     private val pctText = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = BubbleTransferProgress.INNER_RING_COLOR
+        color = Color.WHITE
         textAlign = Paint.Align.CENTER
-        textSize = 8.5f * density
+        textSize = 9.5f * density
         typeface = Typeface.DEFAULT_BOLD
-        setShadowLayer(2f * density, 0f, 0.5f * density, BubbleTransferProgress.TEXT_SHADOW_COLOR)
     }
     private val arc = RectF()
     private val innerArc = RectF()
