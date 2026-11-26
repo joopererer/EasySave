@@ -363,7 +363,7 @@ class CachedPostParser {
     _running[key] = record;
     unawaited(task.then<void>((_) {
       if (identical(_running[key]?.future, task)) _running.remove(key);
-    }, onError: (Object _, StackTrace __) {
+    }, onError: (Object _, StackTrace _) {
       if (identical(_running[key]?.future, task)) _running.remove(key);
     }));
     return task;

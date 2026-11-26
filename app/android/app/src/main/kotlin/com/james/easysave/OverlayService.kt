@@ -17,7 +17,11 @@ import android.graphics.RectF
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.os.Build
+import android.os.Handler
 import android.os.IBinder
+import android.os.Looper
+import com.james.easysave.transfer.TransferEvent
+import com.james.easysave.transfer.TransferService
 import android.util.Log
 import android.util.DisplayMetrics
 import android.view.Gravity
@@ -114,6 +118,15 @@ class OverlayService : Service() {
     private var lastBubbleBounds: BubbleBounds? = null
     private var bubbleTouched = false
 
+    private val mainHandler = Handler(Looper.getMainLooper())
+    private var trackedTransferBatchId: String? = null
+    private var transferNativeActive = false
+    private var lastLoggedTransferStateKey: String? = null
+    private var lastTransferProgressDispatchMs = 0L
+    private val transferListener: (TransferEvent) -> Unit = { event ->
+        onTransferNativeEvent(event)
+    }
+
     // Drag-to-close target.
     private var closeView: View? = null
     private var closeParams: WindowManager.LayoutParams? = null
@@ -130,6 +143,8 @@ class OverlayService : Service() {
         autoHideEnabled = loadAutoHideSetting()
         startForegroundCompat()
         addBubble()
+        TransferService.addTransferListener(transferListener)
+        refreshFromTransferStore()
     }
 
     private fun loadAutoHideSetting(): Boolean {
@@ -162,6 +177,7 @@ class OverlayService : Service() {
                 NativeLog.e(TAG, "restart addBubble failed: $e")
             }
         }
+        refreshFromTransferStore()
         return START_STICKY
     }
 
@@ -185,6 +201,8 @@ class OverlayService : Service() {
     }
 
     override fun onDestroy() {
+        TransferService.removeTransferListener(transferListener)
+        mainHandler.removeCallbacksAndMessages(null)
         isRunning = false
         instance = null
         doneResetRunnable?.let { bubble?.removeCallbacks(it) }
@@ -462,7 +480,12 @@ class OverlayService : Service() {
         if (bubble?.state == BubbleState.BUSY) {
             val total = bubble?.total ?: 0
             val done = bubble?.done ?: 0
-            val msg = if (total > 0) "正在下载 ($done/$total)" else "正在下载中…"
+            val pct = bubble?.displayPercent
+            val msg = when {
+                total > 0 && pct != null -> "正在下载 ($done/$total · $pct%)"
+                total > 0 -> "正在下载 ($done/$total)"
+                else -> "正在下载中…"
+            }
             android.widget.Toast.makeText(this, msg, android.widget.Toast.LENGTH_SHORT).show()
             return
         }
@@ -707,6 +730,52 @@ class OverlayService : Service() {
 
     // ---------------------------------------------------------------- state
 
+    private fun onTransferNativeEvent(event: TransferEvent) {
+        if (event is TransferEvent.Progress) {
+            val now = android.os.SystemClock.uptimeMillis()
+            if (now - lastTransferProgressDispatchMs < 150L) return
+            lastTransferProgressDispatchMs = now
+        }
+        mainHandler.post { refreshFromTransferStore() }
+    }
+
+    private fun refreshFromTransferStore() {
+        val jobs = TransferService.getSnapshotJobs(this)
+        val (snap, nextTracked) = BubbleTransferProgress.compute(jobs, trackedTransferBatchId)
+        trackedTransferBatchId = nextTracked
+        transferNativeActive = snap.state == BubbleState.BUSY
+
+        val v = bubble ?: return
+        if (snap.state == BubbleState.IDLE) {
+            lastLoggedTransferStateKey = null
+            return
+        }
+
+        val stateKey = "${snap.state}:${snap.activeBatchCount}:${snap.activeJobCount}:${snap.doneCount}/${snap.totalCount}"
+        if (stateKey != lastLoggedTransferStateKey) {
+            lastLoggedTransferStateKey = stateKey
+            NativeLog.i(
+                TAG,
+                "progress_source=transfer_native batches=${snap.activeBatchCount} jobs=${snap.activeJobCount}",
+            )
+        }
+
+        doneResetRunnable?.let { v.removeCallbacks(it) }
+        idleHideRunnable?.let { v.removeCallbacks(it) }
+        slideOut(immediate = false)
+        v.state = snap.state
+        v.done = snap.doneCount
+        v.total = snap.totalCount
+        v.overallProgress = snap.overallProgress
+        v.innerProgress = snap.innerProgress
+        v.showInnerRing = snap.showInnerRing
+        v.displayPercent = snap.displayPercent
+        if (snap.state == BubbleState.DONE || snap.state == BubbleState.ERROR) {
+            resetLater()
+        }
+        v.invalidate()
+    }
+
     private fun applyState(
         active: Boolean,
         done: Int,
@@ -715,6 +784,7 @@ class OverlayService : Service() {
         error: Boolean,
         err: BubbleError?,
     ) {
+        if (transferNativeActive && active && total > 0) return
         val v = bubble ?: return
         doneResetRunnable?.let { v.removeCallbacks(it) }
         idleHideRunnable?.let { v.removeCallbacks(it) }
@@ -725,15 +795,23 @@ class OverlayService : Service() {
                 v.done = done
                 v.total = total
                 v.label = label
+                v.overallProgress = if (total > 0) done.toFloat() / total else 0f
+                v.innerProgress = 0f
+                v.showInnerRing = false
+                v.displayPercent = null
             }
             error -> {
                 lastError = err
                 v.state = BubbleState.ERROR
+                v.showInnerRing = false
+                v.displayPercent = null
                 resetLater()
             }
             else -> {
                 lastError = null
                 v.state = BubbleState.DONE
+                v.showInnerRing = false
+                v.displayPercent = null
                 resetLater()
             }
         }
@@ -764,21 +842,47 @@ private class BubbleView(context: Context) : FrameLayout(context) {
     var done = 0
     var total = 0
     var label: String? = null
+    var overallProgress = 0f
+    var innerProgress = 0f
+    var showInnerRing = false
+    var displayPercent: Int? = null
 
+    private val density = resources.displayMetrics.density
     private val fg = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = Color.WHITE
         style = Paint.Style.STROKE
-        strokeWidth = 3f * resources.displayMetrics.density
+        strokeWidth = 3f * density
+        strokeCap = Paint.Cap.ROUND
+        strokeJoin = Paint.Join.ROUND
+    }
+    private val innerTrack = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = BubbleTransferProgress.INNER_TRACK_COLOR
+        style = Paint.Style.STROKE
+        strokeWidth = 3.0f * density
+        strokeCap = Paint.Cap.ROUND
+    }
+    private val innerFg = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = BubbleTransferProgress.INNER_RING_COLOR
+        style = Paint.Style.STROKE
+        strokeWidth = 1.8f * density
         strokeCap = Paint.Cap.ROUND
         strokeJoin = Paint.Join.ROUND
     }
     private val text = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = Color.WHITE
         textAlign = Paint.Align.CENTER
-        textSize = 12f * resources.displayMetrics.density
+        textSize = 11.5f * density
         typeface = Typeface.DEFAULT_BOLD
     }
+    private val pctText = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = BubbleTransferProgress.INNER_RING_COLOR
+        textAlign = Paint.Align.CENTER
+        textSize = 8.5f * density
+        typeface = Typeface.DEFAULT_BOLD
+        setShadowLayer(2f * density, 0f, 0.5f * density, BubbleTransferProgress.TEXT_SHADOW_COLOR)
+    }
     private val arc = RectF()
+    private val innerArc = RectF()
     private lateinit var indicatorView: View
     private lateinit var arrowView: ImageView
 
@@ -796,11 +900,27 @@ private class BubbleView(context: Context) : FrameLayout(context) {
 
                 when (state) {
                     BubbleState.BUSY -> {
-                        val frac = if (total > 0) done.toFloat() / total else 0f
+                        val frac = overallProgress.coerceIn(0f, 1f)
                         arc.set(cx - r + 3, cy - r + 3, cx + r - 3, cy + r - 3)
-                        canvas.drawArc(arc, -90f, 360f * frac.coerceIn(0f, 1f), false, fg)
-                        if (total > 0) canvas.drawText("$done/$total", cx, cy + text.textSize / 3f, text)
-                        else {
+                        canvas.drawArc(arc, -90f, 360f * frac, false, fg)
+                        if (showInnerRing) {
+                            val gap = 2f * density
+                            val innerR = (r - 3f) - fg.strokeWidth / 2f - gap - innerFg.strokeWidth / 2f
+                            if (innerR > 0f) {
+                                innerArc.set(cx - innerR, cy - innerR, cx + innerR, cy + innerR)
+                                canvas.drawArc(innerArc, -90f, 360f, false, innerTrack)
+                                canvas.drawArc(innerArc, -90f, 360f * innerProgress.coerceIn(0f, 1f), false, innerFg)
+                            }
+                        }
+                        if (total > 0) {
+                            val pct = displayPercent
+                            if (pct != null) {
+                                canvas.drawText("$done/$total", cx, cy - 1.5f * density, text)
+                                canvas.drawText("$pct%", cx, cy + 9.5f * density, pctText)
+                            } else {
+                                canvas.drawText("$done/$total", cx, cy + text.textSize / 3f, text)
+                            }
+                        } else {
                             val moving = if (Build.VERSION.SDK_INT >= 26) android.animation.ValueAnimator.areAnimatorsEnabled()
                                 else android.provider.Settings.Global.getFloat(context.contentResolver,
                                     android.provider.Settings.Global.ANIMATOR_DURATION_SCALE, 1f) > 0f

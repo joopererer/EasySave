@@ -16,7 +16,6 @@ import '../services/gallery_locator_service.dart';
 import '../services/history_db.dart';
 import '../services/live_pairs.dart';
 import '../services/local_thumbnail_tiers.dart';
-import '../services/network_status.dart';
 import '../theme/app_theme.dart';
 import 'shared.dart';
 import 'verified_asset_image.dart';

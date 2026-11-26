@@ -3875,8 +3875,9 @@ class DownloadManager extends ChangeNotifier {
               activeJobSubdirs.add(job.currentTaskId!);
               activeJobSubdirs.add(Uri.encodeComponent(job.currentTaskId!));
             }
-            if (job.resumeTempPath != null)
+            if (job.resumeTempPath != null) {
               activeTempPaths.add(job.resumeTempPath!);
+            }
           }
         }
       }
@@ -4867,8 +4868,9 @@ class DownloadManager extends ChangeNotifier {
       await _enqueueAttempt(batch, job, source: 'wrong_content');
       return;
     }
-    if (await _importBestSetAside(batch, job, reason: 'content_rejected'))
+    if (await _importBestSetAside(batch, job, reason: 'content_rejected')) {
       return;
+    }
     await _failReadable(batch, job);
   }
 
@@ -5162,6 +5164,8 @@ class DownloadManager extends ChangeNotifier {
         ..errorCode = null
         ..progress = 1;
       batch.historyWritten = false;
+      batch.settledBy = null;
+      _settledBatchIds.remove(batch.batchId);
       await _persist(batch);
       notifyListeners();
       await _afterTerminal(batch, recovered: false);
@@ -5886,8 +5890,9 @@ class DownloadManager extends ChangeNotifier {
       await _enqueueAttempt(batch, job, source: 'next_candidate');
       return;
     }
-    if (await _importBestSetAside(batch, job, reason: 'transfer_failed'))
+    if (await _importBestSetAside(batch, job, reason: 'transfer_failed')) {
       return;
+    }
     _log(
       'transfer gave up index=${job.itemIndex} role=${roleOf(job)} '
       'reason=${_transferReason(update, userCancelRequested: job.userCancelRequested)} '
@@ -6308,6 +6313,7 @@ class DownloadManager extends ChangeNotifier {
       final histMs = histSw.elapsedMilliseconds;
       if (!written) {
         // Keep the batch owing its history row; try again later.
+        _settledBatchIds.remove(batch.batchId);
         batch.historyWritten = false;
         await _persist(batch);
         _scheduleHistoryRetry(batch);
@@ -6319,7 +6325,7 @@ class DownloadManager extends ChangeNotifier {
             .map((j) => j.transferJobId!)
             .toList();
         if (ackIds.isNotEmpty) {
-          unawaited(_transferClient.ackHistoryWritten(ackIds));
+          await _transferClient.ackHistoryWritten(ackIds);
         }
       }
       for (final j in batch.jobs.where((j) => j.saved)) {
@@ -6450,13 +6456,15 @@ class DownloadManager extends ChangeNotifier {
         }
         return;
       }
-      if (job.state != JobState.failed && job.state != JobState.canceled)
+      if (job.state != JobState.failed && job.state != JobState.canceled) {
         return;
+      }
       job.state = JobState.queued;
       job.transferState = 'queued';
       job.error = null;
       job.errorCode = null;
       batch.historyWritten = false;
+      batch.settledBy = null;
       await _persist(batch);
       notifyListeners();
       await _transferClient.retry(job.transferJobId!);
@@ -6758,8 +6766,9 @@ class DownloadManager extends ChangeNotifier {
   Future<void> pauseBatch(DownloadBatch batch) async {
     if (batch.usesNewTransferPipeline) {
       for (final job in batch.jobs) {
-        if (job.state != JobState.queued && job.state != JobState.active)
+        if (job.state != JobState.queued && job.state != JobState.active) {
           continue;
+        }
         job.state = JobState.paused;
         job.transferState = 'paused';
         job.userPaused = true;
@@ -7076,8 +7085,9 @@ class DownloadManager extends ChangeNotifier {
     }
     batch = await _ownedOrAdopt(batch);
     job = batch.jobs.firstWhere((j) => j.key == job.key, orElse: () => job);
-    if (job.saved || job.state == JobState.done)
+    if (job.saved || job.state == JobState.done) {
       return; // The album write won the race; keep it completed.
+    }
     if (job.isTerminal) return;
     job.userCancelRequested = true;
     _inFlightResumes.remove(job.key);
@@ -8111,7 +8121,6 @@ class DownloadManager extends ChangeNotifier {
     try {
       final pending = await _transferClient.queryHistoryPending();
       if (pending.isEmpty) return;
-      final historyDb = db ?? await HistoryDb.instance();
       final byBatch = <String, List<TransferJobSnapshot>>{};
       final ackIds = <String>[];
 

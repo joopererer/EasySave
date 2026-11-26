@@ -282,6 +282,10 @@ void main() {
         // Start only main UI engine
         DownloadManager.owner = DownloadBatch.sourceMain;
         await dm.reconcile();
+        await dm.reconcileFutureForTesting;
+        for (var i = 0; i < 40 && fakeClient.acked.isEmpty; i++) {
+          await Future<void>.delayed(const Duration(milliseconds: 50));
+        }
         await dm.reconcileTransferHistoryPending(db: testDb);
 
         expect(historyWriteCount, 1);

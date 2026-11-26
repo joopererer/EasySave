@@ -21,6 +21,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import java.util.concurrent.CopyOnWriteArraySet
 
 /**
  * 传输前台服务（TransferService）。
@@ -52,6 +53,25 @@ class TransferService : Service() {
         @Volatile
         var sharedNetworkChecker: AndroidNetworkCapabilityChecker? = null
 
+        private val nativeListeners = CopyOnWriteArraySet<(TransferEvent) -> Unit>()
+
+        fun addTransferListener(listener: (TransferEvent) -> Unit) {
+            nativeListeners.add(listener)
+        }
+
+        fun removeTransferListener(listener: (TransferEvent) -> Unit) {
+            nativeListeners.remove(listener)
+        }
+
+        fun getSnapshotJobs(context: Context): List<TransferJob> {
+            sharedScheduler?.let { return it.jobs.values.toList() }
+            return try {
+                TransferStore(context.applicationContext).getAllJobs()
+            } catch (_: Throwable) {
+                emptyList()
+            }
+        }
+
         @Synchronized
         fun getOrCreateScheduler(context: Context): TransferScheduler {
             sharedScheduler?.let { return it }
@@ -75,6 +95,12 @@ class TransferService : Service() {
                 eventListener = { event ->
                     TransferChannels.broadcastEvent(event)
                     instance?.onTransferEvent(event)
+                    nativeListeners.forEach { listener ->
+                        try {
+                            listener(event)
+                        } catch (_: Throwable) {
+                        }
+                    }
                 },
                 onIdleChanged = { isIdle ->
                     instance?.onIdleChanged(isIdle)
