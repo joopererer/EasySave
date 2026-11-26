@@ -8,6 +8,7 @@
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -16,6 +17,7 @@ import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 import 'package:easysave/pages/history_page.dart';
 import 'package:easysave/services/gallery_locator_service.dart';
 import 'package:easysave/services/history_db.dart';
+import 'package:easysave/widgets/history_cards.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -129,10 +131,17 @@ void main() {
 
       final scrollableFinder = mainScrollable();
       final scrollState = tester.state<ScrollableState>(scrollableFinder);
-      final viewport = scrollState.position.viewportDimension;
 
-      // Scroll down by 1.5 screens -> offset <= 2 screens, button should still be hidden
-      scrollState.position.jumpTo(1.5 * viewport);
+      // Measure actual first-row bottom offset from the rendered first card.
+      final firstCardFinder = find.byKey(const ValueKey('wf-1')).first;
+      final firstCardBox = tester.renderObject<RenderBox>(firstCardFinder);
+      final viewportRender = RenderAbstractViewport.of(firstCardBox);
+      final firstRowThreshold =
+          viewportRender.getOffsetToReveal(firstCardBox, 0.0).offset +
+              firstCardBox.size.height;
+
+      // Scroll slightly before the first row ends -> button should still be hidden
+      scrollState.position.jumpTo((firstRowThreshold - 20.0).clamp(0.0, double.infinity));
       await tester.pump(const Duration(milliseconds: 300));
 
       opacityWidget = tester.widget(
@@ -140,8 +149,8 @@ void main() {
       );
       expect(opacityWidget.opacity, 0.0);
 
-      // Scroll down further to > 2 screens
-      scrollState.position.jumpTo(2.5 * viewport);
+      // Scroll just past the first row -> button should appear
+      scrollState.position.jumpTo(firstRowThreshold + 6.0);
       await tester.pump(const Duration(milliseconds: 300));
 
       opacityWidget = tester.widget(
@@ -149,17 +158,23 @@ void main() {
       );
       expect(opacityWidget.opacity, 1.0);
 
-      // Scroll up slightly into hysteresis zone (1.5 screens) -> should remain visible
-      scrollState.position.jumpTo(1.5 * viewport);
-      await tester.pump(const Duration(milliseconds: 300));
-
+      // Small oscillations within 8dp hysteresis band -> should NOT flicker/hide
+      scrollState.position.jumpTo(firstRowThreshold - 1.0);
+      await tester.pump(const Duration(milliseconds: 100));
       opacityWidget = tester.widget(
         find.ancestor(of: btnFinder, matching: find.byType(AnimatedOpacity)).first,
       );
       expect(opacityWidget.opacity, 1.0);
 
-      // Scroll up to <= 1.0 screens -> should disappear
-      scrollState.position.jumpTo(0.8 * viewport);
+      scrollState.position.jumpTo(firstRowThreshold + 6.0);
+      await tester.pump(const Duration(milliseconds: 100));
+      opacityWidget = tester.widget(
+        find.ancestor(of: btnFinder, matching: find.byType(AnimatedOpacity)).first,
+      );
+      expect(opacityWidget.opacity, 1.0);
+
+      // Scroll back above hysteresis band -> should disappear
+      scrollState.position.jumpTo((firstRowThreshold - 20.0).clamp(0.0, double.infinity));
       await tester.pump(const Duration(milliseconds: 300));
 
       opacityWidget = tester.widget(
@@ -167,8 +182,8 @@ void main() {
       );
       expect(opacityWidget.opacity, 0.0);
 
-      // Scroll down again to > 2 screens
-      scrollState.position.jumpTo(3.0 * viewport);
+      // Scroll down again past first row
+      scrollState.position.jumpTo(firstRowThreshold + 100.0);
       await tester.pump(const Duration(milliseconds: 300));
 
       opacityWidget = tester.widget(
@@ -188,6 +203,82 @@ void main() {
         find.ancestor(of: btnFinder, matching: find.byType(AnimatedOpacity)).first,
       );
       expect(opacityWidget.opacity, 0.0);
+    });
+
+    testWidgets('All view modes (waterfall, list, all, creators) show just past first row and hide at top', (tester) async {
+      for (final mode in [
+        (view: 'posts', layout: 'waterfall', itemFinder: () => find.byType(WaterfallPostCard).first),
+        (view: 'posts', layout: 'list', itemFinder: () => find.byType(Dismissible).first),
+        (view: 'all', layout: 'waterfall', itemFinder: () => find.byType(AllMediaCard).first),
+        (view: 'creators', layout: 'waterfall', itemFinder: () => find.byType(CreatorCard).first),
+      ]) {
+        SharedPreferences.setMockInitialValues({
+          'historyView': mode.view,
+          'historyLayout': mode.layout,
+        });
+        HistoryDb.resetInstanceForTesting();
+        GalleryLocatorService.instance.resetForTesting();
+        tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+          photos,
+          (_) async => 0,
+        );
+
+        late HistoryDb testDb;
+        await tester.runAsync(() async {
+          testDb = await HistoryDb.instance(dbPath: ':memory:');
+          HistoryDb.setInstanceForTesting(testDb);
+          await testDb.clear();
+          final records = createMockRecords(60);
+          for (final r in records) {
+            await testDb.upsert(r, restoreDeleted: true, userSave: true, source: 'test');
+          }
+        });
+
+        tester.view.physicalSize = const Size(400, 800);
+        tester.view.devicePixelRatio = 1.0;
+
+        await tester.pumpWidget(const MaterialApp(home: HistoryPage()));
+        for (var i = 0; i < 10; i++) {
+          await tester.runAsync(
+            () => Future<void>.delayed(const Duration(milliseconds: 20)),
+          );
+          await tester.pump();
+        }
+
+        final btnFinder = find.byKey(const ValueKey('history_scroll_to_top_button'));
+        expect(btnFinder, findsOneWidget);
+
+        final scrollableFinder = mode.view == 'creators'
+            ? find.descendant(of: find.byType(GridView), matching: find.byType(Scrollable)).first
+            : mainScrollable();
+        final scrollState = tester.state<ScrollableState>(scrollableFinder);
+
+        final firstBox = tester.renderObject<RenderBox>(mode.itemFinder());
+        final vp = RenderAbstractViewport.of(firstBox);
+        final threshold = vp.getOffsetToReveal(firstBox, 0.0).offset + firstBox.size.height;
+
+        // Just past first row -> visible
+        scrollState.position.jumpTo(threshold + 16.0);
+        await tester.pump(const Duration(milliseconds: 300));
+        var opacityWidget = tester.widget<AnimatedOpacity>(
+          find.ancestor(of: btnFinder, matching: find.byType(AnimatedOpacity)).first,
+        );
+        expect(opacityWidget.opacity, 1.0, reason: 'Failed show in ${mode.view}/${mode.layout}');
+
+        // Back to top -> hidden
+        scrollState.position.jumpTo(0.0);
+        await tester.pump(const Duration(milliseconds: 300));
+        opacityWidget = tester.widget<AnimatedOpacity>(
+          find.ancestor(of: btnFinder, matching: find.byType(AnimatedOpacity)).first,
+        );
+        expect(opacityWidget.opacity, 0.0, reason: 'Failed hide in ${mode.view}/${mode.layout}');
+
+        await tester.pumpWidget(const SizedBox.shrink());
+        tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(photos, null);
+        GalleryLocatorService.instance.resetForTesting();
+        HistoryDb.resetInstanceForTesting();
+        tester.view.resetPhysicalSize();
+      }
     });
 
     testWidgets('C3: deep distance (> 20 screens) scrolls to top within 500ms', (tester) async {
