@@ -803,7 +803,7 @@ class DownloadBatch {
   static const String pipelineLegacy = 'legacy';
   static const String pipelineTransfer = 'transfer';
 
-  final String pipeline;
+  String pipeline;
   bool get usesNewTransferPipeline => pipeline == pipelineTransfer;
 
   final int startedAt;
@@ -2745,7 +2745,9 @@ class DownloadManager extends ChangeNotifier {
     final settingsForPipeline = await AppSettings.load();
     final useNewPipeline =
         useNewTransferPipelineForTesting ??
-        settingsForPipeline.useNewTransferPipeline;
+        ((enqueueForTesting != null && transferClientForTesting == null)
+            ? false
+            : settingsForPipeline.useNewTransferPipeline);
 
     final batch = DownloadBatch(
       batchId: batchId,
@@ -7386,6 +7388,9 @@ class DownloadManager extends ChangeNotifier {
     await _loadAndReconcile();
   }
 
+  @visibleForTesting
+  Future<void> reconcileForTesting() => _loadAndReconcile();
+
   Future<void> _loadAndReconcile() async {
     try {
       final prefs = await SharedPreferences.getInstance();
@@ -7400,6 +7405,11 @@ class DownloadManager extends ChangeNotifier {
         final batch = DownloadBatch.fromJson(
           (jsonDecode(raw) as Map).cast<String, Object?>(),
         );
+        if (!batch.usesNewTransferPipeline) {
+          if (await _migrateLegacyBatchIfNeeded(batch, prefs)) {
+            changed = true;
+          }
+        }
         // Rule 6: transfer-pipeline batches have no engine ownership, adopt,
         // or foreign-skip logic. Every live engine loads and displays them;
         // single history write is guaranteed by claimHistoryWrite.
@@ -7719,10 +7729,250 @@ class DownloadManager extends ChangeNotifier {
     return null;
   }
 
+  @visibleForTesting
+  Future<Directory> Function()? transfersDirForTesting;
+
+  @visibleForTesting
+  Future<AppSettings> Function()? settingsLoaderForTesting;
+
+  @visibleForTesting
+  Future<void> Function(File src, File dst)? moveFileForTesting;
+
+  Future<Directory> _transfersDir() async {
+    final hook = transfersDirForTesting;
+    if (hook != null) return hook();
+    final supportDir = await getApplicationSupportDirectory();
+    return Directory('${supportDir.path}/transfers');
+  }
+
+  Future<void> _moveFileToPart(File src, File dst) async {
+    await dst.parent.create(recursive: true);
+    final hook = moveFileForTesting;
+    if (hook != null) {
+      await hook(src, dst);
+      return;
+    }
+    try {
+      await src.rename(dst.path);
+    } on FileSystemException {
+      final expectedLen = await src.length();
+      await src.copy(dst.path);
+      final actualLen = await dst.length();
+      if (actualLen != expectedLen) {
+        try {
+          await dst.delete();
+        } catch (_) {}
+        throw FileSystemException(
+          'Copied size mismatch ($actualLen != $expectedLen)',
+          dst.path,
+        );
+      }
+      await src.delete();
+    }
+  }
+
+  Future<bool> _isNewTransferPipelineEnabled() async {
+    if (useNewTransferPipelineForTesting != null) {
+      return useNewTransferPipelineForTesting!;
+    }
+    final settings = await (settingsLoaderForTesting?.call() ?? AppSettings.load());
+    return settings.useNewTransferPipeline;
+  }
+
+  Future<bool> _migrateLegacyBatchIfNeeded(
+    DownloadBatch batch,
+    SharedPreferences prefs,
+  ) async {
+    if (!await _isNewTransferPipelineEnabled()) return false;
+    if (batch.usesNewTransferPipeline) return false;
+    if (batch.historyWritten ||
+        batch.settledBy != null ||
+        batch.cancelledByDeletion) {
+      return false;
+    }
+
+    // Re-read from prefs to ensure another engine didn't already migrate it.
+    await prefs.reload();
+    final freshRaw = prefs.getString(_batchKey(batch.batchId));
+    if (freshRaw != null) {
+      try {
+        final fresh = DownloadBatch.fromJson(
+          (jsonDecode(freshRaw) as Map).cast<String, Object?>(),
+        );
+        if (fresh.usesNewTransferPipeline ||
+            fresh.historyWritten ||
+            fresh.settledBy != null ||
+            fresh.cancelledByDeletion) {
+          return false;
+        }
+      } catch (_) {}
+    }
+
+    final unfinished = batch.jobs.where((j) => !j.isTerminal).toList();
+    if (unfinished.isEmpty) {
+      // All jobs are already terminal (e.g. completed & saved to album); settle via legacy.
+      return false;
+    }
+
+    final transfersDir = await _transfersDir();
+    var resumed = 0;
+    var fromZero = 0;
+    var bytesMoved = 0;
+    var migratedJobs = 0;
+    final legacyIdsToClean = <String>[];
+    final stagedMoves = <({
+      DownloadJob job,
+      String transferJobId,
+      int initialBytes,
+      bool schedulerHasPairPartner,
+    })>[];
+
+    for (final job in unfinished) {
+      final index = candidateIndexOf(job);
+      final transferJobId = index == 0
+          ? 'xfer_${job.key}'
+          : 'xfer_${job.key}_c$index';
+      final legacyIds = <String>{
+        if (job.currentTaskId != null && job.currentTaskId!.isNotEmpty)
+          job.currentTaskId!,
+        ...job.previousTaskIds.where((id) => id.isNotEmpty),
+        job.key,
+      }.toList();
+      legacyIdsToClean.addAll(legacyIds);
+
+      // Cancel legacy plugin tasks through the unique gate first.
+      for (final id in legacyIds) {
+        await _cancelTaskWithId(id, batch: batch, source: 'legacy_migration');
+      }
+
+      // Locate temp file from plugin ResumeData.
+      String? tempPath;
+      for (final id in legacyIds) {
+        final rd = await _getResumeData(id);
+        if (rd != null && rd.data.isNotEmpty) {
+          tempPath = rd.data;
+          break;
+        }
+      }
+
+      final partFile = File('${transfersDir.path}/$transferJobId.part');
+      var initialBytes = 0;
+
+      try {
+        if (tempPath != null && tempPath.isNotEmpty) {
+          final srcFile = File(tempPath);
+          if (await srcFile.exists()) {
+            final len = await srcFile.length();
+            if (len > 0) {
+              await _moveFileToPart(srcFile, partFile);
+              final movedLen = await partFile.length();
+              bytesMoved += movedLen;
+              initialBytes = movedLen;
+              resumed++;
+            } else {
+              fromZero++;
+            }
+          } else if (await partFile.exists() && await partFile.length() > 0) {
+            // Killed mid-migration after moving temp file to .part: reuse .part.
+            initialBytes = await partFile.length();
+            resumed++;
+          } else {
+            fromZero++;
+          }
+        } else if (await partFile.exists() && await partFile.length() > 0) {
+          initialBytes = await partFile.length();
+          resumed++;
+        } else {
+          fromZero++;
+        }
+      } catch (e) {
+        // Move failed -> keep legacy pipeline, do not drop tasks.
+        await DevLog.write(
+          'V16DL',
+          'legacy_migrated batch=${batch.batchId} jobs=0 resumed=0 '
+              'from_zero=0 kept_legacy=${unfinished.length} bytes_moved=0',
+        );
+        return false;
+      }
+
+      final hasCompletedPartner = job.isLivePhoto &&
+          batch.jobs.any(
+            (p) =>
+                p.key != job.key &&
+                p.itemIndex == job.itemIndex &&
+                p.state == JobState.done &&
+                p.saved,
+          );
+
+      stagedMoves.add((
+        job: job,
+        transferJobId: transferJobId,
+        initialBytes: initialBytes,
+        schedulerHasPairPartner: !hasCompletedPartner,
+      ));
+    }
+
+    // Enqueue all staged jobs to TransferService.
+    try {
+      for (final item in stagedMoves) {
+        item.job.resumeTempPath = null;
+        await _enqueueViaTransferService(
+          batch,
+          item.job,
+          schedulerHasPairPartner: item.schedulerHasPairPartner,
+          initialBytesRead: item.initialBytes,
+        );
+        migratedJobs++;
+      }
+    } catch (e) {
+      await DevLog.write(
+        'V16DL',
+        'legacy_migrated batch=${batch.batchId} jobs=0 resumed=0 '
+            'from_zero=0 kept_legacy=${unfinished.length} bytes_moved=$bytesMoved',
+      );
+      return false;
+    }
+
+    batch.pipeline = DownloadBatch.pipelineTransfer;
+    for (final j in batch.jobs) {
+      j.usesNewTransferPipeline = true;
+    }
+    _batches[batch.batchId] = batch;
+    await _persist(batch);
+
+    for (final id in legacyIdsToClean) {
+      await _removeResumeData(id);
+    }
+    if (legacyIdsToClean.isNotEmpty) {
+      final delHook = deleteLegacyRecordsForTesting;
+      if (delHook != null) {
+        try {
+          await delHook(legacyIdsToClean);
+        } catch (_) {}
+      } else {
+        try {
+          await FileDownloader().database.deleteRecordsWithIds(
+            legacyIdsToClean,
+          );
+        } catch (_) {}
+      }
+    }
+
+    await DevLog.write(
+      'V16DL',
+      'legacy_migrated batch=${batch.batchId} jobs=$migratedJobs '
+          'resumed=$resumed from_zero=$fromZero kept_legacy=0 '
+          'bytes_moved=$bytesMoved',
+    );
+    return true;
+  }
+
   Future<void> _enqueueViaTransferService(
     DownloadBatch batch,
-    DownloadJob job,
-  ) async {
+    DownloadJob job, {
+    bool? schedulerHasPairPartner,
+    int initialBytesRead = 0,
+  }) async {
     _subscribeTransferEvents();
 
     // 本机已有相同文件的「关联」逻辑（save plan 里的 associate）照旧在 Dart 侧判断，关联的文件不入队。
@@ -7804,11 +8054,14 @@ class DownloadManager extends ChangeNotifier {
         .whereType<String>()
         .toList();
 
-    final pairId = job.isLivePhoto ? '${batch.postId}#${job.itemIndex}' : null;
+    final provenancePairId =
+        job.isLivePhoto ? '${batch.postId}#${job.itemIndex}' : null;
+    final schedulerPairId =
+        (schedulerHasPairPartner ?? true) ? provenancePairId : null;
     final provenance = provenanceForBatchItem(
       batch,
       itemIndex: job.itemIndex,
-      pairId: pairId,
+      pairId: provenancePairId,
     );
     job.assetId = provenance.assetId;
     job.provenanceItemCount = provenance.itemCount;
@@ -7820,7 +8073,14 @@ class DownloadManager extends ChangeNotifier {
     job.transferJobId = transferJobId;
     job.transferState = 'queued';
     job.state = JobState.queued;
-    job.progress = 0.0;
+    job.bytesRead = initialBytesRead;
+    if (initialBytesRead > 0 &&
+        job.expectedBytes != null &&
+        job.expectedBytes! > 0) {
+      job.progress = (initialBytesRead / job.expectedBytes!).clamp(0.0, 1.0);
+    } else {
+      job.progress = 0.0;
+    }
     job.error = null;
     job.errorCode = null;
     job.lastProgressAt = DateTime.now().millisecondsSinceEpoch;
@@ -7830,7 +8090,7 @@ class DownloadManager extends ChangeNotifier {
         'V16DL',
         'candidate_seq=${index + 1}/${job.urls.length} role=${roleOf(job)} '
             'label=$candidateLabel format_pref=${batch.formatPref.logToken} '
-            'transfer_job=$transferJobId pair_id=${pairId ?? "-"}',
+            'transfer_job=$transferJobId pair_id=${provenancePairId ?? "-"}',
       ),
     );
 
@@ -7839,7 +8099,7 @@ class DownloadManager extends ChangeNotifier {
       direction: 'download',
       category: category,
       batchId: batch.batchId,
-      pairId: pairId,
+      pairId: schedulerPairId,
       url: authorized.uri.toString(),
       headers: authorized.headers,
       cookie: authorized.cookie,

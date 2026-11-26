@@ -1147,11 +1147,15 @@ class _MinePageState extends State<MinePage> with WidgetsBindingObserver {
                   ),
                   SwitchListTile(
                     key: const Key('use_new_transfer_pipeline_switch'),
-                    title: const Text('使用新下载链路（实验）'),
-                    subtitle: const Text('主界面下载交由后台 TransferService 驱动，关闭则走旧链路'),
-                    value: _settings.useNewTransferPipeline,
-                    onChanged: (v) async {
-                      setState(() => _settings.useNewTransferPipeline = v);
+                    title: const Text('使用旧下载链路（回退用）'),
+                    subtitle: const Text(
+                      '主界面与悬浮球下载默认由后台 TransferService 驱动，开启则回退旧链路',
+                    ),
+                    value: !_settings.useNewTransferPipeline,
+                    onChanged: (useLegacy) async {
+                      setState(
+                        () => _settings.useNewTransferPipeline = !useLegacy,
+                      );
                       await _saveSettings();
                     },
                   ),

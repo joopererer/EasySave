@@ -140,6 +140,7 @@ void main() {
     manager.clearBatchesForTesting();
     manager.prepareStartForTesting = () async {};
     manager.enqueueForTesting = null;
+    manager.useNewTransferPipelineForTesting = false;
     HistoryDb.resetInstanceForTesting();
     final db = await HistoryDb.instance(dbPath: ':memory:');
     HistoryDb.setInstanceForTesting(db);
@@ -152,6 +153,7 @@ void main() {
     }
     manager.clearBatchesForTesting();
     manager.prepareStartForTesting = null;
+    manager.useNewTransferPipelineForTesting = null;
     HistoryDb.setInstanceForTesting(null);
     HistoryDb.resetInstanceForTesting();
     SiteRegistry.useBuiltin();

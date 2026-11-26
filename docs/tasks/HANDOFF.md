@@ -107,8 +107,27 @@
 4. **续传测试必须包含首轮任务**：断点续传测试必须覆盖从头开始下载的首轮任务在暂停与断网时的断点保留与恢复，不能只测试断网重入队后的后续轮次。
 5. **不要在插件之上叠加自己的状态机**：充分复用原生与成熟插件（如 `background_downloader`）自身的状态管理机制，避免在其之上重复构建容易产生并发竞态的外部状态机。
 
-### 6.2 下一步
+### 6.2 v1.13（阶段 0）新传输链路交接说明
 
-- **v2.0**：统一后台传输服务（下载与 Drive 上传共用）。
-- **v1.13**（排在 v2.0 之后）：实况合成为系统动态照片（先小米 MicroVideo）。
+1. **新链路架构概览**：
+   - **唯一驱动者**：Android 原生前台服务 `TransferService`（`app/android/app/src/main/kotlin/com/james/easysave/transfer/`）持有单一串行调度器 `TransferScheduler`（单线程 Actor）、SQLite 持久化存储 `TransferStore`（`transfer.db`）、`HttpWorker`（OkHttp 断点续传，写入 `filesDir/transfers/<jobId>.part` 与 `<jobId>.meta`）与原生 `TransferFinalizer`（XMP 来源信息注入、C2PA 边车成对原子写入、Live 图双 `IS_PENDING` 原子发布、MediaStore 入库与 MD5 计算）。
+   - **双引擎客户端**：主界面与悬浮球引擎（`HostService`）均只作为客户端，通过 `TransferClient`（MethodChannel `easysave/transfer` + EventChannel `easysave/transfer/events`）下发指令与订阅事件，不再各自持有独立下载状态机；历史记录通过 `claimHistoryWrite` 原子抢占保证单次写入。
+   - **默认与回退**：自 v1.13 P0-5（dev15）起，`useNewTransferPipeline` 默认为 `true`；「开发者选项」提供「使用旧下载链路（回退用）」开关（默认关闭）。升级时在 `_loadAndReconcile()` 自动执行一次旧任务迁移（仅新链路开启时执行）。
+
+2. **关键日志前缀**：
+   - **`[XFER]`**：`TransferService` / `TransferScheduler` / `HttpWorker` / `TransferFinalizer` 的原生传输日志（状态转移、206/200 续传、退避重试、网络监听、锁竞争、收尾耗时与入库结果）。
+   - **`[V16BUBBLE]`**：悬浮球原生端（`OverlayService`）及悬浮球与传输服务联动日志（双环进度、状态文案、收尾/失败/空间不足展示）。
+   - **`[V16DL]`**：Dart 侧 `DownloadManager` 调度、旧任务迁移（`legacy_migrated`）与结算日志。
+
+3. **下一个版本（v1.14 / 阶段 1 后）待删除的旧代码清单**：
+   - `pubspec.yaml` 中的 `background_downloader` 依赖及其原生初始化/权限/数据库调用（`FileDownloader()`）；
+   - `DownloadManager` 中的旧链路轮次（`round`）、轮次抢占（`round_preempt`）、过期任务采纳（`adopt_stale_complete`）、僵尸任务二次取消（`zombie_task`）、`auto_resume` 退避定时器、`ResumableDownloadStore` 临时文件接管与 `_cleanupTransferOrphanLegacyTasks`；
+   - `DownloadManager` 中的 `_migrateLegacyBatchIfNeeded` 一次性迁移逻辑（确认所有存量用户升级完成后移除）；
+   - 「开发者选项」中的「使用旧下载链路（回退用）」与「断网不自动续传（停在『点继续』）」开关及相关回退分支。
+
+### 6.3 下一步
+
+- **v2.0 阶段 1**：Google Drive 登录授权与云端备份队列（复用阶段 0 的 `TransferService`）。
+- **v2.0 阶段 2–4**：备份清单同步、换机恢复、仅在云端与空间释放。
+- **后续版本**：实况合成为系统动态照片（先小米 MicroVideo）。
 - 完整列表见 `docs/roadmap.md`。
