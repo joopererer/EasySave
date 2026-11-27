@@ -180,7 +180,30 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
       (_) => _refreshDownloads(),
     );
     _refreshDownloads();
+    unawaited(_attachDbListener());
     _init();
+  }
+
+  HistoryDb? _listenedDb;
+
+  Future<void> _attachDbListener() async {
+    try {
+      final db = await HistoryDb.instance();
+      if (!mounted) return;
+      _listenedDb = db;
+      db.addListener(_onDbChanged);
+    } catch (_) {}
+  }
+
+  void _onDbChanged() {
+    if (!mounted) return;
+    final reason = _listenedDb?.lastChangeReason ?? '';
+    // Gallery scans and file repairs update file-location metadata on existing
+    // records; reloading the whole page per scanned post would storm the DB.
+    if (reason.startsWith('gallery scan') || reason.startsWith('file repair')) {
+      return;
+    }
+    unawaited(_reload());
   }
 
   Timer? _downloadPoll;
@@ -334,6 +357,8 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
     WidgetsBinding.instance.removeObserver(this);
     GalleryLocatorService.instance.removeListener(_onLocatorChanged);
     HostBridge.historyRevision.removeListener(_onHostHistoryChanged);
+    _listenedDb?.removeListener(_onDbChanged);
+    _listenedDb = null;
     DownloadManager.instance.removeListener(_refreshDownloads);
     NetworkStatus.instance.removeListener(_refreshDownloads);
     _downloadPoll?.cancel();

@@ -907,12 +907,18 @@ class HistoryDb {
     );
   }
 
+  String _lastChangeReason = '';
+
+  /// Reason string passed to the most recent [notifyChanged] call.
+  String get lastChangeReason => _lastChangeReason;
+
   /// Notify every listener that history data changed.
   ///
   /// [reason] ends up in the device log so a bug report shows which mutation
   /// ran and how many rows it touched. One failing listener must not stop the
   /// others, so each call is guarded.
   void notifyChanged([String reason = 'mutation']) {
+    _lastChangeReason = reason;
     if (_listeners.isEmpty) {
       DevLog.write(
         'HIST',

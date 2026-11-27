@@ -30,6 +30,7 @@ import 'download_status_display.dart';
 import 'gallery_locator_service.dart';
 import 'history_db.dart';
 import 'history_io.dart';
+import 'host_bridge.dart';
 import 'image_format_preference.dart';
 import 'image_dimensions.dart';
 import 'live_pairs.dart';
@@ -6336,6 +6337,7 @@ class DownloadManager extends ChangeNotifier {
         );
         if (!claimed) {
           _settledBatchIds.remove(batch.batchId);
+          unawaited(_onClaimLostRefresh(batch));
           return;
         }
       }
@@ -7856,8 +7858,9 @@ class DownloadManager extends ChangeNotifier {
       return false;
     }
 
-    // P0-5b: Cancel ALL legacy plugin tasks for this batch (including queued
-    // WorkManager tasks) BEFORE reading ResumeData and temp file lengths.
+    // P0-5c: Read ResumeData & temp files FIRST, move to .part, enqueue, and
+    // persist BEFORE cancelling legacy tasks (cancelling a paused task in
+    // background_downloader deletes its ResumeData and temp file).
     final allBatchLegacyIds = <String>{};
     for (final job in unfinished) {
       if (job.currentTaskId != null && job.currentTaskId!.isNotEmpty) {
@@ -7874,13 +7877,6 @@ class DownloadManager extends ChangeNotifier {
         if (r.taskId.isNotEmpty) allBatchLegacyIds.add(r.taskId);
       }
     } catch (_) {}
-    if (allBatchLegacyIds.isNotEmpty) {
-      await _cancelTasksWithIds(
-        allBatchLegacyIds.toList(),
-        batch: batch,
-        source: 'legacy_migration',
-      );
-    }
 
     final transfersDir = await _transfersDir();
     var resumed = 0;
@@ -7908,7 +7904,7 @@ class DownloadManager extends ChangeNotifier {
         job.key,
       }.toList();
 
-      // Locate temp file from plugin ResumeData.
+      // Locate temp file from plugin ResumeData BEFORE any cancel.
       String? tempPath;
       var expectedStartByte = 0;
       for (final id in legacyIds) {
@@ -8007,13 +8003,15 @@ class DownloadManager extends ChangeNotifier {
       return false;
     }
 
-    batch.pipeline = DownloadBatch.pipelineTransfer;
-    for (final j in batch.jobs) {
-      j.usesNewTransferPipeline = true;
+    // Cancel legacy plugin tasks AFTER .part move and TransferService enqueue,
+    // while batch is still marked legacy so the unique gate permits it.
+    if (allBatchLegacyIds.isNotEmpty) {
+      await _cancelTasksWithIds(
+        allBatchLegacyIds.toList(),
+        batch: batch,
+        source: 'legacy_migration',
+      );
     }
-    _batches[batch.batchId] = batch;
-    await _persist(batch);
-
     for (final id in legacyIdsToClean) {
       await _removeResumeData(id);
     }
@@ -8031,6 +8029,13 @@ class DownloadManager extends ChangeNotifier {
         } catch (_) {}
       }
     }
+
+    batch.pipeline = DownloadBatch.pipelineTransfer;
+    for (final j in batch.jobs) {
+      j.usesNewTransferPipeline = true;
+    }
+    _batches[batch.batchId] = batch;
+    await _persist(batch);
 
     await DevLog.write(
       'V16DL',
@@ -8515,6 +8520,30 @@ class DownloadManager extends ChangeNotifier {
   }
 
   /// 启动补写：查询服务中 history_pending=1 的已完成任务，写入历史库后回执清除标记（幂等）。
+  Future<void> _onClaimLostRefresh(DownloadBatch batch) async {
+    try {
+      final db = await HistoryDb.instance();
+      var record = await db.getByPostId(batch.postId, platform: batch.platform);
+      if (record == null) {
+        await Future<void>.delayed(const Duration(milliseconds: 150));
+        record = await db.getByPostId(batch.postId, platform: batch.platform);
+      }
+      final locator = GalleryLocatorService.instance;
+      if (locator.hasAccess) {
+        for (final j in batch.jobs) {
+          final mId = j.mediaId;
+          if (mId != null && mId.isNotEmpty) {
+            await locator.getAssetByIdAsync(mId);
+          }
+        }
+        if (record != null) {
+          await locator.preloadMediaIds([record]);
+        }
+      }
+      HostBridge.historyRevision.value = HostBridge.historyRevision.value + 1;
+    } catch (_) {}
+  }
+
   Future<void> reconcileTransferHistoryPending({HistoryDb? db}) async {
     try {
       final pending = await _transferClient.queryHistoryPending();
@@ -8576,6 +8605,7 @@ class DownloadManager extends ChangeNotifier {
         await _transferClient.ackHistoryWritten(ackIds);
       }
       await (db ?? await HistoryDb.instance()).repairIncompleteTransferRows();
+      HostBridge.historyRevision.value = HostBridge.historyRevision.value + 1;
     } catch (e) {
       _log('reconcileTransferHistoryPending failed: $e');
     }

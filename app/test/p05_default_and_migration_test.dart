@@ -13,6 +13,7 @@ import 'package:easysave/core/dev_log.dart';
 import 'package:easysave/core/models.dart';
 import 'package:easysave/services/download_manager.dart';
 import 'package:easysave/services/history_db.dart';
+import 'package:easysave/services/host_bridge.dart';
 import 'package:easysave/services/settings.dart';
 import 'package:easysave/services/transfer_client.dart';
 
@@ -66,8 +67,10 @@ class _FakeTransferClient extends TransferClient {
     return id;
   }
 
+  bool claimHistoryResult = true;
+
   @override
-  Future<bool> claimHistoryWrite(String batchId) async => true;
+  Future<bool> claimHistoryWrite(String batchId) async => claimHistoryResult;
 
   @override
   Future<bool> claimMigration(String batchId) async {
@@ -137,6 +140,15 @@ void main() {
         AppSettings()..useNewTransferPipeline = true;
     dm.cancelTaskForTesting = (taskId) async {
       canceledTaskIds.add(taskId);
+      // Simulate real background_downloader: cancelling a paused task deletes
+      // its ResumeData and temp file.
+      final rd = resumeStore.remove(taskId);
+      if (rd != null && rd.data.isNotEmpty) {
+        final f = File(rd.data);
+        if (await f.exists()) {
+          await f.delete();
+        }
+      }
     };
     dm.getResumeDataForTesting = (taskId) async => resumeStore[taskId];
     dm.removeResumeDataForTesting = (taskId) async {
@@ -589,6 +601,11 @@ void main() {
       dm.cancelTaskForTesting = (taskId) async {
         canceledTaskIds.add(taskId);
         callOrder.add('cancel:$taskId');
+        final rd = resumeStore.remove(taskId);
+        if (rd != null && rd.data.isNotEmpty) {
+          final f = File(rd.data);
+          if (await f.exists()) await f.delete();
+        }
       };
       fakeClient.onAction = (method, id) {
         if (method == 'enqueue') callOrder.add('enqueue:$id');
@@ -620,9 +637,8 @@ void main() {
       final cancelIdx = callOrder.indexOf('cancel:task_legacy_0');
       final enqueueIdx = callOrder.indexOf('enqueue:xfer_b_order-0_c1');
       expect(startIdx, greaterThan(0));
+      expect(enqueueIdx, lessThan(cancelIdx));
       expect(cancelIdx, lessThan(startIdx));
-      expect(enqueueIdx, lessThan(startIdx));
-      expect(cancelIdx, lessThan(enqueueIdx));
 
       expect(
         DevLog.recentLines(200).any(
@@ -637,6 +653,87 @@ void main() {
         ),
         isTrue,
       );
+    });
+
+    test('cancel-before-read order loses ResumeData and temp file (regression guard)', () async {
+      final legacyTemp = File('${tempDir.path}/cancel_first.part');
+      await legacyTemp.writeAsBytes(List<int>.filled(4096, 3));
+      resumeStore['task_cancel_first'] = ResumeData(
+        DownloadTask(
+          taskId: 'task_cancel_first',
+          url: 'https://sns-video-bd.xhscdn.com/v1.mp4',
+          filename: 'post123_1.mp4',
+        ),
+        legacyTemp.path,
+        4096,
+      );
+
+      // If cancel runs before reading ResumeData, both ResumeData and temp file are gone.
+      await DownloadManager.instance.cancelTaskForTesting!('task_cancel_first');
+      expect(await DownloadManager.instance.getResumeDataForTesting!('task_cancel_first'), isNull);
+      expect(await legacyTemp.exists(), isFalse);
+    });
+
+    test('claim=lost refreshes HistoryDb and increments HostBridge.historyRevision', () async {
+      final revBefore = HostBridge.historyRevision.value;
+      await testDb.upsert(
+        HistoryRecord(
+          platform: 'xhs',
+          postId: 'post_claim_lost',
+          title: 'Bubble Settled',
+          postUrl: 'https://www.xiaohongshu.com/explore/post_claim_lost',
+          fileCount: 1,
+          createdAt: DateTime.now(),
+          files: [
+            HistoryFile(
+              filename: 'post_claim_lost_1.mp4',
+              savedAt: 1000,
+              itemIndex: 1,
+              isImage: false,
+              mediaId: 'm_claim_lost_1',
+              status: FileStatus.found,
+            ),
+          ],
+        ),
+        restoreDeleted: true,
+        userSave: true,
+        source: 'bubble',
+      );
+
+      final fakeNoClaim = _FakeTransferClient()..claimHistoryResult = false;
+      DownloadManager.instance.transferClientForTesting = fakeNoClaim;
+      addTearDown(fakeNoClaim.dispose);
+
+      final batch = DownloadBatch(
+        batchId: 'b_claim_lost',
+        album: 'EasySave',
+        postUrl: 'https://www.xiaohongshu.com/explore/post_claim_lost',
+        platform: 'xhs',
+        postId: 'post_claim_lost',
+        pipeline: DownloadBatch.pipelineTransfer,
+        jobs: [
+          DownloadJob(
+            key: 'b_claim_lost-0',
+            label: 'video:mp4',
+            filename: 'post_claim_lost_1.mp4',
+            urls: ['https://sns-video-bd.xhscdn.com/v.mp4'],
+            isImage: false,
+            itemIndex: 1,
+          )
+            ..transferJobId = 'xfer_b_claim_lost-0'
+            ..state = JobState.done
+            ..saved = true
+            ..mediaId = 'm_claim_lost_1',
+        ],
+      );
+
+      await DownloadManager.instance.afterTerminalForTesting(
+        batch,
+        fromTransferPipeline: true,
+      );
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+
+      expect(HostBridge.historyRevision.value, greaterThan(revBefore));
     });
   });
 }

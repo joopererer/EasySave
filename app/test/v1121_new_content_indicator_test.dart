@@ -9,6 +9,7 @@
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -18,6 +19,7 @@ import 'package:easysave/pages/history_page.dart';
 import 'package:easysave/services/gallery_locator_service.dart';
 import 'package:easysave/services/history_db.dart';
 import 'package:easysave/services/host_bridge.dart';
+import 'package:easysave/widgets/history_cards.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -341,6 +343,67 @@ void main() {
       // 1.5s later highlight expires cleanly
       await tester.pump(const Duration(milliseconds: 1600));
       await tester.pump(const Duration(milliseconds: 350));
+    });
+
+    testWidgets('P0-5c: bubble write and same-engine Db write trigger banner just past first row', (tester) async {
+      SharedPreferences.setMockInitialValues({
+        'historyView': 'posts',
+        'historyLayout': 'waterfall',
+      });
+      HistoryDb.resetInstanceForTesting();
+      GalleryLocatorService.instance.resetForTesting();
+      tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+        photos,
+        (_) async => 0,
+      );
+      addTearDown(() async {
+        await tester.pumpWidget(const SizedBox.shrink());
+        tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(photos, null);
+        GalleryLocatorService.instance.resetForTesting();
+        HistoryDb.resetInstanceForTesting();
+      });
+
+      late HistoryDb testDb;
+      await tester.runAsync(() async {
+        testDb = await HistoryDb.instance(dbPath: ':memory:');
+        HistoryDb.setInstanceForTesting(testDb);
+        await testDb.clear();
+        for (var i = 0; i < 30; i++) {
+          await testDb.upsert(createMockRecord('post_$i', i), restoreDeleted: true, userSave: true, source: 'test');
+        }
+      });
+
+      tester.view.physicalSize = const Size(400, 800);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(() => tester.view.resetPhysicalSize());
+
+      await tester.pumpWidget(const MaterialApp(home: HistoryPage()));
+      await settle(tester);
+
+      final scrollableFinder = mainScrollable();
+      final scrollState = tester.state<ScrollableState>(scrollableFinder);
+      final firstCardBox = tester.renderObject<RenderBox>(find.byType(WaterfallPostCard).first);
+      final vp = RenderAbstractViewport.of(firstCardBox);
+      final threshold = vp.getOffsetToReveal(firstCardBox, 0.0).offset + firstCardBox.size.height;
+
+      // Scroll just past the first row (far above 1 screen!)
+      scrollState.position.jumpTo(threshold + 8.0);
+      await tester.pump(const Duration(milliseconds: 100));
+
+      // 1. Same-engine HistoryDb.upsert triggers banner automatically via Db listener
+      await tester.runAsync(() async {
+        await testDb.upsert(createMockRecord('post_same_engine', 0), restoreDeleted: true, userSave: true, source: 'main');
+      });
+      await settle(tester);
+      expect(find.text('有 1 条新内容 ↑'), findsOneWidget);
+
+      // 2. Bubble engine write via HostBridge.historyRevision accumulates
+      await tester.runAsync(() async {
+        await testDb.upsert(createMockRecord('post_bubble_engine', 0), restoreDeleted: true, userSave: true, source: 'bubble');
+      });
+      HostBridge.historyRevision.value++;
+      await settle(tester);
+      expect(find.text('有 2 条新内容 ↑'), findsOneWidget);
     });
   });
 }

@@ -14,7 +14,7 @@ This file documents notable user-facing changes following [Keep a Changelog](htt
 - 统一后台传输服务（阶段 0）：
   - 新建基于 OkHttp 的 Kotlin 原生前台传输服务（`TransferService`），以单一串行调度器与 `.part` 物理临时文件替代旧下载插件及应用层补丁调度，下载由传输服务统一驱动；
   - 默认开启新下载链路，并在「开发者选项」保留「使用旧下载链路（回退用）」开关（默认关闭）；
-  - 升级时自动迁移仍在进行的旧链路任务：取消旧插件任务、将已有临时文件无损移为 `transfers/<jobId>.part` 并从原长度断点续传，Live 图单边已入库时仍保持配对；
+  - 升级时自动迁移仍在进行的旧链路任务：取消旧插件任务、将已有临时文件无损移为 `transfers/<jobId>.part` 并从原长度断点续传（已暂停的旧任务从原进度续传，正在下载未暂停的旧任务从 0 重新下载，任务均不丢失），Live 图单边已入库时仍保持配对；
   - 原生端完成来源信息（XMP）写入、C2PA 边车成对原子写入、Live 图成对原子入库及相册保存，主界面、悬浮球与系统通知进度实时同步。
   Unified background transfer service (Phase 0):
   - Replaced the legacy downloader plugin and app-layer patch state machines with a native Kotlin foreground `TransferService` powered by OkHttp, a single serial scheduler, and `.part` temp files;
