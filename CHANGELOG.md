@@ -27,10 +27,14 @@ This file documents notable user-facing changes following [Keep a Changelog](htt
 
 - 历史页体验与跨引擎查看优化：
   - 历史页「回到顶部」按钮与「有 N 条新内容 ↑」提示改为在第一行帖子不再完全可见时即平滑淡入（含防闪烁滞回），回到顶部后隐藏，各视图模式保持一致；
-  - 优化悬浮球后台下载完成后在主界面历史页的实时同步与视频首次打开体验。
+  - 在顶部且未滚动时收到新帖子会自动平滑滚回顶部展示最新内容；
+  - 在浏览界面删除帖子最后一项时同步删除该帖子记录，避免返回历史页后残留空帖子；
+  - 修复新传输链路写入相册的视频元数据与发布后媒体扫描，确保立即在 App 内与系统相册中正常播放。
   History page & cross-engine viewing improvements:
   - Updated the "Back to top" button and "N new items ↑" banner to fade in as soon as the first row is no longer fully visible (with anti-flicker hysteresis) across all view modes, and hide upon returning to the top;
-  - Improved immediate history refresh and first-tap video playback in the main UI for posts saved via the floating bubble engine.
+  - Automatically scrolls smoothly to the top when a new post arrives while already at the top and not scrolling;
+  - Removes the post record when its last remaining item is deleted from the viewer;
+  - Fixed video MediaStore metadata and post-publish media scanning in the new transfer pipeline so newly saved videos play immediately in both the app viewer and system gallery.
 
 ## [1.12.1] - 2026-11-22
 

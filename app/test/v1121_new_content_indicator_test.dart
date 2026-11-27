@@ -405,6 +405,77 @@ void main() {
       await settle(tester);
       expect(find.text('有 2 条新内容 ↑'), findsOneWidget);
     });
+
+    testWidgets('at top -> new post auto-scrolls to top without banner; dragging -> does not auto-scroll', (tester) async {
+      SharedPreferences.setMockInitialValues({
+        'historyView': 'posts',
+        'historyLayout': 'waterfall',
+      });
+      HistoryDb.resetInstanceForTesting();
+      GalleryLocatorService.instance.resetForTesting();
+      tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+        photos,
+        (_) async => 0,
+      );
+      addTearDown(() async {
+        await tester.pumpWidget(const SizedBox.shrink());
+        tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(photos, null);
+        GalleryLocatorService.instance.resetForTesting();
+        HistoryDb.resetInstanceForTesting();
+      });
+
+      late HistoryDb testDb;
+      await tester.runAsync(() async {
+        testDb = await HistoryDb.instance(dbPath: ':memory:');
+        HistoryDb.setInstanceForTesting(testDb);
+        await testDb.clear();
+        for (var i = 0; i < 30; i++) {
+          await testDb.upsert(createMockRecord('post_$i', i), restoreDeleted: true, userSave: true, source: 'test');
+        }
+      });
+
+      tester.view.physicalSize = const Size(400, 800);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(() => tester.view.resetPhysicalSize());
+
+      await tester.pumpWidget(const MaterialApp(home: HistoryPage()));
+      await settle(tester);
+
+      final scrollState = tester.state<ScrollableState>(mainScrollable());
+      // Slightly scrolled, still within first row
+      scrollState.position.jumpTo(12.0);
+      await tester.pump(const Duration(milliseconds: 50));
+
+      // 1. At top & idle -> new post auto-scrolls smoothly to 0.0 without showing banner
+      await tester.runAsync(() async {
+        await testDb.upsert(createMockRecord('post_auto_top', 0), restoreDeleted: true, userSave: true, source: 'main');
+      });
+      await settle(tester);
+      await pumpUntil(tester, () => scrollState.position.pixels == 0.0);
+      expect(scrollState.position.pixels, 0.0);
+      final bannerFinder = find.byKey(const ValueKey('history_new_content_banner'));
+      final opacity1 = tester.widget<AnimatedOpacity>(
+        find.ancestor(of: bannerFinder, matching: find.byType(AnimatedOpacity)).first,
+      );
+      expect(opacity1.opacity, 0.0);
+
+      // 2. User actively dragging -> does NOT auto-scroll to top
+      final center = tester.getCenter(mainScrollable());
+      final gesture = await tester.startGesture(center);
+      await gesture.moveBy(const Offset(0, -40));
+      await tester.pump(const Duration(milliseconds: 50));
+      final offsetDuringDrag = scrollState.position.pixels;
+      expect(offsetDuringDrag, greaterThan(0.0));
+
+      await tester.runAsync(() async {
+        await testDb.upsert(createMockRecord('post_during_drag', 0), restoreDeleted: true, userSave: true, source: 'main');
+      });
+      await settle(tester);
+      expect(scrollState.position.pixels, greaterThan(0.0));
+
+      await gesture.up();
+      await tester.pumpAndSettle();
+    });
   });
 }
 
