@@ -590,6 +590,56 @@ void _logViewerNotLocal({
   }
 }
 
+/// Logs diagnostic lines when opening a record finds no viewable items, and
+/// triggers a one-shot read-only MediaStore duplicate check.
+void logOpenNoViewable(HistoryRecord record) {
+  final locator = GalleryLocatorService.instance;
+  unawaited(
+    DevLog.write(
+      'HIST',
+      'open_no_viewable post=${record.postId} files=${record.files.length}',
+    ),
+  );
+  for (var i = 0; i < record.files.length; i++) {
+    final f = record.files[i];
+    final hasMediaId = f.mediaId?.isNotEmpty == true;
+    final relDir = GalleryLocatorService.topRelDir(f.relativePath);
+    final isHidden = GalleryLocatorService.isHiddenPath(f.relativePath);
+    final presentReason = locator.lastIsPresentFalseReason(f.mediaId);
+    final String reason;
+    if (f.status == FileStatus.deleted) {
+      reason = 'status_deleted';
+    } else if (f.status == FileStatus.notFound) {
+      reason = 'status_not_found';
+    } else if (isHidden ||
+        (f.relativePath != null &&
+            f.relativePath!.isNotEmpty &&
+            !GalleryLocatorService.isAllowedPublishPath(
+              f.relativePath,
+              const ['EasySave'],
+            ))) {
+      reason = 'not_allowed_path';
+    } else if (presentReason != null) {
+      reason = 'is_present_false:$presentReason';
+    } else if (!isShowableHistoryFile(f)) {
+      reason = 'candidate_unusable';
+    } else {
+      reason = 'resolver_null';
+    }
+    unawaited(
+      DevLog.write(
+        'HIST',
+        'open_file_filtered post=${record.postId} index=$i reason=$reason '
+            'has_media_id=${hasMediaId ? 'y' : 'n'} rel_dir=$relDir '
+            'is_hidden=${isHidden ? 'y' : 'n'}',
+      ),
+    );
+  }
+  if (record.postId.isNotEmpty) {
+    unawaited(locator.diagnoseMediaDupOnce(record.postId));
+  }
+}
+
 /// Fullscreen browser items for one saved post, plus the page to open.
 ///
 /// The history page and the "最近保存" list both build from here: a Live
@@ -697,10 +747,12 @@ Future<({List<GalleryBrowserItem> items, int initial})> savedBrowserItems({
     // be viewed or re-downloaded by halves.
     final imageMissing = entry.image != null &&
         imageAsset == null &&
-        isMissingHistoryFile(entry.image!);
+        (isMissingHistoryFile(entry.image!) ||
+            (scanned && locator.hasAccess));
     final videoMissing = entry.video != null &&
         videoAsset == null &&
-        isMissingHistoryFile(entry.video!);
+        (isMissingHistoryFile(entry.video!) ||
+            (scanned && locator.hasAccess));
     final missing = imageMissing || videoMissing;
 
     if (highlightItemIndex != null &&
@@ -2763,7 +2815,8 @@ class _BrowserItemViewState extends State<_BrowserItemView> {
   @override
   void initState() {
     super.initState();
-    if (widget.item.status == FileStatus.notFound) {
+    if (widget.item.status == FileStatus.notFound ||
+        (widget.item.asset == null && !widget.item.url.startsWith('http'))) {
       _isNotFound = true;
       if (!widget.item.missing) {
         _logViewerNotLocal(

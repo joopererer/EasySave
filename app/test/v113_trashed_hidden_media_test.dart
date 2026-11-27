@@ -1,5 +1,6 @@
 import 'dart:io';
 
+import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:path/path.dart' as p;
@@ -272,5 +273,205 @@ void main() {
       ),
       isTrue,
     );
+  });
+
+  test('isAllowedPublishPath accepts all EasySave publish dirs and case/slash variants', () {
+    const albums = ['EasySave'];
+    for (final p in [
+      'Movies/EasySave/',
+      'Movies/EasySave',
+      'movies/easysave/',
+      'Pictures/EasySave/',
+      'PICTURES/EASYSAVE',
+      'DCIM/EasySave/',
+      'dcim/easysave',
+      'Download/EasySave/',
+      'download/easysave/',
+      'Pictures/EasySave/2026/',
+    ]) {
+      expect(
+        GalleryLocatorService.isAllowedPublishPath(p, albums),
+        isTrue,
+        reason: '$p should be allowed',
+      );
+    }
+    for (final p in [
+      'MIUI/Gallery/.trashBin/EasySave/',
+      '.trash/EasySave/',
+      'Pictures/.hidden/EasySave/',
+      'Movies/OtherApp/',
+    ]) {
+      expect(
+        GalleryLocatorService.isAllowedPublishPath(p, albums),
+        isFalse,
+        reason: '$p should be excluded',
+      );
+    }
+  });
+
+  test('regression: image, video, live, C2PA, and legacy-dir posts all open in viewer', () async {
+    final locator = GalleryLocatorService.instance;
+    locator.hasAccessForTesting = true;
+    locator.presenceProbeForTesting = (_) async => true;
+
+    final img = AssetEntity(id: 'img_1', typeInt: AssetType.image.index, width: 100, height: 100, title: 'p1_1.jpg', relativePath: 'Pictures/EasySave/');
+    final vid = AssetEntity(id: 'vid_1', typeInt: AssetType.video.index, width: 100, height: 100, title: 'p2_1.mp4', relativePath: 'Movies/EasySave/');
+    final liveImg = AssetEntity(id: 'live_img', typeInt: AssetType.image.index, width: 100, height: 100, title: 'p3_1.jpg', relativePath: 'Pictures/EasySave/');
+    final liveVid = AssetEntity(id: 'live_vid', typeInt: AssetType.video.index, width: 100, height: 100, title: 'p3_1.mp4', relativePath: 'Movies/EasySave/');
+    final c2pa = AssetEntity(id: 'c2pa_1', typeInt: AssetType.image.index, width: 100, height: 100, title: 'p4_1.jpg', relativePath: 'Download/EasySave/');
+    final legacy = AssetEntity(id: 'leg_1', typeInt: AssetType.image.index, width: 100, height: 100, title: 'p5_1.jpg', relativePath: 'DCIM/EasySave/');
+
+    locator.setScannedForTesting(
+      scanned: true,
+      permission: PermissionState.authorized,
+      assets: [img, vid, liveImg, liveVid, c2pa, legacy],
+      relativePaths: {
+        'img_1': 'Pictures/EasySave/',
+        'vid_1': 'Movies/EasySave/',
+        'live_img': 'Pictures/EasySave/',
+        'live_vid': 'Movies/EasySave/',
+        'c2pa_1': 'Download/EasySave/',
+        'leg_1': 'DCIM/EasySave/',
+      },
+    );
+
+    Future<void> checkPost(String postId, List<HistoryFile> files, List<MediaItem> items, String expectedType) async {
+      final rec = HistoryRecord(
+        platform: 'xhs',
+        postId: postId,
+        postUrl: 'https://www.xiaohongshu.com/explore/$postId',
+        fileCount: files.length,
+        createdAt: DateTime.now(),
+        files: files,
+      );
+      final built = await savedBrowserItems(
+        record: rec,
+        files: rec.visibleFiles,
+        post: ParsedPost(platform: 'xhs', id: postId, url: rec.postUrl, author: PostAuthor(), items: items),
+        albumScanned: true,
+      );
+      expect(built.items, hasLength(1));
+      expect(built.items.first.type, expectedType);
+      expect(built.items.first.missing, isFalse);
+      expect(built.items.first.asset, isNotNull);
+    }
+
+    final now = DateTime.now().millisecondsSinceEpoch;
+    await checkPost('p1', [HistoryFile(itemIndex: 1, isImage: true, filename: 'p1_1.jpg', mediaId: 'img_1', relativePath: 'Pictures/EasySave/', savedAt: now, status: FileStatus.found)], [MediaItem(type: 'image', url: 'https://cdn.example/1.jpg')], 'image');
+    await checkPost('p2', [HistoryFile(itemIndex: 1, isImage: false, filename: 'p2_1.mp4', mediaId: 'vid_1', relativePath: 'Movies/EasySave/', savedAt: now, status: FileStatus.found)], [MediaItem(type: 'video', url: 'https://cdn.example/2.mp4')], 'video');
+    await checkPost('p3', [
+      HistoryFile(itemIndex: 1, isImage: true, filename: 'p3_1.jpg', mediaId: 'live_img', pairId: 'p3#1', relativePath: 'Pictures/EasySave/', savedAt: now, status: FileStatus.found),
+      HistoryFile(itemIndex: 1, isImage: false, filename: 'p3_1.mp4', mediaId: 'live_vid', pairId: 'p3#1', relativePath: 'Movies/EasySave/', savedAt: now, status: FileStatus.found),
+    ], [MediaItem(type: 'live', url: 'https://cdn.example/3.jpg', videoUrl: 'https://cdn.example/3.mp4')], 'live');
+    await checkPost('p4', [HistoryFile(itemIndex: 1, isImage: true, filename: 'p4_1.jpg', mediaId: 'c2pa_1', relativePath: 'Download/EasySave/', savedAt: now, status: FileStatus.found)], [MediaItem(type: 'image', url: 'https://cdn.example/4.jpg')], 'image');
+    await checkPost('p5', [HistoryFile(itemIndex: 1, isImage: true, filename: 'p5_1.jpg', mediaId: 'leg_1', relativePath: 'DCIM/EasySave/', savedAt: now, status: FileStatus.found)], [MediaItem(type: 'image', url: 'https://cdn.example/5.jpg')], 'image');
+  });
+
+  test('logOpenNoViewable logs open_no_viewable, open_file_filtered, and triggers diagnoseMediaDupOnce', () async {
+    var diagnosed = false;
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(mediaChannel, (call) async {
+      if (call.method == 'diagnoseMediaDup') {
+        diagnosed = true;
+        return const <Map<String, dynamic>>[];
+      }
+      return null;
+    });
+
+    final rec = HistoryRecord(
+      platform: 'xhs',
+      postId: 'empty_post_1',
+      postUrl: 'https://www.xiaohongshu.com/explore/empty_post_1',
+      fileCount: 1,
+      createdAt: DateTime.now(),
+      files: [
+        HistoryFile(
+          itemIndex: 1,
+          isImage: false,
+          filename: 'empty_post_1_1.mp4',
+          mediaId: null,
+          relativePath: 'MIUI/Gallery/.trashBin/EasySave/',
+          savedAt: 1,
+          status: FileStatus.unknown,
+        ),
+      ],
+    );
+    logOpenNoViewable(rec);
+    await Future<void>.delayed(const Duration(milliseconds: 20));
+    expect(diagnosed, isTrue);
+    final logs = DevLog.recentLines(20);
+    expect(logs.any((l) => l.contains('open_no_viewable post=empty_post_1 files=1')), isTrue);
+    expect(logs.any((l) => l.contains('open_file_filtered post=empty_post_1 index=0 reason=not_allowed_path has_media_id=n rel_dir=MIUI/Gallery is_hidden=y')), isTrue);
+  });
+
+  testWidgets('unavailable files still open viewer with 不在本机 and working 重新下载 button', (tester) async {
+    final locator = GalleryLocatorService.instance;
+    locator.hasAccessForTesting = true;
+    locator.presenceProbeForTesting = (_) async => false;
+    locator.setScannedForTesting(scanned: true, permission: PermissionState.authorized, assets: const []);
+
+    final rec = HistoryRecord(
+      platform: 'xhs',
+      postId: '6b08096e000000002a019d88',
+      postUrl: 'https://www.xiaohongshu.com/explore/6b08096e000000002a019d88',
+      fileCount: 1,
+      createdAt: DateTime.now(),
+      files: [
+        HistoryFile(
+          itemIndex: 1,
+          isImage: true,
+          filename: '6b08096e000000002a019d88_1.jpg',
+          mediaId: 'missing_999',
+          relativePath: 'Pictures/EasySave/',
+          savedAt: DateTime.now().millisecondsSinceEpoch,
+          status: FileStatus.found,
+        ),
+      ],
+    );
+
+    final built = await tester.runAsync(() => savedBrowserItems(
+      record: rec,
+      files: rec.visibleFiles,
+      post: ParsedPost(
+        platform: 'xhs',
+        id: rec.postId,
+        url: rec.postUrl,
+        author: PostAuthor(name: 'author'),
+        items: [MediaItem(type: 'image', url: '')],
+      ),
+      albumScanned: true,
+    ));
+
+    expect(built!.items, hasLength(1));
+    expect(built.items.first.missing, isTrue);
+
+    Set<int>? redownloaded;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: GalleryBrowserPage(
+          items: built.items,
+          initialIndex: 0,
+          authorName: 'author',
+          title: 'test',
+          platform: 'xhs',
+          postUrl: rec.postUrl,
+          onRedownloadItems: (indices) async {
+            redownloaded = indices;
+            return null;
+          },
+        ),
+      ),
+    );
+    await tester.pump();
+
+    expect(find.text('不在本机'), findsOneWidget);
+    final btn = find.text('重新下载这张');
+    expect(btn, findsOneWidget);
+    await tester.tap(btn);
+    await tester.pump();
+    expect(redownloaded, equals({0}));
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pump(const Duration(milliseconds: 50));
   });
 }

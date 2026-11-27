@@ -109,10 +109,15 @@ class MediaStoreBridge(private val context: Context) {
                 .trim('/')
                 .lowercase()
             if (normalized.isEmpty()) return false
-            val albumKeys = albums.map { it.trim().lowercase() }.filter { it.isNotEmpty() }.distinct()
-            if (albumKeys.isEmpty()) return false
+            val albumKeys = (albums + "easysave")
+                .map { it.trim().lowercase() }
+                .filter { it.isNotEmpty() }
+                .distinct()
             return albumKeys.any { album ->
-                ALLOWED_ROOTS.any { root -> normalized == "$root/$album" }
+                ALLOWED_ROOTS.any { root ->
+                    val prefix = "$root/$album"
+                    normalized == prefix || normalized.startsWith("$prefix/")
+                }
             }
         }
 
@@ -444,7 +449,7 @@ class MediaStoreBridge(private val context: Context) {
                 return
             }
             pfd.use {
-                if (it.statSize <= 0L) {
+                if (it.statSize == 0L) {
                     result.success(mapOf("present" to false, "reason" to "media_exists_false"))
                     return
                 }

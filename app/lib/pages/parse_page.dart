@@ -1319,19 +1319,19 @@ class ParsePageState extends State<ParsePage> with WidgetsBindingObserver {
       }
 
       if (items.isEmpty) {
+        logOpenNoViewable(record);
         if (mounted) {
-          ScaffoldMessenger.of(
-            context,
-          ).showSnackBar(const SnackBar(content: Text('未找到可查看的媒体文件')));
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: const Text('未找到可查看的媒体文件'),
+              action: SnackBarAction(
+                label: '重新下载',
+                onPressed: () => _reparseRecord(record),
+              ),
+            ),
+          );
         }
         return;
-      }
-      if (mounted && items.every((item) => item.missing)) {
-        // All of it is off the device: open the viewer anyway, with the
-        // placeholders and the re-download button (v1.11 batch 4).
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(const SnackBar(content: Text('未找到可查看的媒体文件')));
       }
 
       if (!mounted) return;
