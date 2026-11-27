@@ -127,7 +127,21 @@
    - `DownloadManager` 中的 `_migrateLegacyBatchIfNeeded` 一次性迁移逻辑（确认所有存量用户升级完成后移除）；
    - 「开发者选项」中的「使用旧下载链路（回退用）」与「断网不自动续传（停在『点继续』）」开关及相关回退分支。
 
-### 6.3 下一步
+### 6.3 v1.13.0 已知问题与 v1.13.1 修复方向
+
+- **现象**：个别视频下载完成后立即打开，可能显示「不在本机」，但系统相册可正常播放；重启 App 后恢复正常。
+- **根因证据（build101_4 日志）**：
+  - 日志出现 `is_present_false reason=unreadable_ids`；
+  - `media_dup` 显示仅一条记录（`owner=self`，`rel_dir=Pictures/EasySave`，`is_trashed=0`，`is_pending=0`，`size=3138698`，`is_row_media_id=y`）。
+- **结论**：`GalleryLocatorService._unreadableIds` 是只存在内存中的永久黑名单，没有 TTL，也不随重新下载或行改写清除。
+- **v1.13.1 修复方向**：
+  - 黑名单加 TTL；
+  - 在 `onFilesRewritten`、下载发布新 `mediaId` 时清除；
+  - 记入黑名单前确认不是 pending 或刚发布的窗口期；
+  - `isPresent` 命中黑名单时用原生 `checkMediaPresent` 复核一次；
+  - 补测试。
+
+### 6.4 下一步
 
 - **v2.0 阶段 1**：Google Drive 登录授权与云端备份队列（复用阶段 0 的 `TransferService`）。
 - **v2.0 阶段 2–4**：备份清单同步、换机恢复、仅在云端与空间释放。
