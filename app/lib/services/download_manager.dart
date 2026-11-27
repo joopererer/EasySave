@@ -2885,6 +2885,9 @@ class DownloadManager extends ChangeNotifier {
       (db) => writePlaceholderHistory(db, batch),
       stage: 'placeholder',
     );
+    if (batch.usesNewTransferPipeline) {
+      _enqueuingTransferJobs.addAll(batch.jobs.map((j) => j.key));
+    }
     for (final job in batch.jobs) {
       // One failing enqueue must not strand the remaining jobs in `queued`
       // (that kept the batch non-terminal forever, e.g. stuck at ~50%).
@@ -2903,6 +2906,8 @@ class DownloadManager extends ChangeNotifier {
         } else {
           job.error = '加入下载队列失败';
         }
+      } finally {
+        _enqueuingTransferJobs.remove(job.key);
       }
     }
     await _persist(batch);
@@ -7777,6 +7782,7 @@ class DownloadManager extends ChangeNotifier {
   TransferClient? _defaultTransferClient;
   StreamSubscription<TransferEvent>? _transferEventsSub;
   final Set<String> _reresolvingTransferJobs = <String>{};
+  final Set<String> _enqueuingTransferJobs = <String>{};
 
   TransferClient get _transferClient =>
       transferClientForTesting ?? (_defaultTransferClient ??= TransferClient());
@@ -8125,6 +8131,27 @@ class DownloadManager extends ChangeNotifier {
   }
 
   Future<void> _enqueueViaTransferService(
+    DownloadBatch batch,
+    DownloadJob job, {
+    bool? schedulerHasPairPartner,
+    int initialBytesRead = 0,
+  }) async {
+    final addedByMe = _enqueuingTransferJobs.add(job.key);
+    try {
+      await _enqueueViaTransferServiceImpl(
+        batch,
+        job,
+        schedulerHasPairPartner: schedulerHasPairPartner,
+        initialBytesRead: initialBytesRead,
+      );
+    } finally {
+      if (addedByMe) {
+        _enqueuingTransferJobs.remove(job.key);
+      }
+    }
+  }
+
+  Future<void> _enqueueViaTransferServiceImpl(
     DownloadBatch batch,
     DownloadJob job, {
     bool? schedulerHasPairPartner,
@@ -8643,6 +8670,7 @@ class DownloadManager extends ChangeNotifier {
         var batchChanged = false;
         for (final job in batch.jobs) {
           if (job.state == JobState.canceled) continue;
+          if (_enqueuingTransferJobs.contains(job.key)) continue;
           if (job.state == JobState.done &&
               job.saved &&
               (job.mediaId?.trim().isNotEmpty == true)) {

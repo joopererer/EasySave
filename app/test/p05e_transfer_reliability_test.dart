@@ -424,4 +424,108 @@ void main() {
 
     client.dispose();
   });
+
+  test('snapshot sync skips jobs whose enqueue is still in flight, then marks missing after enqueue confirms', () async {
+    final dm = DownloadManager.instance;
+    final enqueueStarted = Completer<void>();
+    final enqueueGate = Completer<void>();
+
+    final client = _GatedEnqueueTransferClient(
+      onEnqueue: () {
+        if (!enqueueStarted.isCompleted) enqueueStarted.complete();
+        return enqueueGate.future;
+      },
+    );
+    dm.transferClientForTesting = client;
+
+    final post = _samplePost('inflight-1');
+    final startFuture = dm.startBatch(
+      post,
+      [0],
+      album: 'EasySave',
+      nameFor: (label, seq, ext) => '${post.id}_$seq.$ext',
+      requestGalleryAccess: false,
+    );
+
+    await enqueueStarted.future;
+
+    // Trigger snapshot sync while enqueue is still awaiting service confirmation
+    await dm.syncTransferBatchesFromSnapshotForTesting();
+    final inflightBatch = dm.unfinishedBatches.firstWhere(
+      (b) => b.postId == 'inflight-1',
+    );
+    expect(inflightBatch.jobs.single.state, JobState.queued);
+    expect(inflightBatch.jobs.single.transferState, isNot('interrupted'));
+    expect(
+      DevLog.recentLines(50).any(
+        (l) =>
+            l.contains('transfer_snapshot_missing') &&
+            l.contains(inflightBatch.batchId),
+      ),
+      isFalse,
+    );
+
+    // Now let enqueue confirm; service snapshot still does not contain it -> handled as missing
+    enqueueGate.complete();
+    await startFuture;
+    await dm.syncTransferBatchesFromSnapshotForTesting();
+
+    expect(inflightBatch.jobs.single.state, JobState.paused);
+    expect(inflightBatch.jobs.single.transferState, 'interrupted');
+    expect(inflightBatch.jobs.single.error, '已中断，点继续');
+    expect(
+      DevLog.recentLines(50).any(
+        (l) =>
+            l.contains('transfer_snapshot_missing') &&
+            l.contains(inflightBatch.batchId),
+      ),
+      isTrue,
+    );
+
+    client.dispose();
+  });
+}
+
+class _GatedEnqueueTransferClient extends _ConfigurableTransferClient {
+  _GatedEnqueueTransferClient({required this.onEnqueue});
+
+  final Future<void> Function() onEnqueue;
+
+  @override
+  Future<String> enqueue({
+    String? jobId,
+    String direction = 'download',
+    String category = 'image',
+    String? batchId,
+    String? pairId,
+    String? fakePlan,
+    String? url,
+    Map<String, String>? headers,
+    String? cookie,
+    List<String>? allowedCookieDomains,
+    List<Map<String, dynamic>>? policyHosts,
+    String? mime,
+    String? policyKey,
+    Map<String, dynamic>? provenance,
+    int? batchTotalCount,
+  }) async {
+    await onEnqueue();
+    return super.enqueue(
+      jobId: jobId,
+      direction: direction,
+      category: category,
+      batchId: batchId,
+      pairId: pairId,
+      fakePlan: fakePlan,
+      url: url,
+      headers: headers,
+      cookie: cookie,
+      allowedCookieDomains: allowedCookieDomains,
+      policyHosts: policyHosts,
+      mime: mime,
+      policyKey: policyKey,
+      provenance: provenance,
+      batchTotalCount: batchTotalCount,
+    );
+  }
 }
