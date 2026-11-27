@@ -7,18 +7,30 @@ This file documents notable user-facing changes following [Keep a Changelog](htt
 
 ## [Unreleased]
 
-## [1.13.0] - 
+## [1.13.0] - 2026-11-27
+
+### 重要提示 / Important Notice
+
+- **包名变更为 `com.joopererer.easysave`**：新版会作为新 App 安装，**不能覆盖旧版**（`com.james.easysave`）；旧版数据请用**本地备份导出**、在新版中**导入**；**导出前请先让下载完成或取消**；**确认无误后再卸载旧版**（平台账号登录态与未完成下载任务不随备份迁移，需在新版重新登录）。
+- **Package ID changed to `com.joopererer.easysave`**: This release installs as a separate app and **will not overwrite the previous version** (`com.james.easysave`). Export your history and settings from the old app via **Local Backup**, import the backup file in the new app (**finish or cancel active downloads before exporting**), and **uninstall the old app only after verifying everything is restored** (platform login sessions and in-progress downloads do not transfer).
 
 ### 客户端 / App
 
 - 统一后台传输服务（阶段 0）：
-  - 新建基于 OkHttp 的 Kotlin 原生前台传输服务（`TransferService`），以单一串行调度器与 `.part` 物理临时文件替代旧下载插件及应用层补丁调度，下载由传输服务统一驱动；
+  - 新建基于 OkHttp 的原生后台传输服务，统一驱动主界面与悬浮球下载，支持断点续传、断网自动等待恢复与存储空间不足提示；
   - 默认开启新下载链路，并在「开发者选项」保留「使用旧下载链路（回退用）」开关（默认关闭）；
-  - 原生端完成来源信息（XMP）写入、C2PA 边车成对原子写入、Live 图成对原子入库及相册保存，主界面、悬浮球与系统通知进度实时同步。
+  - 原生端完成来源信息（XMP）写入、C2PA 边车成对写入、实况图（Live Photo）成对入库及相册保存，主界面、悬浮球与系统通知进度实时同步。
   Unified background transfer service (Phase 0):
-  - Replaced the legacy downloader plugin and app-layer patch state machines with a native Kotlin foreground `TransferService` powered by OkHttp, a single serial scheduler, and `.part` temp files;
+  - Introduced a native OkHttp-backed background transfer service unifying main UI and floating bubble downloads, with byte-range resume, automatic network wait/recovery, and insufficient-storage prompts;
   - Enabled the new transfer pipeline by default, keeping a "Use legacy download pipeline (fallback)" toggle (default off) under Developer Options;
-  - Natively handles XMP provenance embedding, atomic C2PA sidecar writes, atomic Live photo pair publishing, and MediaStore gallery import, keeping the main UI, floating bubble, and notifications in sync.
+  - Natively handles XMP provenance embedding, paired C2PA sidecar writes, atomic Live Photo pair publishing, and MediaStore gallery import, keeping the main UI, floating bubble, and notifications in sync.
+
+- 历史页体验与跨引擎查看优化：
+  - 历史页「回到顶部」按钮与「有 N 条新内容 ↑」提示改为在第一行帖子不再完全可见时即平滑淡入（含防闪烁滞回），回到顶部后隐藏，各视图模式保持一致；
+  - 优化悬浮球后台下载完成后在主界面历史页的实时同步与视频首次打开体验。
+  History page & cross-engine viewing improvements:
+  - Updated the "Back to top" button and "N new items ↑" banner to fade in as soon as the first row is no longer fully visible (with anti-flicker hysteresis) across all view modes, and hide upon returning to the top;
+  - Improved immediate history refresh and first-tap video playback in the main UI for posts saved via the floating bubble engine.
 
 ## [1.12.1] - 2026-11-22
 

@@ -3,16 +3,18 @@
 > 给接手的 agent 会话：先读这一页，再读 `docs/roadmap.md` 与对应版本的
 > `docs/tasks/*-evidence.md`。这里的约定与约束优先级高于任何“看起来更快”的做法。
 
-## 1. 当前状态（截至 v1.12.1 发布）
+## 1. 当前状态（截至 v1.13.0 发布）
 
-- **App**：仓库内 `pubspec.yaml` 为 `1.12.1+81`（v1.12.1，versionCode 81）。
+- **App**：仓库内 `pubspec.yaml` 为 `1.13.0+101`（v1.13.0，versionCode 101）。
+- **包名（applicationId）**：`com.joopererer.easysave`（`app/android/app/build.gradle.kts` 中 `namespace` 与 Kotlin 源码包路径仍保持 `com.james.easysave`，原因：Android 构建中 `applicationId` 与代码 `namespace` 相互独立，保持 Kotlin 包名不变可避免大量类引用、ProGuard 规则与既有测试路径改动）。
+- **下载链路**：新传输链路（`TransferService`）设为默认，「开发者选项」保留「使用旧下载链路（回退用）」开关（默认关闭）。
 - **内置 parser**：仓库 `app/assets/parser/` 为 **1.4.17 / manifestVersion 14**，
   bundle sha256 `f49a8928542842b2f6c1d1730c61815500d8c4ce790e50f4dc8be1bbd207eca1`。
 - **parser 发布状态**：已发布。`master` 上的 merge commit
   `fdc9386` 打了 annotated tag `parser-v1.4.17`，Release 资产与
   `spec/v2/manifest.json` 已由 CI 更新，`tools/verify_v2_channel.mjs` 校验通过。
-- **versionCode 规则**：v1.12.1 正式包使用 **versionCode 81**。**下一个正式 versionCode 必须 ≥ 82**。
-- **App 发布状态**：v1.12.1 发布完成（versionCode 81）。
+- **versionCode 规则**：v1.13.0 正式包使用 **versionCode 101**。**下一个正式 versionCode 必须 ≥ 102**。
+- **App 发布状态**：v1.13.0 准备就绪（versionCode 101，待真机验证正式包后再打 tag 推送）。
 
 ## 2. 分支与发布流程
 
