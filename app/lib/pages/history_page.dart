@@ -496,6 +496,15 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
       final addedPostIds = incomingPostIds.difference(oldPostIds);
 
       final isAwayFromTop = _isAwayFromTop(offset);
+      final isUserScrolling =
+          _activeAttached &&
+          _activeController.hasClients &&
+          _activeController.position.isScrollingNotifier.value;
+      final shouldAutoScrollToTop =
+          hadRecordsBefore &&
+          addedPostIds.isNotEmpty &&
+          !isAwayFromTop &&
+          !isUserScrolling;
 
       setState(() {
         _markHiddenModesPending();
@@ -511,11 +520,19 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
       // Reads are serialised (one refresh at a time), so a delete older than
       // this read has served its purpose and can no longer be needed.
       _forgetDeletionsBefore(readStartedAt);
-      _scheduleScroll(
-        offset,
-        anchorKey: anchor?.key,
-        anchorDelta: anchor?.top ?? 0,
-      );
+      if (shouldAutoScrollToTop) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) {
+            unawaited(_scrollToTop());
+          }
+        });
+      } else {
+        _scheduleScroll(
+          offset,
+          anchorKey: anchor?.key,
+          anchorDelta: anchor?.top ?? 0,
+        );
+      }
       // A quiet, read-only pass over stills the album already holds: a HEIC
       // this device cannot decode is marked so its card can say so. It runs
       // once per session, one file at a time, and never opens a decode path

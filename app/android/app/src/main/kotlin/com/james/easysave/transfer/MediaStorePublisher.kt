@@ -76,17 +76,7 @@ class MediaStorePublisher(private val context: Context) : MediaPublisher {
             else -> MediaStore.Video.Media.EXTERNAL_CONTENT_URI
         }
         val meta = if (video && sourceFile.exists()) MediaMetadataProbe.probeFile(sourceFile) else null
-        val values = ContentValues().apply {
-            put(MediaStore.MediaColumns.DISPLAY_NAME, displayName)
-            put(MediaStore.MediaColumns.MIME_TYPE, mime)
-            put(MediaStore.MediaColumns.RELATIVE_PATH, relativePath)
-            put("is_pending", 1)
-            if (meta != null) {
-                put(MediaStore.Video.Media.DURATION, meta.durationMs)
-                if (meta.width > 0) put(MediaStore.Video.Media.WIDTH, meta.width)
-                if (meta.height > 0) put(MediaStore.Video.Media.HEIGHT, meta.height)
-            }
-        }
+        val values = buildPendingValues(displayName, mime, relativePath, meta)
         val uri = checkNotNull(resolver.insert(collection, values)) { "MediaStore insert returned null" }
         val mediaId = uri.lastPathSegment ?: uri.toString()
         return PublishedHandle(
@@ -151,7 +141,18 @@ class MediaStorePublisher(private val context: Context) : MediaPublisher {
 
         val video = !mime.startsWith("image/")
         val duration = if (video) {
-            handle.mediaId.toLongOrNull()?.let { MediaMetadataProbe.durationOf(resolver, it) }
+            val numericId = handle.mediaId.toLongOrNull()
+            val path = legacyPathOf(uri)
+            if (path != null) {
+                val latch = java.util.concurrent.CountDownLatch(1)
+                runCatching {
+                    MediaScannerConnection.scanFile(context, arrayOf(path), arrayOf(mime)) { _, _ ->
+                        latch.countDown()
+                    }
+                    latch.await(10, java.util.concurrent.TimeUnit.SECONDS)
+                }
+            }
+            numericId?.let { MediaMetadataProbe.durationOf(resolver, it) }
         } else null
 
         return PublishedMedia(
@@ -163,6 +164,28 @@ class MediaStorePublisher(private val context: Context) : MediaPublisher {
             thread = if (isMain) "main" else "bg",
             duration = duration,
         )
+    }
+
+    private fun legacyPathOf(uri: Uri): String? = runCatching {
+        context.contentResolver.query(uri, arrayOf(MediaStore.MediaColumns.DATA), null, null, null)
+            ?.use { cursor -> if (cursor.moveToFirst()) cursor.getString(0) else null }
+    }.getOrNull()
+
+    internal fun buildPendingValues(
+        displayName: String,
+        mime: String,
+        relativePath: String,
+        meta: MediaMetadataProbe.VideoMeta?,
+    ): ContentValues = ContentValues().apply {
+        put(MediaStore.MediaColumns.DISPLAY_NAME, displayName)
+        put(MediaStore.MediaColumns.MIME_TYPE, mime)
+        put(MediaStore.MediaColumns.RELATIVE_PATH, relativePath)
+        put("is_pending", 1)
+        if (meta != null) {
+            put(MediaStore.Video.Media.DURATION, meta.durationMs)
+            if (meta.width > 0) put(MediaStore.Video.Media.WIDTH, meta.width)
+            if (meta.height > 0) put(MediaStore.Video.Media.HEIGHT, meta.height)
+        }
     }
 
     override fun deletePending(mediaId: String) {

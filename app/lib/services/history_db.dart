@@ -1389,6 +1389,7 @@ class HistoryDb {
     int id,
     List<HistoryFile> files, {
     String source = 'unspecified',
+    bool restoreDeleted = false,
   }) async {
     return withPostLock(id, () async {
       validateHistoryFiles(files);
@@ -1405,6 +1406,7 @@ class HistoryDb {
         {
           'files_json': jsonEncode([for (final f in normalized) f.toMap()]),
           'file_count': normalized.where(isSavedHistoryFile).length,
+          if (restoreDeleted) 'is_deleted': 0,
         },
         where: 'id = ?',
         whereArgs: [id],

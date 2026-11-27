@@ -175,8 +175,12 @@ Future<GalleryBrowserItemDeletion?> deleteBrowserItemForRecord(
     deleteAlbumFiles: deleteAlbumFiles,
   );
   if (!outcome.ok) return const GalleryBrowserItemDeletion(ok: false);
-  onChanged?.call();
   final id = fresh.id;
+  if (outcome.visibleRemaining == 0 && id != null) {
+    final db = await HistoryDb.instance();
+    await db.delete(id);
+  }
+  onChanged?.call();
   return GalleryBrowserItemDeletion(
     ok: true,
     message: outcome.problem ??
@@ -213,8 +217,12 @@ Future<BatchGalleryBrowserItemDeletion> deleteBrowserItemsForRecord(
   if (!outcome.ok) {
     return const BatchGalleryBrowserItemDeletion(ok: false);
   }
-  onChanged?.call();
   final id = fresh.id;
+  if (outcome.after.where(isVisibleHistoryFile).isEmpty && id != null) {
+    final db = await HistoryDb.instance();
+    await db.delete(id);
+  }
+  onChanged?.call();
   return BatchGalleryBrowserItemDeletion(
     ok: true,
     succeededIndices: outcome.succeededIndices,

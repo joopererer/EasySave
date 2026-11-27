@@ -114,6 +114,9 @@ Future<ItemDeletionOutcome> deleteHistoryItem(
 
     final db = database ?? await HistoryDb.instance();
     await db.updateFiles(id, after, source: 'viewer-item-delete');
+    final visibleRemaining = pairSavedMedia(
+      after.where(isVisibleHistoryFile),
+    ).length;
 
     final liveCount = pairSavedMedia(rows).where((e) => e.isLive).length;
     final deletedFiles = album != null ? (album.requested - album.remaining) : 0;
@@ -129,9 +132,7 @@ Future<ItemDeletionOutcome> deleteHistoryItem(
       after: after,
       albumOutcome: album,
       problem: problem,
-      visibleRemaining: pairSavedMedia(
-        after.where(isVisibleHistoryFile),
-      ).length,
+      visibleRemaining: visibleRemaining,
       deleteAlbumFiles: deleteAlbumFiles,
     );
   });
@@ -239,7 +240,12 @@ Future<void> undoHistoryItemDelete(
   HistoryDb db,
   int recordId,
   List<HistoryFile> before,
-) => db.updateFiles(recordId, before, source: 'viewer-item-delete-undo');
+) => db.updateFiles(
+  recordId,
+  before,
+  source: 'viewer-item-delete-undo',
+  restoreDeleted: true,
+);
 
 /// Album refs of [files] that can be deleted by id.
 @visibleForTesting
