@@ -49,6 +49,7 @@ class HistoryFile {
     this.pairId,
     this.undecodable,
     this.md5,
+    this.rowVer,
   });
 
   final String filename;
@@ -102,6 +103,10 @@ class HistoryFile {
   /// Null for legacy rows until backfilled.
   final String? md5;
 
+  /// Last writer that produced this row (`download`, `gallery-scan`,
+  /// `settle_repair`), or null for legacy rows.
+  final String? rowVer;
+
   Map<String, Object?> toMap() => {
     'filename': filename,
     'saved_at': savedAt,
@@ -118,6 +123,7 @@ class HistoryFile {
     if (pairId != null) 'pair_id': pairId,
     if (undecodable != null) 'undecodable': undecodable == true ? 1 : 0,
     if (md5 != null) 'md5': md5,
+    if (rowVer != null) 'row_ver': rowVer,
   };
 
   factory HistoryFile.fromMap(Map<String, Object?> map) => HistoryFile(
@@ -141,6 +147,7 @@ class HistoryFile {
         ? null
         : (map['undecodable'] as num?)?.toInt() == 1,
     md5: map['md5'] as String?,
+    rowVer: map['row_ver'] as String?,
   );
 
   HistoryFile copyWith({
@@ -159,6 +166,7 @@ class HistoryFile {
     String? pairId,
     bool? undecodable,
     String? md5,
+    String? rowVer,
   }) => HistoryFile(
     filename: filename ?? this.filename,
     savedAt: savedAt ?? this.savedAt,
@@ -175,6 +183,7 @@ class HistoryFile {
     pairId: pairId ?? this.pairId,
     undecodable: undecodable ?? this.undecodable,
     md5: md5 ?? this.md5,
+    rowVer: rowVer ?? this.rowVer,
   );
 }
 
@@ -912,6 +921,83 @@ class HistoryDb {
   /// Reason string passed to the most recent [notifyChanged] call.
   String get lastChangeReason => _lastChangeReason;
 
+  /// Optional hook registered by [GalleryLocatorService] to evict stale
+  /// in-memory cache entries when DB file rows are rewritten or cleared.
+  static void Function(Iterable<String> mediaIds)? onFilesRewritten;
+
+  static int _refreshSeq = 0;
+
+  static void logRefreshTrigger(String postId, String cause) {
+    DevLog.write(
+      'HIST',
+      'refresh_trigger post=$postId cause=$cause seq=${++_refreshSeq}',
+    );
+  }
+
+  static String _rowMediaType(List<HistoryFile> files) {
+    if (files.isEmpty) return 'none';
+    final hasImg = files.any((f) => f.isImage);
+    final hasVid = files.any((f) => !f.isImage);
+    if (hasImg && hasVid) return 'live';
+    return hasImg ? 'image' : 'video';
+  }
+
+  static void _logRowReplacedIfNeeded({
+    required String postId,
+    required String source,
+    required List<HistoryFile> oldFiles,
+    required List<HistoryFile> newFiles,
+  }) {
+    if (oldFiles.isEmpty) return;
+    final oldIds = oldFiles
+        .map((f) => f.mediaId?.trim())
+        .whereType<String>()
+        .where((s) => s.isNotEmpty)
+        .toSet();
+    final newIds = newFiles
+        .map((f) => f.mediaId?.trim())
+        .whereType<String>()
+        .where((s) => s.isNotEmpty)
+        .toSet();
+    final oldHas = oldIds.isNotEmpty;
+    final newHas = newIds.isNotEmpty;
+    final mediaIdChanged = oldIds.length != newIds.length || !oldIds.containsAll(newIds);
+    final oldType = _rowMediaType(oldFiles);
+    final newType = _rowMediaType(newFiles);
+    final typeChanged = oldType != newType;
+    DevLog.write(
+      'HIST',
+      'row_replaced post=$postId source=$source '
+          'old_has_media_id=${oldHas ? 'y' : 'n'} '
+          'new_has_media_id=${newHas ? 'y' : 'n'} '
+          'media_id_changed=${mediaIdChanged ? 'y' : 'n'} '
+          'type_changed=${typeChanged ? 'y' : 'n'} '
+          'old_type=$oldType new_type=$newType',
+    );
+  }
+
+  static Set<String> _replacedOrMissingMediaIds(
+    List<HistoryFile> oldFiles,
+    List<HistoryFile> newFiles,
+  ) {
+    final evict = <String>{};
+    final newByKey = <String, HistoryFile>{
+      for (final f in newFiles) '${f.itemIndex}_${f.isImage}': f,
+    };
+    for (final old in oldFiles) {
+      final oldId = old.mediaId?.trim();
+      if (oldId == null || oldId.isEmpty) continue;
+      final next = newByKey['${old.itemIndex}_${old.isImage}'];
+      if (next == null ||
+          next.mediaId != old.mediaId ||
+          next.status == FileStatus.notFound ||
+          next.status == FileStatus.deleted) {
+        evict.add(oldId);
+      }
+    }
+    return evict;
+  }
+
   /// Notify every listener that history data changed.
   ///
   /// [reason] ends up in the device log so a bug report shows which mutation
@@ -1189,6 +1275,7 @@ class HistoryDb {
           'restoreDeleted=$restoreDeleted',
     );
     HistoryRecord? committedRecord;
+    HistoryRecord? existingSnapshot;
     var mergedKept = 0;
     var mergedDropped = 0;
     final writtenCount = await _writeTransaction<int?>((txn) async {
@@ -1205,6 +1292,7 @@ class HistoryDb {
       final existing =
           await _getByPostUrl(txn, record.postUrl, includeDeleted: true) ??
           await _getByPostId(txn, record.postId, includeDeleted: true, platform: record.platform);
+      existingSnapshot = existing;
       if (existing != null) {
         final recordByMediaId = <String, HistoryFile>{
           for (final f in record.files)
@@ -1307,9 +1395,17 @@ class HistoryDb {
           // successful save clears it, a failed terminal write or restore sets it.
           downloadError: record.downloadError,
         );
+        final nextMap = mergedRecord.toMap();
+        final prevMap = existing.toMap();
+        final unchanged = nextMap.length == prevMap.length &&
+            nextMap.entries.every((e) => prevMap[e.key] == e.value);
+        if (unchanged) {
+          committedRecord = existing;
+          return null;
+        }
         await txn.update(
           'history_records',
-          mergedRecord.toMap(),
+          nextMap,
           where: 'id = ?',
           whereArgs: [existing.id],
         );
@@ -1327,13 +1423,33 @@ class HistoryDb {
     });
     if (writtenCount != null) {
       if (committedRecord != null) _remember(committedRecord!);
+      if (existingSnapshot != null) {
+        final evictIds = _replacedOrMissingMediaIds(
+          existingSnapshot!.files,
+          committedRecord?.files ?? record.files,
+        );
+        if (evictIds.isNotEmpty) {
+          onFilesRewritten?.call(evictIds);
+        }
+        if (existingSnapshot!.files.isNotEmpty &&
+            mergedKept == 0 &&
+            (source == 'gallery-scan' || source == 'settle_repair')) {
+          _logRowReplacedIfNeeded(
+            postId: record.postId,
+            source: source,
+            oldFiles: existingSnapshot!.files,
+            newFiles: committedRecord?.files ?? record.files,
+          );
+        }
+      }
       DevLog.write(
         'HIST',
         'file rows written source=$source post=${record.postId} '
             'count=$writtenCount kept=$mergedKept dropped=$mergedDropped',
       );
+      logRefreshTrigger(record.postId, 'notify-upsert');
+      notifyChanged('upsert post=${record.postId}');
     }
-    notifyChanged('upsert post=${record.postId}');
   }
 
   /// Refresh only metadata of an existing record; never restore deletion or
@@ -1394,30 +1510,52 @@ class HistoryDb {
     return withPostLock(id, () async {
       validateHistoryFiles(files);
       final normalized = repairHistoryFiles(files) ?? files;
+      final encoded = jsonEncode([for (final f in normalized) f.toMap()]);
       final records = await _db.query(
         'history_records',
-        columns: ['post_id'],
+        columns: ['post_id', 'files_json', 'is_deleted'],
         where: 'id = ?',
         whereArgs: [id],
         limit: 1,
       );
+      if (records.isEmpty) return;
+      final currentJson = records.first['files_json'] as String?;
+      final currentDeleted = (records.first['is_deleted'] as num?)?.toInt() ?? 0;
+      if (currentJson == encoded && (!restoreDeleted || currentDeleted == 0)) {
+        return;
+      }
+      List<HistoryFile> oldFiles = const [];
+      if (currentJson != null && currentJson.isNotEmpty) {
+        try {
+          oldFiles = (jsonDecode(currentJson) as List)
+              .whereType<Map>()
+              .map((m) => HistoryFile.fromMap(m.cast<String, Object?>()))
+              .toList();
+        } catch (_) {}
+      }
       final rows = await _db.update(
         'history_records',
         {
-          'files_json': jsonEncode([for (final f in normalized) f.toMap()]),
+          'files_json': encoded,
           'file_count': normalized.where(isSavedHistoryFile).length,
           if (restoreDeleted) 'is_deleted': 0,
         },
         where: 'id = ?',
         whereArgs: [id],
       );
-      if (rows > 0 && records.isNotEmpty) {
+      if (rows > 0) {
+        final evictIds = _replacedOrMissingMediaIds(oldFiles, normalized);
+        if (evictIds.isNotEmpty) {
+          onFilesRewritten?.call(evictIds);
+        }
+        final postId = '${records.first['post_id']}';
         DevLog.write(
           'HIST',
-          'file rows written source=$source post=${records.first['post_id']} count=${normalized.length}',
+          'file rows written source=$source post=$postId count=${normalized.length}',
         );
+        logRefreshTrigger(postId, source == 'thumb-repair' ? 'thumb-repair' : 'notify-upsert');
+        notifyChanged('updateFiles id=$id rows=$rows');
       }
-      notifyChanged('updateFiles id=$id rows=$rows');
       _knownRecords.removeWhere((_, record) => record.id == id);
     });
   }
@@ -1480,11 +1618,22 @@ class HistoryDb {
               claimedMediaIds.add(proposedId);
             if (change.$2.status == FileStatus.notFound &&
                 current.status == FileStatus.unknown && current.mediaId == null && current.assetId == null) continue;
+            // Deterministic source priority: a download-written mediaId must
+            // not be overwritten by gallery-scan with a different or empty id.
+            final hasCurrentId = current.mediaId != null && current.mediaId!.isNotEmpty;
+            final keepDownloadId = current.rowVer == 'download' && hasCurrentId;
+            final nextMediaId = keepDownloadId
+                ? current.mediaId
+                : (proposedId != null && proposedId.isNotEmpty ? proposedId : current.mediaId);
+            final changedByScan = nextMediaId != current.mediaId ||
+                change.$2.status != current.status ||
+                (change.$2.relativePath != null && change.$2.relativePath != current.relativePath);
             merged.add(
               current.copyWith(
-                mediaId: change.$2.mediaId,
+                mediaId: nextMediaId,
                 status: change.$2.status,
                 relativePath: change.$2.relativePath,
+                rowVer: changedByScan ? 'gallery-scan' : current.rowVer,
               ),
             );
           }
@@ -1504,6 +1653,7 @@ class HistoryDb {
         final kept = repaired.where(isSavedHistoryFile).length;
         final removed = record.files.length - repaired.length;
         return (
+          oldFiles: record.files,
           files: repaired,
           postId: record.postId,
           changed: changed,
@@ -1514,10 +1664,23 @@ class HistoryDb {
       });
       if (result.changed) {
         _knownRecords.removeWhere((_, record) => record.id == id);
+        final evictIds = _replacedOrMissingMediaIds(result.oldFiles, result.files);
+        if (evictIds.isNotEmpty) {
+          onFilesRewritten?.call(evictIds);
+        }
+        if (result.kept == 0 && result.oldFiles.isNotEmpty) {
+          _logRowReplacedIfNeeded(
+            postId: result.postId,
+            source: 'gallery-scan',
+            oldFiles: result.oldFiles,
+            newFiles: result.files,
+          );
+        }
         DevLog.write(
           'HIST',
           'file rows written source=gallery-scan post=${result.postId} count=${result.files.length} kept=${result.kept} removed=${result.removed} skippedUserDeleted=${result.skippedUserDeleted}',
         );
+        logRefreshTrigger(result.postId, 'gallery-scan');
         notifyChanged('gallery scan post=${result.postId}');
       }
       return result.files;

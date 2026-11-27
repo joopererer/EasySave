@@ -15,7 +15,7 @@ import 'package:easysave/services/settings.dart';
 import 'package:easysave/services/transfer_client.dart';
 
 class _ConfigurableTransferClient extends TransferClient {
-  _ConfigurableTransferClient({super.methodChannel, super.enqueueTimeout});
+  _ConfigurableTransferClient();
 
   final StreamController<TransferEvent> controller =
       StreamController<TransferEvent>.broadcast();
@@ -480,6 +480,52 @@ void main() {
             l.contains(inflightBatch.batchId),
       ),
       isTrue,
+    );
+
+    client.dispose();
+  });
+
+  test('background engine new batch with null transferJobId skips snapshot missing check on immediate snapshot sync', () async {
+    final dm = DownloadManager.instance;
+    final client = _ConfigurableTransferClient();
+    dm.transferClientForTesting = client;
+
+    final post = _samplePost('bg-immediate-1');
+    final job = DownloadJob(
+      key: '${post.id}-0-0',
+      label: '视频',
+      filename: '${post.id}_1.mp4',
+      urls: [post.items.first.url],
+      isImage: false,
+      itemIndex: 1,
+    )
+      ..usesNewTransferPipeline = true
+      ..transferJobId = null
+      ..state = JobState.queued;
+
+    final bgBatch = DownloadBatch(
+      batchId: 'background-immediate-1',
+      album: 'EasySave',
+      platform: 'xhs',
+      postId: post.id,
+      postUrl: post.url,
+      source: DownloadBatch.sourceBackground,
+      jobs: [job],
+      pipeline: DownloadBatch.pipelineTransfer,
+    );
+
+    dm.setBatchForTesting(bgBatch);
+    await dm.syncTransferBatchesFromSnapshotForTesting();
+
+    expect(bgBatch.jobs.single.state, JobState.queued);
+    expect(bgBatch.jobs.single.transferState, isNot('interrupted'));
+    expect(
+      DevLog.recentLines(50).any(
+        (l) =>
+            l.contains('transfer_snapshot_missing') &&
+            l.contains(bgBatch.batchId),
+      ),
+      isFalse,
     );
 
     client.dispose();

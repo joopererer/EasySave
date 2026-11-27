@@ -130,6 +130,9 @@ class GalleryBrowserItem {
     this.undecodable = false,
     this.width,
     this.height,
+    this.locateBy = 'none',
+    this.typeSource = 'postItem',
+    this.rowVer = 'unknown',
   });
 
   factory GalleryBrowserItem.fromMediaItem(
@@ -189,6 +192,9 @@ class GalleryBrowserItem {
   final String? cachePostId;
   final int? cacheItemIndex;
   final String? mediaId;
+  final String locateBy;
+  final String typeSource;
+  final String rowVer;
 
   /// This device cannot decode the saved still (a HEIC with an alpha
   /// auxiliary image on Android 12). The page then offers a replacement
@@ -545,6 +551,36 @@ class BatchGalleryBrowserItemDeletion {
 /// Locates the album asset behind one stored history row.
 typedef HistoryAssetLocator = Future<AssetEntity?> Function(HistoryFile file);
 
+String _viewerUriScheme(String? rawUrl) {
+  final u = rawUrl?.trim();
+  if (u == null || u.isEmpty) return 'none';
+  final scheme = Uri.tryParse(u)?.scheme.toLowerCase();
+  if (scheme == 'content' || scheme == 'file') return scheme!;
+  return 'none';
+}
+
+void _logViewerNotLocal({
+  required String postId,
+  required int index,
+  required String reason,
+  required String by,
+  required bool hasMediaId,
+  required String uriScheme,
+  required String type,
+  required String typeSource,
+  required String rowVer,
+}) {
+  unawaited(
+    DevLog.write(
+      'HIST',
+      'viewer_not_local post=$postId index=$index reason=$reason '
+          'by=$by has_media_id=${hasMediaId ? 'y' : 'n'} '
+          'uri_scheme=$uriScheme type=$type type_source=$typeSource '
+          'row_ver=$rowVer',
+    ),
+  );
+}
+
 /// Fullscreen browser items for one saved post, plus the page to open.
 ///
 /// The history page and the "最近保存" list both build from here: a Live
@@ -576,13 +612,16 @@ Future<({List<GalleryBrowserItem> items, int initial})> savedBrowserItems({
   }
 
   final locator = GalleryLocatorService.instance;
+  var lastLocateBy = 'none';
   final resolver =
       locate ??
       (HistoryFile file) async {
+        lastLocateBy = 'none';
         var asset =
             locator.getAssetById(file.mediaId) ??
             locator.locateAsset(file, record.postId);
         if (asset != null) {
+          lastLocateBy = 'cache';
           unawaited(
             DevLog.write(
               'HIST',
@@ -594,6 +633,7 @@ Future<({List<GalleryBrowserItem> items, int initial})> savedBrowserItems({
         if (file.mediaId != null && file.mediaId!.isNotEmpty) {
           asset = await locator.getAssetByIdAsync(file.mediaId);
           if (asset != null) {
+            lastLocateBy = 'mediaId';
             unawaited(
               DevLog.write(
                 'HIST',
@@ -609,6 +649,9 @@ Future<({List<GalleryBrowserItem> items, int initial})> savedBrowserItems({
             record.postId,
             platform: record.platform,
           );
+          if (asset != null) {
+            lastLocateBy = 'path';
+          }
         }
         unawaited(
           DevLog.write(
@@ -634,7 +677,9 @@ Future<({List<GalleryBrowserItem> items, int initial})> savedBrowserItems({
     }
 
     final imageAsset = entry.image == null ? null : await resolver(entry.image!);
+    final imageBy = entry.image == null ? 'none' : lastLocateBy;
     final videoAsset = entry.video == null ? null : await resolver(entry.video!);
+    final videoBy = entry.video == null ? 'none' : lastLocateBy;
 
     // "不在本机" is only ever read from a row the album already confirmed as
     // gone. A row whose lookup merely failed (no permission, no scan) keeps its
@@ -656,14 +701,41 @@ Future<({List<GalleryBrowserItem> items, int initial})> savedBrowserItems({
 
     final coverAsset = entry.isLive ? imageAsset : (entry.image == null ? videoAsset : imageAsset);
     final coverFile = entry.cover;
+    final coverBy = entry.isLive ? imageBy : (entry.image == null ? videoBy : imageBy);
     final fallbackType = coverFile.isImage
         ? 'image'
         : (postItem?.isGif == true ? 'gif' : 'video');
+    // A video row (!coverFile.isImage) must never be misclassified as 'image'
+    // by postItem.type unless it is a Live photo pair.
+    final usePostItemType =
+        !entry.isLive &&
+        coverFile.isImage &&
+        postItem != null &&
+        postItem.type != 'live';
+    final typeSource = usePostItemType ? 'postItem' : 'isImage';
     final itemType = entry.isLive
         ? 'live'
-        : (postItem != null && postItem.type != 'live'
-              ? postItem.type
-              : fallbackType);
+        : (usePostItemType ? postItem.type : fallbackType);
+    final rowVer = coverFile.rowVer ?? 'unknown';
+    final uriScheme = _viewerUriScheme(postItem?.videoUrl ?? postItem?.url);
+    if (missing) {
+      final reason = entry.isLive
+          ? (imageMissing && videoMissing
+                ? 'live_both_missing'
+                : (imageMissing ? 'live_image_missing' : 'live_video_missing'))
+          : 'db_not_found_and_locate_failed';
+      _logViewerNotLocal(
+        postId: record.postId,
+        index: zeroBased,
+        reason: reason,
+        by: coverBy,
+        hasMediaId: coverFile.mediaId?.isNotEmpty == true,
+        uriScheme: uriScheme,
+        type: itemType,
+        typeSource: typeSource,
+        rowVer: rowVer,
+      );
+    }
 
     items.add(
       GalleryBrowserItem(
@@ -688,6 +760,9 @@ Future<({List<GalleryBrowserItem> items, int initial})> savedBrowserItems({
         missing: missing,
         filename: coverFile.filename,
         undecodable: coverFile.undecodable == true,
+        locateBy: coverBy,
+        typeSource: typeSource,
+        rowVer: rowVer,
       ),
     );
   }
@@ -2681,6 +2756,19 @@ class _BrowserItemViewState extends State<_BrowserItemView> {
     super.initState();
     if (widget.item.status == FileStatus.notFound) {
       _isNotFound = true;
+      if (!widget.item.missing) {
+        _logViewerNotLocal(
+          postId: widget.item.cachePostId ?? '-',
+          index: widget.item.index,
+          reason: 'item_status_not_found',
+          by: widget.item.locateBy,
+          hasMediaId: widget.item.mediaId?.isNotEmpty == true,
+          uriScheme: _viewerUriScheme(widget.item.videoUrl ?? widget.item.url),
+          type: widget.item.type,
+          typeSource: widget.item.typeSource,
+          rowVer: widget.item.rowVer,
+        );
+      }
     } else if (widget.item.asset != null) {
       _checkAssetExistence();
     }
@@ -2700,6 +2788,17 @@ class _BrowserItemViewState extends State<_BrowserItemView> {
       try {
         final exists = await GalleryLocatorService.instance.isPresent(a.id);
         if (!exists && mounted) {
+          _logViewerNotLocal(
+            postId: widget.item.cachePostId ?? '-',
+            index: widget.item.index,
+            reason: 'asset_not_present',
+            by: widget.item.locateBy,
+            hasMediaId: widget.item.mediaId?.isNotEmpty == true,
+            uriScheme: _viewerUriScheme(widget.item.videoUrl ?? widget.item.url),
+            type: widget.item.type,
+            typeSource: widget.item.typeSource,
+            rowVer: widget.item.rowVer,
+          );
           setState(() => _isNotFound = true);
         }
       } catch (_) {}

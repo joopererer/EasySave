@@ -1363,6 +1363,7 @@ Future<void> writeBatchHistory(
           // they are written, not after a later album scan.
           pairId: job.isLivePhoto ? '${batch.postId}#${job.itemIndex}' : null,
           md5: job.md5,
+          rowVer: recovered ? 'settle_repair' : 'download',
         ),
       );
     }
@@ -1413,6 +1414,7 @@ Future<void> writeBatchHistory(
                   ? '${batch.postId}#${job.itemIndex}'
                   : null,
               md5: job.md5,
+              rowVer: recovered ? 'settle_repair' : 'download',
             ),
           );
         }
@@ -2863,6 +2865,9 @@ class DownloadManager extends ChangeNotifier {
       await DownloadClaims.release(batchId);
       rethrow;
     }
+    if (batch.usesNewTransferPipeline) {
+      _enqueuingTransferJobs.addAll(batch.jobs.map((j) => j.key));
+    }
     _batches[batchId] = batch;
     notifyListeners();
     onBatchReady?.call(batch);
@@ -2885,9 +2890,6 @@ class DownloadManager extends ChangeNotifier {
       (db) => writePlaceholderHistory(db, batch),
       stage: 'placeholder',
     );
-    if (batch.usesNewTransferPipeline) {
-      _enqueuingTransferJobs.addAll(batch.jobs.map((j) => j.key));
-    }
     for (final job in batch.jobs) {
       // One failing enqueue must not strand the remaining jobs in `queued`
       // (that kept the batch non-terminal forever, e.g. stuck at ~50%).
@@ -8677,7 +8679,10 @@ class DownloadManager extends ChangeNotifier {
             continue;
           }
           final tId = job.transferJobId;
-          final snap = tId == null ? null : byJobId[tId];
+          // Batch just created (e.g. from the other engine) and job has not
+          // yet received its service transferJobId: skip missing check.
+          if (tId == null || tId.isEmpty) continue;
+          final snap = byJobId[tId];
           if (snap != null) {
             _applyTransferSnapshotToJob(job, snap);
             batchChanged = true;
@@ -8685,12 +8690,11 @@ class DownloadManager extends ChangeNotifier {
             continue;
           }
           // 快照中找不到该任务：绝不可视为完成
-          final jobTag = tId ?? job.key;
-          final partBytes = tId == null ? 0 : await _transferPartBytes(tId);
+          final partBytes = await _transferPartBytes(tId);
           if (partBytes > 0) {
             await DevLog.write(
               'V16DL',
-              'transfer_snapshot_missing batch=${batch.batchId} job=$jobTag '
+              'transfer_snapshot_missing batch=${batch.batchId} job=$tId '
                   'part_bytes=$partBytes action=reenqueue',
             );
             try {
@@ -8708,7 +8712,7 @@ class DownloadManager extends ChangeNotifier {
           } else {
             await DevLog.write(
               'V16DL',
-              'transfer_snapshot_missing batch=${batch.batchId} job=$jobTag '
+              'transfer_snapshot_missing batch=${batch.batchId} job=$tId '
                   'part_bytes=0 action=interrupted',
             );
             job.state = JobState.paused;

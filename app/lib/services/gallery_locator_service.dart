@@ -59,7 +59,9 @@ class GalleryLocatorService extends ChangeNotifier {
   Future<Map<Object?, Object?>?> Function(List<String> albums)?
       nativeIndexReaderForTesting;
 
-  GalleryLocatorService._();
+  GalleryLocatorService._() {
+    HistoryDb.onFilesRewritten = evictMediaIds;
+  }
 
   static final GalleryLocatorService instance = GalleryLocatorService._();
 
@@ -117,6 +119,7 @@ class GalleryLocatorService extends ChangeNotifier {
 
   AssetEntity? getAssetById(String? mediaId) {
     if (mediaId == null || mediaId.isEmpty) return null;
+    if (_unreadableIds.contains(mediaId)) return null;
     return _idMap[mediaId];
   }
 
@@ -189,18 +192,29 @@ class GalleryLocatorService extends ChangeNotifier {
   }
 
   /// Evict deleted media IDs from in-memory caches.
-  void evictMediaIds(Iterable<String> ids) {    for (final id in ids) {
+  void evictMediaIds(Iterable<String> ids) {
+    var removedAny = false;
+    for (final id in ids) {
       final asset = _idMap.remove(id);
+      if (asset != null) removedAny = true;
       final title = (asset?.title ?? '').trim().toLowerCase();
       if (title.isNotEmpty) {
-        _exactMap.remove(title);
+        if (_exactMap.remove(title) != null) removedAny = true;
         final baseName = title.split('/').last.split('\\').last;
-        _exactMap.remove(baseName);
+        if (_exactMap.remove(baseName) != null) removedAny = true;
       }
+      final beforeLen = _allAssets.length;
       _allAssets.removeWhere((a) => a.id == id);
+      if (_allAssets.length != beforeLen) removedAny = true;
+      final stemBefore = _stemMap.length;
       _stemMap.removeWhere((_, a) => a.id == id);
+      if (_stemMap.length != stemBefore) removedAny = true;
+      if (_relPathMap.remove(id) != null) removedAny = true;
+      if (_xmpCache.remove(id) != null) removedAny = true;
     }
-    notifyListeners();
+    if (removedAny) {
+      notifyListeners();
+    }
   }
 
   /// Which of [ids] the current album index still holds. Used right after a
@@ -972,7 +986,14 @@ class GalleryLocatorService extends ChangeNotifier {
         }
       } else {
         if (answered && _indexComplete && isFullyAuthorized && _scanned) {
-          if (file.status != FileStatus.notFound) {
+          final stillPresent =
+              file.mediaId != null &&
+              file.mediaId!.isNotEmpty &&
+              await isPresent(file.mediaId!).timeout(
+                lookupTimeout,
+                onTimeout: () => true,
+              );
+          if (!stillPresent && file.status != FileStatus.notFound) {
             updatedFiles.add(file.copyWith(status: FileStatus.notFound));
             changed = true;
           } else {
