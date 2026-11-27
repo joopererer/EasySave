@@ -22,8 +22,13 @@ import 'settings.dart';
 class GalleryLocatorService extends ChangeNotifier {
   final Set<String> _unreadableIds = {};
   final Set<String> _diagnosedPrefixes = {};
+  final Map<String, String> _lastIsPresentFalseReason = {};
   bool _injectedForTesting = false;
+  bool _albumsLoadedFromSettings = false;
   List<String> _effectiveAlbumsCache = const ['EasySave'];
+
+  String? lastIsPresentFalseReason(String? id) =>
+      id == null ? null : _lastIsPresentFalseReason[id];
 
   void markUnreadable(String id) {
     _unreadableIds.add(id);
@@ -41,6 +46,17 @@ class GalleryLocatorService extends ChangeNotifier {
         .any((seg) => seg.isNotEmpty && seg.startsWith('.'));
   }
 
+  static String topRelDir(String? relativePath) {
+    if (relativePath == null || relativePath.trim().isEmpty) return 'unknown';
+    final parts = relativePath
+        .replaceAll('\\', '/')
+        .split('/')
+        .where((s) => s.isNotEmpty)
+        .toList();
+    if (parts.isEmpty) return 'unknown';
+    return parts.take(2).join('/');
+  }
+
   static bool isAllowedPublishPath(
     String? relativePath,
     Iterable<String> albumNames,
@@ -56,19 +72,33 @@ class GalleryLocatorService extends ChangeNotifier {
     };
     for (final album in albums) {
       for (final root in _allowedPublishRoots) {
-        if (norm == '$root/$album') return true;
+        final prefix = '$root/$album';
+        if (norm == prefix || norm.startsWith('$prefix/')) return true;
       }
     }
     return false;
   }
 
-  void _logIsPresentFalse(String reason) {
+  void _logIsPresentFalse(String id, String reason) {
+    _lastIsPresentFalseReason[id] = reason;
     unawaited(DevLog.write('HIST', 'is_present_false reason=$reason'));
+  }
+
+  Future<void> _ensureEffectiveAlbumsLoaded() async {
+    if (_albumsLoadedFromSettings) return;
+    try {
+      final settings = await AppSettings.load();
+      _effectiveAlbumsCache = settings.effectiveAlbumNames;
+      _albumsLoadedFromSettings = true;
+    } catch (_) {
+      // Unit tests without SharedPreferences mock keep the default ['EasySave'].
+    }
   }
 
   Future<({bool present, String? reason})?> _checkNativeMediaPresent(
     String id,
   ) async {
+    await _ensureEffectiveAlbumsLoaded();
     try {
       final raw = await _mediaChannel.invokeMapMethod<String, dynamic>(
         'checkMediaPresent',
@@ -138,7 +168,7 @@ class GalleryLocatorService extends ChangeNotifier {
 
   Future<bool> isPresent(String id) async {
     if (_unreadableIds.contains(id)) {
-      _logIsPresentFalse('unreadable_ids');
+      _logIsPresentFalse(id, 'unreadable_ids');
       return false;
     }
     // The native index lists what MediaStore returns to this app right now;
@@ -146,29 +176,43 @@ class GalleryLocatorService extends ChangeNotifier {
     final native = _nativeIds;
     if (native != null && !hasAccess) {
       final ok = native.contains(id);
-      if (!ok) _logIsPresentFalse('native_index_missing');
+      if (!ok) {
+        _logIsPresentFalse(id, 'native_index_missing');
+      } else {
+        _lastIsPresentFalseReason.remove(id);
+      }
       return ok;
     }
     final probe = presenceProbeForTesting;
     if (probe != null) {
       try {
         final ok = await probe(id);
-        if (!ok) _logIsPresentFalse('media_exists_false');
+        if (!ok) {
+          _logIsPresentFalse(id, 'media_exists_false');
+        } else {
+          _lastIsPresentFalseReason.remove(id);
+        }
         return ok;
       } catch (e) {
-        _logIsPresentFalse('open_failed:${e.runtimeType}');
+        _logIsPresentFalse(id, 'open_failed:${e.runtimeType}');
         return false;
       }
     }
     final nativeCheck = await _checkNativeMediaPresent(id);
     if (nativeCheck != null) {
       if (!nativeCheck.present) {
-        _logIsPresentFalse(nativeCheck.reason ?? 'media_exists_false');
+        _logIsPresentFalse(id, nativeCheck.reason ?? 'media_exists_false');
+      } else {
+        _lastIsPresentFalseReason.remove(id);
       }
       return nativeCheck.present;
     }
     final ok = await mediaExists(id);
-    if (!ok) _logIsPresentFalse('media_exists_false');
+    if (!ok) {
+      _logIsPresentFalse(id, 'media_exists_false');
+    } else {
+      _lastIsPresentFalseReason.remove(id);
+    }
     return ok;
   }
 
@@ -720,9 +764,11 @@ class GalleryLocatorService extends ChangeNotifier {
     _nativePermission = null;
     _nativeOwned = 0;
     _injectedForTesting = false;
+    _albumsLoadedFromSettings = false;
     _effectiveAlbumsCache = const ['EasySave'];
     _unreadableIds.clear();
     _diagnosedPrefixes.clear();
+    _lastIsPresentFalseReason.clear();
     permissionReaderForTesting = null;
     albumReaderForTesting = null;
     presenceProbeForTesting = null;

@@ -1228,20 +1228,21 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
       final initial = built.initial;
 
       if (items.isEmpty) {
+        logOpenNoViewable(record0);
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('未找到可查看的媒体文件')),
+            SnackBar(
+              content: const Text('未找到可查看的媒体文件'),
+              action: SnackBarAction(
+                label: '重新下载',
+                onPressed: () {
+                  unawaited(redownloadRecordItems(context, record0, const {0}));
+                },
+              ),
+            ),
           );
         }
         return;
-      }
-      if (mounted && items.every((item) => item.missing)) {
-        // Every file left the device: still open the viewer (the placeholders
-        // and the re-download button are the useful screen), but say why
-        // nothing can be shown (v1.11 batch 4).
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('未找到可查看的媒体文件')),
-        );
       }
 
       if (!mounted) return;
