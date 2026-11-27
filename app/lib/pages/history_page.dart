@@ -458,6 +458,7 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
   Future<void> _reload() => _historyRefresh.refresh(_reloadRecords, () async {
     final locator = GalleryLocatorService.instance;
     if (locator.hasAccess) {
+      HistoryDb.logRefreshTrigger('*', 'media-refresh');
       await locator.preloadMediaIds(_records);
       if (mounted) setState(() {});
     }

@@ -5,7 +5,6 @@ import 'package:photo_manager/photo_manager.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
-import 'package:easysave/core/models.dart';
 import 'package:easysave/services/download_manager.dart';
 import 'package:easysave/services/history_db.dart';
 import 'package:easysave/widgets/gallery_browser.dart';
