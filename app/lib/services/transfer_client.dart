@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:async';
 import 'package:flutter/services.dart';
 
 /// 传输任务状态快照
@@ -145,11 +146,14 @@ class TransferClient {
   TransferClient({
     MethodChannel? methodChannel,
     EventChannel? eventChannel,
+    Duration enqueueTimeout = const Duration(seconds: 10),
   })  : _methodChannel = methodChannel ?? const MethodChannel('easysave/transfer'),
-        _eventChannel = eventChannel ?? const EventChannel('easysave/transfer/events');
+        _eventChannel = eventChannel ?? const EventChannel('easysave/transfer/events'),
+        _enqueueTimeout = enqueueTimeout;
 
   final MethodChannel _methodChannel;
   final EventChannel _eventChannel;
+  final Duration _enqueueTimeout;
 
   Stream<TransferEvent>? _eventsStream;
 
@@ -225,8 +229,11 @@ class TransferClient {
       if (provenance != null) 'provenance': provenance,
       if (batchTotalCount != null && batchTotalCount > 0)
         'batchTotalCount': batchTotalCount,
-    });
-    return result ?? jobId ?? '';
+    }).timeout(_enqueueTimeout);
+    if (result == null || result.trim().isEmpty) {
+      throw StateError('TransferService enqueue returned empty jobId');
+    }
+    return result;
   }
 
   Future<bool> pause(String jobId) async {
@@ -313,7 +320,7 @@ class TransferClient {
       if (policyHosts != null) 'policyHosts': policyHosts,
       if (mime != null) 'mime': mime,
       if (policyKey != null) 'policyKey': policyKey,
-    });
+    }).timeout(_enqueueTimeout);
     return res ?? false;
   }
 
