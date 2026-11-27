@@ -12,6 +12,7 @@ import android.os.Build
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
+import android.os.SystemClock
 import android.util.Log
 import android.view.Gravity
 import android.view.WindowManager
@@ -50,6 +51,7 @@ class HostService : Service() {
         const val EXTRA_ERROR_CODE = "easy_err_code"
         const val EXTRA_ERROR_MESSAGE = "easy_err_message"
         private const val IDLE_TIMEOUT_MS = 60_000L
+        internal const val PARSE_STALL_TIMEOUT_MS = 30_000L
         private const val ERROR_NOTIF_ID = 9011
 
         /**
@@ -86,51 +88,161 @@ class HostService : Service() {
         }
     }
 
+    internal enum class EngineState {
+        NONE,
+        STARTING,
+        READY,
+        RELEASING,
+    }
+
+    internal interface TestEngineHandle {
+        fun sendSubmit(task: Map<String, Any?>)
+        fun destroy()
+    }
+
+    internal var testEngineFactory: ((MethodChannel.MethodCallHandler) -> TestEngineHandle)? = null
+    internal var testEngineHandle: TestEngineHandle? = null
+
+    internal fun currentEngineStateForTesting(): EngineState = engineState
+    internal fun pendingCountForTesting(): Int = pending.size
+    internal fun triggerIdleForTesting() = idleRunnable.run()
+    internal fun simulateReleasingDuringActionForTesting(action: () -> Unit) {
+        engineState = EngineState.RELEASING
+        action()
+        engineState = EngineState.NONE
+        if (rebuildAfterRelease) {
+            rebuildAfterRelease = false
+            ensureEngine()
+        }
+    }
+
     private var engine: FlutterEngine? = null
     private var channel: MethodChannel? = null
-    private var ready = false
+    private var engineState = EngineState.NONE
+    private var engineStartElapsedMs = 0L
+    private var rebuildAfterRelease = false
+    private var parseStartedForActiveRequest = false
     private var panelView: SelectPanelView? = null
     private val pending = ArrayDeque<Map<String, Any?>>()
     private val handler = Handler(Looper.getMainLooper())
     private val idleRunnable = Runnable {
         NativeLog.i(TAG, "Idle ${IDLE_TIMEOUT_MS}ms reached → destroy engine + stopSelf")
-        releaseEngine()
+        releaseEngine(reason = "idle_timeout", stopService = true)
+    }
+    private val parseStallRunnable = Runnable {
+        if (parseStartedForActiveRequest) return@Runnable
+        val stateAtStall = engineState
+        NativeLog.w(TAG, "parse_stalled engineState=$stateAtStall timeoutMs=$PARSE_STALL_TIMEOUT_MS")
+        showErrorNotification(
+            url = null,
+            code = "PARSE_STALLED",
+            message = "解析失败，点按重试",
+        )
+        releaseEngine(reason = "parse_stalled", stopService = false)
+        ensureEngine()
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        if (intent == null || intent.action != ACTION_SUBMIT) {
+            NativeLog.i(
+                TAG,
+                "start_command ignored intent=${intent?.action ?: "null"} engine_state=$engineState pending=${pending.size}",
+            )
+            if (engineState == EngineState.NONE && pending.isEmpty()) {
+                stopForegroundCompat()
+                stopSelf()
+            }
+            return START_NOT_STICKY
+        }
+
+        val urls = intent.getStringArrayListExtra(EXTRA_URLS)
+            ?: intent.getStringExtra(EXTRA_URL)?.let { arrayListOf(it) }
+            ?: arrayListOf()
+        val text = intent.getStringExtra(EXTRA_TEXT)
+        val mode = intent.getStringExtra(EXTRA_MODE) ?: "all"
+        val source = intent.getStringExtra(EXTRA_SOURCE) ?: "background"
+
+        NativeLog.i(
+            TAG,
+            "request_received mode=$mode source=$source urls=${urls.size} hasText=${!text.isNullOrBlank()} engine_state=$engineState",
+        )
+
         startForegroundCompat()
         ensureEngine()
         resetIdleTimer()
 
-        if (intent?.action == ACTION_SUBMIT) {
-            val urls = intent.getStringArrayListExtra(EXTRA_URLS)
-                ?: intent.getStringExtra(EXTRA_URL)?.let { arrayListOf(it) }
-                ?: arrayListOf()
-            val task = mutableMapOf<String, Any?>(
-                "urls" to urls,
-                "text" to intent.getStringExtra(EXTRA_TEXT),
-                "hint" to intent.getStringExtra(EXTRA_HINT),
-                "mode" to (intent.getStringExtra(EXTRA_MODE) ?: "all"),
-                "source" to (intent.getStringExtra(EXTRA_SOURCE) ?: "background"),
-            )
-            enqueue(task)
-        }
+        val task = mutableMapOf<String, Any?>(
+            "urls" to urls,
+            "text" to text,
+            "hint" to intent.getStringExtra(EXTRA_HINT),
+            "mode" to mode,
+            "source" to source,
+        )
+        enqueue(task)
         return START_NOT_STICKY
     }
 
     private fun enqueue(task: Map<String, Any?>) {
-        if (ready && channel != null) {
-            channel?.invokeMethod("submit", task)
+        val ch = channel
+        val testHandle = testEngineHandle
+        if (engineState == EngineState.READY && (ch != null || testHandle != null)) {
+            dispatchTask(ch, testHandle, task)
         } else {
             pending.addLast(task)
+            NativeLog.i(TAG, "request_queued engine_state=$engineState pending=${pending.size}")
         }
     }
 
+    private fun dispatchTask(ch: MethodChannel?, testHandle: TestEngineHandle?, task: Map<String, Any?>) {
+        parseStartedForActiveRequest = false
+        armParseStallWatchdog()
+        NativeLog.i(
+            TAG,
+            "request_dispatched_to_dart mode=${task["mode"]} source=${task["source"]} engine_state=$engineState",
+        )
+        if (testHandle != null) {
+            testHandle.sendSubmit(task)
+        } else {
+            ch?.invokeMethod("submit", task)
+        }
+    }
+
+    private fun armParseStallWatchdog() {
+        handler.removeCallbacks(parseStallRunnable)
+        handler.postDelayed(parseStallRunnable, PARSE_STALL_TIMEOUT_MS)
+    }
+
+    private fun disarmParseStallWatchdog() {
+        handler.removeCallbacks(parseStallRunnable)
+    }
+
     private fun ensureEngine() {
-        if (engine != null) return
+        when (engineState) {
+            EngineState.STARTING, EngineState.READY -> return
+            EngineState.RELEASING -> {
+                rebuildAfterRelease = true
+                NativeLog.i(TAG, "ensureEngine deferred while engine_state=RELEASING")
+                return
+            }
+            EngineState.NONE -> Unit
+        }
         try {
+            engineState = EngineState.STARTING
+            engineStartElapsedMs = SystemClock.elapsedRealtime()
+            NativeLog.i(TAG, "engine_state=STARTING")
+
+            val factory = testEngineFactory
+            if (factory != null) {
+                val handlerAdapter = MethodChannel.MethodCallHandler { call, result ->
+                    handleDartCall(call, result)
+                }
+                testEngineHandle = factory(handlerAdapter)
+                NativeLog.i(TAG, "FlutterEngine.executeDartEntrypoint(backgroundMain) called [test]")
+                return
+            }
+
             val loader = FlutterInjector.instance().flutterLoader()
             try {
                 loader.startInitialization(applicationContext)
@@ -153,14 +265,50 @@ class HostService : Service() {
             val ch = MethodChannel(e.dartExecutor.binaryMessenger, "easysave/bgtask")
             channel = ch
             ch.setMethodCallHandler { call, result ->
-                when (call.method) {
-                    "ready" -> {
-                        ready = true
-                        NativeLog.i(TAG, "BG engine ready")
-                        while (pending.isNotEmpty()) {
-                            ch.invokeMethod("submit", pending.removeFirst())
-                        }
-                        resetIdleTimer()
+                handleDartCall(call, result)
+            }
+            e.dartExecutor.executeDartEntrypoint(
+                DartExecutor.DartEntrypoint(loader.findAppBundlePath(), "backgroundMain")
+            )
+            NativeLog.i(TAG, "FlutterEngine.executeDartEntrypoint(backgroundMain) called")
+        } catch (e: Exception) {
+            engineState = EngineState.NONE
+            engine = null
+            channel = null
+            testEngineHandle = null
+            disarmParseStallWatchdog()
+            NativeLog.e(TAG, "ensureEngine FAILED: $e", e)
+            updateNotification("后台引擎启动失败: ${e.message}")
+            stopSelf()
+        }
+    }
+
+    private fun handleDartCall(call: io.flutter.plugin.common.MethodCall, result: MethodChannel.Result) {
+        when (call.method) {
+            "ready" -> {
+                engineState = EngineState.READY
+                val readyElapsedMs = SystemClock.elapsedRealtime() - engineStartElapsedMs
+                NativeLog.i(TAG, "BG engine ready elapsed_ms=$readyElapsedMs pending=${pending.size}")
+                while (pending.isNotEmpty()) {
+                    dispatchTask(channel, testEngineHandle, pending.removeFirst())
+                }
+                resetIdleTimer()
+                result.success(null)
+            }
+                    "parseStarted" -> {
+                        val args = call.arguments as? Map<*, *>
+                        val source = args?.get("source") as? String ?: "unknown"
+                        parseStartedForActiveRequest = true
+                        disarmParseStallWatchdog()
+                        NativeLog.i(TAG, "parse_started source=$source engine_state=$engineState")
+                        result.success(null)
+                    }
+                    "parseFinished" -> {
+                        val args = call.arguments as? Map<*, *>
+                        val outcome = args?.get("result") as? String ?: "unknown"
+                        val elapsedMs = (args?.get("elapsedMs") as? Number)?.toLong() ?: -1L
+                        disarmParseStallWatchdog()
+                        NativeLog.i(TAG, "parse_finished result=$outcome elapsed_ms=$elapsedMs engine_state=$engineState")
                         result.success(null)
                     }
                     "log" -> {
@@ -171,14 +319,21 @@ class HostService : Service() {
                         result.success(null)
                     }
                     "notify" -> {
-                        updateNotification(call.arguments as? String ?: "")
+                        val text = call.arguments as? String ?: ""
+                        if (text.contains("解析中") && !parseStartedForActiveRequest) {
+                            armParseStallWatchdog()
+                        }
+                        updateNotification(text)
                         result.success(null)
                     }
                     "error" -> {
+                        disarmParseStallWatchdog()
                         val args = call.arguments as? Map<*, *>
+                        val code = (args?.get("code") as? String) ?: "INVALID_PAGE"
+                        NativeLog.w(TAG, "parse_finished result=error code=$code engine_state=$engineState")
                         showErrorNotification(
                             args?.get("url") as? String,
-                            (args?.get("code") as? String) ?: "INVALID_PAGE",
+                            code,
                             args?.get("message") as? String,
                         )
                         result.success(null)
@@ -262,21 +417,11 @@ class HostService : Service() {
                         result.success(null)
                     }
                     "stop" -> {
-                        releaseEngine()
+                        releaseEngine(reason = "stop_command", stopService = true)
                         result.success(null)
                     }
                     else -> result.notImplemented()
                 }
-            }
-            e.dartExecutor.executeDartEntrypoint(
-                DartExecutor.DartEntrypoint(loader.findAppBundlePath(), "backgroundMain")
-            )
-            NativeLog.i(TAG, "FlutterEngine.executeDartEntrypoint(backgroundMain) called")
-        } catch (e: Exception) {
-            NativeLog.e(TAG, "ensureEngine FAILED: $e", e)
-            updateNotification("后台引擎启动失败: ${e.message}")
-            stopSelf()
-        }
     }
 
     private fun resetIdleTimer() {
@@ -358,10 +503,27 @@ class HostService : Service() {
         p.release()
     }
 
-    private fun releaseEngine() {
+    private fun stopForegroundCompat() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+            stopForeground(STOP_FOREGROUND_REMOVE)
+        } else {
+            @Suppress("DEPRECATION") stopForeground(true)
+        }
+    }
+
+    private fun releaseEngine(reason: String = "unspecified", stopService: Boolean = true) {
+        if (engineState == EngineState.RELEASING) {
+            NativeLog.i(TAG, "releaseEngine skipped (already RELEASING) reason=$reason")
+            return
+        }
+        NativeLog.i(TAG, "engine_release reason=$reason engine_state=$engineState pending=${pending.size}")
+        engineState = EngineState.RELEASING
         handler.removeCallbacks(idleRunnable)
+        disarmParseStallWatchdog()
+        parseStartedForActiveRequest = false
         unmountSelectPanel()
         try {
+            testEngineHandle?.destroy()
             channel?.setMethodCallHandler(null)
             engine?.let {
                 SharedPreviewBridge.detach(it.dartExecutor.binaryMessenger)
@@ -372,16 +534,21 @@ class HostService : Service() {
         }
         engine = null
         channel = null
-        ready = false
-        pending.clear()
+        testEngineHandle = null
+        engineState = EngineState.NONE
         // Never leave the tile stuck in an active state after teardown.
         EasySaveTileService.pushState(this, false, null)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-            stopForeground(STOP_FOREGROUND_REMOVE)
-        } else {
-            @Suppress("DEPRECATION") stopForeground(true)
+        if (rebuildAfterRelease || (!stopService && pending.isNotEmpty())) {
+            rebuildAfterRelease = false
+            NativeLog.i(TAG, "rebuilding engine after release pending=${pending.size}")
+            ensureEngine()
+            return
         }
-        stopSelf()
+        if (stopService) {
+            pending.clear()
+            stopForegroundCompat()
+            stopSelf()
+        }
     }
 
     private fun contentIntent(): PendingIntent {
@@ -508,7 +675,7 @@ class HostService : Service() {
     }
 
     override fun onDestroy() {
-        releaseEngine()
+        releaseEngine(reason = "on_destroy", stopService = false)
         super.onDestroy()
     }
 }

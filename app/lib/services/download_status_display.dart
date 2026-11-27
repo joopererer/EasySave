@@ -77,7 +77,130 @@ DownloadStatusPresentation resolveDownloadStatus({
   bool? partial,
   int? doneCount,
   int? totalCount,
+  String? transferState,
+  int? requiredBytes,
+  int? availableBytes,
+  bool? totalKnown,
 }) {
+  final effectiveTransferState =
+      transferState ?? job?.transferState ?? _batchTransferState(batch);
+  final bool isNewPipeline = effectiveTransferState != null ||
+      (batch?.usesNewTransferPipeline == true) ||
+      (job?.usesNewTransferPipeline == true);
+
+  if (isNewPipeline && effectiveTransferState != null) {
+    final effectiveProgress = progress ?? job?.progress ?? batch?.progress ?? 0.0;
+    final pct = (effectiveProgress.clamp(0.0, 1.0) * 100).round();
+    final knownTotal = totalKnown ??
+        (job != null
+            ? (job.expectedBytes ?? 0) > 0 ||
+                job.state == JobState.done ||
+                (job.fileBytes ?? 0) > 0
+            : (batch != null &&
+                (batch.succeeded > 0 ||
+                    batch.jobs.any(
+                      (j) =>
+                          (j.expectedBytes ?? 0) > 0 || (j.fileBytes ?? 0) > 0,
+                    ))));
+    final reqBytes = requiredBytes ?? job?.transferRequiredBytes ?? 0;
+    final availBytes = availableBytes ?? job?.transferAvailableBytes ?? 0;
+
+    switch (effectiveTransferState) {
+      case 'storage_full':
+        final String label;
+        if (reqBytes > 0) {
+          final needGb = (reqBytes / (1024 * 1024 * 1024)).toStringAsFixed(1);
+          final availGb = (availBytes / (1024 * 1024 * 1024)).toStringAsFixed(1);
+          label = '空间不足 · 需${needGb}GB，可用${availGb}GB';
+        } else {
+          label = '空间不足';
+        }
+        return DownloadStatusPresentation(
+          kind: DownloadStatusKind.storageFull,
+          label: label,
+          shortLabel: '空间不足',
+          icon: Icons.disc_full_outlined,
+          actionTip: '清理后继续',
+          actionIcon: Icons.refresh_rounded,
+        );
+      case 'waiting_network':
+        return const DownloadStatusPresentation(
+          kind: DownloadStatusKind.waitingNetwork,
+          label: '等待网络',
+          shortLabel: '等网络',
+          icon: Icons.wifi_off_rounded,
+          actionTip: '继续下载',
+          actionIcon: Icons.play_arrow_rounded,
+        );
+      case 'interrupted':
+        return const DownloadStatusPresentation(
+          kind: DownloadStatusKind.interrupted,
+          label: '已中断，点继续',
+          shortLabel: '已中断',
+          icon: Icons.refresh_rounded,
+          actionTip: '继续下载',
+          actionIcon: Icons.play_arrow_rounded,
+        );
+      case 'paused':
+        return const DownloadStatusPresentation(
+          kind: DownloadStatusKind.userPaused,
+          label: '已暂停',
+          shortLabel: '已暂停',
+          icon: Icons.play_arrow_rounded,
+          actionTip: '继续下载',
+          actionIcon: Icons.play_arrow_rounded,
+        );
+      case 'finishing':
+      case 'waiting_pair':
+        return const DownloadStatusPresentation(
+          kind: DownloadStatusKind.finishing,
+          label: '正在保存到相册',
+          shortLabel: '保存中',
+          icon: Icons.save_alt_rounded,
+          actionTip: '正在保存',
+          actionIcon: Icons.hourglass_top_rounded,
+        );
+      case 'running':
+        return DownloadStatusPresentation(
+          kind: DownloadStatusKind.downloading,
+          label: knownTotal ? '下载中 $pct%' : '下载中',
+          shortLabel: knownTotal ? '$pct%' : '下载中',
+          icon: Icons.pause_rounded,
+          actionTip: '暂停下载',
+          actionIcon: Icons.pause_rounded,
+        );
+      case 'queued':
+        return const DownloadStatusPresentation(
+          kind: DownloadStatusKind.queued,
+          label: '排队中',
+          shortLabel: '排队中',
+          icon: Icons.hourglass_empty_rounded,
+          actionTip: '等待中',
+          actionIcon: Icons.hourglass_empty_rounded,
+        );
+      case 'done':
+        return const DownloadStatusPresentation(
+          kind: DownloadStatusKind.done,
+          label: '全部完成 ✓',
+          shortLabel: '已完成',
+          icon: Icons.check_circle_rounded,
+          actionTip: '已完成',
+          actionIcon: Icons.check_circle_rounded,
+        );
+      case 'failed':
+        final reason = failureReason ?? job?.error;
+        final suffix = (reason != null && reason.isNotEmpty) ? '（$reason）' : '';
+        return DownloadStatusPresentation(
+          kind: DownloadStatusKind.failed,
+          label: '下载失败$suffix',
+          shortLabel: '失败',
+          icon: Icons.error_outline_rounded,
+          actionTip: '重试',
+          actionIcon: Icons.refresh,
+        );
+    }
+  }
+
   final currentStatusText = statusText ?? job?.error ?? batch?.statusText;
 
   // Determine storage full
@@ -263,4 +386,26 @@ DownloadStatusPresentation resolveDownloadStatus({
     actionTip: '暂停下载',
     actionIcon: Icons.pause_rounded,
   );
+}
+
+String? _batchTransferState(DownloadBatch? batch) {
+  if (batch == null || !batch.usesNewTransferPipeline) return null;
+  final states = batch.jobs.map((j) => j.transferState).whereType<String>().toList();
+  if (states.isEmpty) return null;
+  const priority = [
+    'storage_full',
+    'paused',
+    'interrupted',
+    'finishing',
+    'waiting_pair',
+    'waiting_network',
+    'running',
+    'queued',
+    'failed',
+    'done',
+  ];
+  for (final s in priority) {
+    if (states.contains(s)) return s;
+  }
+  return states.first;
 }

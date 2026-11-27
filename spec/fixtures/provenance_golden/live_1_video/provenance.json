@@ -1,0 +1,18 @@
+{
+  "schema": "0.1",
+  "assetId": "01960000-0000-7000-8000-000000001002",
+  "capturedAt": "2026-11-25T08:00:00Z",
+  "capturedBy": "EasySave/1.13.0",
+  "metadataDate": "2026-11-25T08:00:00Z",
+  "sourceUrl": "https://www.xiaohongshu.com/explore/xhs_live_001",
+  "platform": "xhs",
+  "sourceId": "xhs_live_001",
+  "itemIndex": 1,
+  "itemCount": 2,
+  "authorId": "author_xhs_1",
+  "publishedAt": "2026-11-24T12:00:00Z",
+  "pairId": "xhs_live_001#1",
+  "title": "XHS Live Sample 1",
+  "creator": ["Alice"]
+}
+

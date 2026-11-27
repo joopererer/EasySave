@@ -243,6 +243,7 @@ void main() {
             l.contains('provenance_bytes_written=1000') &&
             l.contains('import_copy_ms=80') &&
             l.contains('import_bytes=1000') &&
+            l.contains('thread=bg') &&
             l.contains('history_ms=')),
         isTrue,
         reason: 'finish_timing log must contain all measured stages',

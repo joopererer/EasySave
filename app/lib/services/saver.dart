@@ -20,7 +20,7 @@ import 'export_names.dart';
 /// and the system may rename a file on name clashes (e.g. `x (1).jpg`), so we
 /// locate the freshly saved asset right away instead of trusting the planned
 /// filename. Returns nulls when lookup fails (e.g. no photo permission).
-Future<({String? mediaId, String? title, String? relativePath})> saveToGallery(
+Future<({String? mediaId, String? title, String? relativePath, String? thread})> saveToGallery(
   String path,
   bool isImage,
   String album, {
@@ -49,6 +49,7 @@ Future<({String? mediaId, String? title, String? relativePath})> saveToGallery(
         mediaId: result!['mediaId'],
         title: result['title'],
         relativePath: result['relativePath'],
+        thread: result['thread'] ?? 'bg',
       );
     }
     var source = path;
@@ -64,7 +65,12 @@ Future<({String? mediaId, String? title, String? relativePath})> saveToGallery(
       await Gal.putVideo(source, album: album);
     }
     final saved = await _locateJustSaved(expectedName, isImage, album);
-    return saved;
+    return (
+      mediaId: saved.mediaId,
+      title: saved.title,
+      relativePath: saved.relativePath,
+      thread: 'bg',
+    );
   } finally {
     if (exportCopy != null) {
       try {

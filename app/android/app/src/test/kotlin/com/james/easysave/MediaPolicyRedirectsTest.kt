@@ -1,55 +1,113 @@
 package com.james.easysave
 
-import com.bbflight.background_downloader.MediaPolicyRedirects
-
+import com.bbflight.background_downloader.MediaPolicyRedirects as VendorMediaPolicyRedirects
+import com.james.easysave.policy.MediaPolicyRedirects as AppMediaPolicyRedirects
+import org.json.JSONObject
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertNull
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Test
+import java.io.File
 
 class MediaPolicyRedirectsTest {
-    private val rules = MediaPolicyRedirects.rules(
-        """{"mediaPolicyHosts":[{"domain":"tiktok.com","includeSubdomains":true}]}"""
-    )!!
+    private val rulesJson = """{"mediaPolicyHosts":[{"domain":"tiktok.com","includeSubdomains":true}]}"""
+    private val vendorRules = VendorMediaPolicyRedirects.rules(rulesJson)!!
+    private val appRules = AppMediaPolicyRedirects.rules(rulesJson)!!
 
-    @Test fun acceptsOnlyDeclaredHostBoundaries() {
-        assertNull(MediaPolicyRedirects.reject("https://tiktok.com/video", rules))
-        assertNull(MediaPolicyRedirects.reject("https://v19-webapp-prime.tiktok.com/video", rules))
+    private fun findVectorsFile(): File {
+        val candidates = listOf(
+            File("../../../spec/fixtures/media_request_policy_vectors.json"),
+            File("../../spec/fixtures/media_request_policy_vectors.json"),
+            File("../spec/fixtures/media_request_policy_vectors.json"),
+            File("spec/fixtures/media_request_policy_vectors.json")
+        )
+        return candidates.firstOrNull { it.exists() }
+            ?: throw IllegalStateException("Cannot locate media_request_policy_vectors.json in candidates: ${candidates.map { it.absolutePath }}")
+    }
+
+    @Test
+    fun runsSharedVectorsOnBothVendorAndAppImplementations() {
+        val file = findVectorsFile()
+        val json = JSONObject(file.readText())
+        val rulesStr = JSONObject().put("mediaPolicyHosts", json.getJSONArray("rules")).toString()
+        val vRules = VendorMediaPolicyRedirects.rules(rulesStr)!!
+        val aRules = AppMediaPolicyRedirects.rules(rulesStr)!!
+
+        val urlVectors = json.getJSONArray("urlVectors")
+        for (i in 0 until urlVectors.length()) {
+            val entry = urlVectors.getJSONObject(i)
+            val url = entry.getString("url")
+            val expectedCode = if (entry.isNull("expectedCode")) null else entry.getString("expectedCode")
+
+            val vRejection = VendorMediaPolicyRedirects.reject(url, vRules)
+            val aRejection = AppMediaPolicyRedirects.reject(url, aRules)
+
+            // Both implementations must produce identical results
+            assertEquals("URL vector $i ($url) vendor vs app code mismatch", vRejection?.code, aRejection?.code)
+            assertEquals("URL vector $i ($url) expected code mismatch", expectedCode, aRejection?.code)
+        }
+
+        val headerVectors = json.getJSONArray("headerVectors")
+        for (i in 0 until headerVectors.length()) {
+            val entry = headerVectors.getJSONObject(i)
+            val host = entry.getString("host")
+            val expectedCode = if (entry.isNull("expectedCode")) null else entry.getString("expectedCode")
+            val headersObj = entry.getJSONObject("headers")
+            val headersMap = mutableMapOf<String, String>()
+            val keys = headersObj.keys()
+            while (keys.hasNext()) {
+                val k = keys.next()
+                headersMap[k] = headersObj.getString(k)
+            }
+
+            val vRejection = VendorMediaPolicyRedirects.rejectHeaders(headersMap, host)
+            val aRejection = AppMediaPolicyRedirects.rejectHeaders(headersMap, host)
+
+            // Both implementations must produce identical results
+            assertEquals("Header vector $i ($headersMap) vendor vs app code mismatch", vRejection?.code, aRejection?.code)
+            assertEquals("Header vector $i ($headersMap) expected code mismatch", expectedCode, aRejection?.code)
+        }
+    }
+
+    @Test
+    fun acceptsOnlyDeclaredHostBoundaries() {
+        assertNull(AppMediaPolicyRedirects.reject("https://tiktok.com/video", appRules))
+        assertNull(AppMediaPolicyRedirects.reject("https://v19-webapp-prime.tiktok.com/video", appRules))
         assertEquals("REQUEST_HOST_REJECTED",
-            MediaPolicyRedirects.reject("https://tiktok.com.evil.com/video", rules)?.code)
+            AppMediaPolicyRedirects.reject("https://tiktok.com.evil.com/video", appRules)?.code)
         assertEquals("REQUEST_HOST_REJECTED",
-            MediaPolicyRedirects.reject("https://com/video", rules)?.code)
+            AppMediaPolicyRedirects.reject("https://com/video", appRules)?.code)
     }
 
-    @Test fun rejectsCredentialsAndDowngrades() {
+    @Test
+    fun rejectsCredentialsAndDowngrades() {
         assertEquals("REQUEST_URL_REJECTED",
-            MediaPolicyRedirects.reject("https://user:secret@tiktok.com/video", rules)?.code)
+            AppMediaPolicyRedirects.reject("https://user:secret@tiktok.com/video", appRules)?.code)
         assertEquals("REQUEST_URL_REJECTED",
-            MediaPolicyRedirects.reject("https://@tiktok.com/video", rules)?.code)
+            AppMediaPolicyRedirects.reject("https://@tiktok.com/video", appRules)?.code)
         assertEquals("REQUEST_URL_REJECTED",
-            MediaPolicyRedirects.reject("http://tiktok.com/video", rules)?.code)
+            AppMediaPolicyRedirects.reject("http://tiktok.com/video", appRules)?.code)
     }
 
-    @Test fun rejectsUnauthorizedHeadersBeforeNetwork() {
+    @Test
+    fun rejectsUnauthorizedHeadersBeforeNetwork() {
         assertEquals("REQUEST_HEADER_REJECTED",
-            MediaPolicyRedirects.rejectHeaders(mapOf("Cookie" to "secret"), "tiktok.com")?.code)
+            AppMediaPolicyRedirects.rejectHeaders(mapOf("Cookie" to "secret"), "tiktok.com")?.code)
         assertEquals("REQUEST_HEADER_REJECTED",
-            MediaPolicyRedirects.rejectHeaders(mapOf("Referer" to "ok\nCookie: secret"), "tiktok.com")?.code)
-        assertNull(MediaPolicyRedirects.rejectHeaders(mapOf("Range" to "bytes=0-"), "tiktok.com"))
-        assertNull(MediaPolicyRedirects.rejectHeaders(mapOf("If-Range" to "\"5f8a-12345\""), "tiktok.com"))
-        assertNull(MediaPolicyRedirects.rejectHeaders(mapOf("if-range" to "W/\"weak-etag-1\""), "tiktok.com"))
-        assertNull(MediaPolicyRedirects.rejectHeaders(mapOf("If-Range" to "Wed, 21 Oct 2015 07:28:00 GMT"), "tiktok.com"))
+            AppMediaPolicyRedirects.rejectHeaders(mapOf("Referer" to "ok\nCookie: secret"), "tiktok.com")?.code)
+        assertNull(AppMediaPolicyRedirects.rejectHeaders(mapOf("Range" to "bytes=0-"), "tiktok.com"))
+        assertNull(AppMediaPolicyRedirects.rejectHeaders(mapOf("If-Range" to "\"5f8a-12345\""), "tiktok.com"))
+        assertNull(AppMediaPolicyRedirects.rejectHeaders(mapOf("if-range" to "W/\"weak-etag-1\""), "tiktok.com"))
+        assertNull(AppMediaPolicyRedirects.rejectHeaders(mapOf("If-Range" to "Wed, 21 Oct 2015 07:28:00 GMT"), "tiktok.com"))
         assertEquals("REQUEST_HEADER_REJECTED",
-            MediaPolicyRedirects.rejectHeaders(mapOf("If-Range" to "unquoted-token"), "tiktok.com")?.code)
+            AppMediaPolicyRedirects.rejectHeaders(mapOf("If-Range" to "unquoted-token"), "tiktok.com")?.code)
         assertEquals("REQUEST_HEADER_REJECTED",
-            MediaPolicyRedirects.rejectHeaders(mapOf("If-Range" to "\"etag\"\nInjected: true"), "tiktok.com")?.code)
+            AppMediaPolicyRedirects.rejectHeaders(mapOf("If-Range" to "\"etag\"\nInjected: true"), "tiktok.com")?.code)
     }
 
-    // v1.10.3 build 47: every background transfer carries the same two headers
-    // the Dart side adds, so `Accept-Encoding: identity` must survive this
-    // check. Anything the policy does not declare still may not pass.
-    @Test fun acceptsTheUnifiedTransferHeadersWithIdentityEncoding() {
-        assertNull(MediaPolicyRedirects.rejectHeaders(
+    @Test
+    fun acceptsTheUnifiedTransferHeadersWithIdentityEncoding() {
+        assertNull(AppMediaPolicyRedirects.rejectHeaders(
             mapOf(
                 "User-Agent" to "Mozilla/5.0",
                 "Accept-Encoding" to "identity",
@@ -58,21 +116,23 @@ class MediaPolicyRedirectsTest {
             ),
             "sns-video-zl.xhscdn.com",
         ))
-        assertNull(MediaPolicyRedirects.rejectHeaders(
+        assertNull(AppMediaPolicyRedirects.rejectHeaders(
             mapOf("accept-encoding" to "IDENTITY"), "scontent-fra3-1.cdninstagram.com"))
     }
 
-    @Test fun rejectsAnEncodingItNeverAskedFor() {
+    @Test
+    fun rejectsAnEncodingItNeverAskedFor() {
         for (value in listOf("gzip", "gzip, identity", "br", "", "identity ")) {
             assertEquals("REQUEST_HEADER_REJECTED",
-                MediaPolicyRedirects.rejectHeaders(
+                AppMediaPolicyRedirects.rejectHeaders(
                     mapOf("Accept-Encoding" to value), "video.twimg.com")?.code)
         }
     }
 
-    @Test fun absentPolicyMetadataDoesNotImplyAuthorization() {
-        assertNull(MediaPolicyRedirects.rules("{}"))
-        assertNotNull(MediaPolicyRedirects.rules(
+    @Test
+    fun absentPolicyMetadataDoesNotImplyAuthorization() {
+        assertNull(AppMediaPolicyRedirects.rules("{}"))
+        assertNotNull(AppMediaPolicyRedirects.rules(
             """{"mediaPolicyHosts":[{"domain":"tiktok.com","includeSubdomains":true}]}"""
         ))
     }

@@ -175,6 +175,7 @@ Future<T> resolveAndEnterParse<T>(
   Duration? timeout,
   String entry = 'app_input',
   XhsDomainCoordinator? coordinator,
+  void Function(String step)? onStep,
 }) async {
   final uri = Uri.parse(url);
   final domainCoordinator = coordinator ?? (site.id == 'xhs' ? XhsDomainCoordinator() : null);
@@ -220,6 +221,7 @@ Future<T> resolveAndEnterParse<T>(
       _logParseCheck('SHORT_NOT_EXPANDED', site, actual: _hostPathOf(url));
       throw ParseFailure(ParseErrorCode.invalidPage, '短链未能展开，请重试');
     }
+    onStep?.call('shortlink_resolved');
   }
   final target = SiteRegistry.current.match(resolved);
   if (target?.id != site.id) {
@@ -278,14 +280,16 @@ class CachedPostParser {
     required this.parseNetwork,
     this.resolveIdentityUrl,
     this.channel = sharedPreviewChannel,
+    this.parseTimeout = const Duration(seconds: 30),
     DateTime Function()? now,
   }) : now = now ?? DateTime.now;
   final Future<ParseOutcome> Function(String url, String entry) parseNetwork;
   final Future<String> Function(String url)? resolveIdentityUrl;
   final MethodChannel channel;
+  final Duration parseTimeout;
   final DateTime Function() now;
   final _fallback = SharedParseCache<Map<String, dynamic>>();
-  final _running = <String, Future<ParseOutcome>>{};
+  final _running = <String, ({Future<ParseOutcome> future, DateTime startedAt})>{};
 
   /// Per-site generation. A login-state change bumps it, so a parse that was
   /// already running cannot publish its pre-change answer afterwards.
@@ -333,19 +337,34 @@ class CachedPostParser {
     bool forceRefresh = false,
     FutureOr<void> Function()? onCacheMiss,
     void Function()? onCacheHit,
+    void Function(String step)? onStep,
   }) {
     final key = keyFor(url);
     // A forced refresh never joins an in-flight task: that task may be about to
     // answer from the cache, which is exactly what "刷新" must not accept.
+    // Dedup only applies while the in-flight task has not timed out.
     final existing = forceRefresh ? null : _running[key];
-    if (existing != null) return existing;
-    final task = _parse(url, entry: entry, forceRefresh: forceRefresh,
-        onCacheMiss: onCacheMiss, onCacheHit: onCacheHit);
-    _running[key] = task;
+    if (existing != null &&
+        now().difference(existing.startedAt) < parseTimeout) {
+      return existing.future;
+    }
+    if (existing != null) {
+      _running.remove(key);
+    }
+    final task = _parse(
+      url,
+      entry: entry,
+      forceRefresh: forceRefresh,
+      onCacheMiss: onCacheMiss,
+      onCacheHit: onCacheHit,
+      onStep: onStep,
+    );
+    final record = (future: task, startedAt: now());
+    _running[key] = record;
     unawaited(task.then<void>((_) {
-      if (identical(_running[key], task)) _running.remove(key);
-    }, onError: (Object _, StackTrace __) {
-      if (identical(_running[key], task)) _running.remove(key);
+      if (identical(_running[key]?.future, task)) _running.remove(key);
+    }, onError: (Object _, StackTrace _) {
+      if (identical(_running[key]?.future, task)) _running.remove(key);
     }));
     return task;
   }
@@ -356,6 +375,7 @@ class CachedPostParser {
     required bool forceRefresh,
     FutureOr<void> Function()? onCacheMiss,
     void Function()? onCacheHit,
+    void Function(String step)? onStep,
   }) async {
     final site = SiteRegistry.current.match(url);
     if (site == null || !site.enabled) return parseNetwork(url, entry);
@@ -374,6 +394,7 @@ class CachedPostParser {
           resolveIdentityUrl != null) {
         try {
           final resolved = await resolveIdentityUrl!(url);
+          onStep?.call('shortlink_resolved');
           if (SiteRegistry.current.match(resolved)?.id == site.id) {
             key = keyFor(resolved);
             postId = site.sourceId(Uri.parse(resolved)) ?? postId;
@@ -405,6 +426,7 @@ class CachedPostParser {
             }
           }
           onCacheHit?.call();
+          onStep?.call('cache');
           unawaited(log('hit'));
           return cached;
         } catch (_) {
@@ -414,9 +436,13 @@ class CachedPostParser {
         await log('expired');
       }
     }
+    onStep?.call('cache');
     unawaited(log('miss'));
     await onCacheMiss?.call();
-    final outcome = await parseNetwork(url, entry);
+    final outcome = await runZoned(
+      () => parseNetwork(url, entry),
+      zoneValues: {if (onStep != null) #parseFlowOnStep: onStep},
+    );
     postId = outcome.data.id;
     if ((_generations[site.id] ?? 0) != generation) {
       // The login state changed while this page was loading: the answer belongs
@@ -483,7 +509,7 @@ final cachedPostParser = CachedPostParser(
     final site = SiteRegistry.current.match(url);
     final rule = site?.shortLink(Uri.parse(url));
     if (rule == null || rule['strategy'] != 'http') return url;
-    return resolveShortLink(url);
+    return resolveShortLink(url, timeout: const Duration(seconds: 5));
   },
 );
 
@@ -508,6 +534,7 @@ Future<ParseOutcome> parsePostOutcome(
   bool forceRefresh = false,
   FutureOr<void> Function()? onCacheMiss,
   void Function()? onCacheHit,
+  void Function(String step)? onStep,
 }) async {
   final outcome = await cachedPostParser.parse(
     url,
@@ -515,6 +542,7 @@ Future<ParseOutcome> parsePostOutcome(
     forceRefresh: forceRefresh,
     onCacheMiss: onCacheMiss,
     onCacheHit: onCacheHit,
+    onStep: onStep,
   );
   unawaited(SharedThumbnailCache.instance.prefetch(outcome.data));
   return outcome;
@@ -561,6 +589,7 @@ Future<ParseOutcome> _parsePostOutcomeUncached(
   try {
     return await (() async {
       final coordinator = site.id == 'xhs' ? XhsDomainCoordinator() : null;
+      final onStep = Zone.current[#parseFlowOnStep] as void Function(String)?;
       final result = await resolveAndEnterParse(
         url,
         site,
@@ -573,6 +602,7 @@ Future<ParseOutcome> _parsePostOutcomeUncached(
         timeout: remaining(),
         entry: source,
         coordinator: coordinator,
+        onStep: onStep,
       );
       // Diagnostics only: retweets and quote tweets may answer with a payload
       // id that differs from the one in the link (v1.9.0 kept parsing).
@@ -1078,7 +1108,9 @@ Future<ParseOutcome> _run(
   var stage = 'load_wait';
   var checkingReady = false;
   HeadlessInAppWebView? view;
+  final onStep = Zone.current[#parseFlowOnStep] as void Function(String)?;
   try {
+    onStep?.call('webview_acquire');
     view = HeadlessInAppWebView(
       initialUrlRequest: jsonMode
           ? null
@@ -1263,6 +1295,7 @@ Future<ParseOutcome> _run(
       },
     );
     await view.run();
+    onStep?.call('webview_start');
     final controller = await loaded.future.timeout(const Duration(seconds: 12));
     var currentUrl = jsonMode
         ? targetUrl

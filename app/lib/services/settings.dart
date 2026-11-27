@@ -117,12 +117,22 @@ class AppSettings {
   /// do not auto-resume on disconnect, but stop at "已中断，点继续" for manual resume.
   bool manualResumeOnlyOnDisconnect = kDefaultManualResumeOnlyOnDisconnect;
 
+  /// Developer option (v1.13 P0-5b): fallback to legacy download pipeline (default false).
+  bool useLegacyPipeline = false;
+
+  bool get useNewTransferPipeline => !useLegacyPipeline;
+  set useNewTransferPipeline(bool value) => useLegacyPipeline = !value;
+
   /// Set only by [clearBackupFolder]: a regular [save] must keep the folder.
   bool _forgetBackupFolder = false;
 
   static Future<AppSettings> load() async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.reload();
+    if (prefs.containsKey('useNewTransferPipeline')) {
+      prefs.getBool('useNewTransferPipeline');
+      await prefs.remove('useNewTransferPipeline');
+    }
     return AppSettings()
       ..albumName = prefs.getString('albumName') ?? defaultAlbumName
       ..namePattern = prefs.getString('namePattern') ?? defaultNamePattern
@@ -173,6 +183,7 @@ class AppSettings {
       ..backupFolderHintDismissed = prefs.getBool('backupFolderHintDismissed') ?? false
       ..developerOptionsVisible = prefs.getBool('developerOptionsVisible') ?? false
       ..manualResumeOnlyOnDisconnect = prefs.getBool('manualResumeOnlyOnDisconnect') ?? kDefaultManualResumeOnlyOnDisconnect
+      ..useLegacyPipeline = prefs.getBool('useLegacyPipeline') ?? false
       ..videoBackfillHintDismissed = prefs.getBool('videoBackfillHintDismissed') ?? false;
   }
 
@@ -222,6 +233,8 @@ class AppSettings {
     await prefs.setBool('backupFolderHintDismissed', backupFolderHintDismissed);
     await prefs.setBool('developerOptionsVisible', developerOptionsVisible);
     await prefs.setBool('manualResumeOnlyOnDisconnect', manualResumeOnlyOnDisconnect);
+    await prefs.setBool('useLegacyPipeline', useLegacyPipeline);
+    await prefs.remove('useNewTransferPipeline');
     await prefs.setBool('videoBackfillHintDismissed', videoBackfillHintDismissed);
   }
 

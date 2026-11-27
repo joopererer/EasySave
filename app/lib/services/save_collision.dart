@@ -6,7 +6,7 @@ import '../core/dev_log.dart';
 import '../metadata/metadata_service.dart';
 import 'site_registry.dart';
 
-typedef SavedMedia = ({String? mediaId, String? title, String? relativePath});
+typedef SavedMedia = ({String? mediaId, String? title, String? relativePath, String? thread});
 typedef SaveCollisionOutcome = ({SavedMedia saved, String? reusedAssetId});
 
 bool sameSavedOrigin(XmpProvenance? found, XmpProvenance expected) =>
@@ -94,6 +94,7 @@ Future<SaveCollisionOutcome> saveWithConflictHandling({
             mediaId: row['mediaId'],
             title: row['title'],
             relativePath: row['relativePath'],
+            thread: row['thread'] ?? 'bg',
           ),
           reusedAssetId: origin!.assetId,
         );
@@ -125,6 +126,7 @@ Future<SaveCollisionOutcome> saveWithConflictHandling({
             mediaId: raced['mediaId'],
             title: raced['title'],
             relativePath: raced['relativePath'],
+            thread: raced['thread'] ?? 'bg',
           ),
           reusedAssetId: racedOrigin!.assetId,
         );

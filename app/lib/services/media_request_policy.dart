@@ -67,12 +67,14 @@ class AuthorizedMediaRequest {
 }
 
 class MediaRequestPolicy {
+  static MediaCookieReader? defaultCookieReaderForTesting;
+
   MediaRequestPolicy(
     this.site, {
     MediaCookieReader? readCookie,
     DateTime Function()? now,
     MediaPolicyRejectionLogger? logRejection,
-  }) : _readCookie = readCookie ?? _systemCookie,
+  }) : _readCookie = readCookie ?? defaultCookieReaderForTesting ?? _systemCookie,
        _now = now ?? DateTime.now,
        _logRejection = logRejection;
 

@@ -17,7 +17,17 @@ import java.io.File
  * Downloads accepts both real MIME types under scoped storage. No broad grant.
  */
 object ProvenancePairWriter {
+    private val mainHandler = Handler(Looper.getMainLooper())
     private class StepFailure(message: String) : Exception(message)
+
+    internal fun dispatchBackgroundWork(
+        onMain: (() -> Unit) -> Unit = { block -> mainHandler.post(block) },
+        work: () -> Unit,
+    ) {
+        Thread({
+            work()
+        }, "EasySave-MediaIO").start()
+    }
 
     private inline fun <T> step(name: String, action: () -> T): T {
         try { return action() } catch (e: Exception) {
@@ -41,7 +51,8 @@ object ProvenancePairWriter {
                 result.notImplemented()
                 return@setMethodCallHandler
             }
-            Thread {
+            dispatchBackgroundWork {
+                check(Looper.myLooper() != Looper.getMainLooper()) { "Native media import must execute on background thread" }
                 try {
                     val value = if (call.method == "repairLegacyNames") {
                         LegacyNameRepair.run(context, call.argument<List<String>>("albums") ?: emptyList())
@@ -82,13 +93,13 @@ object ProvenancePairWriter {
                             save(context, source, call.argument<String>("mime")!!, call.argument<String>("filename") ?: source.name)
                         }
                     }
-                    result.success(value)
+                    mainHandler.post { result.success(value) }
                 } catch (e: Exception) {
                     val message = if (e is StepFailure) e.message!! else PairSavePolicy.errorMessage(call.method, e)
                     if (e !is StepFailure) NativeLog.w("EasySavePair", message)
-                    result.error("provenance_pair", message, null)
+                    mainHandler.post { result.error("provenance_pair", message, null) }
                 }
-            }.start()
+            }
         }
     }
 
@@ -186,7 +197,13 @@ object ProvenancePairWriter {
                     put(MediaStore.MediaColumns.IS_PENDING, 0)
                 }, null, null) == 1) { "MediaStore update affected no row" }
             }
-            return mapOf("mediaId" to media.lastPathSegment!!, "title" to storedName, "relativePath" to relative)
+            val isMain = Looper.myLooper() == Looper.getMainLooper()
+            return mapOf(
+                "mediaId" to media.lastPathSegment!!,
+                "title" to storedName,
+                "relativePath" to relative,
+                "thread" to (if (isMain) "main" else "bg"),
+            )
         } catch (e: Exception) {
             val failures = inserted.mapNotNull { uri ->
                 runCatching { step("失败清理") {
@@ -220,8 +237,13 @@ object ProvenancePairWriter {
                 latch.countDown()
             }
             check(latch.await(30, java.util.concurrent.TimeUnit.SECONDS))
-            return mapOf("mediaId" to checkNotNull(saved).lastPathSegment!!,
-                "title" to media.name, "relativePath" to C2paStoragePolicy.RELATIVE_PATH)
+            val isMain = Looper.myLooper() == Looper.getMainLooper()
+            return mapOf(
+                "mediaId" to checkNotNull(saved).lastPathSegment!!,
+                "title" to media.name,
+                "relativePath" to C2paStoragePolicy.RELATIVE_PATH,
+                "thread" to (if (isMain) "main" else "bg"),
+            )
         } catch (e: Exception) {
             val failures = listOf(media, xmp).mapNotNull { file ->
                 runCatching { step("失败清理") { check(!file.exists() || file.delete()) } }.exceptionOrNull()?.message

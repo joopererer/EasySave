@@ -149,6 +149,12 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
   /// Whether the floating "back to top" button is currently visible (v1.12.1 Item C).
   bool _showScrollToTop = false;
 
+  /// Keys & cached threshold for first-row visibility detection (v1.13 P0-5).
+  final GlobalKey _scrollContainerKey = GlobalKey();
+  final GlobalKey _firstRowKey = GlobalKey();
+  double? _cachedFirstRowThreshold;
+  static const double _scrollHysteresisDp = 8.0;
+
   /// Post IDs for new items received while the user was away from the top (v1.12.1 Item D).
   final Set<String> _pendingNewPostIds = {};
 
@@ -174,7 +180,30 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
       (_) => _refreshDownloads(),
     );
     _refreshDownloads();
+    unawaited(_attachDbListener());
     _init();
+  }
+
+  HistoryDb? _listenedDb;
+
+  Future<void> _attachDbListener() async {
+    try {
+      final db = await HistoryDb.instance();
+      if (!mounted) return;
+      _listenedDb = db;
+      db.addListener(_onDbChanged);
+    } catch (_) {}
+  }
+
+  void _onDbChanged() {
+    if (!mounted) return;
+    final reason = _listenedDb?.lastChangeReason ?? '';
+    // Gallery scans and file repairs update file-location metadata on existing
+    // records; reloading the whole page per scanned post would storm the DB.
+    if (reason.startsWith('gallery scan') || reason.startsWith('file repair')) {
+      return;
+    }
+    unawaited(_reload());
   }
 
   Timer? _downloadPoll;
@@ -328,6 +357,8 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
     WidgetsBinding.instance.removeObserver(this);
     GalleryLocatorService.instance.removeListener(_onLocatorChanged);
     HostBridge.historyRevision.removeListener(_onHostHistoryChanged);
+    _listenedDb?.removeListener(_onDbChanged);
+    _listenedDb = null;
     DownloadManager.instance.removeListener(_refreshDownloads);
     NetworkStatus.instance.removeListener(_refreshDownloads);
     _downloadPoll?.cancel();
@@ -464,10 +495,7 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
       final incomingPostIds = newRecords.map((r) => r.postId).toSet();
       final addedPostIds = incomingPostIds.difference(oldPostIds);
 
-      final viewportHeight = _activeController.hasClients && _activeController.position.hasViewportDimension
-          ? _activeController.position.viewportDimension
-          : 800.0;
-      final isAwayFromTop = offset > viewportHeight;
+      final isAwayFromTop = _isAwayFromTop(offset);
 
       setState(() {
         _markHiddenModesPending();
@@ -561,19 +589,48 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
     return created;
   }
 
+  Widget _wrapFirstRow(bool isFirst, Widget child) {
+    if (!isFirst) return child;
+    return KeyedSubtree(key: _firstRowKey, child: child);
+  }
+
+  double? _measureFirstRowThreshold(double offset) {
+    final itemCtx = _firstRowKey.currentContext;
+    if (itemCtx != null) {
+      final itemBox = itemCtx.findRenderObject() as RenderBox?;
+      if (itemBox != null && itemBox.attached && itemBox.hasSize) {
+        final viewport = RenderAbstractViewport.maybeOf(itemBox);
+        if (viewport != null) {
+          final revealOffset = viewport.getOffsetToReveal(itemBox, 0.0).offset;
+          if (revealOffset.isFinite && revealOffset >= 0) {
+            final threshold = revealOffset + itemBox.size.height;
+            if (threshold.isFinite && threshold > 0) {
+              _cachedFirstRowThreshold = threshold;
+            }
+          }
+        }
+      }
+    }
+    return _cachedFirstRowThreshold;
+  }
+
+  bool _isAwayFromTop(double offset) {
+    final threshold = _measureFirstRowThreshold(offset);
+    if (threshold == null) {
+      return offset > _scrollHysteresisDp;
+    }
+    final hideThreshold =
+        (threshold - _scrollHysteresisDp).clamp(0.0, double.infinity);
+    return _showScrollToTop ? offset > hideThreshold : offset > threshold;
+  }
+
   void _updateScrollMetrics() {
     if (!mounted || !_activeAttached) return;
     final controller = _activeController;
     if (!controller.hasClients) return;
     final offset = controller.offset;
-    final viewportHeight = controller.position.hasViewportDimension
-        ? controller.position.viewportDimension
-        : (context.mounted ? MediaQuery.sizeOf(context).height : 800.0);
 
-    // C1: Show when offset > 2.0 * viewportHeight, hide when offset <= 1.0 * viewportHeight
-    final shouldShow = _showScrollToTop
-        ? offset > viewportHeight
-        : offset > 2.0 * viewportHeight;
+    final shouldShow = _isAwayFromTop(offset);
 
     if (shouldShow != _showScrollToTop) {
       setState(() {
@@ -582,7 +639,7 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
     }
 
     // D3: User manually scrolls back to top -> dismiss new content banner and highlight
-    if (offset <= 10.0 && _pendingNewPostIds.isNotEmpty) {
+    if ((!shouldShow || offset <= 10.0) && _pendingNewPostIds.isNotEmpty) {
       _consumePendingNewPosts();
     }
   }
@@ -749,6 +806,7 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
   /// After a filter or sort change: back to the top, except when the change
   /// goes back to the unfiltered list, which returns to where it was left.
   void _afterPositionKeyChange() {
+    _cachedFirstRowThreshold = null;
     _pendingNewPostIds.clear();
     _highlightedPostIds.clear();
     final key = _positionKey;
@@ -1745,6 +1803,7 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
               );
               final offset = _activeOffset;
               setState(() {
+                _cachedFirstRowThreshold = null;
                 _layout = _layout == HistoryLayout.waterfall
                     ? HistoryLayout.list
                     : HistoryLayout.waterfall;
@@ -2526,29 +2585,34 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
   Widget _postsWaterfall(ScrollController controller) {
     final groups = _groupPosts(_filtered);
     return _refreshWrapper(
-      CustomScrollView(
-        controller: controller,
-        key: const PageStorageKey<String>('history_scroll_posts'),
-        slivers: [
-          const SliverToBoxAdapter(child: SizedBox(height: 8)),
-          for (final group in groups)
-            historyGroupSliver(
-              title: group.title,
-              background: Theme.of(context).scaffoldBackgroundColor,
-              content: _groupMasonry(
-              balanced: true,
-              itemKeys: [for (final record in group.posts) 'wf-${record.id}'],
-              estimatedHeightOf: (index, columnWidth) =>
-                  waterfallCardHeight(group.posts[index], columnWidth),
-              itemBuilder: (context, index) {
-                final record = group.posts[index];
-                final key = _postKey(record);
-                return _anchored(key, _highlightWrapper(record.postId, WaterfallPostCard(
+      KeyedSubtree(
+        key: _scrollContainerKey,
+        child: CustomScrollView(
+          controller: controller,
+          key: const PageStorageKey<String>('history_scroll_posts'),
+          slivers: [
+            const SliverToBoxAdapter(child: SizedBox(height: 8)),
+            for (var gi = 0; gi < groups.length; gi++)
+              historyGroupSliver(
+                title: groups[gi].title,
+                background: Theme.of(context).scaffoldBackgroundColor,
+                content: _groupMasonry(
+                balanced: true,
+                itemKeys: [for (final record in groups[gi].posts) 'wf-${record.id}'],
+                estimatedHeightOf: (index, columnWidth) =>
+                    waterfallCardHeight(groups[gi].posts[index], columnWidth),
+                itemBuilder: (context, index) {
+                  final record = groups[gi].posts[index];
+                  final key = _postKey(record);
+                  return _wrapFirstRow(
+                    gi == 0 && index == 0,
+                    _anchored(key, _highlightWrapper(record.postId, WaterfallPostCard(
                   key: ValueKey('wf-${record.id}'),
                   record: record,
                   selectionMode: _selectionMode,
                   selected: _selected.contains(key),
                   downloadProgress: _downloadProgress[record.postId] ?? (_recordFailed(record) ? 0 : null),
+                  downloadBatch: _downloadBatches[record.postId],
                   downloadPaused: _isPaused(record.postId),
                   downloadUserPaused: _downloadBatches[record.postId]?.isUserPaused ?? false,
                   downloadStatusText: _downloadBatches[record.postId]?.statusText,
@@ -2567,12 +2631,13 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
                   onTap: () => _openRecord(record),
                   onLongPress: () => _handleCardLongPress(record, key),
                   onToggleSelect: () => _toggleSelection(key),
-                )));
+                ))));
               },
               ),
             ),
           const SliverToBoxAdapter(child: SizedBox(height: 96)),
         ],
+      ),
       ),
     );
   }
@@ -2580,22 +2645,26 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
   Widget _postsList(ScrollController controller) {
     final groups = _groupPosts(_filtered);
     return _refreshWrapper(
-      CustomScrollView(
-        controller: controller,
-        key: const PageStorageKey<String>('history_scroll_posts_list'),
-        slivers: [
-          const SliverToBoxAdapter(child: SizedBox(height: 8)),
-          for (final group in groups)
-            historyGroupSliver(
-              title: group.title,
-              background: Theme.of(context).scaffoldBackgroundColor,
-              content: SliverPadding(
-              padding: const EdgeInsets.symmetric(horizontal: 16),
-              sliver: SliverList(
-                delegate: SliverChildBuilderDelegate((context, index) {
-                  final record = group.posts[index];
-                  final key = _postKey(record);
-                  return _anchored(
+      KeyedSubtree(
+        key: _scrollContainerKey,
+        child: CustomScrollView(
+          controller: controller,
+          key: const PageStorageKey<String>('history_scroll_posts_list'),
+          slivers: [
+            const SliverToBoxAdapter(child: SizedBox(height: 8)),
+            for (var gi = 0; gi < groups.length; gi++)
+              historyGroupSliver(
+                title: groups[gi].title,
+                background: Theme.of(context).scaffoldBackgroundColor,
+                content: SliverPadding(
+                padding: const EdgeInsets.symmetric(horizontal: 16),
+                sliver: SliverList(
+                  delegate: SliverChildBuilderDelegate((context, index) {
+                    final record = groups[gi].posts[index];
+                    final key = _postKey(record);
+                    return _wrapFirstRow(
+                      gi == 0 && index == 0,
+                      _anchored(
                     key,
                     _highlightWrapper(
                       record.postId,
@@ -2636,6 +2705,7 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
                         selectionMode: _selectionMode,
                         selected: _selected.contains(key),
                         downloadProgress: _downloadProgress[record.postId] ?? (_recordFailed(record) ? 0 : null),
+                  downloadBatch: _downloadBatches[record.postId],
                         downloadPaused: _isPaused(record.postId),
                         downloadUserPaused: _downloadBatches[record.postId]?.isUserPaused ?? false,
                         downloadStatusText: _downloadBatches[record.postId]?.statusText,
@@ -2655,13 +2725,14 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
                         onOpenOriginal: () => _openOriginal(record.postUrl),
                       ),
                     ),
-                  )));
-                }, childCount: group.posts.length),
+                  ))));
+                }, childCount: groups[gi].posts.length),
               ),
               ),
             ),
           const SliverToBoxAdapter(child: SizedBox(height: 24)),
         ],
+      ),
       ),
     );
   }
@@ -2669,30 +2740,34 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
   Widget _allWaterfall(ScrollController controller) {
     final groups = _groupMedia(_filtered);
     return _refreshWrapper(
-      CustomScrollView(
-        controller: controller,
-        key: const PageStorageKey<String>('history_scroll_all'),
-        slivers: [
-          const SliverToBoxAdapter(child: SizedBox(height: 8)),
-          for (final group in groups)
-            historyGroupSliver(
-              title: group.title,
-              background: Theme.of(context).scaffoldBackgroundColor,
-              content: _groupMasonry(
-              itemKeys: [
-                for (final ref in group.media) 'all-${ref.record.id}-${ref.itemIndex}',
-              ],
-              estimatedHeightOf: (index, columnWidth) {
-                final ref = group.media[index];
-                return allMediaCardHeight(
-                  allMediaItemFor(ref.record, ref.itemIndex),
-                  columnWidth,
-                );
-              },
-              itemBuilder: (context, index) {
-                final ref = group.media[index];
-                final key = _mediaKey(ref.record, ref.itemIndex);
-                return _anchored(
+      KeyedSubtree(
+        key: _scrollContainerKey,
+        child: CustomScrollView(
+          controller: controller,
+          key: const PageStorageKey<String>('history_scroll_all'),
+          slivers: [
+            const SliverToBoxAdapter(child: SizedBox(height: 8)),
+            for (var gi = 0; gi < groups.length; gi++)
+              historyGroupSliver(
+                title: groups[gi].title,
+                background: Theme.of(context).scaffoldBackgroundColor,
+                content: _groupMasonry(
+                itemKeys: [
+                  for (final ref in groups[gi].media) 'all-${ref.record.id}-${ref.itemIndex}',
+                ],
+                estimatedHeightOf: (index, columnWidth) {
+                  final ref = groups[gi].media[index];
+                  return allMediaCardHeight(
+                    allMediaItemFor(ref.record, ref.itemIndex),
+                    columnWidth,
+                  );
+                },
+                itemBuilder: (context, index) {
+                  final ref = groups[gi].media[index];
+                  final key = _mediaKey(ref.record, ref.itemIndex);
+                  return _wrapFirstRow(
+                    gi == 0 && index == 0,
+                    _anchored(
                   key,
                   _highlightWrapper(
                     ref.record.postId,
@@ -2708,12 +2783,14 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
                       onToggleSelect: () => _toggleSelection(key),
                     ),
                   ),
-                );
-              },
+                  ),
+                  );
+                },
+                ),
               ),
-            ),
-          const SliverToBoxAdapter(child: SizedBox(height: 96)),
-        ],
+            const SliverToBoxAdapter(child: SizedBox(height: 96)),
+          ],
+        ),
       ),
     );
   }
@@ -2721,20 +2798,24 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
   Widget _creators(ScrollController controller) {
     final creators = _creatorGroups(_filtered);
     return _refreshWrapper(
-      GridView.builder(
-        controller: controller,
-        key: const PageStorageKey<String>('history_scroll_creators'),
-        padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
-        gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-          crossAxisCount: 2,
-          crossAxisSpacing: 12,
-          mainAxisSpacing: 16,
-          childAspectRatio: 0.72,
-        ),
-        itemCount: creators.length,
-        itemBuilder: (context, index) {
-          final c = creators[index];
-          return _anchored(
+      KeyedSubtree(
+        key: _scrollContainerKey,
+        child: GridView.builder(
+          controller: controller,
+          key: const PageStorageKey<String>('history_scroll_creators'),
+          padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
+          gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+            crossAxisCount: 2,
+            crossAxisSpacing: 12,
+            mainAxisSpacing: 16,
+            childAspectRatio: 0.72,
+          ),
+          itemCount: creators.length,
+          itemBuilder: (context, index) {
+            final c = creators[index];
+            return _wrapFirstRow(
+              index == 0,
+              _anchored(
             'c:${c.platform}:${c.authorName}',
             CreatorCard(
             authorName: c.authorName,
@@ -2756,8 +2837,10 @@ class HistoryPageState extends State<HistoryPage> with WidgetsBindingObserver {
               _afterPositionKeyChange();
             },
           ),
+          ),
           );
         },
+      ),
       ),
     );
   }

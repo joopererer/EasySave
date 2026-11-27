@@ -1,0 +1,78 @@
+{
+  "vectors": [
+    {
+      "name": "single_file_half",
+      "batchTotalCount": 1,
+      "previousOverallProgress": 0.0,
+      "jobs": [
+        { "jobId": "j1", "state": "running", "bytesRead": 50000000, "totalBytes": 100000000 }
+      ],
+      "expectedOverallProgress": 0.5,
+      "expectedTotalCount": 1,
+      "expectedDoneCount": 0,
+      "expectedShowInnerRing": false,
+      "expectedDisplayPercent": 50
+    },
+    {
+      "name": "single_file_unknown_total",
+      "batchTotalCount": 1,
+      "previousOverallProgress": 0.0,
+      "jobs": [
+        { "jobId": "j1", "state": "running", "bytesRead": 102400, "totalBytes": 0 }
+      ],
+      "expectedOverallProgress": 0.0,
+      "expectedTotalCount": 1,
+      "expectedDoneCount": 0,
+      "expectedShowInnerRing": false,
+      "expectedDisplayPercent": null
+    },
+    {
+      "name": "multi_file_sequential_enqueue_first_only",
+      "batchTotalCount": 11,
+      "previousOverallProgress": 0.0,
+      "jobs": [
+        { "jobId": "j1", "state": "running", "bytesRead": 500, "totalBytes": 1000 }
+      ],
+      "expectedOverallProgress": 0.045454545,
+      "expectedTotalCount": 11,
+      "expectedDoneCount": 0,
+      "expectedShowInnerRing": true,
+      "expectedInnerProgress": 0.5,
+      "expectedDisplayPercent": 50
+    },
+    {
+      "name": "multi_file_three_concurrent_plus_done",
+      "batchTotalCount": 5,
+      "previousOverallProgress": 0.0,
+      "jobs": [
+        { "jobId": "j1", "state": "done", "bytesRead": 1000, "totalBytes": 1000 },
+        { "jobId": "j2", "state": "running", "bytesRead": 300, "totalBytes": 1000 },
+        { "jobId": "j3", "state": "running", "bytesRead": 700, "totalBytes": 1000 },
+        { "jobId": "j4", "state": "running", "bytesRead": 500, "totalBytes": 0 },
+        { "jobId": "j5", "state": "queued", "bytesRead": 0, "totalBytes": 0 }
+      ],
+      "expectedOverallProgress": 0.4,
+      "expectedTotalCount": 5,
+      "expectedDoneCount": 1,
+      "expectedShowInnerRing": true,
+      "expectedInnerProgress": 0.7,
+      "expectedDisplayPercent": 70
+    },
+    {
+      "name": "multi_file_candidate_retry_monotonic",
+      "batchTotalCount": 2,
+      "previousOverallProgress": 0.45,
+      "jobs": [
+        { "jobId": "j1", "state": "running", "bytesRead": 0, "totalBytes": 1000 },
+        { "jobId": "j2", "state": "queued", "bytesRead": 0, "totalBytes": 0 }
+      ],
+      "expectedOverallProgress": 0.45,
+      "expectedTotalCount": 2,
+      "expectedDoneCount": 0,
+      "expectedShowInnerRing": true,
+      "expectedInnerProgress": 0.0,
+      "expectedDisplayPercent": 0
+    }
+  ]
+}
+

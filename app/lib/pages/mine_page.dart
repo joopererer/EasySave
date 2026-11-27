@@ -24,6 +24,8 @@ import '../services/update_service.dart';
 import 'backup_restore_page.dart';
 import 'failure_log_page.dart';
 import 'login_page.dart';
+import 'transfer_self_check_page.dart';
+import 'transfer_new_pipeline_page.dart';
 
 class MinePage extends StatefulWidget {
   const MinePage({super.key, this.xhsSessionProbe = probeXhsSessions});
@@ -1141,6 +1143,46 @@ class _MinePageState extends State<MinePage> with WidgetsBindingObserver {
                     onChanged: (on) async {
                       setState(() => _settings.manualResumeOnlyOnDisconnect = on);
                       await _saveSettings();
+                    },
+                  ),
+                  SwitchListTile(
+                    key: const Key('use_new_transfer_pipeline_switch'),
+                    title: const Text('使用旧下载链路（回退用）'),
+                    subtitle: const Text(
+                      '主界面与悬浮球下载默认由后台 TransferService 驱动，开启则回退旧链路',
+                    ),
+                    value: _settings.useLegacyPipeline,
+                    onChanged: (useLegacy) async {
+                      setState(
+                        () => _settings.useLegacyPipeline = useLegacy,
+                      );
+                      await _saveSettings();
+                    },
+                  ),
+                  ListTile(
+                    key: const Key('transfer_service_self_check'),
+                    title: const Text('传输服务自检'),
+                    subtitle: const Text('入队 3 个 FakeWorker 任务并实时查看 [XFER] 转移日志'),
+                    trailing: const Icon(Icons.chevron_right),
+                    onTap: () {
+                      Navigator.of(context).push(
+                        MaterialPageRoute(
+                          builder: (_) => const TransferSelfCheckPage(),
+                        ),
+                      );
+                    },
+                  ),
+                  ListTile(
+                    key: const Key('transfer_new_pipeline_test'),
+                    title: const Text('新链路下载测试'),
+                    subtitle: const Text('使用 OkHttp 与续传协议下载小红书或 IG 媒体到 transfers/'),
+                    trailing: const Icon(Icons.chevron_right),
+                    onTap: () {
+                      Navigator.of(context).push(
+                        MaterialPageRoute(
+                          builder: (_) => const TransferNewPipelinePage(),
+                        ),
+                      );
                     },
                   ),
                 ],

@@ -126,6 +126,7 @@ class GalleryBrowserItem {
     this.filename,
     this.cachePostId,
     this.cacheItemIndex,
+    this.mediaId,
     this.undecodable = false,
     this.width,
     this.height,
@@ -187,6 +188,7 @@ class GalleryBrowserItem {
   final String? filename;
   final String? cachePostId;
   final int? cacheItemIndex;
+  final String? mediaId;
 
   /// This device cannot decode the saved still (a HEIC with an alpha
   /// auxiliary image on Android 12). The page then offers a replacement
@@ -580,13 +582,40 @@ Future<({List<GalleryBrowserItem> items, int initial})> savedBrowserItems({
         var asset =
             locator.getAssetById(file.mediaId) ??
             locator.locateAsset(file, record.postId);
-        if (asset == null && locator.hasAccess) {
+        if (asset != null) {
+          unawaited(
+            DevLog.write(
+              'HIST',
+              'viewer_locate post=${record.postId} by=cache result=ok',
+            ),
+          );
+          return asset;
+        }
+        if (file.mediaId != null && file.mediaId!.isNotEmpty) {
+          asset = await locator.getAssetByIdAsync(file.mediaId);
+          if (asset != null) {
+            unawaited(
+              DevLog.write(
+                'HIST',
+                'viewer_locate post=${record.postId} by=mediaId result=ok',
+              ),
+            );
+            return asset;
+          }
+        }
+        if (locator.hasAccess) {
           asset = await locator.locateAssetAsync(
             file,
             record.postId,
             platform: record.platform,
           );
         }
+        unawaited(
+          DevLog.write(
+            'HIST',
+            'viewer_locate post=${record.postId} by=scan result=${asset != null ? 'ok' : 'fail'}',
+          ),
+        );
         return asset;
       };
   final scanned = albumScanned ?? (locate == null && locator.scanned);
@@ -640,6 +669,7 @@ Future<({List<GalleryBrowserItem> items, int initial})> savedBrowserItems({
       GalleryBrowserItem(
         index: zeroBased,
         cachePostId: record.postId,
+        mediaId: coverFile.mediaId,
         type: itemType,
         url: postItem?.url ?? '',
         videoUrl: postItem?.videoUrl,
@@ -2838,7 +2868,7 @@ class _BrowserItemViewState extends State<_BrowserItemView> {
     });
   }
 
-  Future<void> _initVideo() async {
+  Future<void> _initVideo({bool retried = false}) async {
     final it = widget.item;
     try {
       VideoPlayerController controller;
@@ -2894,6 +2924,45 @@ class _BrowserItemViewState extends State<_BrowserItemView> {
       setState(() => _videoController = controller);
       _attachVideoListener(controller);
     } catch (e) {
+      final hasMediaId = it.mediaId != null && it.mediaId!.isNotEmpty;
+      final hasUri = (it.videoUrl ?? it.url).isNotEmpty;
+      unawaited(DevLog.write(
+        'HIST',
+        'viewer_play_fail post=${it.cachePostId ?? '-'} '
+            'mediaId=${hasMediaId ? 'present' : 'absent'} '
+            'uri=${hasUri ? 'present' : 'absent'} '
+            'reason=${playbackFailureType(e)}',
+      ));
+      if (!retried && hasMediaId) {
+        try {
+          final refreshed =
+              await GalleryLocatorService.instance.getAssetByIdAsync(it.mediaId);
+          final f = (refreshed != null && refreshed.type == AssetType.video)
+              ? await refreshed.file
+              : null;
+          if (f != null && await f.exists()) {
+            final retryController = VideoPlayerController.file(f);
+            await retryController.initialize();
+            if (!mounted) {
+              await retryController.dispose();
+              return;
+            }
+            if (it.isGif) {
+              await retryController.setLooping(true);
+              await retryController.setVolume(0);
+              await retryController.play();
+              _isPlaying = true;
+            } else {
+              await retryController.pause();
+              _isPlaying = false;
+              _controlsVisible = true;
+            }
+            setState(() => _videoController = retryController);
+            _attachVideoListener(retryController);
+            return;
+          }
+        } catch (_) {}
+      }
       unawaited(DevLog.write(
         'PreviewPlayer',
         'event=failed source=${it.asset == null ? 'network' : 'local'} '
