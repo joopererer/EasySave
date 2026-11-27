@@ -243,6 +243,7 @@ void main() {
       reason: 'the display frame is the final image, not the square thumbnail',
     );
     await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pump(const Duration(milliseconds: 50));
   });
 
   testWidgets('a full image that fails keeps the placeholder and shows the '
@@ -294,6 +295,7 @@ void main() {
       1,
     );
     await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pump(const Duration(milliseconds: 50));
   });
 
   testWidgets('a GIF is not staged: it animates from the first frame', (
@@ -321,6 +323,7 @@ void main() {
 
     expect(find.byType(StagedPhoto), findsNothing);
     await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pump(const Duration(milliseconds: 50));
   });
 
   testWidgets("turning the page shows the next still's placeholder at once", (
@@ -368,6 +371,7 @@ void main() {
       reason: 'while the sharp frame decodes the placeholder is what shows',
     );
     await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pump(const Duration(milliseconds: 50));
   });
 }
 

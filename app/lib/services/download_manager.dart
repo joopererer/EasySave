@@ -4458,6 +4458,13 @@ class DownloadManager extends ChangeNotifier {
   /// Batches whose album was already indexed for the idempotency guard.
   final Set<String> _albumIndexed = <String>{};
 
+  @visibleForTesting
+  Future<AssetEntity?> findExistingAlbumAssetForTesting(
+    DownloadBatch batch,
+    DownloadJob job, {
+    bool refresh = false,
+  }) => _findExistingAlbumAsset(batch, job, refresh: refresh);
+
   /// Look for an already-imported file with the planned name. The album is
   /// indexed once per batch (it is needed to see files saved by an earlier
   /// run), and only when the user granted album read access — without it we
@@ -4495,7 +4502,17 @@ class DownloadManager extends ChangeNotifier {
         (job.isImage
             ? asset.type == AssetType.image
             : asset.type == AssetType.video);
-    return matchesType && await locator.isPresent(asset.id) ? asset : null;
+    if (!matchesType) return null;
+    final rel = asset.relativePath;
+    if (rel != null &&
+        rel.isNotEmpty &&
+        !GalleryLocatorService.isAllowedPublishPath(
+          rel,
+          const ['EasySave'],
+        )) {
+      return null;
+    }
+    return await locator.isPresent(asset.id) ? asset : null;
   }
 
   /// Gallery import for a finished file, then temp cleanup.
@@ -5066,6 +5083,18 @@ class DownloadManager extends ChangeNotifier {
             existing = null;
           } else {
             reusedProvenance = read;
+          }
+          if (existing != null) {
+            final expectedSize = job.fileBytes ?? await file.length();
+            final albumSize = await (mediaSizeForTesting ?? _mediaSize)(
+              existing.id,
+              !job.isImage,
+            );
+            if (albumSize == null ||
+                albumSize <= 0 ||
+                (expectedSize > 0 && albumSize != expectedSize)) {
+              existing = null;
+            }
           }
         }
         if (existing != null) {
@@ -8172,23 +8201,40 @@ class DownloadManager extends ChangeNotifier {
         );
         if (sameSavedOrigin(read, expected) ||
             (read == null && job.provenanceSkipped)) {
-          _log(
-            'new pipeline associated existing album file: ${existing.title ?? job.filename}',
+          final albumSize = await (mediaSizeForTesting ?? _mediaSize)(
+            existing.id,
+            !job.isImage,
           );
-          job
-            ..mediaId = existing.id
-            ..savedTitle = existing.title
-            ..relativePath = existing.relativePath
-            ..assetId = read?.assetId
-            ..provenanceItemCount = read?.itemCount
-            ..provenanceCapturedBy = read?.capturedBy
-            ..state = JobState.done
-            ..transferState = 'done'
-            ..progress = 1.0
-            ..saved = true;
-          await _persist(batch);
-          notifyListeners();
-          return;
+          final sizeOk =
+              albumSize != null &&
+              albumSize > 0 &&
+              (job.fileBytes == null ||
+                  job.fileBytes! <= 0 ||
+                  albumSize == job.fileBytes);
+          if (!sizeOk) {
+            _log(
+              'new pipeline associate rejected size mismatch: '
+              'album=${albumSize ?? -1} expected=${job.fileBytes ?? -1}',
+            );
+          } else {
+            _log(
+              'new pipeline associated existing album file: ${existing.title ?? job.filename}',
+            );
+            job
+              ..mediaId = existing.id
+              ..savedTitle = existing.title
+              ..relativePath = existing.relativePath
+              ..assetId = read?.assetId
+              ..provenanceItemCount = read?.itemCount
+              ..provenanceCapturedBy = read?.capturedBy
+              ..state = JobState.done
+              ..transferState = 'done'
+              ..progress = 1.0
+              ..saved = true;
+            await _persist(batch);
+            notifyListeners();
+            return;
+          }
         }
       }
     } catch (_) {

@@ -21,18 +21,155 @@ import 'settings.dart';
 
 class GalleryLocatorService extends ChangeNotifier {
   final Set<String> _unreadableIds = {};
+  final Set<String> _diagnosedPrefixes = {};
+  bool _injectedForTesting = false;
+  List<String> _effectiveAlbumsCache = const ['EasySave'];
+
   void markUnreadable(String id) {
     _unreadableIds.add(id);
     evictMediaIds([id]);
     notifyListeners();
   }
+
+  static const _allowedPublishRoots = ['pictures', 'movies', 'download', 'dcim'];
+
+  static bool isHiddenPath(String? path) {
+    if (path == null || path.trim().isEmpty) return false;
+    return path
+        .replaceAll('\\', '/')
+        .split('/')
+        .any((seg) => seg.isNotEmpty && seg.startsWith('.'));
+  }
+
+  static bool isAllowedPublishPath(
+    String? relativePath,
+    Iterable<String> albumNames,
+  ) {
+    if (relativePath == null || relativePath.trim().isEmpty) return false;
+    if (isHiddenPath(relativePath)) return false;
+    final norm = normalizePath(relativePath);
+    if (norm.isEmpty) return false;
+    final albums = {
+      for (final a in albumNames)
+        if (a.trim().isNotEmpty) a.trim().toLowerCase(),
+      'easysave',
+    };
+    for (final album in albums) {
+      for (final root in _allowedPublishRoots) {
+        if (norm == '$root/$album') return true;
+      }
+    }
+    return false;
+  }
+
+  void _logIsPresentFalse(String reason) {
+    unawaited(DevLog.write('HIST', 'is_present_false reason=$reason'));
+  }
+
+  Future<({bool present, String? reason})?> _checkNativeMediaPresent(
+    String id,
+  ) async {
+    try {
+      final raw = await _mediaChannel.invokeMapMethod<String, dynamic>(
+        'checkMediaPresent',
+        {'id': id, 'albums': _effectiveAlbumsCache},
+      );
+      if (raw == null) return null;
+      return (
+        present: raw['present'] == true,
+        reason: raw['reason']?.toString(),
+      );
+    } on MissingPluginException {
+      return null;
+    } catch (e) {
+      return (present: false, reason: 'open_failed:${e.runtimeType}');
+    }
+  }
+
+  /// Read-only diagnostic: queries MediaStore (including trashed and pending)
+  /// for records whose DISPLAY_NAME starts with [prefix] and writes `[HIST] media_dup`
+  /// entries to DevLog.
+  Future<List<Map<String, dynamic>>> diagnoseMediaDup(
+    String prefix, {
+    String? rowMediaId,
+  }) async {
+    final clean = prefix.trim();
+    if (clean.isEmpty) return const [];
+    try {
+      final raw = await _mediaChannel.invokeListMethod<Map<Object?, Object?>>(
+        'diagnoseMediaDup',
+        {'prefix': clean, 'rowMediaId': rowMediaId},
+      );
+      if (raw == null) return const [];
+      final out = <Map<String, dynamic>>[];
+      for (final item in raw) {
+        final m = item.map((k, v) => MapEntry(k.toString(), v));
+        out.add(m);
+        unawaited(
+          DevLog.write(
+            'HIST',
+            'media_dup id_hash=${m['id_hash']} '
+                'is_row_media_id=${m['is_row_media_id']} '
+                'is_trashed=${m['is_trashed']} '
+                'is_pending=${m['is_pending']} '
+                'owner=${m['owner']} '
+                'rel_dir=${m['rel_dir']} '
+                'is_hidden=${m['is_hidden']} '
+                'size=${m['size']} '
+                'date_added_age_s=${m['date_added_age_s']}',
+          ),
+        );
+      }
+      return out;
+    } catch (_) {
+      return const [];
+    }
+  }
+
+  /// Runs [diagnoseMediaDup] at most once per [prefix] per app session.
+  Future<void> diagnoseMediaDupOnce(
+    String prefix, {
+    String? rowMediaId,
+  }) async {
+    final clean = prefix.trim();
+    if (clean.isEmpty || !_diagnosedPrefixes.add(clean)) return;
+    await diagnoseMediaDup(clean, rowMediaId: rowMediaId);
+  }
+
   Future<bool> isPresent(String id) async {
-    if (_unreadableIds.contains(id)) return false;
+    if (_unreadableIds.contains(id)) {
+      _logIsPresentFalse('unreadable_ids');
+      return false;
+    }
     // The native index lists what MediaStore returns to this app right now;
     // photo_manager's per-id query is not usable without its permission.
     final native = _nativeIds;
-    if (native != null && !hasAccess) return native.contains(id);
-    return (presenceProbeForTesting ?? mediaExists)(id);
+    if (native != null && !hasAccess) {
+      final ok = native.contains(id);
+      if (!ok) _logIsPresentFalse('native_index_missing');
+      return ok;
+    }
+    final probe = presenceProbeForTesting;
+    if (probe != null) {
+      try {
+        final ok = await probe(id);
+        if (!ok) _logIsPresentFalse('media_exists_false');
+        return ok;
+      } catch (e) {
+        _logIsPresentFalse('open_failed:${e.runtimeType}');
+        return false;
+      }
+    }
+    final nativeCheck = await _checkNativeMediaPresent(id);
+    if (nativeCheck != null) {
+      if (!nativeCheck.present) {
+        _logIsPresentFalse(nativeCheck.reason ?? 'media_exists_false');
+      }
+      return nativeCheck.present;
+    }
+    final ok = await mediaExists(id);
+    if (!ok) _logIsPresentFalse('media_exists_false');
+    return ok;
   }
 
   static const MethodChannel _mediaChannel = MethodChannel('easysave/media');
@@ -319,6 +456,7 @@ class GalleryLocatorService extends ChangeNotifier {
       final wanted = {
         for (final name in settings.effectiveAlbumNames) name.trim().toLowerCase(),
       };
+      _effectiveAlbumsCache = settings.effectiveAlbumNames;
 
       final paths = await PhotoManager.getAssetPathList(
         type: RequestType.common,
@@ -350,6 +488,10 @@ class GalleryLocatorService extends ChangeNotifier {
         if (count <= 0) continue;
         final list = await p.getAssetListRange(start: 0, end: count);
         for (final asset in list) {
+          final rel = asset.relativePath;
+          if (rel != null && rel.isNotEmpty && !isAllowedPublishPath(rel, wanted)) {
+            continue;
+          }
           if (seenIds.add(asset.id)) assetsToIndex.add(asset);
         }
       }
@@ -367,11 +509,16 @@ class GalleryLocatorService extends ChangeNotifier {
         if (count > 0) {
           final list = await allAlbum.getAssetListRange(start: 0, end: count);
           for (final a in list) {
+            final rel = a.relativePath;
+            if (rel != null && rel.isNotEmpty && !isAllowedPublishPath(rel, wanted)) {
+              continue;
+            }
             if (seenIds.add(a.id)) assetsToIndex.add(a);
           }
         }
       }
 
+      _injectedForTesting = false;
       _replaceIndex(assetsToIndex);
       _lookupMethod = 'plugin';
       _nativeIds = null;
@@ -393,6 +540,11 @@ class GalleryLocatorService extends ChangeNotifier {
     _relPathMap.clear();
     _xmpCache.clear();
     for (final asset in assets) {
+      if (_unreadableIds.contains(asset.id)) continue;
+      final rel = asset.relativePath;
+      if (rel != null && rel.isNotEmpty && !isAllowedPublishPath(rel, _effectiveAlbumsCache)) {
+        continue;
+      }
       _idMap[asset.id] = asset;
       _allAssets.add(asset);
       final title = (asset.title ?? '').trim().toLowerCase();
@@ -417,6 +569,7 @@ class GalleryLocatorService extends ChangeNotifier {
         for (final name in settings.effectiveAlbumNames)
           if (name.trim().isNotEmpty) name.trim(),
       ];
+      _effectiveAlbumsCache = albums;
       final raw = await (nativeIndexReaderForTesting?.call(albums) ??
           _mediaChannel.invokeMethod<Map<Object?, Object?>>(
             'savedMediaIndex',
@@ -428,6 +581,10 @@ class GalleryLocatorService extends ChangeNotifier {
       for (final item in (raw['items'] as List? ?? const []).whereType<Map>()) {
         final id = item['id']?.toString();
         if (id == null || id.isEmpty) continue;
+        final relPath = item['relativePath']?.toString();
+        if (relPath != null && relPath.isNotEmpty && !isAllowedPublishPath(relPath, albums)) {
+          continue;
+        }
         if (item['owned'] == true) owned++;
         assets.add(AssetEntity(
           id: id,
@@ -435,9 +592,10 @@ class GalleryLocatorService extends ChangeNotifier {
           width: (item['width'] as num?)?.toInt() ?? 0,
           height: (item['height'] as num?)?.toInt() ?? 0,
           title: item['title']?.toString(),
-          relativePath: item['relativePath']?.toString(),
+          relativePath: relPath,
         ));
       }
+      _injectedForTesting = false;
       _replaceIndex(assets);
       for (final asset in assets) {
         _relPathMap[asset.id] = asset.relativePath;
@@ -540,6 +698,7 @@ class GalleryLocatorService extends ChangeNotifier {
     List<AssetEntity>? assets,
     Map<String, String?>? relativePaths,
   }) {
+    _injectedForTesting = true;
     _scanned = scanned;
     _indexComplete = scanned;
     _permission = permission;
@@ -560,6 +719,10 @@ class GalleryLocatorService extends ChangeNotifier {
     _nativeIds = null;
     _nativePermission = null;
     _nativeOwned = 0;
+    _injectedForTesting = false;
+    _effectiveAlbumsCache = const ['EasySave'];
+    _unreadableIds.clear();
+    _diagnosedPrefixes.clear();
     permissionReaderForTesting = null;
     albumReaderForTesting = null;
     presenceProbeForTesting = null;
@@ -682,6 +845,24 @@ class GalleryLocatorService extends ChangeNotifier {
     }
   }
 
+  Future<bool> _isCandidateUsable(AssetEntity asset) async {
+    if (_unreadableIds.contains(asset.id)) return false;
+    final rel = await getRelativePath(asset);
+    if (rel != null &&
+        rel.isNotEmpty &&
+        !isAllowedPublishPath(rel, _effectiveAlbumsCache)) {
+      return false;
+    }
+    if (!_injectedForTesting || presenceProbeForTesting != null) {
+      final ok = await isPresent(asset.id);
+      if (!ok) {
+        evictMediaIds([asset.id]);
+        return false;
+      }
+    }
+    return true;
+  }
+
   /// Locate asset asynchronously with multi-level fallback and XMP validation:
   /// 1. relativePath + filename exact match
   /// 2. usedAlbumNames + filename (validated by XMP)
@@ -738,6 +919,7 @@ class GalleryLocatorService extends ChangeNotifier {
             _matchesDoubleExtension(baseName, targetName)) {
           final rel = await getRelativePath(asset);
           if (rel != null && normalizePath(rel) == targetRel) {
+            if (!await _isCandidateUsable(asset)) continue;
             if (!await _verifyXmpConsistency(asset, expectedAssetId: file.assetId,
                 expectedPlatform: platform, expectedPostId: postId,
                 expectedItemIndex: file.itemIndex)) continue;
@@ -763,6 +945,7 @@ class GalleryLocatorService extends ChangeNotifier {
       }
 
       for (final candidate in candidates) {
+        if (!await _isCandidateUsable(candidate)) continue;
         final isConsistent = await _verifyXmpConsistency(
           candidate,
           expectedAssetId: file.assetId,
@@ -819,6 +1002,7 @@ class GalleryLocatorService extends ChangeNotifier {
         }
 
         for (final candidate in orderedCandidates) {
+          if (!await _isCandidateUsable(candidate)) continue;
           final isConsistent = await _verifyXmpConsistency(
             candidate,
             expectedAssetId: file.assetId,
