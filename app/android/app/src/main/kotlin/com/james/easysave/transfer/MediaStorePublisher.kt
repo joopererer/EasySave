@@ -26,10 +26,17 @@ class MediaStorePublisher(private val context: Context) : MediaPublisher {
     override fun exists(relativePath: String, displayName: String): Boolean {
         if (Build.VERSION.SDK_INT >= 29) {
             val resolver = context.contentResolver
+            val selection = buildString {
+                append("relative_path = ? AND _display_name IN (?, ?)")
+                append(" AND (is_pending IS NULL OR is_pending = 0)")
+                if (Build.VERSION.SDK_INT >= 30) {
+                    append(" AND (is_trashed IS NULL OR is_trashed = 0)")
+                }
+            }
             return resolver.query(
                 MediaStore.Files.getContentUri("external"),
                 arrayOf("_id"),
-                "relative_path = ? AND _display_name IN (?, ?)",
+                selection,
                 arrayOf(relativePath, displayName, "$displayName.xmp"),
                 null
             )?.use { it.moveToFirst() } ?: false
@@ -132,9 +139,15 @@ class MediaStorePublisher(private val context: Context) : MediaPublisher {
 
         val resolver = context.contentResolver
         val uri = Uri.parse(handle.uriString)
-        resolver.query(uri, arrayOf(MediaStore.MediaColumns.DISPLAY_NAME), null, null, null)?.use {
-            check(it.moveToFirst() && it.getString(0) == handle.displayName) { "Provider changed final filename" }
-        }
+        val actualDisplayName = resolver.query(
+            uri,
+            arrayOf(MediaStore.MediaColumns.DISPLAY_NAME),
+            null,
+            null,
+            null
+        )?.use {
+            if (it.moveToFirst()) it.getString(0) else null
+        } ?: handle.displayName
 
         val updateCount = resolver.update(uri, ContentValues().apply { put("is_pending", 0) }, null, null)
         check(updateCount == 1) { "Failed to unmark is_pending" }
@@ -157,7 +170,7 @@ class MediaStorePublisher(private val context: Context) : MediaPublisher {
 
         return PublishedMedia(
             mediaId = handle.mediaId,
-            title = handle.displayName,
+            title = actualDisplayName,
             relativePath = handle.relativePath,
             md5 = md5,
             size = size,

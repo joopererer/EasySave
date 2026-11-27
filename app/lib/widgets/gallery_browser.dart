@@ -569,6 +569,7 @@ void _logViewerNotLocal({
   required String type,
   required String typeSource,
   required String rowVer,
+  String? rowMediaId,
 }) {
   unawaited(
     DevLog.write(
@@ -579,6 +580,14 @@ void _logViewerNotLocal({
           'row_ver=$rowVer',
     ),
   );
+  if (postId.isNotEmpty && postId != '-') {
+    unawaited(
+      GalleryLocatorService.instance.diagnoseMediaDupOnce(
+        postId,
+        rowMediaId: rowMediaId,
+      ),
+    );
+  }
 }
 
 /// Fullscreen browser items for one saved post, plus the page to open.
@@ -2798,6 +2807,7 @@ class _BrowserItemViewState extends State<_BrowserItemView> {
             type: widget.item.type,
             typeSource: widget.item.typeSource,
             rowVer: widget.item.rowVer,
+            rowMediaId: widget.item.mediaId,
           );
           setState(() => _isNotFound = true);
         }

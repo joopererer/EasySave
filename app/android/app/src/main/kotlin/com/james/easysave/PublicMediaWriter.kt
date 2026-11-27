@@ -52,8 +52,15 @@ object PublicMediaWriter {
     }
     fun available(context: Context, relative: String, name: String) {
         if (Build.VERSION.SDK_INT >= 29) {
+            val selection = buildString {
+                append("relative_path = ? AND _display_name IN (?, ?)")
+                append(" AND (is_pending IS NULL OR is_pending = 0)")
+                if (Build.VERSION.SDK_INT >= 30) {
+                    append(" AND (is_trashed IS NULL OR is_trashed = 0)")
+                }
+            }
             context.contentResolver.query(MediaStore.Files.getContentUri("external"), arrayOf("_id"),
-                "relative_path = ? AND _display_name IN (?, ?)", arrayOf(relative, name, "$name.xmp"), null)?.use {
+                selection, arrayOf(relative, name, "$name.xmp"), null)?.use {
                 check(!it.moveToFirst()) { "Target filename already exists" }
             }
         }
@@ -89,9 +96,9 @@ object PublicMediaWriter {
         val uri = checkNotNull(resolver.insert(collection, values))
         try {
             checkNotNull(resolver.openOutputStream(uri, "w")).use { out -> source.inputStream().use { it.copyTo(out) } }
-            resolver.query(uri, arrayOf("_display_name"), null, null, null)!!.use {
-                check(it.moveToFirst() && it.getString(0) == name) { "Provider changed final filename" }
-            }
+            val actualName = resolver.query(uri, arrayOf("_display_name"), null, null, null)?.use {
+                if (it.moveToFirst()) it.getString(0) else null
+            } ?: name
             fun digest(input: java.io.InputStream): ByteArray = input.use {
                 val md = java.security.MessageDigest.getInstance("SHA-256"); val buffer = ByteArray(65536)
                 while (true) { val n = it.read(buffer); if (n < 0) break; md.update(buffer, 0, n) }; md.digest()
@@ -102,7 +109,7 @@ object PublicMediaWriter {
             val duration = if (video) publishDuration(context, uri, mediaId, source, mime) else null
             val isMain = Looper.myLooper() == Looper.getMainLooper()
             buildMap {
-                put("mediaId", mediaId); put("title", name); put("relativePath", relative)
+                put("mediaId", mediaId); put("title", actualName); put("relativePath", relative)
                 put("thread", if (isMain) "main" else "bg")
                 if (duration != null) put("duration", duration.toString())
             }

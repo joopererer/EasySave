@@ -8,6 +8,7 @@ import android.content.pm.PackageManager
 import android.media.MediaScannerConnection
 import android.net.Uri
 import android.os.Build
+import android.os.Bundle
 import android.os.Environment
 import android.os.StatFs
 import android.os.Handler
@@ -19,6 +20,7 @@ import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
 import io.flutter.plugin.common.StandardMethodCodec
 import java.io.File
+import java.security.MessageDigest
 import java.util.concurrent.Executors
 
 /**
@@ -73,6 +75,58 @@ class MediaStoreBridge(private val context: Context) {
         fun bucketSelection(count: Int): String =
             "LOWER(bucket_display_name) IN (" +
                 List(count) { "?" }.joinToString(",") + ")"
+
+        const val LEGACY_PACKAGE_NAME = "com.james.easysave"
+
+        private val ALLOWED_ROOTS = listOf("pictures", "movies", "download", "dcim")
+
+        /** True when any path segment starts with `.` (hidden or OEM trash dir). */
+        fun isHiddenPath(relativePath: String?): Boolean {
+            if (relativePath.isNullOrBlank()) return false
+            return relativePath.replace('\\', '/')
+                .split('/')
+                .any { it.isNotEmpty() && it.startsWith(".") }
+        }
+
+        /** Top-level directory summary (at most 2 segments, e.g. `Movies/EasySave`). */
+        fun topRelDir(relativePath: String?): String {
+            if (relativePath.isNullOrBlank()) return "unknown"
+            val parts = relativePath.replace('\\', '/')
+                .split('/')
+                .filter { it.isNotEmpty() }
+            return if (parts.isEmpty()) "unknown" else parts.take(2).joinToString("/")
+        }
+
+        /**
+         * True only when [relativePath] is a non-hidden EasySave publish directory
+         * (`Pictures/<album>/`, `Movies/<album>/`, `Download/<album>/`, `DCIM/<album>/`).
+         */
+        fun isAllowedPublishPath(relativePath: String?, albums: List<String>): Boolean {
+            if (relativePath.isNullOrBlank()) return false
+            if (isHiddenPath(relativePath)) return false
+            val normalized = relativePath.replace('\\', '/')
+                .trim()
+                .trim('/')
+                .lowercase()
+            if (normalized.isEmpty()) return false
+            val albumKeys = albums.map { it.trim().lowercase() }.filter { it.isNotEmpty() }.distinct()
+            if (albumKeys.isEmpty()) return false
+            return albumKeys.any { album ->
+                ALLOWED_ROOTS.any { root -> normalized == "$root/$album" }
+            }
+        }
+
+        fun classifyOwner(ownerPackageName: String?, selfPackage: String): String = when {
+            ownerPackageName == null -> "null"
+            ownerPackageName == selfPackage -> "self"
+            ownerPackageName == LEGACY_PACKAGE_NAME -> "legacy"
+            else -> "other"
+        }
+
+        fun shortIdHash(id: String): String {
+            val digest = MessageDigest.getInstance("SHA-256").digest(id.toByteArray(Charsets.UTF_8))
+            return digest.take(4).joinToString("") { "%02x".format(it) }
+        }
     }
 
     fun handle(call: MethodCall, result: MethodChannel.Result): Boolean {
@@ -89,6 +143,8 @@ class MediaStoreBridge(private val context: Context) {
             "apiLevel" -> result.success(Build.VERSION.SDK_INT)
             "readMediaBytes" -> readMediaBytes(call, result)
             "mediaDuration" -> mediaDuration(call, result)
+            "checkMediaPresent" -> checkMediaPresent(call, result)
+            "diagnoseMediaDup" -> diagnoseMediaDup(call, result)
             else -> return false
         }
         return true
@@ -275,10 +331,22 @@ class MediaStoreBridge(private val context: Context) {
                 add(MediaStore.MediaColumns.OWNER_PACKAGE_NAME)
             }
         }.toTypedArray()
+        val selection = buildString {
+            append(bucketSelection(albums.size))
+            append(" AND ${MediaStore.MediaColumns.SIZE} > 0")
+            if (modern) {
+                append(" AND (${MediaStore.MediaColumns.IS_PENDING} IS NULL OR ${MediaStore.MediaColumns.IS_PENDING} = 0)")
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                append(" AND (${MediaStore.MediaColumns.IS_TRASHED} IS NULL OR ${MediaStore.MediaColumns.IS_TRASHED} = 0)")
+            }
+        }
         val out = mutableListOf<Map<String, Any?>>()
-        resolver.query(collection, projection, bucketSelection(albums.size),
+        resolver.query(collection, projection, selection,
             albums.toTypedArray(), null)?.use { cursor ->
             while (cursor.moveToNext()) {
+                val relPath = if (modern) cursor.getString(5) else null
+                if (modern && !isAllowedPublishPath(relPath, albums)) continue
                 val owner = if (modern) cursor.getString(6) else null
                 out += mapOf(
                     "id" to cursor.getLong(0).toString(),
@@ -286,13 +354,221 @@ class MediaStoreBridge(private val context: Context) {
                     "size" to cursor.getLong(2),
                     "width" to cursor.getInt(3),
                     "height" to cursor.getInt(4),
-                    "relativePath" to if (modern) cursor.getString(5) else null,
+                    "relativePath" to relPath,
                     "owned" to (owner == context.packageName),
                     "type" to type,
                 )
             }
         }
         return out
+    }
+
+    /**
+     * Checks whether a MediaStore item is non-trashed, non-pending, in an allowed
+     * non-hidden publish directory, has size > 0, and can genuinely be opened via
+     * [ContentResolver.openFileDescriptor]. Read-only.
+     */
+    private fun checkMediaPresent(call: MethodCall, result: MethodChannel.Result) {
+        val idStr = call.argument<String>("id")
+        val mediaId = idStr?.toLongOrNull()
+        if (mediaId == null) {
+            result.success(mapOf("present" to false, "reason" to "media_exists_false"))
+            return
+        }
+        val albums = (call.argument<List<String>>("albums") ?: emptyList())
+            .map { it.trim() }.filter { it.isNotEmpty() }.distinct()
+        val modern = Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q
+        val filesUri = MediaStore.Files.getContentUri("external")
+        val projection = buildList {
+            add(MediaStore.MediaColumns._ID)
+            add(MediaStore.MediaColumns.SIZE)
+            add(MediaStore.Files.FileColumns.MEDIA_TYPE)
+            if (modern) {
+                add(MediaStore.MediaColumns.RELATIVE_PATH)
+            }
+        }.toTypedArray()
+        val selection = buildString {
+            append("${MediaStore.MediaColumns._ID} = ?")
+            append(" AND ${MediaStore.MediaColumns.SIZE} > 0")
+            if (modern) {
+                append(" AND (${MediaStore.MediaColumns.IS_PENDING} IS NULL OR ${MediaStore.MediaColumns.IS_PENDING} = 0)")
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                append(" AND (${MediaStore.MediaColumns.IS_TRASHED} IS NULL OR ${MediaStore.MediaColumns.IS_TRASHED} = 0)")
+            }
+        }
+        var mediaType = MediaStore.Files.FileColumns.MEDIA_TYPE_NONE
+        var rowFound = false
+        var relPath: String? = null
+        try {
+            context.contentResolver.query(
+                filesUri,
+                projection,
+                selection,
+                arrayOf(mediaId.toString()),
+                null,
+            )?.use { cursor ->
+                if (cursor.moveToFirst()) {
+                    val size = cursor.getLong(1)
+                    mediaType = cursor.getInt(2)
+                    relPath = if (modern) cursor.getString(3) else null
+                    if (size > 0L) {
+                        rowFound = true
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            result.success(mapOf("present" to false, "reason" to "open_failed:${e.javaClass.simpleName}"))
+            return
+        }
+        if (!rowFound) {
+            result.success(mapOf("present" to false, "reason" to "media_exists_false"))
+            return
+        }
+        if (modern) {
+            if (isHiddenPath(relPath) || (albums.isNotEmpty() && !isAllowedPublishPath(relPath, albums))) {
+                result.success(mapOf("present" to false, "reason" to "media_exists_false"))
+                return
+            }
+        }
+        val collection = when (mediaType) {
+            MediaStore.Files.FileColumns.MEDIA_TYPE_IMAGE -> MediaStore.Images.Media.EXTERNAL_CONTENT_URI
+            MediaStore.Files.FileColumns.MEDIA_TYPE_VIDEO -> MediaStore.Video.Media.EXTERNAL_CONTENT_URI
+            else -> filesUri
+        }
+        val itemUri = ContentUris.withAppendedId(collection, mediaId)
+        try {
+            val pfd = context.contentResolver.openFileDescriptor(itemUri, "r")
+            if (pfd == null) {
+                result.success(mapOf("present" to false, "reason" to "media_exists_false"))
+                return
+            }
+            pfd.use {
+                if (it.statSize <= 0L) {
+                    result.success(mapOf("present" to false, "reason" to "media_exists_false"))
+                    return
+                }
+            }
+            result.success(mapOf("present" to true))
+        } catch (e: Exception) {
+            result.success(mapOf("present" to false, "reason" to "open_failed:${e.javaClass.simpleName}"))
+        }
+    }
+
+    /**
+     * Read-only MediaStore diagnostic: queries all records whose DISPLAY_NAME
+     * starts with [prefix], explicitly including trashed and pending rows on
+     * Android 11+ (MATCH_INCLUDE), and logs each match.
+     */
+    private fun diagnoseMediaDup(call: MethodCall, result: MethodChannel.Result) {
+        val prefix = call.argument<String>("prefix")?.trim()
+        if (prefix.isNullOrEmpty()) {
+            result.success(emptyList<Map<String, Any?>>())
+            return
+        }
+        val rowMediaId = call.argument<String>("rowMediaId")?.trim()
+        val resolver = context.contentResolver
+        val filesUri = MediaStore.Files.getContentUri("external")
+        val hasQ = Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q
+        val hasR = Build.VERSION.SDK_INT >= Build.VERSION_CODES.R
+        val projection = buildList {
+            add(MediaStore.MediaColumns._ID)
+            add(MediaStore.MediaColumns.SIZE)
+            add(MediaStore.MediaColumns.DATE_ADDED)
+            if (hasQ) {
+                add(MediaStore.MediaColumns.RELATIVE_PATH)
+                add(MediaStore.MediaColumns.OWNER_PACKAGE_NAME)
+                add(MediaStore.MediaColumns.IS_PENDING)
+            } else {
+                @Suppress("DEPRECATION")
+                add(MediaStore.MediaColumns.DATA)
+            }
+            if (hasR) {
+                add(MediaStore.MediaColumns.IS_TRASHED)
+            }
+        }.toTypedArray()
+
+        val cursor = try {
+            if (hasR) {
+                val args = Bundle().apply {
+                    putString(
+                        ContentResolver.QUERY_ARG_SQL_SELECTION,
+                        "${MediaStore.MediaColumns.DISPLAY_NAME} LIKE ?",
+                    )
+                    putStringArray(
+                        ContentResolver.QUERY_ARG_SQL_SELECTION_ARGS,
+                        arrayOf("$prefix%"),
+                    )
+                    putInt(MediaStore.QUERY_ARG_MATCH_TRASHED, MediaStore.MATCH_INCLUDE)
+                    putInt(MediaStore.QUERY_ARG_MATCH_PENDING, MediaStore.MATCH_INCLUDE)
+                }
+                resolver.query(filesUri, projection, args, null)
+            } else {
+                resolver.query(
+                    filesUri,
+                    projection,
+                    "${MediaStore.MediaColumns.DISPLAY_NAME} LIKE ?",
+                    arrayOf("$prefix%"),
+                    null,
+                )
+            }
+        } catch (e: Exception) {
+            NativeLog.w("HIST", "media_dup_query_failed err=${e.javaClass.simpleName}")
+            null
+        }
+
+        val nowSec = System.currentTimeMillis() / 1000L
+        val entries = mutableListOf<Map<String, Any?>>()
+        cursor?.use { c ->
+            val idxId = c.getColumnIndex(MediaStore.MediaColumns._ID)
+            val idxSize = c.getColumnIndex(MediaStore.MediaColumns.SIZE)
+            val idxDate = c.getColumnIndex(MediaStore.MediaColumns.DATE_ADDED)
+            val idxRel = if (hasQ) c.getColumnIndex(MediaStore.MediaColumns.RELATIVE_PATH) else -1
+            val idxOwner = if (hasQ) c.getColumnIndex(MediaStore.MediaColumns.OWNER_PACKAGE_NAME) else -1
+            val idxPending = if (hasQ) c.getColumnIndex(MediaStore.MediaColumns.IS_PENDING) else -1
+            val idxTrashed = if (hasR) c.getColumnIndex(MediaStore.MediaColumns.IS_TRASHED) else -1
+            @Suppress("DEPRECATION")
+            val idxData = if (!hasQ) c.getColumnIndex(MediaStore.MediaColumns.DATA) else -1
+
+            while (c.moveToNext()) {
+                val idStr = if (idxId >= 0) c.getLong(idxId).toString() else ""
+                val size = if (idxSize >= 0) c.getLong(idxSize) else -1L
+                val dateAdded = if (idxDate >= 0) c.getLong(idxDate) else 0L
+                val relOrData = when {
+                    idxRel >= 0 -> c.getString(idxRel)
+                    idxData >= 0 -> c.getString(idxData)?.substringBeforeLast('/', "")
+                    else -> null
+                }
+                val ownerPkg = if (idxOwner >= 0) c.getString(idxOwner) else null
+                val isPending = if (idxPending >= 0) c.getInt(idxPending) else 0
+                val isTrashed = if (idxTrashed >= 0) c.getInt(idxTrashed) else 0
+                val ageSec = if (dateAdded > 0L) (nowSec - dateAdded).coerceAtLeast(0L) else -1L
+                val idHash = shortIdHash(idStr)
+                val isRow = if (rowMediaId != null && rowMediaId == idStr) "y" else "n"
+                val owner = classifyOwner(ownerPkg, context.packageName)
+                val relDir = topRelDir(relOrData)
+                val isHidden = if (isHiddenPath(relOrData)) 1 else 0
+
+                NativeLog.i(
+                    "HIST",
+                    "media_dup id_hash=$idHash is_row_media_id=$isRow is_trashed=$isTrashed " +
+                        "is_pending=$isPending owner=$owner rel_dir=$relDir is_hidden=$isHidden " +
+                        "size=$size date_added_age_s=$ageSec",
+                )
+                entries += mapOf(
+                    "id_hash" to idHash,
+                    "is_row_media_id" to isRow,
+                    "is_trashed" to isTrashed,
+                    "is_pending" to isPending,
+                    "owner" to owner,
+                    "rel_dir" to relDir,
+                    "is_hidden" to isHidden,
+                    "size" to size,
+                    "date_added_age_s" to ageSec,
+                )
+            }
+        }
+        result.success(entries)
     }
 
     /** Free bytes for temp files (app cache) and for the shared album volume. */

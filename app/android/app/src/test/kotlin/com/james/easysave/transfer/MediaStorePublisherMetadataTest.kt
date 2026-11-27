@@ -3,6 +3,7 @@ package com.james.easysave.transfer
 import android.provider.MediaStore
 import com.james.easysave.MediaMetadataProbe
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -34,6 +35,12 @@ class MediaStorePublisherMetadataTest {
         assertEquals(15_400L, values.getAsLong(MediaStore.Video.Media.DURATION))
         assertEquals(1080, values.getAsInteger(MediaStore.Video.Media.WIDTH))
         assertEquals(1920, values.getAsInteger(MediaStore.Video.Media.HEIGHT))
+    }
+
+    @Test
+    fun `exists returns false when MediaStore has no non-trashed non-pending match`() {
+        val publisher = MediaStorePublisher(RuntimeEnvironment.getApplication())
+        assertFalse(publisher.exists("Movies/EasySave/", "6b08096e000000002a019d88_1.mp4"))
     }
 }
 
